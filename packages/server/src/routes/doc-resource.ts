@@ -11,9 +11,8 @@ import type { Thread } from '@feedback/core';
 import { type Anchor, anchors } from '@feedback/core';
 import { showFile } from '../git-diff.ts';
 import {
-  PLAN_REQUEST_COMMENT,
   RESEARCH_TOPIC_MAX,
-  REVIEW_REQUEST_COMMENT,
+  askCommentFor,
   researchAskComment,
   researchPlaceholderMarkdown,
   researchSectionTitle,
@@ -202,6 +201,11 @@ export async function handleDocResourceCore(
   // renders "plan requested" rather than offering a first ask.
   // Owner-only for the same reason `plan` is: asking for board work
   // is a member's seat.
+  //
+  // ALSO the board's own Plan control: a ticket's comments live in its
+  // body doc (`task:<id>`), so the task panel presses this same route
+  // and inherits the thread, the channel and the stamp. Only the words
+  // differ — `askCommentFor` picks them.
   if (rest === 'plan-request' && req.method === 'POST') {
     if (visitor) return j(403, { error: 'not available to share visitors' });
     const body = await safeJson(req);
@@ -215,7 +219,7 @@ export async function handleDocResourceCore(
       docId,
       null,
       author,
-      PLAN_REQUEST_COMMENT,
+      askCommentFor(taskIdOfBodyDoc(docId) !== null, 'plan'),
       { kind: 'subject' },
       { generate: false },
     );
@@ -244,7 +248,11 @@ export async function handleDocResourceCore(
     const author = authorFor(body?.author);
     if (!author) return j(400, { error: 'author required' });
     if (isCategoryAuthor(author)) return refuseCategoryAuthor();
-    const filed = await fileReviewRequest(docId, author, REVIEW_REQUEST_COMMENT);
+    const filed = await fileReviewRequest(
+      docId,
+      author,
+      askCommentFor(taskIdOfBodyDoc(docId) !== null, 'review'),
+    );
     if (!filed) return j(404, { error: 'doc not found' });
     return j(200, { docId, ...filed });
   }

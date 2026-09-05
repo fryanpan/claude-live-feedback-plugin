@@ -38,7 +38,7 @@ describe('compareSemver', () => {
 });
 
 describe('readReleasedPluginVersion', () => {
-  const root = () => mkdtempSync(join(tmpdir(), 'lf-release-'));
+  const root = () => mkdtempSync(join(tmpdir(), 'cw-release-'));
 
   test('reads the plugin manifest the deploy source would install', () => {
     const dir = root();

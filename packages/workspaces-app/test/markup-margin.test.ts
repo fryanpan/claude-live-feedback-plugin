@@ -292,21 +292,21 @@ describe('mountMarkupMargin — balloon DOM', () => {
     expect(parent.classList.contains('redline-layout')).toBe(true);
     const marginEl = parent.querySelector('.markup-margin');
     expect(marginEl).not.toBeNull();
-    let balloons = parent.querySelectorAll('.lf-balloon.lf-balloon-del');
+    let balloons = parent.querySelectorAll('.cw-balloon.cw-balloon-del');
     expect(balloons).toHaveLength(1);
     // Rests collapsed: label + one-line preview, full text behind a click.
-    expect(balloons[0].classList.contains('lf-balloon-collapsed')).toBe(true);
-    expect(balloons[0].querySelector('.lf-balloon-label')?.textContent).toBe('Deleted');
+    expect(balloons[0].classList.contains('cw-balloon-collapsed')).toBe(true);
+    expect(balloons[0].querySelector('.cw-balloon-label')?.textContent).toBe('Deleted');
     clickToExpand(balloons[0]);
-    balloons = parent.querySelectorAll('.lf-balloon.lf-balloon-del');
-    expect(balloons[0].classList.contains('lf-balloon-collapsed')).toBe(false);
-    expect(balloons[0].querySelector('.lf-balloon-text')?.textContent).toContain(
+    balloons = parent.querySelectorAll('.cw-balloon.cw-balloon-del');
+    expect(balloons[0].classList.contains('cw-balloon-collapsed')).toBe(false);
+    expect(balloons[0].querySelector('.cw-balloon-text')?.textContent).toContain(
       'Removed paragraph.',
     );
     // One SVG overlay with one leader line per balloon.
-    const overlay = parent.querySelectorAll('svg.lf-leader-overlay');
+    const overlay = parent.querySelectorAll('svg.cw-leader-overlay');
     expect(overlay).toHaveLength(1);
-    expect(overlay[0].querySelectorAll('.lf-leader')).toHaveLength(1);
+    expect(overlay[0].querySelectorAll('.cw-leader')).toHaveLength(1);
   });
 
   it('collapses two inline deletions in the same paragraph into one balloon', async () => {
@@ -319,11 +319,11 @@ describe('mountMarkupMargin — balloon DOM', () => {
     const { margin } = mountMargin(parent, surface);
     margin.relayout();
 
-    let balloons = parent.querySelectorAll('.lf-balloon');
+    let balloons = parent.querySelectorAll('.cw-balloon');
     expect(balloons).toHaveLength(1);
     clickToExpand(balloons[0]);
-    balloons = parent.querySelectorAll('.lf-balloon');
-    const text = balloons[0].querySelector('.lf-balloon-text')?.textContent ?? '';
+    balloons = parent.querySelectorAll('.cw-balloon');
+    const text = balloons[0].querySelector('.cw-balloon-text')?.textContent ?? '';
     expect(text).toContain('beta');
     expect(text).toContain('delta');
   });
@@ -337,9 +337,9 @@ describe('mountMarkupMargin — balloon DOM', () => {
     const { margin } = mountMargin(parent, surface);
     margin.relayout();
 
-    const balloons = parent.querySelectorAll('.lf-balloon');
+    const balloons = parent.querySelectorAll('.cw-balloon');
     expect(balloons).toHaveLength(2);
-    expect(parent.querySelectorAll('svg.lf-leader-overlay .lf-leader')).toHaveLength(2);
+    expect(parent.querySelectorAll('svg.cw-leader-overlay .cw-leader')).toHaveLength(2);
   });
 
   it('re-renders balloons when the deletions list changes', async () => {
@@ -348,11 +348,11 @@ describe('mountMarkupMargin — balloon DOM', () => {
     const deletions: RedlineDeletion[] = [];
     const { margin } = mountMargin(parent, surface, () => deletions);
     margin.relayout();
-    expect(parent.querySelectorAll('.lf-balloon')).toHaveLength(0);
+    expect(parent.querySelectorAll('.cw-balloon')).toHaveLength(0);
 
     deletions.push({ pos: 1, deletedMarkdown: 'now gone' });
     margin.relayout();
-    const balloons = parent.querySelectorAll('.lf-balloon');
+    const balloons = parent.querySelectorAll('.cw-balloon');
     expect(balloons).toHaveLength(1);
     expect(balloons[0].textContent).toContain('now gone');
   });
@@ -367,10 +367,10 @@ describe('mountMarkupMargin — truncation & expand toggle', () => {
     const { margin } = mountMargin(parent, surface, () => [{ pos: 1, deletedMarkdown: longMd }]);
     margin.relayout();
 
-    clickToExpand(parent.querySelector('.lf-balloon') as HTMLElement);
-    const balloon = parent.querySelector('.lf-balloon') as HTMLElement;
-    const text = balloon.querySelector('.lf-balloon-text') as HTMLElement;
-    const toggle = balloon.querySelector('.lf-balloon-expand') as HTMLButtonElement;
+    clickToExpand(parent.querySelector('.cw-balloon') as HTMLElement);
+    const balloon = parent.querySelector('.cw-balloon') as HTMLElement;
+    const text = balloon.querySelector('.cw-balloon-text') as HTMLElement;
+    const toggle = balloon.querySelector('.cw-balloon-expand') as HTMLButtonElement;
     expect(text.classList.contains('is-clamped')).toBe(true);
     expect(toggle).not.toBeNull();
     expect(toggle.textContent).toBe('Show more');
@@ -391,10 +391,10 @@ describe('mountMarkupMargin — truncation & expand toggle', () => {
     const { margin } = mountMargin(parent, surface, () => [{ pos: 1, deletedMarkdown: 'short' }]);
     margin.relayout();
 
-    clickToExpand(parent.querySelector('.lf-balloon') as HTMLElement);
-    const balloon = parent.querySelector('.lf-balloon') as HTMLElement;
-    expect(balloon.querySelector('.lf-balloon-expand')).toBeNull();
-    expect(balloon.querySelector('.lf-balloon-text')?.classList.contains('is-clamped')).toBe(false);
+    clickToExpand(parent.querySelector('.cw-balloon') as HTMLElement);
+    const balloon = parent.querySelector('.cw-balloon') as HTMLElement;
+    expect(balloon.querySelector('.cw-balloon-expand')).toBeNull();
+    expect(balloon.querySelector('.cw-balloon-text')?.classList.contains('is-clamped')).toBe(false);
   });
 });
 
@@ -428,14 +428,14 @@ describe('mountMarkupMargin — teardown', () => {
       margin.relayout();
       expect(parent.querySelector('.markup-margin')).not.toBeNull();
       expect(observed.length).toBeGreaterThan(0);
-      expect(document.querySelector('.lf-del-sheet')).not.toBeNull();
+      expect(document.querySelector('.cw-del-sheet')).not.toBeNull();
 
       scope.dispose();
       expect(parent.querySelector('.markup-margin')).toBeNull();
-      expect(parent.querySelector('svg.lf-leader-overlay')).toBeNull();
+      expect(parent.querySelector('svg.cw-leader-overlay')).toBeNull();
       expect(parent.classList.contains('redline-layout')).toBe(false);
       expect(disconnected.length).toBeGreaterThan(0);
-      expect(document.querySelector('.lf-del-sheet')).toBeNull();
+      expect(document.querySelector('.cw-del-sheet')).toBeNull();
     } finally {
       vi.unstubAllGlobals();
     }
@@ -470,7 +470,7 @@ describe('mountMarkupMargin — comment balloons', () => {
     // Rests collapsed — but as the SAME node it will be expanded as. Both
     // faces are already built, because the morph cross-fades between two
     // things that both have to exist.
-    const balloon = parent.querySelector('.lf-balloon.lf-balloon-comment') as HTMLElement;
+    const balloon = parent.querySelector('.cw-balloon.cw-balloon-comment') as HTMLElement;
     expect(balloon).not.toBeNull();
     expect(balloon.classList.contains('expanded')).toBe(false);
     expect(balloon.querySelector('.thread-topic')?.textContent).toBeTruthy();
@@ -480,7 +480,7 @@ describe('mountMarkupMargin — comment balloons', () => {
     clickToExpand(balloon);
     // Expanding MUTATES that node — a rebuilt card mounts at its final
     // height and has nothing to morph out of.
-    expect(parent.querySelector('.lf-balloon.lf-balloon-comment')).toBe(balloon);
+    expect(parent.querySelector('.cw-balloon.cw-balloon-comment')).toBe(balloon);
     // It IS the drawer's thread card (ThreadPanel.renderThread).
     expect(balloon.classList.contains('thread')).toBe(true);
     expect(balloon.getAttribute('data-thread-id')).toBe(thread.id);
@@ -535,8 +535,8 @@ describe('mountMarkupMargin — comment balloons', () => {
     });
     margin.relayout();
 
-    clickToExpand(parent.querySelector('.lf-balloon.lf-balloon-comment') as HTMLElement);
-    const balloon = parent.querySelector('.lf-balloon.lf-balloon-comment') as HTMLElement;
+    clickToExpand(parent.querySelector('.cw-balloon.cw-balloon-comment') as HTMLElement);
+    const balloon = parent.querySelector('.cw-balloon.cw-balloon-comment') as HTMLElement;
     const textarea = balloon.querySelector('textarea') as HTMLTextAreaElement;
     textarea.value = 'A reply from the balloon';
     const fetchSpy = vi.fn(() => Promise.resolve({ ok: true }) as unknown as Promise<Response>);
@@ -581,10 +581,10 @@ describe('mountMarkupMargin — comment balloons', () => {
       scope,
     });
     margin.relayout();
-    clickToExpand(parent.querySelector('.lf-balloon.lf-balloon-comment') as HTMLElement);
+    clickToExpand(parent.querySelector('.cw-balloon.cw-balloon-comment') as HTMLElement);
 
     const topic = () =>
-      (parent.querySelector('.lf-balloon-comment .thread-topic')?.textContent ?? '').trim();
+      (parent.querySelector('.cw-balloon-comment .thread-topic')?.textContent ?? '').trim();
     // Positive control: the topic line really is the anchor snippet.
     expect(topic()).toBe('Alpha');
 
@@ -644,12 +644,12 @@ describe('mountMarkupMargin — comment balloons', () => {
     });
     margin.relayout();
     // Positive control: the record really is on the balloon to begin with.
-    expect(parent.querySelector('.lf-balloon-comment .thread-answered')).not.toBeNull();
+    expect(parent.querySelector('.cw-balloon-comment .thread-answered')).not.toBeNull();
 
     setCommentReview(ydoc, thread.id, commentId, declared);
     margin.relayout();
 
-    expect(parent.querySelector('.lf-balloon-comment .thread-answered')).toBeNull();
+    expect(parent.querySelector('.cw-balloon-comment .thread-answered')).toBeNull();
   });
 
   it('renders a resolved thread as a folded, resolved balloon', async () => {
@@ -677,7 +677,7 @@ describe('mountMarkupMargin — comment balloons', () => {
     });
     margin.relayout();
 
-    const balloons = parent.querySelectorAll('.lf-balloon-comment');
+    const balloons = parent.querySelectorAll('.cw-balloon-comment');
     expect(balloons).toHaveLength(1);
     expect(balloons[0]?.classList.contains('resolved')).toBe(true);
     expect(balloons[0]?.classList.contains('thread-kind-resolved')).toBe(true);
@@ -715,7 +715,7 @@ describe('mountMarkupMargin — collapsed balloons (Word-style)', () => {
   }
 
   const balloonFor = (parent: HTMLElement, threadId: string): HTMLElement | null => {
-    for (const el of Array.from(parent.querySelectorAll<HTMLElement>('.lf-balloon-comment'))) {
+    for (const el of Array.from(parent.querySelectorAll<HTMLElement>('.cw-balloon-comment'))) {
       if (el.getAttribute('data-thread-id') === threadId) return el;
       if (el.dataset.expandKey === `c:${threadId}`) return el;
     }
@@ -752,7 +752,7 @@ describe('mountMarkupMargin — collapsed balloons (Word-style)', () => {
     expect(card.classList.contains('expanded')).toBe(true);
     // There is no − button any more: the whole card is the tap target and
     // `✓ Resolve` is the only control in the footer.
-    expect(card.querySelector('.lf-balloon-collapse')).toBeNull();
+    expect(card.querySelector('.cw-balloon-collapse')).toBeNull();
 
     clickToExpand(card);
     expect(card.classList.contains('expanded')).toBe(false);
@@ -825,12 +825,12 @@ describe('mountMarkupMargin — collapsed balloons (Word-style)', () => {
     const { margin } = mountMargin(parent, surface, () => [{ pos: 1, deletedMarkdown: table }]);
     margin.relayout();
 
-    const balloons = parent.querySelectorAll('.lf-balloon-del');
+    const balloons = parent.querySelectorAll('.cw-balloon-del');
     expect(balloons).toHaveLength(1); // ONE bubble for the whole table
     const balloon = balloons[0] as HTMLElement;
-    expect(balloon.classList.contains('lf-balloon-collapsed')).toBe(true);
-    expect(balloon.querySelector('.lf-collapsed-preview')?.textContent).toBe('| Group | Modules |');
-    const badge = balloon.querySelector('.lf-collapsed-count') as HTMLElement;
+    expect(balloon.classList.contains('cw-balloon-collapsed')).toBe(true);
+    expect(balloon.querySelector('.cw-collapsed-preview')?.textContent).toBe('| Group | Modules |');
+    const badge = balloon.querySelector('.cw-collapsed-count') as HTMLElement;
     expect(badge.textContent).toBe('+3');
     expect(badge.title).toBe('3 more lines');
   });
@@ -866,7 +866,7 @@ describe('mountMarkupMargin — collapsed balloons (Word-style)', () => {
     margin.relayout();
     await tick();
 
-    const balloon = parent.querySelector('.lf-balloon-comment') as HTMLElement;
+    const balloon = parent.querySelector('.cw-balloon-comment') as HTMLElement;
     expect(balloon.classList.contains('expanded')).toBe(false);
     // A folded balloon states no reply count — the number restated the replies
     // an open card is already showing, and told a folded one's reader
@@ -927,8 +927,8 @@ describe('mountMarkupMargin — mixed deletion + comment ordering', () => {
     });
     margin.relayout();
 
-    const commentEl = parent.querySelector('.lf-balloon-comment') as HTMLElement;
-    const delEl = parent.querySelector('.lf-balloon-del') as HTMLElement;
+    const commentEl = parent.querySelector('.cw-balloon-comment') as HTMLElement;
+    const delEl = parent.querySelector('.cw-balloon-del') as HTMLElement;
     expect(commentEl).not.toBeNull();
     expect(delEl).not.toBeNull();
     // Both balloons live in the same margin column, positioned by one
@@ -961,8 +961,8 @@ describe('mountMarkupMargin — plain markdown doc (comments only, no deletions)
     margin.relayout();
 
     expect(parent.classList.contains('redline-layout')).toBe(true);
-    expect(parent.querySelectorAll('.lf-balloon-del')).toHaveLength(0);
-    expect(parent.querySelectorAll('.lf-balloon-comment')).toHaveLength(1);
+    expect(parent.querySelectorAll('.cw-balloon-del')).toHaveLength(0);
+    expect(parent.querySelectorAll('.cw-balloon-comment')).toHaveLength(1);
   });
 });
 
@@ -975,16 +975,16 @@ describe('mountMarkupMargin — mobile deletion chip opens the bottom sheet', ()
     await tick();
     mountMargin(parent, surface); // wires the chip → sheet click delegation
 
-    const chip = parent.querySelector('.lf-del-chip') as HTMLElement;
+    const chip = parent.querySelector('.cw-del-chip') as HTMLElement;
     expect(chip).not.toBeNull();
-    const sheet = document.querySelector('.lf-del-sheet') as HTMLElement;
+    const sheet = document.querySelector('.cw-del-sheet') as HTMLElement;
     expect(sheet).not.toBeNull();
     expect(sheet.classList.contains('hidden')).toBe(true);
 
     chip.click();
     expect(sheet.classList.contains('hidden')).toBe(false);
     expect(sheet.getAttribute('aria-hidden')).toBe('false');
-    expect(sheet.querySelector('.lf-del-sheet-text')?.textContent).toContain('Removed paragraph.');
+    expect(sheet.querySelector('.cw-del-sheet-text')?.textContent).toContain('Removed paragraph.');
 
     (sheet.querySelector('.thread-view-close') as HTMLElement).click();
     expect(sheet.classList.contains('hidden')).toBe(true);
@@ -999,7 +999,7 @@ describe('mountMarkupMargin — mobile deletion chip opens the bottom sheet', ()
     await tick();
     mountMargin(parent, surface);
 
-    const sheet = document.querySelector('.lf-del-sheet') as HTMLElement;
+    const sheet = document.querySelector('.cw-del-sheet') as HTMLElement;
     const pm = parent.querySelector('.ProseMirror') as HTMLElement;
     pm.click();
     expect(sheet.classList.contains('hidden')).toBe(true);
@@ -1040,7 +1040,7 @@ describe('mountMarkupMargin — revealThreadBalloon', () => {
     try {
       expect(margin.revealThreadBalloon(thread.id)).toBe(true);
       expect(scrollSpy).toHaveBeenCalled();
-      const balloon = parent.querySelector('.lf-balloon-comment') as HTMLElement;
+      const balloon = parent.querySelector('.cw-balloon-comment') as HTMLElement;
       expect(balloon.classList.contains('expanded')).toBe(true);
       expect(balloon.classList.contains('thread')).toBe(true);
       expect(margin.revealThreadBalloon('no-such-thread')).toBe(false);
@@ -1076,7 +1076,7 @@ describe('mountMarkupMargin — revealThreadBalloon', () => {
     // The balloon IS in the DOM — CSS (display:none on .markup-margin) is
     // what hides it below the breakpoint, so `rendered[]` membership alone
     // must not count as "revealed".
-    expect(parent.querySelector('.lf-balloon-comment')).not.toBeNull();
+    expect(parent.querySelector('.cw-balloon-comment')).not.toBeNull();
 
     // 901–1100px: the iPad-portrait gap where chrome.isMobile() is false
     // but the balloon column is hidden — the width the original bug ate.
@@ -1161,12 +1161,12 @@ describe('mountMarkupMargin — clearance under the floating view toggle', () =>
     ]);
     margin.relayout();
 
-    const balloon = parent.querySelector('.lf-balloon') as HTMLElement;
+    const balloon = parent.querySelector('.cw-balloon') as HTMLElement;
     // Anchor Y is 0 (no layout) — without clearance the balloon would sit at
     // top:0 underneath the opaque toggle (bottom edge 48px + 8px gap).
     expect(Number.parseFloat(balloon.style.top)).toBeGreaterThanOrEqual(56);
     // The leader line still points at the deletion's real anchor.
-    const line = parent.querySelector('svg.lf-leader-overlay .lf-leader') as SVGLineElement;
+    const line = parent.querySelector('svg.cw-leader-overlay .cw-leader') as SVGLineElement;
     expect(Number(line.getAttribute('y1'))).toBe(0);
   });
 
@@ -1195,7 +1195,7 @@ describe('mountMarkupMargin — clearance under the floating view toggle', () =>
     const { margin } = mountMargin(parent, surface, () => [{ pos: 1, deletedMarkdown: 'gone' }]);
     margin.relayout();
 
-    const balloon = parent.querySelector('.lf-balloon') as HTMLElement;
+    const balloon = parent.querySelector('.cw-balloon') as HTMLElement;
     expect(Number.parseFloat(balloon.style.top)).toBe(0);
   });
 });
@@ -1220,20 +1220,20 @@ describe('mountMarkupMargin — suggestion balloons', () => {
     margin.relayout();
 
     // Rests collapsed: author + preview + compact ✓/✕, no age line yet.
-    let balloon = parent.querySelector('.lf-balloon.lf-balloon-suggestion') as HTMLElement;
+    let balloon = parent.querySelector('.cw-balloon.cw-balloon-suggestion') as HTMLElement;
     expect(balloon).not.toBeNull();
-    expect(balloon.classList.contains('lf-balloon-collapsed')).toBe(true);
-    expect(balloon.querySelector('.lf-collapsed-name')?.textContent).toBe('Docs Agent');
-    expect(balloon.querySelector('.lf-suggest-old')).toBeNull();
-    expect(balloon.querySelector('.lf-suggest-new')?.textContent).toBe('NEW ');
+    expect(balloon.classList.contains('cw-balloon-collapsed')).toBe(true);
+    expect(balloon.querySelector('.cw-collapsed-name')?.textContent).toBe('Docs Agent');
+    expect(balloon.querySelector('.cw-suggest-old')).toBeNull();
+    expect(balloon.querySelector('.cw-suggest-new')?.textContent).toBe('NEW ');
 
     clickToExpand(balloon);
-    balloon = parent.querySelector('.lf-balloon.lf-balloon-suggestion') as HTMLElement;
-    expect(balloon.classList.contains('lf-balloon-collapsed')).toBe(false);
-    expect(balloon.querySelector('.lf-suggest-author')?.textContent).toBe('Docs Agent');
-    expect(balloon.querySelector('.lf-suggest-age')?.textContent).toBe('just now');
-    expect(balloon.querySelector('.lf-suggest-old')).toBeNull();
-    expect(balloon.querySelector('.lf-suggest-new')?.textContent).toBe('NEW ');
+    balloon = parent.querySelector('.cw-balloon.cw-balloon-suggestion') as HTMLElement;
+    expect(balloon.classList.contains('cw-balloon-collapsed')).toBe(false);
+    expect(balloon.querySelector('.cw-suggest-author')?.textContent).toBe('Docs Agent');
+    expect(balloon.querySelector('.cw-suggest-age')?.textContent).toBe('just now');
+    expect(balloon.querySelector('.cw-suggest-old')).toBeNull();
+    expect(balloon.querySelector('.cw-suggest-new')?.textContent).toBe('NEW ');
   });
 
   it('renders a delete-only card: only the deleted text struck', async () => {
@@ -1254,10 +1254,10 @@ describe('mountMarkupMargin — suggestion balloons', () => {
     });
     margin.relayout();
 
-    const balloon = parent.querySelector('.lf-balloon.lf-balloon-suggestion') as HTMLElement;
+    const balloon = parent.querySelector('.cw-balloon.cw-balloon-suggestion') as HTMLElement;
     expect(balloon).not.toBeNull();
-    expect(balloon.querySelector('.lf-suggest-new')).toBeNull();
-    expect(balloon.querySelector('.lf-suggest-old')?.textContent).toBe('gamma');
+    expect(balloon.querySelector('.cw-suggest-new')).toBeNull();
+    expect(balloon.querySelector('.cw-suggest-old')?.textContent).toBe('gamma');
   });
 
   it('renders a replace card: old text struck AND new text underlined', async () => {
@@ -1278,9 +1278,9 @@ describe('mountMarkupMargin — suggestion balloons', () => {
     });
     margin.relayout();
 
-    const balloon = parent.querySelector('.lf-balloon.lf-balloon-suggestion') as HTMLElement;
-    expect(balloon.querySelector('.lf-suggest-old')?.textContent).toBe('gamma');
-    expect(balloon.querySelector('.lf-suggest-new')?.textContent).toBe('GAMMA');
+    const balloon = parent.querySelector('.cw-balloon.cw-balloon-suggestion') as HTMLElement;
+    expect(balloon.querySelector('.cw-suggest-old')?.textContent).toBe('gamma');
+    expect(balloon.querySelector('.cw-suggest-new')?.textContent).toBe('GAMMA');
     // Plain textContent, never innerHTML — a hostile author name/snippet
     // can't inject markup into the card.
     expect(balloon.innerHTML).not.toContain('<script');
@@ -1312,15 +1312,15 @@ describe('mountMarkupMargin — suggestion balloons', () => {
     const fetchSpy = vi.fn(() => Promise.resolve({ ok: true }) as unknown as Promise<Response>);
     vi.stubGlobal('fetch', fetchSpy);
     try {
-      const balloon = parent.querySelector('.lf-balloon-suggestion') as HTMLElement;
-      const acceptBtn = balloon.querySelector('.lf-suggest-accept') as HTMLButtonElement;
+      const balloon = parent.querySelector('.cw-balloon-suggestion') as HTMLElement;
+      const acceptBtn = balloon.querySelector('.cw-suggest-accept') as HTMLButtonElement;
       acceptBtn.click();
       expect(fetchSpy).toHaveBeenCalledWith(
         expect.stringContaining(`/api/docs/d1/suggestions/${res.ok ? res.sid : ''}/accept`),
         expect.objectContaining({ method: 'POST' }),
       );
       // Optimistically removed on click — doesn't wait for the round trip.
-      expect(parent.querySelectorAll('.lf-balloon-suggestion')).toHaveLength(0);
+      expect(parent.querySelectorAll('.cw-balloon-suggestion')).toHaveLength(0);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -1354,11 +1354,11 @@ describe('mountMarkupMargin — suggestion balloons', () => {
     );
     vi.stubGlobal('fetch', fetchSpy);
     try {
-      const balloon = parent.querySelector('.lf-balloon-suggestion') as HTMLElement;
-      const rejectBtn = balloon.querySelector('.lf-suggest-reject') as HTMLButtonElement;
+      const balloon = parent.querySelector('.cw-balloon-suggestion') as HTMLElement;
+      const rejectBtn = balloon.querySelector('.cw-suggest-reject') as HTMLButtonElement;
       expect(() => rejectBtn.click()).not.toThrow();
       await tick();
-      expect(parent.querySelectorAll('.lf-balloon-suggestion')).toHaveLength(0);
+      expect(parent.querySelectorAll('.cw-balloon-suggestion')).toHaveLength(0);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -1382,7 +1382,7 @@ describe('mountMarkupMargin — suggestion balloons', () => {
     });
     margin.relayout();
 
-    expect(parent.querySelectorAll('.lf-balloon-suggestion')).toHaveLength(0);
+    expect(parent.querySelectorAll('.cw-balloon-suggestion')).toHaveLength(0);
   });
 });
 
@@ -1411,23 +1411,23 @@ describe('mountMarkupMargin — mobile suggestion chip opens the sheet with the 
 
     // The chip is a real (base-schema) ProseMirror decoration, independent
     // of the margin's own relayout — same "mobile fallback always in the
-    // DOM, CSS decides visibility" contract as .lf-del-chip.
-    const chips = parent.querySelectorAll('.lf-suggest-chip');
+    // DOM, CSS decides visibility" contract as .cw-del-chip.
+    const chips = parent.querySelectorAll('.cw-suggest-chip');
     expect(chips).toHaveLength(1);
     const chip = chips[0] as HTMLElement;
     expect(chip.dataset.lfSuggestSid).toBe(res.ok ? res.sid : '');
 
-    const sheet = document.querySelector('.lf-suggest-sheet') as HTMLElement;
+    const sheet = document.querySelector('.cw-suggest-sheet') as HTMLElement;
     expect(sheet).not.toBeNull();
     expect(sheet.classList.contains('hidden')).toBe(true);
 
     chip.click();
     expect(sheet.classList.contains('hidden')).toBe(false);
     expect(sheet.getAttribute('aria-hidden')).toBe('false');
-    expect(sheet.querySelector('.lf-suggest-old')?.textContent).toBe('gamma');
-    expect(sheet.querySelector('.lf-suggest-new')?.textContent).toBe('GAMMA');
-    expect(sheet.querySelector('.lf-suggest-accept')).not.toBeNull();
-    expect(sheet.querySelector('.lf-suggest-reject')).not.toBeNull();
+    expect(sheet.querySelector('.cw-suggest-old')?.textContent).toBe('gamma');
+    expect(sheet.querySelector('.cw-suggest-new')?.textContent).toBe('GAMMA');
+    expect(sheet.querySelector('.cw-suggest-accept')).not.toBeNull();
+    expect(sheet.querySelector('.cw-suggest-reject')).not.toBeNull();
 
     (sheet.querySelector('.thread-view-close') as HTMLElement).click();
     expect(sheet.classList.contains('hidden')).toBe(true);
@@ -1450,15 +1450,15 @@ describe('mountMarkupMargin — mobile suggestion chip opens the sheet with the 
       scope,
     });
 
-    const chip = parent.querySelector('.lf-suggest-chip') as HTMLElement;
+    const chip = parent.querySelector('.cw-suggest-chip') as HTMLElement;
     chip.click();
-    const sheet = document.querySelector('.lf-suggest-sheet') as HTMLElement;
+    const sheet = document.querySelector('.cw-suggest-sheet') as HTMLElement;
     expect(sheet.classList.contains('hidden')).toBe(false);
 
     const fetchSpy = vi.fn(() => Promise.resolve({ ok: true }) as unknown as Promise<Response>);
     vi.stubGlobal('fetch', fetchSpy);
     try {
-      (sheet.querySelector('.lf-suggest-reject') as HTMLButtonElement).click();
+      (sheet.querySelector('.cw-suggest-reject') as HTMLButtonElement).click();
       expect(fetchSpy).toHaveBeenCalled();
       expect(sheet.classList.contains('hidden')).toBe(true);
     } finally {
@@ -1468,7 +1468,7 @@ describe('mountMarkupMargin — mobile suggestion chip opens the sheet with the 
 });
 
 describe('mountMarkupMargin — suggestion chip mobile-only class / 430px', () => {
-  it('the chip carries the SAME class the deletion chip uses to hide ≥1100px (`.lf-suggest-chip`, styles.css)', async () => {
+  it('the chip carries the SAME class the deletion chip uses to hide ≥1100px (`.cw-suggest-chip`, styles.css)', async () => {
     setViewportWidth(415); // 430px-class viewport
     const { parent, editor, ydoc, chrome, scope } = mountPlainWithChrome('Alpha bravo gamma.\n');
     await tick();
@@ -1484,14 +1484,14 @@ describe('mountMarkupMargin — suggestion chip mobile-only class / 430px', () =
       docId: 'd1',
       scope,
     });
-    const chip = parent.querySelector('.lf-suggest-chip') as HTMLElement;
+    const chip = parent.querySelector('.cw-suggest-chip') as HTMLElement;
     expect(chip).not.toBeNull();
     // ProseMirror adds its own `ProseMirror-widget` class to a widget
     // decoration's root node alongside ours — assert containment, not
     // full equality.
-    expect(chip.classList.contains('lf-suggest-chip')).toBe(true);
+    expect(chip.classList.contains('cw-suggest-chip')).toBe(true);
     // The chip decoration exists in the DOM at every width — same "always
-    // rendered, CSS decides visibility" contract as `.lf-del-chip`
+    // rendered, CSS decides visibility" contract as `.cw-del-chip`
     // (live-markup.ts): styles.css, not this test, is what actually hides
     // the balloon column and reveals the chip ≤1100px.
   });
@@ -1539,10 +1539,10 @@ describe('mountMarkupMargin — a rebuild does not interrupt typing', () => {
 
       const balloonTa = (id: string): HTMLTextAreaElement | null =>
         parent.querySelector<HTMLTextAreaElement>(
-          `.lf-balloon-comment[data-thread-id="${id}"] textarea`,
+          `.cw-balloon-comment[data-thread-id="${id}"] textarea`,
         );
       clickToExpand(
-        parent.querySelector(`.lf-balloon-comment[data-thread-id="${t1.id}"]`) as HTMLElement,
+        parent.querySelector(`.cw-balloon-comment[data-thread-id="${t1.id}"]`) as HTMLElement,
       );
       const ta = balloonTa(t1.id) as HTMLTextAreaElement;
       ta.value = 'half a thought';
@@ -1578,9 +1578,9 @@ describe('mountMarkupMargin — a composer mounting re-measures the balloon that
      column measured this card: the slot-b detail face grows under a written
      slot height, and `.thread-slot { overflow: hidden }` eats the reply box.
      Measured in the field as a reply box hidden on a doc comment balloon.
-     The mount bubbles `lf-composer-mounted`; the margin owns re-measuring
+     The mount bubbles `cw-composer-mounted`; the margin owns re-measuring
      its own subtree and restacking the column. */
-  it('re-sizes the slots when lf-composer-mounted bubbles out of a card', async () => {
+  it('re-sizes the slots when cw-composer-mounted bubbles out of a card', async () => {
     const { parent, surface, ydoc, chrome, scope } = mountRedlineWithChrome(
       '',
       'Alpha bravo gamma.\n',
@@ -1603,7 +1603,7 @@ describe('mountMarkupMargin — a composer mounting re-measures the balloon that
     });
     margin.relayout();
 
-    const balloon = parent.querySelector('.lf-balloon.lf-balloon-comment') as HTMLElement;
+    const balloon = parent.querySelector('.cw-balloon.cw-balloon-comment') as HTMLElement;
     clickToExpand(balloon);
     expect(balloon.classList.contains('expanded')).toBe(true);
 
@@ -1615,7 +1615,7 @@ describe('mountMarkupMargin — a composer mounting re-measures the balloon that
     expect(slotB.style.height).not.toBe('80px');
 
     const ta = balloon.querySelector('.slot-b .face-detail textarea') as HTMLElement;
-    ta.dispatchEvent(new CustomEvent('lf-composer-mounted', { bubbles: true }));
+    ta.dispatchEvent(new CustomEvent('cw-composer-mounted', { bubbles: true }));
     expect(slotB.style.height).toBe('80px');
   });
 });
@@ -1661,7 +1661,7 @@ describe('mountMarkupMargin — fit-to-fold keeps the composer reachable', () =>
     });
     margin.relayout();
 
-    const balloon = parent.querySelector('.lf-balloon-comment') as HTMLElement;
+    const balloon = parent.querySelector('.cw-balloon-comment') as HTMLElement;
     expect(balloon).not.toBeNull();
     // happy-dom reports offsetHeight 0 — pin the measured card height, then
     // drive the scroll restack (positions only, no rebuild, so the pin holds).
@@ -1740,7 +1740,7 @@ describe('mountMarkupMargin — the leader never crosses a word', () => {
     );
     margin.relayout();
 
-    const line = parent.querySelector('.lf-leader-comment') as SVGLineElement;
+    const line = parent.querySelector('.cw-leader-comment') as SVGLineElement;
     expect(line).not.toBeNull();
     const x1 = Number.parseFloat(line.getAttribute('x1') ?? '0');
     const x2 = Number.parseFloat(line.getAttribute('x2') ?? '0');
@@ -1787,12 +1787,12 @@ describe('mountMarkupMargin — tapping a bubble brings it forward', () => {
     margin.relayout();
 
     const balloonFor = (id: string) =>
-      parent.querySelector<HTMLElement>(`.lf-balloon-comment[data-thread-id="${id}"]`);
+      parent.querySelector<HTMLElement>(`.cw-balloon-comment[data-thread-id="${id}"]`);
     expect(balloonFor(a.id)?.classList.contains('active')).toBe(false);
     expect(balloonFor(b.id)?.classList.contains('active')).toBe(false);
     // Nothing selected: no leader is emphasised, so none is dimmed either.
-    expect(parent.querySelectorAll('.lf-leader-dim').length).toBe(0);
-    expect(parent.querySelectorAll('.lf-leader-on').length).toBe(0);
+    expect(parent.querySelectorAll('.cw-leader-dim').length).toBe(0);
+    expect(parent.querySelectorAll('.cw-leader-on').length).toBe(0);
 
     chrome.threadsPanel.setActive(b.id);
     margin.relayout();
@@ -1804,7 +1804,7 @@ describe('mountMarkupMargin — tapping a bubble brings it forward', () => {
     // Its leader comes forward with it; the other goes back. The CARDS dim in
     // CSS off `.markup-margin:has(.thread.active)`; the lines cannot, so the
     // classes are written here.
-    expect(parent.querySelectorAll('.lf-leader-on').length).toBe(1);
-    expect(parent.querySelectorAll('.lf-leader-dim').length).toBe(1);
+    expect(parent.querySelectorAll('.cw-leader-on').length).toBe(1);
+    expect(parent.querySelectorAll('.cw-leader-dim').length).toBe(1);
   });
 });

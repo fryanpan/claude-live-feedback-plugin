@@ -126,7 +126,7 @@ describe('inline card width on the code surface', () => {
     // happy-dom gives it — otherwise it is still queued when the stubs below
     // land and this test passes without the card ever asking for a width.
     await frame();
-    expect(view.dom.style.getPropertyValue('--lf-inline-card-w')).toBe('');
+    expect(view.dom.style.getPropertyValue('--cw-inline-card-w')).toBe('');
 
     // Stand in for the layout happy-dom has none of: a 390px phone scroller
     // with a 40px line-number gutter, over content far wider than either.
@@ -136,11 +136,11 @@ describe('inline card width on the code surface', () => {
     Object.defineProperty(gutters, 'offsetWidth', { configurable: true, value: 40 });
 
     const card = document.createElement('div');
-    card.className = 'thread lf-inline-card';
+    card.className = 'thread cw-inline-card';
     surface.setInlineCards?.([{ id: 't1', from: 0, to: 3, el: card }]);
     await frame();
 
     // 390 scroller − 40 gutter − 8 of the card's own horizontal margins.
-    expect(view.dom.style.getPropertyValue('--lf-inline-card-w')).toBe('342px');
+    expect(view.dom.style.getPropertyValue('--cw-inline-card-w')).toBe('342px');
   });
 });

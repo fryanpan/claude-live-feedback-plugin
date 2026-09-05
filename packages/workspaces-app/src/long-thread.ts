@@ -14,7 +14,7 @@ import {
  * wrong size for the two things that keep landing in it instead: a long
  * exchange, and a declared DECISION, whose card carries a kind chip, a
  * headline, a markdown body and a stack of option buttons. Both were already
- * being fought with a viewport clamp (`.lf-balloon-comment.expanded` caps its
+ * being fought with a viewport clamp (`.cw-balloon-comment.expanded` caps its
  * height and scrolls inside itself), which keeps the card on screen but does
  * not give the words anywhere to go: an 80-character measure wrapped into a
  * 300px column is roughly six words a line.

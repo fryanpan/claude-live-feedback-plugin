@@ -201,24 +201,24 @@ describe('mountCommentHints', () => {
       a: -200,
       b: 300,
     });
-    const top = h.pane.querySelector<HTMLElement>('.lf-offscreen-top');
-    const bot = h.pane.querySelector<HTMLElement>('.lf-offscreen-bottom');
+    const top = h.pane.querySelector<HTMLElement>('.cw-offscreen-top');
+    const bot = h.pane.querySelector<HTMLElement>('.cw-offscreen-bottom');
     expect(top?.hidden).toBe(false);
     expect(top?.dataset.n).toBe('1');
     expect(top?.title).toBe('1 comment above');
     expect(bot?.hidden).toBe(true);
     // Never inside the margin: a balloon there could land on top of it.
-    expect(h.marginEl.querySelector('.lf-offscreen')).toBe(null);
+    expect(h.marginEl.querySelector('.cw-offscreen')).toBe(null);
   });
 
   it('lines the pair up over the balloon column on a wide screen, and lets go on a phone', () => {
     const wide = harness([thread('a', [comment('x')])], { a: -200 });
-    const top = wide.pane.querySelector<HTMLElement>('.lf-offscreen-top');
+    const top = wide.pane.querySelector<HTMLElement>('.cw-offscreen-top');
     // margin spans x 540..800 inside a pane at x 0..800 → 6px in from each edge.
     expect(top?.style.left).toBe('546px');
     expect(top?.style.right).toBe('6px');
     const phone = harness([thread('a', [comment('x')])], { a: -200 }, { margin: false });
-    const ptop = phone.pane.querySelector<HTMLElement>('.lf-offscreen-top');
+    const ptop = phone.pane.querySelector<HTMLElement>('.cw-offscreen-top');
     expect(ptop?.style.left).toBe('');
     expect(ptop?.style.right).toBe('');
   });
@@ -228,8 +228,8 @@ describe('mountCommentHints', () => {
       [thread('a', [comment('x')]), thread('b', [comment('y')]), thread('c', [comment('z')])],
       { a: -400, b: -100, c: 900 },
     );
-    h.pane.querySelector<HTMLElement>('.lf-offscreen-top')?.click();
-    h.pane.querySelector<HTMLElement>('.lf-offscreen-bottom')?.click();
+    h.pane.querySelector<HTMLElement>('.cw-offscreen-top')?.click();
+    h.pane.querySelector<HTMLElement>('.cw-offscreen-bottom')?.click();
     expect(h.jumps).toEqual(['b', 'c']);
   });
 
@@ -244,7 +244,7 @@ describe('mountCommentHints', () => {
     );
     expect(h.chip.hidden).toBe(false);
     expect(h.chip.title).toBe('2 waiting on you');
-    expect(h.chip.querySelector('.lf-ic-question')).not.toBe(null);
+    expect(h.chip.querySelector('.cw-ic-question')).not.toBe(null);
     h.chip.click();
     // First in DOCUMENT order, not in thread order — `b` sits higher.
     expect(h.jumps).toEqual(['b']);
@@ -303,7 +303,7 @@ describe('mountCommentHints', () => {
       new1: 100,
       new2: 900,
     });
-    const bot = h.pane.querySelector<HTMLElement>('.lf-offscreen-bottom');
+    const bot = h.pane.querySelector<HTMLElement>('.cw-offscreen-bottom');
     expect(bot?.dataset.new).toBe('1');
     // Not yet — the dwell has not elapsed.
     expect(h.seen).toEqual([]);
@@ -322,7 +322,7 @@ describe('mountCommentHints', () => {
       { new1: -300 },
       { cards: { new1: [card] } },
     );
-    const top = h.pane.querySelector<HTMLElement>('.lf-offscreen-top');
+    const top = h.pane.querySelector<HTMLElement>('.cw-offscreen-top');
     // The COUNT still says the sentence is above…
     expect(top?.dataset.new).toBe('1');
     vi.advanceTimersByTime(60);
@@ -333,7 +333,7 @@ describe('mountCommentHints', () => {
 
   it('the bottom hint clears the action dock when one is showing', () => {
     const h = harness([thread('a', [comment('x')])], { a: 900 }, { dock: 700 });
-    const bot = h.pane.querySelector<HTMLElement>('.lf-offscreen-bottom');
+    const bot = h.pane.querySelector<HTMLElement>('.cw-offscreen-bottom');
     // pane bottom 820 − (dock top 700 − 8) = 128px up from the pane's edge.
     expect(bot?.style.bottom).toBe('128px');
   });

@@ -102,7 +102,7 @@ describe('sync-clobber regressions', () => {
   let rooms: Rooms;
 
   beforeEach(() => {
-    dataDir = mkdtempSync(join(tmpdir(), 'lf-clobber-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-clobber-'));
     path = join(dataDir, 'doc.md');
     writeFileSync(path, DOC);
     rooms = makeRooms(dataDir);
@@ -253,7 +253,7 @@ describe('sync-clobber regressions', () => {
     it('write-back preserves a symlinked bound path', async () => {
       // Rename-onto-path would replace a symlink with a regular file
       // (codex P2) — the write must land through the link at its target.
-      const realDir = mkdtempSync(join(tmpdir(), 'lf-real-'));
+      const realDir = mkdtempSync(join(tmpdir(), 'cw-real-'));
       try {
         const realPath = join(realDir, 'real.md');
         writeFileSync(realPath, DOC);
@@ -442,7 +442,7 @@ describe('sync-clobber HTTP surface', () => {
   let path: string;
 
   beforeEach(() => {
-    dataDir = mkdtempSync(join(tmpdir(), 'lf-clobber-http-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-clobber-http-'));
     path = join(dataDir, 'doc.md');
     writeFileSync(path, DOC);
     handle = createServer({ port: 0, dataDir });

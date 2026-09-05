@@ -55,7 +55,7 @@ describe('attachedAgentResolver', () => {
   it('matches the other spellings a roster holds in the field', () => {
     // A hand-supplied slug, and the display name stored verbatim. Both occur
     // on real boards; matching only the derived id matches almost none.
-    expect(attachedAgentResolver([att('quick-build')])('Quick Build')?.agentId).toBe('quick-build');
+    expect(attachedAgentResolver([att('field-notes')])('Field Notes')?.agentId).toBe('field-notes');
     expect(attachedAgentResolver([att('Surveyor')])('  surveyor ')?.agentId).toBe('Surveyor');
   });
 
@@ -109,7 +109,7 @@ describe('attachedAgentTest still answers the question it always did', () => {
   // against that refactor changing an answer.
   it('keeps its existing yes/no behaviour', () => {
     expect(attachedAgentTest(['agent-cartographer'])('Cartographer')).toBe(true);
-    expect(attachedAgentTest(['quick-build'])('Quick Build')).toBe(true);
+    expect(attachedAgentTest(['field-notes'])('Field Notes')).toBe(true);
     expect(attachedAgentTest(['Surveyor'])('  surveyor ')).toBe(true);
     expect(attachedAgentTest([])('Cartographer')).toBe(false);
     expect(attachedAgentTest(['agent-cartographer'])('   ')).toBe(false);
@@ -137,7 +137,7 @@ describe('the owning session over the real routes', () => {
   const AUTHOR = { id: 'agent-cartographer', name: 'Cartographer', kind: 'agent' };
 
   beforeAll(() => {
-    dataDir = mkdtempSync(join(tmpdir(), 'lf-owner-session-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-owner-session-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
   });

@@ -133,7 +133,7 @@ describe('plugin MCP launcher', () => {
     // anywhere" portably. Run a copy with those paths redirected at nothing.
     // Trade-off: this exercises the failure branch and its message, but not the
     // literal contents of the candidate list.
-    const dir = mkdtempSync(join(tmpdir(), 'lf-launcher-'));
+    const dir = mkdtempSync(join(tmpdir(), 'cw-launcher-'));
     const stripped = readFileSync(LAUNCHER, 'utf8').replace(
       /^(\s*)(\/opt\/homebrew|\/usr\/local|\/usr|\/snap)\/bin\/node(\s*\\?)$/gm,
       '$1/nonexistent$2/bin/node$3',

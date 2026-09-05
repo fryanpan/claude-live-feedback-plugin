@@ -12,7 +12,7 @@ export const RedlineIns = Mark.create({
   name: 'redlineIns',
   inclusive: () => false,
   parseHTML: () => [{ tag: 'ins' }],
-  renderHTML: () => ['ins', { class: 'lf-ins' }, 0],
+  renderHTML: () => ['ins', { class: 'cw-ins' }, 0],
 });
 
 /**
@@ -27,7 +27,7 @@ export const RedlineDel = Mark.create({
   name: 'redlineDel',
   inclusive: () => false,
   parseHTML: () => [{ tag: 'del', priority: 60 }],
-  renderHTML: () => ['del', { class: 'lf-del' }, 0],
+  renderHTML: () => ['del', { class: 'cw-del' }, 0],
 });
 
 /** Block types that can carry provenance. Anything not listed simply has none,
@@ -61,7 +61,7 @@ function numberAttr(dataName: string, attrName: string) {
 }
 
 /**
- * Lifts `data-lf-*` provenance from the rendered HTML onto block nodes.
+ * Lifts `data-cw-*` provenance from the rendered HTML onto block nodes.
  *
  * `lfFrom`/`lfTo` are offsets into the `content` Y.Text — the block's source
  * span on the NEW side. `lfSnap` replaces them on deletion-only blocks, which
@@ -79,19 +79,19 @@ export const RedlineProvenance = Extension.create({
       {
         types: PROVENANCE_TYPES,
         attributes: {
-          lfFrom: numberAttr('data-lf-from', 'lfFrom'),
-          lfTo: numberAttr('data-lf-to', 'lfTo'),
-          lfSnap: numberAttr('data-lf-snap', 'lfSnap'),
+          lfFrom: numberAttr('data-cw-from', 'lfFrom'),
+          lfTo: numberAttr('data-cw-to', 'lfTo'),
+          lfSnap: numberAttr('data-cw-snap', 'lfSnap'),
           lfChange: {
             default: null as string | null,
             parseHTML: (element: HTMLElement): string | null =>
-              element.getAttribute('data-lf-change'),
+              element.getAttribute('data-cw-change'),
             renderHTML: (attrs: Record<string, unknown>): Record<string, string> =>
               attrs.lfChange == null
                 ? {}
                 : {
-                    'data-lf-change': String(attrs.lfChange),
-                    class: `lf-block-${String(attrs.lfChange)}`,
+                    'data-cw-change': String(attrs.lfChange),
+                    class: `cw-block-${String(attrs.lfChange)}`,
                   },
           },
         },

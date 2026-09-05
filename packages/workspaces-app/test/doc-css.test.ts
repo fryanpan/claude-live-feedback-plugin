@@ -73,7 +73,7 @@ describe('the editor page keeps every surface that moved', () => {
   });
 
   it('boxes the in-flow comment card so code cannot widen it (INLINE THREAD CARDS)', () => {
-    const card = attach('lf-inline-card');
+    const card = attach('cw-inline-card');
     const s = styleOf(card);
     // Code scrolls sideways; the card is clamped so a comment on a long line
     // never needs a horizontal scroll of its own.
@@ -108,7 +108,7 @@ describe('the board never loads doc.css, and loses nothing by it', () => {
     expect(styleOf(attach('meeting-strip')).display).not.toBe('flex');
     expect(styleOf(attach('format-bar')).minHeight).not.toBe('44px');
     expect(styleOf(attach('diff-nav-toggle')).position).not.toBe('sticky');
-    expect(styleOf(attach('lf-inline-card')).maxWidth).not.toBe('100%');
+    expect(styleOf(attach('cw-inline-card')).maxWidth).not.toBe('100%');
   });
 
   it('positive control: the shared chrome in styles.css still reaches the board', () => {
@@ -137,9 +137,9 @@ describe('the board never loads doc.css, and loses nothing by it', () => {
     // expand the shorthand, so `textDecoration` is the property that answers
     // — `textDecorationLine` reads `''` even when the rule applies.
     const editor = attach('ProseMirror');
-    const ins = attach('lf-suggest-ins', { tag: 'span', parent: editor });
+    const ins = attach('cw-suggest-ins', { tag: 'span', parent: editor });
     expect(styleOf(ins).textDecoration).toBe('underline');
-    const del = attach('lf-suggest-del', { tag: 'span', parent: editor });
+    const del = attach('cw-suggest-del', { tag: 'span', parent: editor });
     expect(styleOf(del).textDecoration).toBe('line-through');
   });
 
@@ -149,7 +149,7 @@ describe('the board never loads doc.css, and loses nothing by it', () => {
     // an unstyled `<button>✎ suggestion</button>` appears in the task detail
     // panel at every width — the failure inverts rather than disappearing,
     // which is why the negatives above do not cover this.
-    expect(styleOf(attach('lf-suggest-chip', { tag: 'button' })).display).toBe('none');
+    expect(styleOf(attach('cw-suggest-chip', { tag: 'button' })).display).toBe('none');
   });
 
   it('keeps .thread-line in the shared base, because the board renders it too', () => {
@@ -200,7 +200,7 @@ describe('the mobile chip: the board is unmoved, the editor follows placement', 
   /**
    * The chip's rules are split across the two files — the base
    * `display: none` is in `styles.css` (both pages get it), the reveal is in
-   * `doc.css` beside `.lf-del-chip`'s (only the editor gets it) — so "does the
+   * `doc.css` beside `.cw-del-chip`'s (only the editor gets it) — so "does the
    * board read what the editor reads" is a question with two answers to
    * compare, not one value to assert.
    *
@@ -222,9 +222,9 @@ describe('the mobile chip: the board is unmoved, the editor follows placement', 
     if (cards) document.body.dataset.cards = cards;
     else document.body.removeAttribute('data-cards');
     setViewport(IPAD);
-    const ipad = styleOf(attach('lf-suggest-chip', { tag: 'button' })).display;
+    const ipad = styleOf(attach('cw-suggest-chip', { tag: 'button' })).display;
     setViewport(PHONE);
-    const phone = styleOf(attach('lf-suggest-chip', { tag: 'button' })).display;
+    const phone = styleOf(attach('cw-suggest-chip', { tag: 'button' })).display;
     cleanup();
     cleanup = () => {};
     document.body.removeAttribute('data-cards');

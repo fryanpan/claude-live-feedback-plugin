@@ -79,8 +79,8 @@ describe('redline end-to-end shape', () => {
     const para = Array.from(parent.querySelectorAll('p')).find((p) =>
       (p.textContent ?? '').includes('fox'),
     );
-    expect(para?.querySelector('del.lf-del')?.textContent).toBe('brown');
-    expect(para?.querySelector('ins.lf-ins')?.textContent).toBe('red');
+    expect(para?.querySelector('del.cw-del')?.textContent).toBe('brown');
+    expect(para?.querySelector('ins.cw-ins')?.textContent).toBe('red');
     // "The quick" and "over the lazy dog." are untouched, so unmarked.
     expect(para?.textContent).toContain('The quick');
     surface.destroy();
@@ -91,10 +91,10 @@ describe('redline end-to-end shape', () => {
     const { parent, surface } = mount();
     expect(parent.textContent).toContain('Removed section');
     expect(parent.textContent).toContain('This paragraph will be deleted entirely.');
-    const deleted = Array.from(parent.querySelectorAll('[data-lf-change="del"]'));
+    const deleted = Array.from(parent.querySelectorAll('[data-cw-change="del"]'));
     expect(deleted.length).toBeGreaterThan(0);
     // A deleted block has no new-side span, so it carries a snap target.
-    expect(deleted.every((el) => el.hasAttribute('data-lf-snap'))).toBe(true);
+    expect(deleted.every((el) => el.hasAttribute('data-cw-snap'))).toBe(true);
     surface.destroy();
     parent.remove();
   });
@@ -102,9 +102,9 @@ describe('redline end-to-end shape', () => {
   it('marks the added section as an insertion', () => {
     const { parent, surface } = mount();
     expect(parent.textContent).toContain('Brand new section');
-    const added = Array.from(parent.querySelectorAll('[data-lf-change="ins"]'));
+    const added = Array.from(parent.querySelectorAll('[data-cw-change="ins"]'));
     expect(added.length).toBeGreaterThan(0);
-    expect(added.every((el) => el.hasAttribute('data-lf-from'))).toBe(true);
+    expect(added.every((el) => el.hasAttribute('data-cw-from'))).toBe(true);
     surface.destroy();
     parent.remove();
   });
@@ -113,7 +113,7 @@ describe('redline end-to-end shape', () => {
     const { parent, surface } = mount();
     const quote = parent.querySelector('blockquote');
     expect(quote?.textContent).toContain('A quote that stays put.');
-    expect(quote?.hasAttribute('data-lf-change')).toBe(false);
+    expect(quote?.hasAttribute('data-cw-change')).toBe(false);
     expect(quote?.querySelector('del')).toBeNull();
     expect(quote?.querySelector('ins')).toBeNull();
     surface.destroy();
@@ -124,8 +124,8 @@ describe('redline end-to-end shape', () => {
     const { parent, surface } = mount();
     const list = parent.querySelector('ul');
     expect(list?.textContent).toContain('alpha');
-    expect(list?.querySelector('del.lf-del')?.textContent).toBe('bravo');
-    expect(list?.querySelector('ins.lf-ins')?.textContent).toBe('charlie');
+    expect(list?.querySelector('del.cw-del')?.textContent).toBe('bravo');
+    expect(list?.querySelector('ins.cw-ins')?.textContent).toBe('charlie');
     // The list structure must survive — a wrapped "- " would stop being a list.
     expect(list?.querySelectorAll('li').length).toBe(2);
     surface.destroy();

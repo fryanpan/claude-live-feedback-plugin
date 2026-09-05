@@ -15,7 +15,7 @@ import { describe, expect, it } from 'vitest';
 const Ins = Mark.create({
   name: 'redlineIns',
   parseHTML: () => [{ tag: 'ins' }],
-  renderHTML: () => ['ins', { class: 'lf-ins' }, 0],
+  renderHTML: () => ['ins', { class: 'cw-ins' }, 0],
 });
 // StarterKit's Strike mark parses `del` (alongside `s` and `strike`) at the
 // default priority of 50, so a plain `{ tag: 'del' }` rule LOSES to it and the
@@ -25,7 +25,7 @@ const Ins = Mark.create({
 const Del = Mark.create({
   name: 'redlineDel',
   parseHTML: () => [{ tag: 'del', priority: 60 }],
-  renderHTML: () => ['del', { class: 'lf-del' }, 0],
+  renderHTML: () => ['del', { class: 'cw-del' }, 0],
 });
 
 describe('redline render pipeline', () => {
@@ -43,9 +43,9 @@ describe('redline render pipeline', () => {
     console.log('[probe] getHTML() =>', html);
     expect(html).toContain('<h2>');
     // The del must be OUR mark, not StarterKit's Strike claiming the tag.
-    expect(html).toContain('lf-del');
+    expect(html).toContain('cw-del');
     expect(html).not.toContain('<s>stale</s>');
-    expect(html).toContain('lf-ins');
+    expect(html).toContain('cw-ins');
     // Markdown INSIDE the wrapper still parses — this is what block-level
     // wrapping would have cost us.
     expect(html).toContain('<strong>');
@@ -62,8 +62,8 @@ describe('redline render pipeline', () => {
     console.log('[probe] list getHTML() =>', html);
     expect(html).toContain('<ul');
     expect(html).toContain('<li>');
-    expect(html).toContain('lf-del');
-    expect(html).toContain('lf-ins');
+    expect(html).toContain('cw-del');
+    expect(html).toContain('cw-ins');
     editor.destroy();
   });
 });

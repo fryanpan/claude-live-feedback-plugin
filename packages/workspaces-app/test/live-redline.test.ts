@@ -71,21 +71,21 @@ describe('createLiveRedlineEditor — editable collaborative surface', () => {
 });
 
 describe('createLiveRedlineEditor — live ins markup', () => {
-  it('marks an inserted paragraph with the existing lf-ins styling, as a decoration', async () => {
+  it('marks an inserted paragraph with the existing cw-ins styling, as a decoration', async () => {
     const { parent, surface } = mount('Alpha.\n', 'Alpha.\n\nBrand new paragraph.\n');
     await tick();
-    const ins = parent.querySelector('ins.lf-ins');
+    const ins = parent.querySelector('ins.cw-ins');
     expect(ins?.textContent).toContain('Brand new paragraph.');
     // Decoration, not content: the document itself carries no redline marks.
     const md = surface.handle.getMarkdown();
-    expect(md).not.toContain('lf-ins');
+    expect(md).not.toContain('cw-ins');
     expect(md).toContain('Brand new paragraph.');
   });
 
   it('marks only the inserted words inside a reworded paragraph', async () => {
     const { parent } = mount('The quick brown fox.\n', 'The quick red brown fox.\n');
     await tick();
-    const marked = Array.from(parent.querySelectorAll('ins.lf-ins'))
+    const marked = Array.from(parent.querySelectorAll('ins.cw-ins'))
       .map((e) => e.textContent ?? '')
       .join(' ');
     expect(marked).toContain('red');
@@ -95,12 +95,12 @@ describe('createLiveRedlineEditor — live ins markup', () => {
   it('recomputes markup live when a REMOTE edit lands in the Yjs doc', async () => {
     const { fragment, parent } = mount('The quick brown fox.\n', 'The quick brown fox.\n');
     await tick();
-    expect(parent.querySelector('ins.lf-ins')).toBeNull();
+    expect(parent.querySelector('ins.cw-ins')).toBeNull();
     // A concurrent editor / agent applies a change straight to the fragment —
     // the same path apply_markdown / find_and_replace use on the server.
     prose.applyMarkdownToFragment(fragment, 'The quick brown fox.\n\nAdded remotely.\n');
     await tick();
-    expect(parent.querySelector('ins.lf-ins')?.textContent).toContain('Added remotely.');
+    expect(parent.querySelector('ins.cw-ins')?.textContent).toContain('Added remotely.');
   });
 
   it('refresh() recomputes synchronously without waiting out the debounce', async () => {
@@ -108,9 +108,9 @@ describe('createLiveRedlineEditor — live ins markup', () => {
     await tick();
     prose.applyMarkdownToFragment(fragment, 'Alpha.\n\nNot yet marked.\n');
     await tick(); // debounce is 60s — nothing recomputed yet
-    expect(parent.querySelector('ins.lf-ins')).toBeNull();
+    expect(parent.querySelector('ins.cw-ins')).toBeNull();
     surface.refresh();
-    expect(parent.querySelector('ins.lf-ins')?.textContent).toContain('Not yet marked.');
+    expect(parent.querySelector('ins.cw-ins')?.textContent).toContain('Not yet marked.');
   });
 });
 
@@ -119,14 +119,14 @@ describe('createLiveRedlineEditor — added file (isAdded)', () => {
     const { parent, surface } = mount('', '# New file\n\nBody.\n', 0, true);
     await tick();
     expect(parent.textContent).toContain('New file');
-    expect(parent.querySelector('ins.lf-ins')).toBeNull();
+    expect(parent.querySelector('ins.cw-ins')).toBeNull();
     expect(surface.getDeletions()).toEqual([]);
   });
 
   it('a MODIFIED file whose base blob is empty still gets markup (added ≠ empty base)', async () => {
     const { parent } = mount('', 'Fresh content.\n');
     await tick();
-    expect(parent.querySelector('ins.lf-ins')).not.toBeNull();
+    expect(parent.querySelector('ins.cw-ins')).not.toBeNull();
   });
 });
 
@@ -146,7 +146,7 @@ describe('createLiveRedlineEditor — getDeletions', () => {
     expect(cPos).toBeGreaterThan(0);
     expect(dels[0].pos).toBe(cPos);
     // Deletions are NOT rendered inline (the margin owns them, commit 3).
-    expect(parent.querySelector('del.lf-del')).toBeNull();
+    expect(parent.querySelector('del.cw-del')).toBeNull();
     expect(parent.textContent).not.toContain('Gone paragraph.');
   });
 
@@ -157,7 +157,7 @@ describe('createLiveRedlineEditor — getDeletions', () => {
     expect(dels.length).toBeGreaterThan(0);
     expect(dels.map((d) => d.deletedMarkdown).join(' ')).toContain('brown');
     expect(dels[0].pos).toBeGreaterThan(0);
-    expect(parent.querySelector('del.lf-del')).toBeNull();
+    expect(parent.querySelector('del.cw-del')).toBeNull();
   });
 
   it('anchors a trailing deletion at the end of the document', async () => {

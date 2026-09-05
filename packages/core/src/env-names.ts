@@ -2,18 +2,19 @@
  * Environment variable names across the live-feedback → claude-workspaces
  * rename.
  *
- * WHY ONE PREFIX. There were two, `LF_` and `FEEDBACK_`, split by nothing
- * anyone could state — plus a third spelling for a single variable
- * (`LIVE_FEEDBACK_SUMMARY_API_KEY`). The rename is the one cheap moment to
- * collapse them, so every variable this project owns is now `CW_`.
+ * WHY ONE PREFIX. There were three spellings, split by nothing anyone could
+ * state: a two-letter prefix from the old product name, `FEEDBACK_`, and a
+ * long form for a single variable (`LIVE_FEEDBACK_SUMMARY_API_KEY`). The
+ * rename was the one cheap moment to collapse them, so every variable this
+ * project owns is now `CW_`.
  *
  * WHY `CW_` AND NOT `CLAUDE_WORKSPACES_`. Short enough that a plist or a
- * launch config stays readable, which is what `LF_` was buying. And
+ * launch config stays readable, which is what the old prefix was buying. And
  * deliberately NOT under `CLAUDE_`: that namespace belongs to Claude Code
  * itself (`CLAUDE_PLUGIN_ROOT`), so squatting in it risks a collision with a
  * harness-owned name we would not control and could not rename back.
  *
- * WHY THE OLD NAMES KEEP WORKING. The rollout is a coordinated flag day — a
+ * WHY SOME OLD NAMES STILL WORK. The rollout was a coordinated flag day — a
  * migration script on the box, launch configs updated, every session
  * respawned. But a launch environment is the one input this repo cannot
  * restart on somebody's behalf, so a straggler that the sweep missed should
@@ -21,6 +22,11 @@
  * a permanent cheap read, not a transition scaffold; it costs one property
  * lookup and it is the difference between a missed config line being visible
  * and being catastrophic.
+ *
+ * The server-facing aliases from the old product name are gone (2026-09-04):
+ * they were only ever read from the launchd plist and the dev shell, both of
+ * which this repo does own and has since migrated. What remains is the
+ * agent-facing set, which is read from a session's launch environment.
  */
 
 export type EnvLike = Record<string, string | undefined>;
@@ -37,22 +43,7 @@ export const ENV_RENAMES: ReadonlyArray<readonly [legacy: string, current: strin
   ['FEEDBACK_BASE_URL', 'CW_BASE_URL'],
   ['FEEDBACK_AGENT_NAME', 'CW_AGENT_NAME'],
   ['FEEDBACK_AUTHOR', 'CW_AUTHOR'],
-  // Server-facing: read from the launchd plist / the dev shell.
-  ['LF_CLIENT_ROOT', 'CW_CLIENT_ROOT'],
-  ['LF_PUBLIC_BASE_URL', 'CW_PUBLIC_BASE_URL'],
-  // Named `LF_` in the domain plan and its cutover runbook before the prefix
-  // collapsed; registered so the spelling the runbook teaches keeps working.
-  ['LF_PROXIED_TRUSTED_HOSTS', 'CW_PROXIED_TRUSTED_HOSTS'],
-  ['LF_WIDGET_DIST', 'CW_WIDGET_DIST'],
-  ['LF_MARKDOWN_APP_DIST', 'CW_MARKDOWN_APP_DIST'],
-  ['LF_SHARING_DISABLED', 'CW_SHARING_DISABLED'],
-  ['LF_SUMMARIES', 'CW_SUMMARIES'],
-  ['LF_SUMMARY_BACKFILL', 'CW_SUMMARY_BACKFILL'],
-  ['LF_SUMMARY_BACKFILL_MINUTES', 'CW_SUMMARY_BACKFILL_MINUTES'],
-  ['LF_PLUGIN_REFRESH_MINUTES', 'CW_PLUGIN_REFRESH_MINUTES'],
-  ['LF_CLAUDE_BIN', 'CW_CLAUDE_BIN'],
-  ['LF_MCP_PRINT_NODE', 'CW_MCP_PRINT_NODE'],
-  // The one variable that never shared either prefix.
+  // The one variable that never shared the agent-facing prefix.
   ['LIVE_FEEDBACK_SUMMARY_API_KEY', 'CW_SUMMARY_API_KEY'],
 ];
 

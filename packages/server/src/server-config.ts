@@ -58,10 +58,8 @@ export function resolveServerConfig(opts: {
   // The flag and the variable spell the app differently on purpose. The flag
   // is internal — `scripts/serve.ts` is its only caller and it restarts with
   // this file — so it followed the package rename. The variable is a launch
-  // config, the one input this repo cannot restart on somebody's behalf, and
-  // it already carries an `LF_MARKDOWN_APP_DIST` fallback (`env-names.ts`);
-  // renaming it would end that chain for a straggler that the sweep missed.
-  // Rename it in the same flag day that retires the `LF_` spellings.
+  // config, the one input this repo cannot restart on somebody's behalf, so
+  // it is left alone until a flag day updates the launch configs that set it.
   const { widget: widgetDist, markdownApp: markdownAppDist } = resolveClientDists({
     widgetDist: arg('widget-dist') ?? readRenamedEnv(env, 'CW_WIDGET_DIST'),
     markdownAppDist: arg('workspaces-app-dist') ?? readRenamedEnv(env, 'CW_MARKDOWN_APP_DIST'),

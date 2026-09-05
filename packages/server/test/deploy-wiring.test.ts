@@ -26,7 +26,7 @@ async function withServer(
   extraArgs: string[],
   body: (port: number, headers: Record<string, string>) => Promise<void>,
 ): Promise<void> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'lf-deploy-wiring-'));
+  const dataDir = mkdtempSync(join(tmpdir(), 'cw-deploy-wiring-'));
   const port = 9700 + Math.floor(Math.random() * 250);
   const child = spawn(
     'bun',
@@ -39,7 +39,7 @@ async function withServer(
       dataDir,
       ...extraArgs,
     ],
-    { cwd: repoRoot, stdio: 'ignore', env: { ...process.env, LF_SUMMARIES: '0' } },
+    { cwd: repoRoot, stdio: 'ignore', env: { ...process.env, CW_SUMMARIES: '0' } },
   );
   const headers = { host: `localhost:${port}`, 'content-type': 'application/json' };
   try {

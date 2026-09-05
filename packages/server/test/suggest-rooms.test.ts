@@ -47,7 +47,7 @@ describe('rooms suggestion operations', () => {
   let rooms: Rooms;
 
   beforeEach(() => {
-    dataDir = mkdtempSync(join(tmpdir(), 'lf-suggest-ops-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-suggest-ops-'));
     path = join(dataDir, 'doc.md');
     writeFileSync(path, MD);
     rooms = makeRooms(dataDir);

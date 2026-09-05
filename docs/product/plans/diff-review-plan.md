@@ -121,7 +121,7 @@ Sequential (each layer feeds the next); no subagent fan-out needed for implement
 ## Testing & verification
 
 - **Unit/server**: fixture git repo (init, two commits) in test tmp; `bindDiff` file list/status/rename/guardrails/idempotency; diff endpoint baseText + added/deleted cases; docId encoding; reviewUrl. Core: schema fields round-trip. Pure line-number mapping helper (chunks → old/new gutter numbers) unit-tested.
-- **E2E (isolated)**: run `bun packages/server/src/bin.ts --port 8891 --data-dir <scratchpad>/lf-diff-data` from THIS worktree (never :8787). Create a diff review for a partner project-3945 (`5273a7717..cb178fa02`), open in Chrome: verify per-file render, hunks, old/new numbers, line comment round-trip (create in browser → SSE event → `post_reply` → appears live → `resolve_thread`), toggle both views + comment in full-file view, 430px pass.
+- **E2E (isolated)**: run `bun packages/server/src/bin.ts --port 8891 --data-dir <scratchpad>/cw-diff-data` from THIS worktree (never :8787). Create a diff review for a partner project-3945 (`5273a7717..cb178fa02`), open in Chrome: verify per-file render, hunks, old/new numbers, line comment round-trip (create in browser → SSE event → `post_reply` → appears live → `resolve_thread`), toggle both views + comment in full-file view, 430px pass.
 - **Scale**: Maps diff (`e8c6e64..37ea03a`, ~65 files) binds < a few seconds, tree navigates, biggest file renders.
 - Full `bun run test` + `typecheck` + `lint`; build all bundles.
 - After merge: restart prod to deploy the client — `git pull --ff-only origin main`

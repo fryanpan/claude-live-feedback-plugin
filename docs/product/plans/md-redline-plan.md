@@ -34,7 +34,7 @@ touching Tasks 6-8:
    two items into a single `one - two`.
 3. **Block provenance via `data-*` requires an HTML block, and an HTML block
    stops markdown parsing inside it.** A plain markdown heading yields
-   `lfFrom: null`; `<div data-lf-from>` around a table collapsed the whole thing
+   `lfFrom: null`; `<div data-cw-from>` around a table collapsed the whole thing
    to `<p>ab12</p>`. So "markdown with data attributes" is not available.
 4. **One emitted markdown block ≠ one top-level node.** `- a\n- b` followed by
    `- c\n- d` parses to ONE `bulletList`. Adjacent same-type lists merge across
@@ -44,10 +44,10 @@ touching Tasks 6-8:
    after some block types.)
 
 **Revised approach:** render each `RedlineBlock`'s markdown to HTML *in
-isolation* (one reused scratch editor), inject `data-lf-*` into the outer tag of
+isolation* (one reused scratch editor), inject `data-cw-*` into the outer tag of
 the resulting element, concatenate, and `setContent(html)`. Isolated parses
 cannot merge (fact 4 defused), inline content is already HTML by the time the
-attributes are added (fact 3 defused), and `<p data-lf-from="12">` → `lfFrom: 12`
+attributes are added (fact 3 defused), and `<p data-cw-from="12">` → `lfFrom: 12`
 is verified. `RedlineProvenance` from Task 7 is retained — it was correct, it
 just needed generated HTML rather than hand-written markdown as its input.
 
@@ -140,7 +140,7 @@ describe('redline render pipeline', () => {
       ],
       content: '',
     });
-    editor.commands.setContent('<p data-lf-from="12" data-lf-to="40">Body.</p>', {
+    editor.commands.setContent('<p data-cw-from="12" data-cw-to="40">Body.</p>', {
       emitUpdate: false,
     });
     const node = editor.state.doc.child(0);
@@ -162,7 +162,7 @@ Expected: the first test's outcome is the finding. The second FAILS (module does
 
 1. **`<del>` must outrank StarterKit's Strike mark.** Strike's own `parseHTML` claims `del` (alongside `s` and `strike`) at the default priority of 50, so a plain `{ tag: 'del' }` rule LOSES and every deletion silently renders as ordinary strikethrough — visually near-identical, so this would not have been caught by eye. `RedlineDel` must use `parseHTML: () => [{ tag: 'del', priority: 60 }]` (Task 7). Do NOT fix this by disabling Strike: real `~~strikethrough~~` in the source must still render as itself.
 2. **Inline markdown inside the wrapper parses.** Verified output:
-   `<h2>A <del class="lf-del">stale</del><strong><ins class="lf-ins">fresh</ins></strong> heading</h2>`
+   `<h2>A <del class="cw-del">stale</del><strong><ins class="cw-ins">fresh</ins></strong> heading</h2>`
    — the block marker stays literal, and `**fresh**` inside the `<ins>` becomes `<strong>`. Mark nesting order (`<strong><ins>` vs `<ins><strong>`) is ProseMirror's call and is cosmetically irrelevant. Lists behave the same way.
 
 Retained for context: had it failed (inline HTML stripped, or inner markdown not parsed), the fallback was building ProseMirror JSON directly in `redline-markdown.ts` and parsing inline markdown per segment — a larger Task 6, costing inline-formatting fidelity inside changed text.
@@ -1280,7 +1280,7 @@ the route is the layer that silently dropped `groups` (see learnings.md)."
 
 **Interfaces:**
 - Consumes: `RedlineBlock` (Task 4).
-- Produces: `renderRedlineMarkdown(blocks: RedlineBlock[]): string` — markdown where changed inline text is wrapped in `<ins>` / `<del>`, and every block carries `data-lf-*` provenance.
+- Produces: `renderRedlineMarkdown(blocks: RedlineBlock[]): string` — markdown where changed inline text is wrapped in `<ins>` / `<del>`, and every block carries `data-cw-*` provenance.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1309,12 +1309,12 @@ describe('renderRedlineMarkdown', () => {
   it('marks a whole inserted block with a provenance span', () => {
     const md = renderRedlineMarkdown(computeRedline('A.\n', 'A.\n\nBrand new.\n'));
     expect(md).toContain('<ins>Brand new.</ins>');
-    expect(md).toMatch(/data-lf-from="\d+"/);
+    expect(md).toMatch(/data-cw-from="\d+"/);
   });
 
-  it('emits data-lf-snap on a deleted block instead of a from/to', () => {
+  it('emits data-cw-snap on a deleted block instead of a from/to', () => {
     const md = renderRedlineMarkdown(computeRedline('A.\n\nGone.\n\nC.\n', 'A.\n\nC.\n'));
-    expect(md).toContain('data-lf-snap=');
+    expect(md).toContain('data-cw-snap=');
     expect(md).toContain('<del>Gone.</del>');
   });
 
@@ -1338,8 +1338,8 @@ Expected: FAIL — module not found.
 Create `packages/markdown-app/src/redline/redline-markdown.ts`. Key rules, in order of importance:
 
 1. **Never wrap block-level markdown syntax.** For a block whose source starts with a marker (`## `, `- `, `> `, `1. `), the marker stays literal and only the inline text is wrapped. Otherwise a struck-through `##` renders as a paragraph.
-2. **Never wrap inside a fence or a table.** `codeBlock` / `table` / `horizontalRule` blocks emit their source verbatim and get whole-block change styling via `data-lf-change`.
-3. **Provenance goes on the block**, as `data-lf-from` / `data-lf-to` (or `data-lf-snap` for `del` blocks), via an HTML comment-free wrapper the global attribute in Task 7 parses.
+2. **Never wrap inside a fence or a table.** `codeBlock` / `table` / `horizontalRule` blocks emit their source verbatim and get whole-block change styling via `data-cw-change`.
+3. **Provenance goes on the block**, as `data-cw-from` / `data-cw-to` (or `data-cw-snap` for `del` blocks), via an HTML comment-free wrapper the global attribute in Task 7 parses.
 
 ```ts
 import type { RedlineBlock, RedlineSegment } from '@feedback/core';
@@ -1371,7 +1371,7 @@ function wrapSegments(segs: RedlineSegment[]): string {
  * Render a redline to markdown that the Tiptap surface can parse.
  *
  * Inline changes become <ins>/<del> (marks — see redline-marks.ts). Block
- * provenance rides on data-lf-* attributes that the RedlineProvenance global
+ * provenance rides on data-cw-* attributes that the RedlineProvenance global
  * attribute lifts onto the block node, which is how a rendered position maps
  * back to a `content` offset for anchoring.
  */
@@ -1380,9 +1380,9 @@ export function renderRedlineMarkdown(blocks: RedlineBlock[]): string {
   for (const b of blocks) {
     const attrs =
       b.from != null
-        ? ` data-lf-from="${b.from}" data-lf-to="${b.to}"`
-        : ` data-lf-snap="${b.snapTo ?? 0}"`;
-    const changeAttr = b.kind === 'same' ? '' : ` data-lf-change="${b.kind}"`;
+        ? ` data-cw-from="${b.from}" data-cw-to="${b.to}"`
+        : ` data-cw-snap="${b.snapTo ?? 0}"`;
+    const changeAttr = b.kind === 'same' ? '' : ` data-cw-change="${b.kind}"`;
 
     // Verbatim blocks: no inline wrapping is possible, so the whole block is
     // styled instead.
@@ -1414,7 +1414,7 @@ export function renderRedlineMarkdown(blocks: RedlineBlock[]): string {
 }
 ```
 
-**Implementer note:** the marker-consumption loop above is the fiddly part — a `del` segment can straddle the marker boundary. Let the tests drive it; if a test shows a marker being wrapped, fix the loop, not the test. If `data-lf-*` on a `<div>` wrapper turns out not to survive (Task 0 probes this), fall back to emitting the provenance as attributes on the block via `renderHTML` in Task 7 and reconstructing the index by document order instead.
+**Implementer note:** the marker-consumption loop above is the fiddly part — a `del` segment can straddle the marker boundary. Let the tests drive it; if a test shows a marker being wrapped, fix the loop, not the test. If `data-cw-*` on a `<div>` wrapper turns out not to survive (Task 0 probes this), fall back to emitting the provenance as attributes on the block via `renderHTML` in Task 7 and reconstructing the index by document order instead.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
@@ -1467,8 +1467,8 @@ describe('redline marks', () => {
     editor.destroy();
   });
 
-  it('lifts data-lf-from / data-lf-to onto the block node as numbers', () => {
-    const editor = mount('<p data-lf-from="10" data-lf-to="25">Body.</p>');
+  it('lifts data-cw-from / data-cw-to onto the block node as numbers', () => {
+    const editor = mount('<p data-cw-from="10" data-cw-to="25">Body.</p>');
     const node = editor.state.doc.child(0);
     expect(node.attrs.lfFrom).toBe(10);
     expect(node.attrs.lfTo).toBe(25);
@@ -1481,8 +1481,8 @@ describe('redline marks', () => {
     editor.destroy();
   });
 
-  it('lifts data-lf-snap for deletion-only blocks', () => {
-    const editor = mount('<p data-lf-snap="42">Gone.</p>');
+  it('lifts data-cw-snap for deletion-only blocks', () => {
+    const editor = mount('<p data-cw-snap="42">Gone.</p>');
     expect(editor.state.doc.child(0).attrs.lfSnap).toBe(42);
     editor.destroy();
   });
@@ -1511,7 +1511,7 @@ export const RedlineIns = Mark.create({
   name: 'redlineIns',
   inclusive: () => false,
   parseHTML: () => [{ tag: 'ins' }],
-  renderHTML: () => ['ins', { class: 'lf-ins' }, 0],
+  renderHTML: () => ['ins', { class: 'cw-ins' }, 0],
 });
 
 // Priority 60 is load-bearing, not decoration: StarterKit's Strike mark parses
@@ -1521,7 +1521,7 @@ export const RedlineDel = Mark.create({
   name: 'redlineDel',
   inclusive: () => false,
   parseHTML: () => [{ tag: 'del', priority: 60 }],
-  renderHTML: () => ['del', { class: 'lf-del' }, 0],
+  renderHTML: () => ['del', { class: 'cw-del' }, 0],
 });
 
 const numAttr = (name: string) => ({
@@ -1533,14 +1533,14 @@ const numAttr = (name: string) => ({
     return Number.isFinite(n) ? n : null;
   },
   renderHTML: (attrs: Record<string, unknown>): Record<string, string> => {
-    const key = name.replace(/^data-lf-/, 'lf');
+    const key = name.replace(/^data-cw-/, 'lf');
     void key;
     return {};
   },
 });
 
 /**
- * Lifts data-lf-* provenance from the rendered HTML onto block nodes.
+ * Lifts data-cw-* provenance from the rendered HTML onto block nodes.
  *
  * `lfFrom`/`lfTo` are offsets into the `content` Y.Text — the block's source
  * span on the NEW side. `lfSnap` replaces them on deletion-only blocks, which
@@ -1558,14 +1558,14 @@ export const RedlineProvenance = Extension.create({
       {
         types: ['paragraph', 'heading', 'blockquote', 'codeBlock', 'bulletList', 'orderedList', 'listItem', 'table', 'horizontalRule'],
         attributes: {
-          lfFrom: { ...numAttr('data-lf-from'), renderHTML: (a) => (a.lfFrom == null ? {} : { 'data-lf-from': String(a.lfFrom) }) },
-          lfTo: { ...numAttr('data-lf-to'), renderHTML: (a) => (a.lfTo == null ? {} : { 'data-lf-to': String(a.lfTo) }) },
-          lfSnap: { ...numAttr('data-lf-snap'), renderHTML: (a) => (a.lfSnap == null ? {} : { 'data-lf-snap': String(a.lfSnap) }) },
+          lfFrom: { ...numAttr('data-cw-from'), renderHTML: (a) => (a.lfFrom == null ? {} : { 'data-cw-from': String(a.lfFrom) }) },
+          lfTo: { ...numAttr('data-cw-to'), renderHTML: (a) => (a.lfTo == null ? {} : { 'data-cw-to': String(a.lfTo) }) },
+          lfSnap: { ...numAttr('data-cw-snap'), renderHTML: (a) => (a.lfSnap == null ? {} : { 'data-cw-snap': String(a.lfSnap) }) },
           lfChange: {
             default: null as string | null,
-            parseHTML: (el: HTMLElement) => el.getAttribute('data-lf-change'),
+            parseHTML: (el: HTMLElement) => el.getAttribute('data-cw-change'),
             renderHTML: (a: Record<string, unknown>) =>
-              a.lfChange == null ? {} : { 'data-lf-change': String(a.lfChange), class: `lf-block-${String(a.lfChange)}` },
+              a.lfChange == null ? {} : { 'data-cw-change': String(a.lfChange), class: `cw-block-${String(a.lfChange)}` },
           },
         },
       },
@@ -1998,9 +1998,9 @@ git commit -m "feat(redline): boot .md diff docs into the redline surface with a
 
 Append to `packages/markdown-app/src/styles.css`. Requirements:
 
-- `ins.lf-ins` — underline, green-ish, no background fill that would fight the thread highlight.
-- `del.lf-del` — line-through, red-ish, slightly muted so surviving text stays dominant.
-- `[data-lf-change='ins'|'del']` block styling — a left change bar, matching the `.cm-changedLine` bar in the source view so the two surfaces read as one product.
+- `ins.cw-ins` — underline, green-ish, no background fill that would fight the thread highlight.
+- `del.cw-del` — line-through, red-ish, slightly muted so surviving text stays dominant.
+- `[data-cw-change='ins'|'del']` block styling — a left change bar, matching the `.cm-changedLine` bar in the source view so the two surfaces read as one product.
 - Both must survive the existing thread-highlight and `.pulse` decorations layering on top.
 - Do NOT rely on color alone — the strikethrough and underline carry the meaning for colorblind readers.
 
