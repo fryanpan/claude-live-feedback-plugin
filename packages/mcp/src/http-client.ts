@@ -54,16 +54,30 @@ export function resolveBaseUrl(deps: DiscoveryDeps): string {
 
 export type Http = (method: string, path: string, body?: unknown) => Promise<unknown>;
 
-/** The REST call every tool goes through; throws on a non-2xx. */
+/**
+ * The REST call every tool goes through; throws on a non-2xx.
+ *
+ * `authHeaders` is asked PER PATH, and answers `{}` for all but the one route
+ * that reads this agent's own feed (see `pathNeedsAgentToken` in
+ * agent-token.ts). Asked unconditionally, it would make the first tool call
+ * of a session wait on a token mint that has nothing to do with it, coupling
+ * every tool's availability to a request none of them need. It also resolves
+ * to `{}` whenever no token could be had, which is exactly what this client
+ * sent before the header existed.
+ */
 export function createHttp(
   resolve: () => string,
   fetchFn: (url: string, init?: RequestInit) => Promise<Response> = fetch,
+  authHeaders: (path: string) => Promise<Record<string, string>> = async () => ({}),
 ): Http {
   return async (method, path, body) => {
     const baseUrl = resolve();
     const res = await fetchFn(`${baseUrl}${path}`, {
       method,
-      headers: body ? { 'content-type': 'application/json' } : {},
+      headers: {
+        ...(body ? { 'content-type': 'application/json' } : {}),
+        ...(await authHeaders(path)),
+      },
       body: body ? JSON.stringify(body) : undefined,
     });
     const text = await res.text();

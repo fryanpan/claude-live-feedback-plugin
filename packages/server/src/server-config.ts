@@ -216,6 +216,29 @@ export function resolveServerConfig(opts: {
   const requireSignInToWrite = signInToWriteFromEnv(env.CW_REQUIRE_SIGNIN_TO_WRITE);
 
   /**
+   * Whether the two agent-id-keyed routes REFUSE a caller that presents no
+   * `at1` agent token: `GET /api/agents/<id>/watches` and
+   * `GET /events/agent/<id>`.
+   *
+   * Default OFF, and that is the deprecation window rather than an opinion
+   * about the gate. Presenting the token needs a client change, and the MCP
+   * child that must make it ships in a plugin bundle a peer updates on their
+   * own schedule; refusing an un-updated child would take its durable watch
+   * restore and its whole event stream away mid-session, which is the exact
+   * outage `/events/agent/` exists to prevent. So an un-tokened caller is
+   * served with one logged warning until the fleet is past 0.1.164, and
+   * `CW_REQUIRE_AGENT_TOKEN=1` closes it.
+   *
+   * Nothing about the SHAPE gate is deferred: not-a-browser, loopback-only
+   * and not-through-the-edge are enforced on both routes regardless of this
+   * flag, because every shipped MCP child already satisfies all three. See
+   * auth/agent-token.ts for which door each layer closes.
+   */
+  const requireAgentToken = ['1', 'true', 'yes', 'on'].includes(
+    (env.CW_REQUIRE_AGENT_TOKEN ?? '').trim().toLowerCase(),
+  );
+
+  /**
    * ACCESS-ONLY browser hosts. Default ON (Bryan, 2026-09-02: *"Let's make
    * everyone go through cloudflare access. No internal hole."*).
    *
@@ -579,6 +602,7 @@ export function resolveServerConfig(opts: {
     sharingEnvLocked,
     requireEmailAuth,
     requireSignInToWrite,
+    requireAgentToken,
     accessOnlyBrowserHosts,
     emailCodeSignIn,
     ownerEmail,
