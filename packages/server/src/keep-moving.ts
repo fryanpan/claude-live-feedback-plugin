@@ -82,11 +82,38 @@ export interface Classified {
    *  malformed graph — the report names it as such rather than presenting a
    *  loop member as its own blocker. */
   cycle?: string[];
+  /**
+   * When the row's own NOTES started saying it is waiting on a person, with
+   * no review item filed anywhere the person reads — the oldest note in the
+   * unbroken run of such notes ending at the newest one. Absent when the
+   * newest note says nothing of the kind, which is the ordinary case.
+   *
+   * Present is what makes the row `blocked-on-owner-unfiled` on evidence the
+   * BOARD could not see: an agent-owned row under a dispatching band whose
+   * ask exists only in prose. See the `noteAsk` parameter for why the run is
+   * walked rather than the newest note alone.
+   */
+  askedInNoteAt?: number;
   /** TRUE means this row is waiting on the owner with NO pending review item
    *  anywhere on its chain's terminal — an ask that exists only in someone's
    *  head. The owner cannot see it on the Home queue, so it counts toward FAIL
    *  (7 of 10 "blocked-on-owner" rows on the 08-27 "PASS" board were this). */
   unfiledAsk: boolean;
+}
+
+/**
+ * How a caller reads a note for an ask to a person. Declared here rather than
+ * imported so this module stays what it is — a pure classifier the CLI report
+ * and the server both run — while the detector itself (`note-ask.ts`, plus
+ * the Haiku confirmation under it) stays out of the report's dependency tree.
+ * `NoteAskClassifier` satisfies it structurally.
+ */
+export interface NoteAskSeam {
+  /** The full reading: prefilter, cached judge verdict, and the background
+   *  confirmation this call may schedule. */
+  asks(note: { ts: number; text?: string }): boolean;
+  /** The deterministic half alone — no cache read, no judge call. */
+  prefilterOnly(note: { ts: number; text?: string }): boolean;
 }
 
 /** A ticket's own clock: when it entered its current status. */
@@ -103,6 +130,31 @@ function newestNoteAt(t: TaskRow): number {
   let newest = 0;
   for (const n of t.notes ?? []) if (typeof n.ts === 'number' && n.ts > newest) newest = n.ts;
   return newest;
+}
+
+/**
+ * When this row's notes started saying it is waiting on a person, or
+ * undefined when they do not say so.
+ *
+ * The newest note decides — see the `noteAsk` parameter — and the answer is
+ * then dated by walking back through the unbroken run of notes that read the
+ * same way. Notes are sorted rather than trusted in append order, for the
+ * reason `newestNoteAt` gives: they arrive in order but carry the poster's
+ * clock.
+ */
+function noteAskStartedAt(t: TaskRow, noteAsk: NoteAskSeam | undefined): number | undefined {
+  if (noteAsk === undefined) return undefined;
+  const notes = (t.notes ?? []).filter((n) => typeof n.ts === 'number');
+  if (notes.length === 0) return undefined;
+  const newestFirst = [...notes].sort((a, b) => b.ts - a.ts);
+  const newest = newestFirst[0];
+  if (newest === undefined || !noteAsk.asks(newest)) return undefined;
+  let startedAt = newest.ts;
+  for (const older of newestFirst.slice(1)) {
+    if (!noteAsk.prefilterOnly(older)) break;
+    startedAt = older.ts;
+  }
+  return startedAt;
 }
 
 export function classifyOpenTasks(
@@ -145,6 +197,23 @@ export function classifyOpenTasks(
    * means somebody actually changed the content.)
    */
   threadActivity?: Map<string, number>,
+  /**
+   * Reads a note for "the agent is waiting on a person" — absent means the
+   * notes are not read that way at all, which is every caller that predates
+   * this and the CLI report's default.
+   *
+   * Only the NEWEST note is put to the full reading (`asks`), and only when
+   * that one says yes are the older notes walked with the deterministic half
+   * (`prefilterOnly`) to find where the run of them began. Both halves of that
+   * are deliberate. The newest note is what the row is saying NOW — a later
+   * note reporting progress means the agent moved on — and the walk is what
+   * stops an agent from resetting the finding by restating the same ask every
+   * turn, because the clock the wake reads runs from the START of the run
+   * (see `askedInNoteAt`, and its use in stall-gate.ts). Judging only the
+   * newest note is also what bounds the confirmation spend: the older ones
+   * cost nothing at all.
+   */
+  noteAsk?: NoteAskSeam,
 ): Classified[] {
   const byId = new Map(tasks.map((t) => [t.id, t]));
   // Presence in askedTaskIds is what "an ask is FILED" means; newestAskAt
@@ -210,9 +279,23 @@ export function classifyOpenTasks(
     // counts toward FAIL (the owner's 08-27 review: 7 of 10 "blocked-on-owner"
     // rows were invisible on his queue).
     const hasPendingAsk = askedTaskIds.has(t.id);
+    // …and the third way a row can be waiting on a person: its own agent
+    // SAID SO, in a note, with nothing filed. The board cannot see that from
+    // the row — the owner is an agent and the band dispatches — so before
+    // this such a row read as ordinary in-progress work while its note reset
+    // the clock that would have named it (2026-09-04: three rows, hours
+    // each). A filed ask beats it: a pending review item is the ask being
+    // where the person reads, which is the whole protocol.
+    // Asked only of the rows whose answer could change anything. A row the
+    // board ALREADY reads as waiting on a person is unfiled whatever its notes
+    // say, so reading them would schedule a judge call whose verdict cannot
+    // move the bucket — spend with no possible effect.
+    const boardSaysOwnerWaits = t.ownerKind === 'person' || bands.ownerBand.has(t.goal ?? '');
+    const askedInNoteAt =
+      hasPendingAsk || boardSaysOwnerWaits ? undefined : noteAskStartedAt(t, noteAsk);
     let bucket: Bucket;
     if (hasPendingAsk) bucket = 'blocked-on-owner';
-    else if (t.ownerKind === 'person' || bands.ownerBand.has(t.goal ?? ''))
+    else if (boardSaysOwnerWaits || askedInNoteAt !== undefined)
       bucket = 'blocked-on-owner-unfiled';
     else if (unmet.length > 0) bucket = 'blocked-on-dependency';
     else if (t.status === 'in-progress') bucket = 'in-progress';
@@ -236,6 +319,7 @@ export function classifyOpenTasks(
       ...(bucket === 'blocked-on-owner' && newestAskAt.has(t.id)
         ? { askAgeMs: now - (newestAskAt.get(t.id) ?? now) }
         : {}),
+      ...(askedInNoteAt !== undefined ? { askedInNoteAt } : {}),
       unfiledAsk: bucket === 'blocked-on-owner-unfiled',
     });
   }
