@@ -62,6 +62,7 @@ import type { UpgradeData } from '../socket-handlers.ts';
 import { channelForWatchKey, openAgentMuxStream } from '../sse-mux.ts';
 import { type SseBus, openSseStream } from '../sse.ts';
 import type { TaskStore } from '../tasks.ts';
+import { matchWorkspaceRoute } from './workspace-path.ts';
 
 /** The id a reconnecting SSE client last saw: the `Last-Event-ID` header a
  *  native EventSource sends back by itself once frames carry `id:` lines,
@@ -386,9 +387,17 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
       // --- SSE (workspace-level): every thread event on any member doc of a
       // workspace/diff review, one stream — agents watch this instead of one
       // stream per file. ---
-      const wsEventsMatch = pathname.match(/^\/events\/workspace\/([^/]+)$/);
+      //
+      // `/workspaces/<id>/events:stream`, not `/events/workspace/<id>`. The
+      // old address named the workspace in a segment that was not under
+      // `/workspaces`, so the guard could not read it the way it reads every
+      // other board path — and it spelled the LIVE stream `events`, which is
+      // the activity feed's name on the board's own REST surface. The colon
+      // is the design guide's custom-verb spelling, and it is what keeps this
+      // apart from the five board panes at `/workspaces/<id>/<tab>`.
+      const wsEventsMatch = matchWorkspaceRoute(pathname, 'events:stream');
       if (wsEventsMatch) {
-        const workspaceId = decodeURIComponent(wsEventsMatch[1] ?? '');
+        const workspaceId = wsEventsMatch.workspaceId;
         if (!isValidDocId(workspaceId)) return j(400, { error: 'bad workspaceId' });
         // A workspace channel exists for reviews (diff
         // reviews / folder binds) AND for board workspaces — task.* events

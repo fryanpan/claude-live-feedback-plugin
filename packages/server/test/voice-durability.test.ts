@@ -215,7 +215,7 @@ describe('the live branch is durable too', () => {
       body: JSON.stringify({ name: 'live-durable', goal: 'Ship it.' }),
     });
     const { workspace } = (await r.json()) as { workspace: { id: string } };
-    await fetch(`${base}/api/workspaces/${workspace.id}/attachments`, {
+    await fetch(`${base}/workspaces/${workspace.id}/agents`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ agentId: 'worker', runtime: 'claude-code-local' }),

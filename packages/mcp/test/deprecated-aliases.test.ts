@@ -35,12 +35,13 @@ const REPO = join(HERE, '../../..');
 const PAIRS = Object.entries(DEPRECATED_TOOL_ALIASES);
 
 describe('the alias table is the one place the pairs are written down', () => {
-  it('names the four verbs this rename covers (the assertions below are otherwise vacuous)', () => {
+  it('names the verbs this rename covers (the assertions below are otherwise vacuous)', () => {
     expect(DEPRECATED_TOOL_ALIASES).toEqual({
       bind_folder: 'attach_folder',
       bind_mock: 'attach_mockup',
       promote_to_task: 'spin_off_task',
       retire_workspace: 'archive_workspace',
+      list_attachments: 'list_agents',
     });
   });
 

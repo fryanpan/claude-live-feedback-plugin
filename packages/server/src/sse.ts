@@ -62,8 +62,8 @@ type ChannelMarks = { broadcast?: string; addressedAfter: Map<string, string> };
  * `HTTP_IDLE_TIMEOUT_SEC * 1000`, and `sse-keepalive.test.ts` asserts exactly
  * that — separating them is what broke this.
  *
- * Measured 2026-08-19 on Bun 1.3.10: `curl -N` on `/events/workspace/<id>`
- * ended after 9.7s having received the 5-byte `:ok` preamble and nothing else,
+ * Measured 2026-08-19 on Bun 1.3.10: `curl -N` on
+ * `/workspaces/<id>/events:stream` ended after 9.7s having received the 5-byte `:ok` preamble and nothing else,
  * when asked to hold for 40. The keepalive comment was already here, on a
  * 20_000ms period; `Bun.serve` carried no `idleTimeout` at all and Bun's
  * default is 10 seconds. **The guard's period was longer than the timeout it

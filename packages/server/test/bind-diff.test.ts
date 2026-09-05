@@ -681,7 +681,7 @@ describe('DocStore.bindDiff', () => {
       if (!bound.ok) return;
       const docId = bound.files.find((f) => f.relPath === 'src/kept.ts')?.docId ?? '';
 
-      const res = await fetch(`http://localhost:${handle.port}/events/workspace/sse-ws`);
+      const res = await fetch(`http://localhost:${handle.port}/workspaces/sse-ws/events:stream`);
       expect(res.ok).toBe(true);
       const reader = res.body?.getReader();
       if (!reader) throw new Error('no sse body');

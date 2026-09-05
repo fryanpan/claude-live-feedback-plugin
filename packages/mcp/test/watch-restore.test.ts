@@ -186,10 +186,10 @@ describe('the attachment comes back too, not just the subscription', () => {
           : {},
     });
     await h.restore.ensureWatchesRestored();
-    const attach = h.sent.find((s) => s.path === '/api/workspaces/w1/attachments');
+    const attach = h.sent.find((s) => s.path === '/workspaces/w1/agents');
     expect(attach).toEqual({
       method: 'POST',
-      path: '/api/workspaces/w1/attachments',
+      path: '/workspaces/w1/agents',
       body: {
         agentId: AUTHOR.id,
         agentName: AUTHOR.name,
@@ -222,7 +222,7 @@ describe('the attachment comes back too, not just the subscription', () => {
     const h = harness({
       coverage: coverageWithStaleBoard(),
       respond: (_method, path) =>
-        path.endsWith('/attachments')
+        path.endsWith('/agents')
           ? new Error('board gone')
           : { watches: [], coverage: coverageWithStaleBoard() },
     });
@@ -238,7 +238,7 @@ describe('the backlog the attach drains is delivered, not swallowed by its own a
     const h = harness({
       coverage: coverageWithStaleBoard(),
       respond: (_method, path) => {
-        if (path.endsWith('/attachments')) {
+        if (path.endsWith('/agents')) {
           return {
             queuedComments: [
               {
@@ -289,7 +289,7 @@ describe('the notice reaches the session unprompted, or says nothing', () => {
     const h = harness({
       coverage: coverageWithStaleBoard(),
       respond: (_method, path) =>
-        path.endsWith('/attachments')
+        path.endsWith('/agents')
           ? {}
           : { watches: [{ key: 'plan' }], coverage: coverageWithStaleBoard() },
     });

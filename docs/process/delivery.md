@@ -458,7 +458,7 @@ the reading covers, not to invent a fleet registry to make a broader sentence
 true.**
 
 That is what ships: every reading now carries its denominator and its domain.
-`GET /api/workspaces/:id/attachments` returns `pluginRelease.checked` — how
+`GET /workspaces/:id/agents` returns `pluginRelease.checked` — how
 many sessions the `behind` list was computed over, counted from the same
 population the check filtered — and the presence strip renders a quiet line
 even when nobody is behind: *"No attached session is behind 0.1.40 (1

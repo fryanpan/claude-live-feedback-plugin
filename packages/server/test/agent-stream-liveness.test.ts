@@ -16,7 +16,7 @@
  * were none to ride.
  *
  * The whole time, the MCP child process was holding an SSE stream open on
- * `/events/workspace/<id>` — the very channel the delivery would have ridden.
+ * `/workspaces/<id>/events:stream` — the very channel the delivery would have ridden.
  * The server had a live socket to the agent and declined to use it because a
  * language model had not spoken in nineteen minutes.
  *
@@ -203,7 +203,7 @@ describe('a real stream on the real route keeps a working agent reachable', () =
       body: JSON.stringify({ name, goal: 'Ship it.' }),
     });
     const { workspace } = (await r.json()) as { workspace: { id: string } };
-    await fetch(`${base}/api/workspaces/${workspace.id}/attachments`, {
+    await fetch(`${base}/workspaces/${workspace.id}/agents`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ agentId: 'worker', runtime: 'claude-code-local' }),

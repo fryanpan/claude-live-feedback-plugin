@@ -70,13 +70,13 @@ describe("a task's linked doc counts as the task moving", () => {
       await post('/api/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id }),
     );
     await jj(
-      await post(`/api/workspaces/${workspace.id}/attachments`, {
+      await post(`/workspaces/${workspace.id}/agents`, {
         agentId: LEAD.id,
         runtime: 'claude-code-local',
       }),
     );
     const leadRes = await fetch(
-      `${base}/events/workspace/${workspace.id}?agentId=${encodeURIComponent(LEAD.id)}`,
+      `${base}/workspaces/${workspace.id}/events:stream?agentId=${encodeURIComponent(LEAD.id)}`,
       { headers: { accept: 'text/event-stream' } },
     );
     return { workspaceId: workspace.id, lead: listenFrames(leadRes) };

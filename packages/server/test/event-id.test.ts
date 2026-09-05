@@ -100,7 +100,7 @@ describe('broadcast event ids', () => {
     });
 
     const docStream = await get('/events/doc-one');
-    const boardStream = await get(`/events/workspace/${encodeURIComponent(workspace.id)}`);
+    const boardStream = await get(`/workspaces/${encodeURIComponent(workspace.id)}/events:stream`);
     const onDoc = listenData(docStream);
     const onBoard = listenData(boardStream);
     await settle(150);

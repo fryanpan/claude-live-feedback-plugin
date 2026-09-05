@@ -769,25 +769,31 @@ describe('shareScopeAllows (workspace-board surfaces — §3.12 commit 8)', () =
   });
 
   it('allows the workspace SSE feed', () => {
-    expect(shareScopeAllows('/events/workspace/board-1', 'GET', BOARD, () => [])).toBe(true);
+    expect(shareScopeAllows('/workspaces/board-1/events:stream', 'GET', BOARD, () => [])).toBe(
+      true,
+    );
   });
 
   it('a share on ANOTHER board gets NONE of the three (the §3.3 rule-2 boundary)', () => {
     expect(shareScopeAllows('/workspaces/board-1', 'GET', OTHER_WS, workspaceOf)).toBe(false);
     expect(shareScopeAllows('/y/ws%3Aboard-1', 'GET', OTHER_WS, workspaceOf)).toBe(false);
     expect(shareScopeAllows('/y/ws:board-1', 'GET', OTHER_WS, workspaceOf)).toBe(false);
-    expect(shareScopeAllows('/events/workspace/board-1', 'GET', OTHER_WS, workspaceOf)).toBe(false);
+    expect(
+      shareScopeAllows('/workspaces/board-1/events:stream', 'GET', OTHER_WS, workspaceOf),
+    ).toBe(false);
     // Positive control: the same three, for the board that share DOES cover.
     // Without it a target that reached no board at all would pass this test.
     expect(shareScopeAllows('/workspaces/ws-a', 'GET', OTHER_WS, workspaceOf)).toBe(true);
     expect(shareScopeAllows('/y/ws%3Aws-a', 'GET', OTHER_WS, workspaceOf)).toBe(true);
-    expect(shareScopeAllows('/events/workspace/ws-a', 'GET', OTHER_WS, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/workspaces/ws-a/events:stream', 'GET', OTHER_WS, workspaceOf)).toBe(
+      true,
+    );
   });
 
   it('BLOCKS another workspace’s board surfaces', () => {
     expect(shareScopeAllows('/workspaces/board-2', 'GET', BOARD)).toBe(false);
     expect(shareScopeAllows('/y/ws%3Aboard-2', 'GET', BOARD)).toBe(false);
-    expect(shareScopeAllows('/events/workspace/board-2', 'GET', BOARD)).toBe(false);
+    expect(shareScopeAllows('/workspaces/board-2/events:stream', 'GET', BOARD)).toBe(false);
   });
 
   it('BLOCKS non-GET on the board page and anything nested under it', () => {
@@ -799,7 +805,7 @@ describe('shareScopeAllows (workspace-board surfaces — §3.12 commit 8)', () =
   it('is not fooled by a prefix that merely starts with the workspace id', () => {
     expect(shareScopeAllows('/workspaces/board-1-other', 'GET', BOARD)).toBe(false);
     expect(shareScopeAllows('/y/ws%3Aboard-1-other', 'GET', BOARD)).toBe(false);
-    expect(shareScopeAllows('/events/workspace/board-1-other', 'GET', BOARD)).toBe(false);
+    expect(shareScopeAllows('/workspaces/board-1-other/events:stream', 'GET', BOARD)).toBe(false);
   });
 
   /**
@@ -926,7 +932,7 @@ describe('shareScopeAllows (workspace-board surfaces — §3.12 commit 8)', () =
       ['/api/workspaces/board-1/events', 'GET'],
       ['/api/workspaces/board-1/load-reports', 'GET'],
       ['/api/workspaces/board-1/load-reports', 'POST'],
-      ['/api/workspaces/board-1/attachments', 'GET'],
+      ['/workspaces/board-1/agents', 'GET'],
       ['/api/workspaces/board-1/review-items', 'GET'],
     ];
     for (const [p, m] of cases) {
@@ -937,7 +943,7 @@ describe('shareScopeAllows (workspace-board surfaces — §3.12 commit 8)', () =
   it('keeps the board’s lifecycle out of a member’s hands, and the roster with it', () => {
     const cases: Array<[string, string]> = [
       // The agent roster's own verbs — a seat on the board, not work on it.
-      ['/api/workspaces/board-1/attachments', 'POST'],
+      ['/workspaces/board-1/agents', 'POST'],
       // Board lifecycle.
       ['/api/workspaces/board-1', 'DELETE'],
       ['/api/workspaces/board-1/rename', 'POST'],
@@ -1128,7 +1134,9 @@ describe('shareScopeAllows — a grouping filed on a shared board', () => {
     }
     expect(shareScopeAllows('/workspaces/rev-a', 'GET', BOARD, workspacesOf)).toBe(false);
     expect(shareScopeAllows('/y/ws%3Arev-a', 'GET', BOARD, workspacesOf)).toBe(false);
-    expect(shareScopeAllows('/events/workspace/rev-a', 'GET', BOARD, workspacesOf)).toBe(false);
+    expect(shareScopeAllows('/workspaces/rev-a/events:stream', 'GET', BOARD, workspacesOf)).toBe(
+      false,
+    );
   });
 
   it('the old doc-only target reaches nothing at all, not even its own doc', () => {
@@ -1561,7 +1569,7 @@ describe('collabScope', () => {
       '/workspaces/ws-a/tasks',
       '/workspaces/ws-a/docs/design-doc',
       '/api/workspaces/ws-a',
-      '/api/workspaces/ws-a/attachments',
+      '/workspaces/ws-a/agents',
       '/api/workspaces/ws-a/tree',
       '/api/docs/design-doc',
       '/api/docs/design-doc/threads',
@@ -1569,7 +1577,7 @@ describe('collabScope', () => {
       '/y/design-doc',
       '/y/ws:ws-a',
       '/events/design-doc',
-      '/events/workspace/ws-a',
+      '/workspaces/ws-a/events:stream',
     ]) {
       expect(allows(p), p).toBe(true);
     }
@@ -1717,7 +1725,7 @@ describe('collabScope', () => {
       '/review/design-doc',
       '/y/design-doc',
       '/y/ws:ws-a',
-      '/events/workspace/ws-a',
+      '/workspaces/ws-a/events:stream',
     ]) {
       expect(allowsFor(['ws-b'], p), p).toBe(false);
       expect(allowsFor(['ws-a'], p), p).toBe(true);

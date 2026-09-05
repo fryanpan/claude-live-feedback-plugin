@@ -543,9 +543,7 @@ describe('a declared lead comes back live after a respawn', () => {
   };
 
   const stateOf = async (workspaceId: string): Promise<string | undefined> => {
-    const res = (await (
-      await rest(`/api/workspaces/${workspaceId}/attachments`, 'GET')
-    ).json()) as {
+    const res = (await (await rest(`/workspaces/${workspaceId}/agents`, 'GET')).json()) as {
       attachments: Array<{ agentId: string; state: string }>;
     };
     return res.attachments.find((a) => a.agentId === AGENT_ID)?.state;
@@ -621,9 +619,7 @@ describe('a declared lead comes back live after a respawn', () => {
     const second = await spawnChild({ CW_AGENT_NAME: OTHER });
     await second.tool('list_watched_docs');
 
-    const res = (await (
-      await rest(`/api/workspaces/${workspaceId}/attachments`, 'GET')
-    ).json()) as {
+    const res = (await (await rest(`/workspaces/${workspaceId}/agents`, 'GET')).json()) as {
       attachments: Array<{ agentId: string }>;
     };
     expect(res.attachments.map((a) => a.agentId)).not.toContain(OTHER_ID);

@@ -36,7 +36,7 @@ function harness(responses: { attach?: unknown; lead?: unknown } = {}) {
   const deps = {
     http: async (method: string, path: string, body?: unknown): Promise<unknown> => {
       calls.push({ kind: 'http', method, path, body });
-      if (path.endsWith('/attachments')) {
+      if (path.endsWith('/agents')) {
         return responses.attach ?? { attachment: { agentId: SELF.id }, lead: true };
       }
       if (path.endsWith('/lead')) {
@@ -75,7 +75,7 @@ describe('declareWorkspaceLead — declaring yourself', () => {
     // delivery on the floor and clear it at the same time — the very
     // silent-loss shape this whole tool change is closing.
     expect(shape(calls)).toEqual([
-      `POST /api/workspaces/${WS}/attachments`,
+      `POST /workspaces/${WS}/agents`,
       `watch ${WS}`,
       `PUT /api/workspaces/${WS}/lead`,
     ]);
@@ -84,7 +84,7 @@ describe('declareWorkspaceLead — declaring yourself', () => {
   it('attaches as itself, reporting the bundle it is running', async () => {
     const { calls, deps } = harness();
     await declareWorkspaceLead({ workspaceId: WS }, deps);
-    const attach = calls.find((c) => c.path?.endsWith('/attachments'));
+    const attach = calls.find((c) => c.path?.endsWith('/agents'));
     expect(attach?.body).toMatchObject({
       agentId: SELF.id,
       runtime: 'claude-code-local',
@@ -254,7 +254,7 @@ describe('the attach carries the agent NAME, not only its id', () => {
   it('sends agentName so the roster row is written under the display name', async () => {
     const { calls, deps } = harness();
     await declareWorkspaceLead({ workspaceId: WS }, deps);
-    const attach = calls.find((c) => c.path?.endsWith('/attachments'));
+    const attach = calls.find((c) => c.path?.endsWith('/agents'));
     expect((attach?.body as { agentName?: string }).agentName).toBe(SELF.name);
   });
 });
@@ -278,7 +278,7 @@ describe('POSITIVE CONTROL — the legacy payload keeps its meaning', () => {
   it('surrounding whitespace on a self id is still self', async () => {
     const { calls, deps } = harness();
     await declareWorkspaceLead({ workspaceId: WS, leadAgentId: `  ${SELF.id}  ` }, deps);
-    expect(shape(calls)[0]).toBe(`POST /api/workspaces/${WS}/attachments`);
+    expect(shape(calls)[0]).toBe(`POST /workspaces/${WS}/agents`);
   });
 });
 

@@ -31,6 +31,10 @@ export const DEPRECATED_TOOL_ALIASES: Readonly<Record<string, string>> = {
   bind_mock: 'attach_mockup',
   promote_to_task: 'spin_off_task',
   retire_workspace: 'archive_workspace',
+  // The roster read followed its route off `attachments`: an *attachment* is
+  // a doc, mockup, preview or diff filed on a board, and this tool has always
+  // listed the SESSIONS sitting at one.
+  list_attachments: 'list_agents',
 };
 
 /** The one line, so the test and the log cannot drift apart. */

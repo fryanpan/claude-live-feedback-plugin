@@ -188,9 +188,12 @@ describe('task discussion', () => {
    */
   it('a task comment reaches the workspace channel', async () => {
     const { taskId, workspaceId } = await makeTaskIn('Wire the index');
-    const stream = await fetch(`${base}/events/workspace/${encodeURIComponent(workspaceId)}`, {
-      headers: { host: `localhost:${handle.port}` },
-    });
+    const stream = await fetch(
+      `${base}/workspaces/${encodeURIComponent(workspaceId)}/events:stream`,
+      {
+        headers: { host: `localhost:${handle.port}` },
+      },
+    );
     expect(stream.status).toBe(200);
     const heard = listen(stream);
 

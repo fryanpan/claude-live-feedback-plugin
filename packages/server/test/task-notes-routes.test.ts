@@ -149,7 +149,7 @@ describe('task status notes route', () => {
     const wsId = await board();
     const taskId = await todoRow(wsId, 'Index the archive');
     await jj(
-      await post(`/api/workspaces/${wsId}/attachments`, {
+      await post(`/workspaces/${wsId}/agents`, {
         agentId: AGENT.id,
         runtime: 'claude-code-local',
       }),

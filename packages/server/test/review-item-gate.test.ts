@@ -225,13 +225,13 @@ describe('the review-item quality gate', () => {
 
   async function agentStream(workspaceId: string, agent: { id: string }) {
     await jj(
-      await post(`/api/workspaces/${workspaceId}/attachments`, {
+      await post(`/workspaces/${workspaceId}/agents`, {
         agentId: agent.id,
         runtime: 'claude-code-local',
       }),
     );
     const res = await fetch(
-      `${base}/events/workspace/${workspaceId}?agentId=${encodeURIComponent(agent.id)}`,
+      `${base}/workspaces/${workspaceId}/events:stream?agentId=${encodeURIComponent(agent.id)}`,
       { headers: { accept: 'text/event-stream' } },
     );
     const stream = listenFrames(res);

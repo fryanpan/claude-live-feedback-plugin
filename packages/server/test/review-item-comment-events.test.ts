@@ -147,7 +147,7 @@ describe('the owner hears a comment on their review item', () => {
   it('POSITIVE CONTROL: a plain task-thread comment still reaches both streams, naming no item', async () => {
     const { workspaceId, taskId } = await seed('index-rebuild');
     const onDoc = await stream(`/events/${encodeURIComponent(taskBodyDocId(taskId))}`);
-    const onBoard = await stream(`/events/workspace/${encodeURIComponent(workspaceId)}`);
+    const onBoard = await stream(`/workspaces/${encodeURIComponent(workspaceId)}/events:stream`);
 
     await jj(
       await post(`/api/docs/${encodeURIComponent(taskBodyDocId(taskId))}/threads`, {
@@ -171,7 +171,7 @@ describe('the owner hears a comment on their review item', () => {
   it('a comment anchored to a review item names the item on the frame — on the doc stream and the workspace stream', async () => {
     const { workspaceId, taskId, itemId } = await seed('index-rebuild');
     const onDoc = await stream(`/events/${encodeURIComponent(taskBodyDocId(taskId))}`);
-    const onBoard = await stream(`/events/workspace/${encodeURIComponent(workspaceId)}`);
+    const onBoard = await stream(`/workspaces/${encodeURIComponent(workspaceId)}/events:stream`);
 
     const { thread } = await askOnItem(taskId, itemId, 'Twice per what — per night?');
     await settle();
@@ -212,7 +212,9 @@ describe('the owner hears a comment on their review item', () => {
     const mine = await seed('index-rebuild');
     const theirs = await seed('search-revamp');
     const onDoc = await stream(`/events/${encodeURIComponent(taskBodyDocId(mine.taskId))}`);
-    const onBoard = await stream(`/events/workspace/${encodeURIComponent(mine.workspaceId)}`);
+    const onBoard = await stream(
+      `/workspaces/${encodeURIComponent(mine.workspaceId)}/events:stream`,
+    );
 
     await askOnItem(theirs.taskId, theirs.itemId, 'Which cache?');
     await settle();
@@ -242,7 +244,9 @@ describe('the owner hears a comment on their review item', () => {
       await post(`/api/tasks/${sibling.id}/review-items`, { review: REVIEW, author: AGENT }),
     );
     const onDoc = await stream(`/events/${encodeURIComponent(taskBodyDocId(mine.taskId))}`);
-    const onBoard = await stream(`/events/workspace/${encodeURIComponent(mine.workspaceId)}`);
+    const onBoard = await stream(
+      `/workspaces/${encodeURIComponent(mine.workspaceId)}/events:stream`,
+    );
 
     await askOnItem(sibling.id, siblingItem.id, 'Warm it how?');
     await settle();

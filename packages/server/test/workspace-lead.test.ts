@@ -497,7 +497,7 @@ describe('lead agent routes + projection', () => {
     const wsId = ((await r.json()) as { workspace: BoardWorkspace }).workspace.id;
     // The handover target must be a known id — attach it first (the seat is
     // occupied, so this attach does not claim it).
-    await post(`/api/workspaces/${wsId}/attachments`, {
+    await post(`/workspaces/${wsId}/agents`, {
       agentId: 'agent-helper',
       runtime: 'claude-code-local',
     });
@@ -540,7 +540,7 @@ describe('lead agent routes + projection', () => {
     const wsId = ((await r.json()) as { workspace: BoardWorkspace }).workspace.id;
     expect((await workspaceOf(wsId)).leadAgentId).toBeUndefined(); // positive control
 
-    const attach = await post(`/api/workspaces/${wsId}/attachments`, {
+    const attach = await post(`/workspaces/${wsId}/agents`, {
       agentId: 'agent-relay',
       runtime: 'claude-code-local',
     });
@@ -552,7 +552,7 @@ describe('lead agent routes + projection', () => {
   it('the route forwards takeover — without it a live lead is held, with it the seat moves', async () => {
     const r = await post('/api/workspaces', { name: 'takeover-route', goal: 'Ship it.' });
     const wsId = ((await r.json()) as { workspace: BoardWorkspace }).workspace.id;
-    const attach = await post(`/api/workspaces/${wsId}/attachments`, {
+    const attach = await post(`/workspaces/${wsId}/agents`, {
       agentId: 'agent-relay',
       runtime: 'claude-code-local',
     });
@@ -725,7 +725,7 @@ describe('a display-name change keeps the seat and renames every write', () => {
   it('the roster name is what a write is signed with, and the seat does not move', async () => {
     const created = await post('/api/workspaces', { name: 'rename-board', goal: 'Ship it.' });
     const { workspace } = (await created.json()) as { workspace: { id: string } };
-    const attached = await post(`/api/workspaces/${workspace.id}/attachments`, {
+    const attached = await post(`/workspaces/${workspace.id}/agents`, {
       agentId: 'agent-relay',
       agentName: 'Relay',
       runtime: 'claude-code-local',
@@ -780,7 +780,7 @@ describe('a display-name change keeps the seat and renames every write', () => {
   it('a row an older bundle attached without a name LEARNS its name from the first signed write', async () => {
     const created = await post('/api/workspaces', { name: 'legacy-board', goal: 'Ship it.' });
     const { workspace } = (await created.json()) as { workspace: { id: string } };
-    await post(`/api/workspaces/${workspace.id}/attachments`, {
+    await post(`/workspaces/${workspace.id}/agents`, {
       agentId: 'agent-legacy',
       runtime: 'claude-code-local',
     });
@@ -858,7 +858,7 @@ describe('the shared "agent" identity can neither claim nor be handed the seat',
         });
       const created = await post('/api/workspaces', { name: 'shared-http', goal: 'Ship it.' });
       const { workspace } = (await created.json()) as { workspace: { id: string } };
-      const res = await post(`/api/workspaces/${workspace.id}/attachments`, {
+      const res = await post(`/workspaces/${workspace.id}/agents`, {
         agentId: 'known-agent',
         runtime: 'claude-code-local',
       });
