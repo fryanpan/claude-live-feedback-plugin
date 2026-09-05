@@ -6,7 +6,6 @@ import {
   type WebhookPayload,
   agentIdForName,
   contentKind,
-  isEmailLike,
   reviewIdOf,
 } from '@feedback/core';
 import { createAccessDeps } from './access-deps.ts';
@@ -28,7 +27,7 @@ import { type GoogleOauthApp, type RefreshTokenVault } from './google-oauth.ts';
 import { taskDeepLink } from './home-brief.ts';
 import { createHomePane } from './home-pane.ts';
 import { spokenReviewComment } from './huddle.ts';
-import { Identities, type IdentityRecord, userForIdentity } from './identities.ts';
+import { Identities } from './identities.ts';
 import { createIdentitySetup } from './identity-setup.ts';
 import { type LookupDoc, boardLookupDocs } from './meeting-lookup.ts';
 import { withServerNotesSinks } from './meeting-notes-doc.ts';
@@ -39,7 +38,7 @@ import { MeetingStore } from './meetings.ts';
 import { isAllowedBrowserOrigin } from './middleware/browser-origin.ts';
 import type { CfAccessOptions } from './middleware/cf-access.ts';
 import { RECALL_STATUS_PATH } from './middleware/recall-callback-gate.ts';
-import { isBrowserRequest, isGatedWrite, signInRequiredBody } from './middleware/write-gate.ts';
+import { isGatedWrite, signInRequiredBody } from './middleware/write-gate.ts';
 import type { NoteAskJudge } from './note-ask.ts';
 import {
   PARK_MIGRATION_ACTOR,
@@ -64,6 +63,7 @@ import { svixHeadersFrom, verifySvixSignature } from './recall-webhook-auth.ts';
 import { type RecallClient, unreachableCallbackReason } from './recall.ts';
 import { scanSettledDocRefs } from './refs-backfill.ts';
 import { createOriginPolicy, createRequestAdmission } from './request-admission.ts';
+import { createRequestAttribution } from './request-attribution.ts';
 import { listArchivedReviews, readDocArchiveManifest } from './review-archive.ts';
 import { backfillReviewFiling } from './review-backfill.ts';
 import { createReviewGate } from './review-gate.ts';
@@ -109,20 +109,17 @@ import {
 import { Shares } from './share/shares.ts';
 import { SharingGate } from './share/sharing-gate.ts';
 import type { ShareConfig } from './share/types.ts';
-import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
 import { createShellStatic } from './shell-static.ts';
 import { claimReplayMarks, saveReplayMarks } from './sse-marks.ts';
 import { HTTP_IDLE_TIMEOUT_SEC, SseHub } from './sse.ts';
 import { createStallWiring } from './stall-wiring.ts';
 import { ThreadSummarizer } from './summarize.ts';
-import { AUTHOR_REQUIRED_ERROR, AUTHOR_REQUIRED_MESSAGE } from './task-owner.ts';
 import { TaskProjection, taskBodyDocId } from './task-projection.ts';
 import {
   DEFAULT_PARALLELISM_CAP,
   type ParallelismCapChange,
   type Task,
   TaskStore,
-  taskChip,
 } from './tasks.ts';
 import { ThreadRequestDedup } from './thread-request-dedup.ts';
 import type { TranscriptionEngine } from './transcribe.ts';
@@ -1962,6 +1959,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   });
 
   /**
+   * Whose name goes on a write — see request-attribution.ts. Composed
+   * directly below admission because that is the order the two RUN in: the
+   * gate proves who the boundary saw, and attribution ranks those proofs
+   * against what the body claims. It is the one member of this split that
+   * chains rather than composes — its per-request input is the admission
+   * result, so it cannot be called until the gate has answered.
+   */
+  const { attributeRequest } = createRequestAttribution({
+    identities,
+    taskStore,
+    sessionIdentityFor,
+    widgetBearerOf,
+    widgetTokenIdentityFor,
+    j,
+  });
+
+  /**
    * Which page or asset an address gets — see shell-static.ts. Composed
    * HERE rather than beside the other helpers because `emailCodeSignIn`
    * comes out of the identity setup just above, and the landing page's
@@ -2322,174 +2336,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return j(403, { error: 'origin_not_allowed' });
         }
 
-        /**
-         * The identity this request has PROVEN, resolved at most once.
-         *
-         * Lazy because most requests never ask, and memoized because a write
-         * route can call `authorFor` more than once and each call would
-         * otherwise re-verify an HMAC.
-         */
-        let provenIdentity: IdentityRecord | null | undefined;
-        const provenIdentityFor = (): IdentityRecord | null => {
-          if (provenIdentity !== undefined) return provenIdentity;
-          // Cloudflare Access first. It has already verified a signed claim
-          // from an identity provider, which is a STRONGER proof than a code
-          // we mailed — so an Access visitor skips the code entirely and
-          // mints the same `user-<hash>` the code path would have. Composing
-          // here rather than building a second verifier is the whole point:
-          // the email was already being extracted (cf-access.ts) and thrown
-          // away after authorizing, so the person stayed anonymous on a
-          // surface that knew exactly who they were.
-          if (accessEmail && isEmailLike(accessEmail)) {
-            const rec = identities.upsertByEmail(accessEmail);
-            provenIdentity = rec.status === 'active' ? rec : null;
-            return provenIdentity;
-          }
-          provenIdentity = sessionIdentityFor(req);
-          return provenIdentity;
-        };
-
-        /**
-         * The author to attribute a write to.
-         *
-         * Until this commit the tailnet body was simply trusted — the comment
-         * here said so — which meant `?as=bryan` on any URL minted
-         * `known-bryan`, and `kind: 'known'` only ever meant "typed a name".
-         * Now, when a request carries a VERIFIED session, the server's own
-         * verdict outranks whatever the body claims. A caller may still say
-         * who they are; they no longer get to say it about someone else.
-         *
-         * Order matters and each rung has a reason:
-         *
-         *  1. A proven identity. It outranks the body precisely because the
-         *     body is the thing it exists to stop being authoritative — and
-         *     it does so whether or not `CW_REQUIRE_EMAIL_AUTH` is on: the
-         *     flag governs whether a session is REQUIRED, never whether a
-         *     verified one is believed (Bryan, 2026-08-29 — a verified name
-         *     is never worse than a typed one).
-         *  2. A share visitor with nothing proven stays a `guest-` — that
-         *     path is the template this work copies, not a thing it replaces.
-         *     Since every share host sits behind Cloudflare Access, a visitor
-         *     reaching this rung is a deployment with no verifier wired, not a
-         *     normal anonymous reviewer.
-         *  3. Otherwise the claimed body, exactly as today. This is the rung
-         *     every agent, every MCP call and every un-authenticated browser
-         *     lands on, so a request with no session behaves identically
-         *     whichever way the flag is set.
-         *
-         * With no session presented, this function is byte-for-byte what it
-         * was whichever way the flag is set.
-         */
-        const authorFor = (claimed: unknown): User | undefined => {
-          /**
-           * Rung -1, and it exists ONLY on a share surface: the identity the
-           * boundary itself proved outranks a widget popup-token.
-           *
-           * Everywhere else rung 0 below is right — a token is a stronger
-           * proof than a cookie for the page that holds it. On a share or
-           * collaboration host it is not, because there the Access email is
-           * what the member gate just decided the whole request on, and a
-           * token is an `Authorization` header. Ranking the header first let
-           * a request choose which of two proven identities to be written
-           * down as, which is the "no writing as someone else" half of the
-           * member boundary and is what `docs/architecture/security.md`
-           * claims outright ("Every write is attributed to the email
-           * Cloudflare confirmed").
-           *
-           * A token is bound to one page origin, so this is reachable by a
-           * non-browser client that sets `Origin` by hand rather than by a
-           * page; it stays a precedence bug either way, and the fix is that
-           * the two proofs cannot disagree about a member.
-           */
-          if (visitor) {
-            const provenHere = provenIdentityFor();
-            if (provenHere) return userForIdentity(provenHere);
-          }
-          // Rung 0: a verified widget popup-token. NOT behind the flag,
-          // unlike the cookie rung — no request carries this header by
-          // accident, so presenting the token is itself the opt-in, and the
-          // whole point of the handshake is attribution on a surface the
-          // cookie can never reach. An invalid token never lands here: the
-          // gate below 401s it before any route runs.
-          if (widgetIdentity) return userForIdentity(widgetIdentity);
-          const proven = provenIdentityFor();
-          if (proven) return userForIdentity(proven);
-          if (visitor) {
-            return sanitizeVisitorAuthor(claimed, {
-              // The SHARE, not the doc: two links to the same doc are two
-              // different audiences, and seeding from the doc id would give a
-              // returning browser the same guest identity on both — attributing
-              // comments on a freshly minted link to the old one's visitor.
-              // The `?? ''` is unreachable: the guard refuses a target with
-              // no workspaceId, so a visitor always has one. Typed optional
-              // there so an old doc-only shape is refused at runtime rather
-              // than only at compile time.
-              shareKey: visitorShareId ?? visitor.workspaceId ?? '',
-            });
-          }
-          return stampRosterAgent(claimed as User | undefined);
-        };
-
-        /**
-         * A write signed by a roster AGENT is stamped with the roster's
-         * name and canonical id — the board's record of who holds the seat
-         * names the lead, not the launch env of whichever process happened
-         * to sign. Mirrors `userForIdentity` for people. An author the
-         * roster does not know (a person's typed name, an old bundle's id
-         * nothing attached under) passes through exactly as claimed.
-         */
-        /** The 400 every comment route answers the shared category with.
-         *  One message, the same fix named, so a peer launched without a
-         *  name learns it from the first refusal rather than from silence. */
-        const refuseCategoryAuthor = (): Response =>
-          j(400, { error: AUTHOR_REQUIRED_ERROR, message: AUTHOR_REQUIRED_MESSAGE });
-
-        const stampRosterAgent = (claimed: User | undefined): User | undefined => {
-          if (!claimed || typeof claimed !== 'object' || typeof claimed.id !== 'string') {
-            return claimed;
-          }
-          const rec = identities.get(claimed.id);
-          if (!rec || rec.kind !== 'agent') return claimed;
-          // A row written by an older bundle's attach carries no name — its
-          // display name is its id. The claim on THIS write is the launch
-          // env's name, which is exactly the source the roster wants, so
-          // learn it here rather than overwrite a real name with an id.
-          const claimedName = typeof claimed.name === 'string' ? claimed.name.trim() : '';
-          if (rec.displayName === rec.id && claimedName && claimedName !== rec.id) {
-            const learned = identities.upsertAgent(rec.id, claimedName);
-            return { ...claimed, id: rec.id, name: learned?.displayName ?? claimedName };
-          }
-          return { ...claimed, id: rec.id, name: rec.displayName };
-        };
-
-        /**
-         * Thread→task surfacing (§3.12 commit 4): decorate a thread payload
-         * with chips for the tasks that reference it — via `links` or via a
-         * promotion `origin`. The chip is the §3.3 rule-2 visitor-safe shape,
-         * so visitors get the decoration too. Omitted when empty (trimmed
-         * results, §3.10) — every reader treats a missing `tasks` as none.
-         */
-        const withTaskChips = <T extends { id: string }>(docId: string, t: T): T => {
-          const chips = taskStore
-            .tasksReferencingThread(docId, t.id)
-            // `tasksReferencingThread` spans every workspace, deliberately —
-            // a ref may cross a board. For a caller scoped to ONE board that
-            // span is a read of a board they were never given: a private
-            // row's title, status and assignee, arriving through a thread on
-            // a doc they ARE allowed to open. The same filter, for the same
-            // reason and in the same words, as `GET /api/tasks/<id>/links`.
-            .filter((task) => !visitor || task.workspaceId === visitor.workspaceId)
-            .map(taskChip);
-          return chips.length > 0 ? { ...t, tasks: chips } : t;
-        };
-
-        /**
-         * The identity a widget popup-token proved, resolved once below the
-         * host gate and read by `authorFor` (rung 0). Stays null when no
-         * token was presented; a presented-but-invalid token never gets this
-         * far — the gate answers 401 for the whole request.
-         */
-        let widgetIdentity: IdentityRecord | null = null;
         // ── Request admission ── see request-admission.ts.
         // The gate ANSWERS this request or hands back what it proved. A
         // refused answer carries no per-request value with it, so nothing
@@ -2497,7 +2343,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // union is what makes that a compile error rather than a review note.
         const gate = await admit(req, { pathname });
         if (!gate.admitted) return gate.response;
-        const { visitor, visitorShareId, visitorMemberKey, accessEmail, metaFor } = gate;
+        const { visitor, visitorShareId, visitorMemberKey, metaFor } = gate;
 
         // --- REST: email login ---
         // Reachability (the host gate, Access, a share session) and identity
@@ -2509,34 +2355,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // reaches them only if `shareScopeAllows` lets them, and it does not:
         // a share visitor is already proven by Cloudflare Access, and this is
         // not a second way to claim an identity on a share host.
-        // --- Widget popup-token gate ---
-        // Resolve a presented token ONCE for the whole request, and fail
-        // loudly: an invalid token 401s rather than silently downgrading the
-        // write to anonymous — the widget hears "signed out" on the request
-        // that proved it, not never. Runs below the host gate so a share
-        // visitor's request is already scoped; runs above every route so no
-        // write path can forget the check.
-        {
-          const rawWidgetToken = widgetBearerOf(req);
-          if (rawWidgetToken !== null) {
-            widgetIdentity = widgetTokenIdentityFor(rawWidgetToken, req.headers.get('origin'));
-            if (widgetIdentity === null) return j(401, { error: 'widget_token_invalid' });
-          }
-        }
-
-        /**
-         * `true` when this request comes from a browser that has proven
-         * nobody. The three proofs, in the order `authorFor` ranks them: a
-         * widget popup-token, a Cloudflare Access claim, a session cookie —
-         * the last two both resolved by `provenIdentityFor`.
-         *
-         * Shared by the write gate below and by the `/y/` upgrade, which is
-         * the one write surface that is not an HTTP write: a markdown doc's
-         * prose is edited over the websocket, so a gate that only looked at
-         * methods would refuse the comment and wave the edit through.
-         */
-        const browserProvedNobody = (): boolean =>
-          isBrowserRequest(req.headers) && widgetIdentity === null && provenIdentityFor() === null;
+        // ── Request attribution ── see request-attribution.ts.
+        // Chained after admission rather than composed beside it, because its
+        // input is what the gate just proved. Called from the position the
+        // widget-token gate held — that gate lives inside, and its 401 has to
+        // land exactly here. `attributed: false` carries no helpers at all, so
+        // no route can name an author on a request whose token was refused.
+        const attribution = attributeRequest(req, gate);
+        if (!attribution.attributed) return attribution.response;
+        const {
+          widgetIdentity,
+          provenIdentityFor,
+          authorFor,
+          refuseCategoryAuthor,
+          withTaskChips,
+          browserProvedNobody,
+        } = attribution;
 
         // --- Sign-in write gate ---
         // Every ordinary write — a comment, a task edit, a review answer, a

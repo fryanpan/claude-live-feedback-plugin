@@ -135,6 +135,15 @@ describe('security docs are wired together', () => {
       // moved or reordered in this file cannot be caught later by a request
       // that arrives afterwards, because there is no afterwards.
       'packages/server/src/upgrade-stream.ts',
+      // …and the seventh, which is the other half of the fourth. Admission
+      // decides who the boundary proved; THIS file decides which proof is
+      // written down as the author, and it holds the widget-token gate whose
+      // identity it ranks. The precedence bug it documents — a header
+      // outranking the email Cloudflare confirmed, letting a request choose
+      // which of two proven identities to be recorded as — is exactly the
+      // shape the checklist exists to catch, and it lives in the ordering of
+      // four lines inside one function.
+      'packages/server/src/request-attribution.ts',
     ];
     for (const path of security) expect(pattern.test(path)).toBe(true);
 
