@@ -318,9 +318,17 @@ reader's own queue (`stall-escalation.ts`). What makes that possible is a
 told-time in the nudger's memory: `ToldRow.toldAt`, stamped on a DELIVERED
 wake, never refreshed while the row is remembered, and persisted in
 `stall-nudge-stamps.json` so a deploy does not hand every board a fresh hour.
-A row nobody was reached about carries no told time and never escalates —
-escalating past a lead who was never woken is the same mistake as a wake that
-fires while the turn that would have acted on it is still running.
+
+**A board with nobody to tell starts the same clock.** When the loop finds a
+row and there is no addressee at all — the lead seat held by a session that is
+not answering, nothing else attached — it stamps that first undeliverable
+attempt in a separate `undeliverable` map and the window runs from there. The
+two are kept apart on purpose: the wake stays owed, so a session that attaches
+later is still told, and the item can say which case it is (*"nobody could be
+reached on this board for 3h"* rather than *"the lead was told 3h ago"*). This
+is the case the whole feature opened with — a board whose lead had died, whose
+rows were therefore never told about, and which under a delivered-only clock
+would have escalated never.
 
 - **One item per board, revised in place.** The rows live in its body, each
   with a relative link (`/workspaces/<id>?task=<taskId>`), what kind of stuck
@@ -349,6 +357,29 @@ fires while the turn that would have acted on it is still running.
   caused — file, watch the anchor leave the findings, withdraw, watch it come
   back. A re-file cooldown of one escalation window is the second half of the
   same guard.
+- **When the anchor stops holding, the item MOVES.** A `done` or archived
+  anchor is not a reason to keep revising: `taskReviewItems` skips a done
+  ticket's rows, so the ask would be open forever and visible to nobody while
+  every other stuck row on the board went unreported behind it. The item is
+  withdrawn and re-filed on the worst row that still qualifies, in the same
+  tick and with no cooldown — a cooldown is for a board that keeps flickering,
+  not for one ask being carried somewhere it can be read. The withdrawal also
+  unmasks the old anchor, which is how a row that dropped out of the body can
+  come back into a later one.
+  An item the reader asked back on is a different case and is NOT moved: a
+  revision with a later timestamp answers their turn, so revising it in place
+  returns it to the queue, and re-anchoring would abandon the thread they
+  started.
+- **A retired board withdraws unconditionally.** Standing a board down is the
+  owner saying nobody is working it, and the ask outlives the reason it was
+  filed. Checked before the qualifying set, because the anchor is re-read from
+  its own ticket and would otherwise keep the item alive on a board the gate
+  no longer looks at.
+- **The residual trade-off:** while an item is open its anchor is invisible to
+  the wake. There is no home for a board-level item that is not a ticket — the
+  allow-rule proposals hang on one too — so the alternative was anchoring on a
+  row that is NOT stuck, which would tell the reader something false about a
+  healthy row.
 - **Answered means heard.** An item the reader answered or withdrew is not
   re-filed for rows it already named; a row it did not name files afresh.
 - `[stall] escalated ws=<id> rows=<n> item=<id>` and
