@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 /**
  * Who is allowed to bring a docId into existence, and where.
  *
- * The doc id space is shared: a caller-chosen review doc, a folder member, a
+ * The doc id space is shared: a caller-chosen attachment, a folder member, a
  * task's body room and a board room are all just strings in the same map, and
  * the same string reaches disk as a filename. That shared space is the reason
  * two holes existed at once — a folder bound as `setId: 'task'` minted real

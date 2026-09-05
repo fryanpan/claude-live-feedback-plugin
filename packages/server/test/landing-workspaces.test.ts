@@ -173,7 +173,7 @@ describe('review docs stay reachable without leaking back onto /', () => {
     );
     const html = await landing();
     // Present: the project's label, linking to its on-demand page.
-    expect(html).toContain('Review docs by project');
+    expect(html).toContain('Attachments by project');
     expect(html).toContain(`/projects/${encodeURIComponent('/proj/gamma')}`);
     expect(html).toContain('gamma');
     // Absent: the doc itself — no file name, no review link. The project

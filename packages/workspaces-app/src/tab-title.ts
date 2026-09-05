@@ -3,7 +3,7 @@
  *
  * A tab strip gives each title roughly twenty characters before it truncates,
  * and every surface here used to spend all twenty on the same leading word —
- * so a reader with a board, three review docs and a diff open saw one word
+ * so a reader with a board, three attachments and a diff open saw one word
  * five times over and had to click to find out which tab was which. Leading
  * with the doc / workspace name puts the varying half where the reader can
  * see it and lets the product name be the part that gets cut.

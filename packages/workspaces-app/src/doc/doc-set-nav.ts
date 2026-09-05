@@ -139,7 +139,7 @@ export function mountDocSetNav(opts: DocSetNavOptions): DocSetNav {
       if (docMenu) docMenu.innerHTML = `<ol>${items}</ol>`;
       setSidebarSignature(sig);
       // On mobile, the desktop sidebar is hidden — the dropdown is the ONLY
-      // surface that shows the review set. Open it on first render so the
+      // surface that shows the attachment set. Open it on first render so the
       // reviewer sees siblings without discovering the doc-switcher tap
       // target. The scroll-to-close handler dismisses it once they engage.
       const isMobile = window.matchMedia('(max-width: 1100px)').matches;

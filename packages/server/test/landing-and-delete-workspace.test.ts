@@ -116,7 +116,7 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     // The review docs surface as one per-project link behind the fold,
     // deriving from the owner cwd basename and linking to the project's own
     // on-demand page.
-    expect(html).toContain('Review docs by project');
+    expect(html).toContain('Attachments by project');
     expect(html).toContain('alpha');
     expect(html).toContain(`/projects/${encodeURIComponent('/proj/alpha')}`);
 

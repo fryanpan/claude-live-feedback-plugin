@@ -214,7 +214,7 @@ function servedClientIsOlder(f: DeployFacts): { stale: false } | { stale: true; 
  *
  * A modified path blocks only when the pull would rewrite that same path.
  * A blanket "refuse while dirty" was the first shape and it is unusable
- * here: the deploy source hosts bound review documents, so tracked files
+ * here: the deploy source hosts bound attachments, so tracked files
  * under `docs/` are modified for hours during ordinary editing (see
  * `deploy-source.ts` for the measurement). It is also the rule git itself
  * applies — `merge --ff-only` refuses exactly when an incoming change

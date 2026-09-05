@@ -205,7 +205,7 @@ export interface DocMeta {
    * gate refuses to move them out of triage until somebody approves the plan
    * (`POST /api/docs/:id/plan`). `'approved'` releases them and lets later
    * derived tasks skip the hold. Absent means the doc is not a gated plan at
-   * all — a discussion, a huddle, an ordinary review doc — and derived tasks
+   * all — a discussion, a huddle, an ordinary attachment — and derived tasks
    * move like any other row. Set by the first create-from-doc call that
    * declares plan mode, in the CRDT meta (it describes the document, and a
    * share visitor rendering the doc may see it).

@@ -174,13 +174,13 @@ export async function handleDocCreateListRoutes(
     if (type === 'diff') {
       return j(400, {
         error: 'use /api/diffs',
-        hint: 'Diff review docs are created per changed file by POST /api/diffs {repo, base, target}.',
+        hint: 'Diff attachments are created per changed file by POST /api/diffs {repo, base, target}.',
       });
     }
     if ((type === 'markdown' || type === 'code') && !sourceUrl) {
       return j(400, {
         error: 'sourceUrl required',
-        hint: 'Markdown and code review docs are backed by a file on disk. Pass sourceUrl: "/abs/path/to/file" in the POST body.',
+        hint: 'Markdown and code attachments are backed by a file on disk. Pass sourceUrl: "/abs/path/to/file" in the POST body.',
       });
     }
     // A mockup binds to a file OUTSIDE the repo, so this route was the

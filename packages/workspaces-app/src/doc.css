@@ -3275,7 +3275,7 @@ body.redline-mode #toggle-suggest-mode {
 /* ---------------------------------------------------------------------------
    Markup margin — Word's balloon column for deletions AND open comment
    threads. Mounted on the editable redline surface (deletions + comments)
-   AND on plain markdown review docs (comments only, via mountMarkupMargin
+   AND on plain markdown attachments (comments only, via mountMarkupMargin
    from app.ts) — NOT scoped to body.redline-mode, since the plain-doc mount
    never sets that class.
 
