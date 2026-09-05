@@ -1,10 +1,10 @@
 import type { DocMeta, TaskReviewItem, User } from '@feedback/core';
 import type { AgentNoteRing } from '../agent-notes.ts';
 import type { DispatchRegistry } from '../dispatch-registry.ts';
+import type { DocStore } from '../doc-store.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
 import type { ReadyWorkNudger } from '../ready-nudge.ts';
 import type { ReviewGate } from '../review-gate-types.ts';
-import type { Rooms } from '../doc-store.ts';
 import type { TaskProjection } from '../task-projection.ts';
 import type { ParallelismCapChange, Task, TaskStore } from '../tasks.ts';
 
@@ -39,9 +39,9 @@ export interface TaskRoutesContext {
   /** The ydoc projection of the store; refreshed by hand after the writes
    *  that emit no store event (links, goal placement, archive-in-place). */
   taskProjection: TaskProjection;
-  /** Doc rooms — read for a batch's source doc and written when an ask-back
+  /** Doc store — read for a batch's source doc and written when an ask-back
    *  turns a question into a thread. */
-  rooms: Rooms;
+  docStore: DocStore;
   /** Open builder dispatches and their worktree watchers. */
   dispatches: DispatchRegistry;
   /** The per-agent ring of turn / denial / status notes. */

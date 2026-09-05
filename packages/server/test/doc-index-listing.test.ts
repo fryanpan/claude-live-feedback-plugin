@@ -28,12 +28,12 @@ import { join } from 'node:path';
 import { type DocMeta, createThread, setStatus } from '@feedback/core';
 import type * as Y from 'yjs';
 import { moveDocIndex } from '../src/doc-index.ts';
-import { Rooms } from '../src/doc-store.ts';
+import { DocStore } from '../src/doc-store.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 
-function makeRooms(dataDir: string): Rooms {
-  return new Rooms({
+function makeDocStore(dataDir: string): DocStore {
+  return new DocStore({
     dataDir,
     sse: new SseHub(),
     webhooks: createWebhookDispatcher({ onLog: () => {} }),
@@ -82,24 +82,24 @@ describe('an index-backed listing equals the hydrated listing', () => {
    * set members, workspace members with a relPath, bound markdown, diff rows
    * with their counts, mockups, and docs with open and resolved threads.
    */
-  function seed(rooms: Rooms, count: number): string[] {
+  function seed(docStore: DocStore, count: number): string[] {
     const docIds: string[] = [];
     for (let i = 0; i < count; i++) {
       const docId = `idx-${i}`;
       docIds.push(docId);
       const shape = i % 8;
       if (shape === 0) {
-        rooms.getOrCreate(docId, { type: 'markdown' });
+        docStore.getOrCreate(docId, { type: 'markdown' });
       } else if (shape === 1) {
-        rooms.getOrCreate(docId, { type: 'markdown', title: `Titled ${i}` });
+        docStore.getOrCreate(docId, { type: 'markdown', title: `Titled ${i}` });
       } else if (shape === 2) {
-        rooms.getOrCreate(docId, {
+        docStore.getOrCreate(docId, {
           type: 'markdown',
           alias: `readable-${i}`,
           setId: `set-${i % 3}`,
         });
       } else if (shape === 3) {
-        rooms.getOrCreate(docId, {
+        docStore.getOrCreate(docId, {
           type: 'markdown',
           workspaceId: `ws-${i % 4}`,
           relPath: `packages/server/src/f${i}.ts`,
@@ -108,10 +108,10 @@ describe('an index-backed listing equals the hydrated listing', () => {
       } else if (shape === 4) {
         const path = join(srcDir, `${docId}.md`);
         writeFileSync(path, `# Doc ${i}\n\nbody\n`);
-        rooms.getOrCreate(docId, { type: 'markdown', title: `Bound ${i}` });
-        rooms.attachFile(docId, path);
+        docStore.getOrCreate(docId, { type: 'markdown', title: `Bound ${i}` });
+        docStore.attachFile(docId, path);
       } else if (shape === 5) {
-        rooms.getOrCreate(docId, {
+        docStore.getOrCreate(docId, {
           type: 'diff',
           relPath: `src/changed-${i}.ts`,
           diffStatus: 'modified',
@@ -120,19 +120,19 @@ describe('an index-backed listing equals the hydrated listing', () => {
           diffTarget: 'HEAD',
         });
       } else if (shape === 6) {
-        rooms.getOrCreate(docId, { type: 'mockup', title: `Mock ${i}` });
+        docStore.getOrCreate(docId, { type: 'mockup', title: `Mock ${i}` });
       } else {
-        const room = rooms.getOrCreate(docId, { type: 'markdown', title: `Threaded ${i}` });
+        const room = docStore.getOrCreate(docId, { type: 'markdown', title: `Threaded ${i}` });
         addThread(room.ydoc, `${docId}-open`, 'open');
         addThread(room.ydoc, `${docId}-done`, 'resolved');
       }
     }
-    rooms.flush();
+    docStore.flush();
     return docIds;
   }
 
   it('matches on a fixture covering every listing field', () => {
-    const first = makeRooms(dataDir);
+    const first = makeDocStore(dataDir);
     const docIds = seed(first, 120);
     const hydrated = first.list();
     expect(hydrated.length).toBeGreaterThanOrEqual(docIds.length);
@@ -169,19 +169,19 @@ describe('an index-backed listing equals the hydrated listing', () => {
   });
 
   it('survives a restart: the index alone still describes every doc', () => {
-    const first = makeRooms(dataDir);
+    const first = makeDocStore(dataDir);
     const docIds = seed(first, 40);
     const before = first.list();
 
     // Control: the rows must already be ON DISK before the restart. A fresh
-    // Rooms also runs the write-missing migration, so without this the test
+    // DocStore also runs the write-missing migration, so without this the test
     // would pass on rows the second instance manufactured from the hydrated
     // docs — proving the migration works and the persist path not at all.
     const onDisk = readdirSync(dataDir).filter((f) => f.endsWith('.index.json'));
     expect(onDisk.length).toBe(docIds.length);
 
-    // A fresh Rooms over the same data dir is what a restart does.
-    const second = makeRooms(dataDir);
+    // A fresh DocStore over the same data dir is what a restart does.
+    const second = makeDocStore(dataDir);
     const a = byId(before);
     const b = byId(second.listFromIndex());
     expect([...b.keys()].sort()).toEqual([...a.keys()].sort());
@@ -189,7 +189,7 @@ describe('an index-backed listing equals the hydrated listing', () => {
   });
 
   it('lists a doc whose index row is all there is', () => {
-    const first = makeRooms(dataDir);
+    const first = makeDocStore(dataDir);
     const docIds = seed(first, 40);
     const before = first.list();
 
@@ -203,7 +203,7 @@ describe('an index-backed listing equals the hydrated listing', () => {
       }
       expect(readdirSync(indexOnly).length).toBe(docIds.length);
 
-      const rows = byId(makeRooms(indexOnly).list());
+      const rows = byId(makeDocStore(indexOnly).list());
       expect([...rows.keys()].sort()).toEqual([...byId(before).keys()].sort());
       for (const [docId, hydratedRow] of byId(before)) {
         // lastActivityAt is the .ydoc's mtime, which by construction is not
@@ -218,42 +218,42 @@ describe('an index-backed listing equals the hydrated listing', () => {
   });
 
   it('carries open and total thread counts without loading the doc', () => {
-    const rooms = makeRooms(dataDir);
-    const room = rooms.getOrCreate('counted', { type: 'markdown', title: 'Counted' });
+    const docStore = makeDocStore(dataDir);
+    const room = docStore.getOrCreate('counted', { type: 'markdown', title: 'Counted' });
     addThread(room.ydoc, 'still-open', 'open');
     addThread(room.ydoc, 'done', 'resolved');
-    rooms.flush();
+    docStore.flush();
 
-    const counts = rooms.threadCountsFromIndex('counted');
+    const counts = docStore.threadCountsFromIndex('counted');
     expect(counts).toEqual({ open: 1, total: 2 });
   });
 
   it('takes the index with it when a doc is archived', () => {
-    const rooms = makeRooms(dataDir);
-    rooms.getOrCreate('to-archive', { type: 'markdown', title: 'Leaving' });
-    rooms.flush();
+    const docStore = makeDocStore(dataDir);
+    docStore.getOrCreate('to-archive', { type: 'markdown', title: 'Leaving' });
+    docStore.flush();
     // Control: the row is in the live directory to begin with.
     expect(existsSync(join(dataDir, 'to-archive.index.json'))).toBe(true);
 
-    const res = rooms.archiveDoc('to-archive', { archivedBy: 'Tester' });
+    const res = docStore.archiveDoc('to-archive', { archivedBy: 'Tester' });
     expect(res.ok).toBe(true);
 
     // The row must not be left in the LIVE directory. If it is, a restart
     // reads it and lists an archived doc as though it were still here — the
     // exact opposite of what archiving is for.
     expect(existsSync(join(dataDir, 'to-archive.index.json'))).toBe(false);
-    expect(rooms.list().some((r) => r.docId === 'to-archive')).toBe(false);
+    expect(docStore.list().some((r) => r.docId === 'to-archive')).toBe(false);
     expect(
-      makeRooms(dataDir)
+      makeDocStore(dataDir)
         .list()
         .some((r) => r.docId === 'to-archive'),
     ).toBe(false);
   });
 
   it('reports a failed index move rather than swallowing it', () => {
-    const rooms = makeRooms(dataDir);
-    rooms.getOrCreate('stuck', { type: 'markdown', title: 'Stuck' });
-    rooms.flush();
+    const docStore = makeDocStore(dataDir);
+    docStore.getOrCreate('stuck', { type: 'markdown', title: 'Stuck' });
+    docStore.flush();
     // Control: it moves where the destination exists.
     const good = join(dataDir, 'somewhere');
     mkdirSync(good, { recursive: true });
@@ -267,16 +267,16 @@ describe('an index-backed listing equals the hydrated listing', () => {
   });
 
   it('drops the index when the doc is purged, so a listing cannot resurrect it', () => {
-    const rooms = makeRooms(dataDir);
-    rooms.getOrCreate('doomed', { type: 'markdown', title: 'Doomed' });
-    rooms.flush();
+    const docStore = makeDocStore(dataDir);
+    docStore.getOrCreate('doomed', { type: 'markdown', title: 'Doomed' });
+    docStore.flush();
     // Control: it is in the index to begin with.
-    expect(rooms.listFromIndex().some((r) => r.docId === 'doomed')).toBe(true);
+    expect(docStore.listFromIndex().some((r) => r.docId === 'doomed')).toBe(true);
 
-    rooms.deleteDoc('doomed', { force: true });
-    expect(rooms.listFromIndex().some((r) => r.docId === 'doomed')).toBe(false);
+    docStore.deleteDoc('doomed', { force: true });
+    expect(docStore.listFromIndex().some((r) => r.docId === 'doomed')).toBe(false);
     expect(
-      makeRooms(dataDir)
+      makeDocStore(dataDir)
         .listFromIndex()
         .some((r) => r.docId === 'doomed'),
     ).toBe(false);

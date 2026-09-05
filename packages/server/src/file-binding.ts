@@ -6,11 +6,11 @@
  * ever a rule about which file a binding may write.
  *
  * It reaches the room lifecycle through `FileBindingHost` rather than
- * holding a `Rooms`. The seam is that shape because the bindings touch a
+ * holding a `DocStore`. The seam is that shape because the bindings touch a
  * room on every path — its ydoc, its persist debounce, its event fan-out —
  * so a line-range extraction would have had to copy those, and a copy of a
  * persist timer is a second timer. Every entry below is a THUNK onto the
- * live thing: `room` is the rooms map, `schedulePersist` is the 200ms
+ * live thing: `room` is the doc map, `schedulePersist` is the 200ms
  * `.ydoc` debounce, `noteTouched` writes the one residency clock the
  * eviction policy also reads. Nothing here owns state the lifecycle owns,
  * and nothing there owns the bindings' own timers.
@@ -46,11 +46,11 @@ import {
   resolveHomeCheckout,
   verifyPathInHome,
 } from './doc-home.ts';
-import { isHubOwnedRoom } from './doc-ids.ts';
+import { isHubOwnedDoc } from './doc-ids.ts';
+import { DOC_STORE_TIMINGS } from './doc-store-timings.ts';
+import type { DocRoom } from './doc-store.ts';
 import { showFile } from './git-diff.ts';
 import { gitConflictHint } from './git-provenance.ts';
-import { ROOM_TIMINGS } from './doc-store-timings.ts';
-import type { DocRoom } from './doc-store.ts';
 import { isWithinRoot } from './safe-path.ts';
 import { boundFiles } from './slow-fs.ts';
 
@@ -183,13 +183,13 @@ export function decideReconcile(args: {
 /** How often the shared mtime sweep runs — the cadence the old per-binding
  *  interval ran at, kept so external-edit latency is unchanged for a doc
  *  anyone is actually looking at. */
-const FILE_POLL_MS = ROOM_TIMINGS.filePollMs;
+const FILE_POLL_MS = DOC_STORE_TIMINGS.filePollMs;
 
 /** Settle time before a changed file is read, so no half-written save is parsed. */
-const READ_DEBOUNCE_MS = ROOM_TIMINGS.readDebounceMs;
+const READ_DEBOUNCE_MS = DOC_STORE_TIMINGS.readDebounceMs;
 
 /** Doc → disk: how long a prose change waits before the serialize+write. */
-const WRITE_BACK_MS = ROOM_TIMINGS.writeBackMs;
+const WRITE_BACK_MS = DOC_STORE_TIMINGS.writeBackMs;
 
 /** How long after an access a bound doc counts as ACTIVE — stat'd on every
  *  tick. Long enough that a person reading, thinking and typing never falls
@@ -249,7 +249,7 @@ function activationTag(): string {
  * What the bindings need from the room lifecycle, and nothing more.
  *
  * Every member is a function onto the live thing rather than a copy of it:
- * the rooms map, the `.ydoc` persist debounce, the residency clock, the
+ * the doc map, the `.ydoc` persist debounce, the residency clock, the
  * room's event fan-out. That is the whole reason this interface exists —
  * the bindings mutate a room's ydoc and re-arm its persist timer on almost
  * every path, so handing them a snapshot of a room would give two owners to
@@ -285,7 +285,7 @@ export interface FileBindingHost {
 }
 
 /**
- * One server's file bindings. Constructed by `Rooms`, which keeps the
+ * One server's file bindings. Constructed by `DocStore`, which keeps the
  * lifecycle and the websocket fan-out and calls in here for everything that
  * touches a file.
  */
@@ -348,7 +348,7 @@ export class FileBindings {
    * attach was reached from a synchronous caller: an async door with no
    * caller is worse than none, because it reads like coverage the flat path
    * does not have. The two callers that made the flat path blocking — the
-   * bind loop in `bind-diff` and the member opens in `rooms-workspaces` —
+   * bind loop in `bind-diff` and the member opens in `doc-store-workspaces` —
    * are async now and come through these, so the doors have callers and the
    * flat path has the guarantee the prose one already had.
    */
@@ -459,7 +459,7 @@ export class FileBindings {
     // the workspace member opens come through the async doors, is an
     // in-process caller holding a path it supplied itself and needing the
     // binding in the same turn. In production that is BOOT and nothing else:
-    // hydration passes a preread on every other path (`Rooms.prereadFor`),
+    // hydration passes a preread on every other path (`DocStore.prereadFor`),
     // and no request handler reaches these two without one. The rest of the
     // callers are the tests.
     if (!pre && (boundFiles.quarantined(abs) || boundFiles.busy())) {
@@ -477,7 +477,7 @@ export class FileBindings {
           seeded = true;
         }
       } catch (err) {
-        console.error(`[rooms] read failed for ${abs}:`, err);
+        console.error(`[doc-store] read failed for ${abs}:`, err);
         return { ok: false, error: 'read-failed' };
       }
     }
@@ -571,7 +571,7 @@ export class FileBindings {
           }
         }
       } catch (err) {
-        console.error(`[rooms] attach-time reconcile failed for ${abs}:`, err);
+        console.error(`[doc-store] attach-time reconcile failed for ${abs}:`, err);
       }
     }
 
@@ -646,7 +646,7 @@ export class FileBindings {
       try {
         text = pre ? (pre.text ?? '') : readFileSync(abs, 'utf8');
       } catch (err) {
-        console.error(`[rooms] read failed for ${abs}:`, err);
+        console.error(`[doc-store] read failed for ${abs}:`, err);
         return { ok: false, error: 'read-failed' };
       }
     }
@@ -740,7 +740,7 @@ export class FileBindings {
     | { ok: false; error: 'not-found' | 'invalid-home' | 'not-markdown'; detail?: string } {
     const room = this.p.room(docId);
     if (!room) return { ok: false, error: 'not-found' };
-    if (isHubOwnedRoom(room.docId) || contentKind(room.meta.type) !== 'prose') {
+    if (isHubOwnedDoc(room.docId) || contentKind(room.meta.type) !== 'prose') {
       return {
         ok: false,
         error: 'not-markdown',
@@ -857,14 +857,14 @@ export class FileBindings {
         // attach's own read is not the syscall this guard exists for.
         attachOpts = { ...opts, preread: undefined };
       } catch (err) {
-        console.error(`[rooms] ${docId}: could not export doc to its home ${absPath}:`, err);
+        console.error(`[doc-store] ${docId}: could not export doc to its home ${absPath}:`, err);
       }
     }
     // attachFile only records sourceUrl when absent; a retarget must repoint.
     room.meta.sourceUrl = absPath;
     this.attachFile(docId, absPath, attachOpts);
     this.p.schedulePersist(room);
-    console.log(`[rooms] ${docId}: home binding now at ${absPath}`);
+    console.log(`[doc-store] ${docId}: home binding now at ${absPath}`);
   }
 
   /**
@@ -881,7 +881,7 @@ export class FileBindings {
   maybeRebindHome(room: DocRoom, opts?: { force?: boolean }): void {
     const home = room.meta.docHome;
     if (!home || this.bindings.has(room.docId)) return;
-    if (isHubOwnedRoom(room.docId) || contentKind(room.meta.type) !== 'prose') return;
+    if (isHubOwnedDoc(room.docId) || contentKind(room.meta.type) !== 'prose') return;
     const now = Date.now();
     if (!opts?.force && now - (this.homeRebindAttemptAt.get(room.docId) ?? 0) < 1000) return;
     this.homeRebindAttemptAt.set(room.docId, now);
@@ -1245,7 +1245,7 @@ export class FileBindings {
     // with reparse documented as one of its two recovery verbs.
     if (
       room.meta.docHome &&
-      !isHubOwnedRoom(room.docId) &&
+      !isHubOwnedDoc(room.docId) &&
       contentKind(room.meta.type) === 'prose'
     ) {
       const bound = this.bindings.get(docId);
@@ -1333,7 +1333,7 @@ export class FileBindings {
       try {
         md = readFileSync(binding.path, 'utf8');
       } catch (err) {
-        console.error(`[rooms] read failed for ${binding.path}:`, err);
+        console.error(`[doc-store] read failed for ${binding.path}:`, err);
         return 'missing';
       }
     }
@@ -1424,7 +1424,7 @@ export class FileBindings {
       // (we never started the transact), so the next edit retries cleanly.
       const message = err instanceof Error ? err.message : String(err);
       this.recordSyncError(room, binding, `parse failed: ${message}`);
-      console.error(`[rooms] ${room.docId}: disk→doc parse failed for ${binding.path}:`, err);
+      console.error(`[doc-store] ${room.docId}: disk→doc parse failed for ${binding.path}:`, err);
       return decision;
     }
     if (blocks.length === 0) {
@@ -1436,7 +1436,7 @@ export class FileBindings {
         'disk content parsed to zero blocks; live doc left unchanged',
       );
       console.warn(
-        `[rooms] ${room.docId}: disk→doc reconcile yielded 0 blocks from ${binding.path}; keeping prior state`,
+        `[doc-store] ${room.docId}: disk→doc reconcile yielded 0 blocks from ${binding.path}; keeping prior state`,
       );
       return decision;
     }
@@ -1477,13 +1477,13 @@ export class FileBindings {
         `external edit dropped pending suggestion(s): ${droppedSids.join(', ')}`,
       );
       console.warn(
-        `[rooms] ${room.docId}: external edit to ${binding.path} dropped suggestion(s) ${droppedSids.join(', ')}`,
+        `[doc-store] ${room.docId}: external edit to ${binding.path} dropped suggestion(s) ${droppedSids.join(', ')}`,
       );
     } else {
       binding.lastSyncError = undefined;
     }
     console.log(
-      `[rooms] ${room.docId}: applied external edit from ${binding.path} (${blocks.length} blocks)`,
+      `[doc-store] ${room.docId}: applied external edit from ${binding.path} (${blocks.length} blocks)`,
     );
     return decision;
   }
@@ -1684,7 +1684,7 @@ export class FileBindings {
       // here and the write timer is already cleared, so nothing downstream
       // can tell a failed write from a finished one.
       this.failedWrites.add(room.docId);
-      console.error(`[rooms] file write failed for ${binding.path}:`, err);
+      console.error(`[doc-store] file write failed for ${binding.path}:`, err);
     }
   }
 
@@ -1718,7 +1718,7 @@ export class FileBindings {
       backupPath,
     );
     console.warn(
-      `[rooms] ${room.docId}: disk↔doc conflict for ${binding.path}; kept live edits, reasserting to disk` +
+      `[doc-store] ${room.docId}: disk↔doc conflict for ${binding.path}; kept live edits, reasserting to disk` +
         (backupPath ? ` (external version backed up to ${backupPath})` : '') +
         (gitHint ? ' — the overwritten bytes came from git, not an editor save' : ''),
     );
@@ -1775,7 +1775,7 @@ export class FileBindings {
       writeFileSync(file, content);
       return file;
     } catch (err) {
-      console.error(`[rooms] clobber backup failed for ${docId}:`, err);
+      console.error(`[doc-store] clobber backup failed for ${docId}:`, err);
       return null;
     }
   }
@@ -1969,7 +1969,7 @@ export class FileBindings {
     try {
       this.writeBoundFileNow(room, binding, 'sync');
     } catch (err) {
-      console.error(`[rooms] evict ${room.docId}: write-back failed:`, err);
+      console.error(`[doc-store] evict ${room.docId}: write-back failed:`, err);
     }
   }
 
@@ -1990,14 +1990,14 @@ export class FileBindings {
     this.bindings.delete(docId);
   }
 
-  /** Stop the shared mtime sweep — part of `Rooms.stop()`. */
+  /** Stop the shared mtime sweep — part of `DocStore.stop()`. */
   stopPolling(): void {
     if (this.pollTicker) clearInterval(this.pollTicker);
     this.pollTicker = null;
   }
 
   /**
-   * What `Rooms.stats()` reports about the bindings: how many exist, how many
+   * What `DocStore.stats()` reports about the bindings: how many exist, how many
    * the sweep would stat on this tick, how many debounce timers they hold,
    * and who has been promoting them into the fast lane.
    */

@@ -63,7 +63,7 @@ function socket(opts: { readOnly?: boolean; failSend?: boolean } = {}) {
  *
  * `new Awareness(ydoc)` gives itself a local state, so a room always carries
  * one entry of its own — the server's — and every joiner is told about it.
- * That is production's shape (`RoomStore.createAwareness` constructs it the
+ * That is production's shape (`DocStore.createAwareness` constructs it the
  * same way and only clears the library's timer), so the fake keeps it and the
  * assertions subtract it rather than pretending rooms start empty.
  */

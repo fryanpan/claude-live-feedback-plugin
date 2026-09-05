@@ -40,7 +40,7 @@ export interface DocEditPersistence {
   ): void;
 }
 
-/** The editing verbs. One per `Rooms`; its only state is the backup counter,
+/** The editing verbs. One per `DocStore`; its only state is the backup counter,
  *  which nothing outside a backup has ever read. */
 export class DocEditOps {
   private backupSeq = 0;
@@ -71,7 +71,7 @@ export class DocEditOps {
       }
       return file;
     } catch (err) {
-      console.error(`[rooms] set_doc_content backup failed for ${docId}:`, err);
+      console.error(`[doc-store] set_doc_content backup failed for ${docId}:`, err);
       return null;
     }
   }

@@ -177,7 +177,7 @@ describe('server wiring: a read_session on a task body room updates Task.reading
     );
     // Task creation mints the body room asynchronously (projection commit);
     // wait for it before posting a read against it.
-    await until(() => handle.rooms.getDoc(taskBodyDocId(task.id)));
+    await until(() => handle.docStore.getDoc(taskBodyDocId(task.id)));
     return task.id;
   }
 

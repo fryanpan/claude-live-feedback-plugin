@@ -17,12 +17,12 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runBackfill } from '../src/activity-backfill.ts';
+import { DocStore } from '../src/doc-store.ts';
 import {
   listArchivedDocs,
   listArchivedReviews,
   readDocArchiveManifest,
 } from '../src/review-archive.ts';
-import { Rooms } from '../src/doc-store.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 import { waitForFile } from './wait-for.ts';
@@ -33,8 +33,8 @@ const REVIEWER = { id: 'u1', name: 'Reviewer', kind: 'known' as const, color: '#
  *  are meaningless before it. */
 const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 260));
 
-function makeRooms(dataDir: string): Rooms {
-  return new Rooms({
+function makeDocStore(dataDir: string): DocStore {
+  return new DocStore({
     dataDir,
     sse: new SseHub(),
     webhooks: createWebhookDispatcher({ onLog: () => {} }),
@@ -50,21 +50,21 @@ function backfilledStream(dataDir: string): string {
   return existsSync(p) ? readFileSync(p, 'utf8') : '';
 }
 
-describe('Rooms.archiveDoc / unarchiveDoc', () => {
+describe('DocStore.archiveDoc / unarchiveDoc', () => {
   let dataDir: string;
   let folder: string;
   let mdPath: string;
-  let rooms: Rooms;
+  let docStore: DocStore;
 
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'da-data-'));
     folder = mkdtempSync(join(tmpdir(), 'da-src-'));
     mdPath = join(folder, 'notes.md');
     writeFileSync(mdPath, '# Notes\n\nthe unique md line\n');
-    rooms = makeRooms(dataDir);
+    docStore = makeDocStore(dataDir);
     // What `create_review_doc` produces: one bound markdown doc, no review.
-    rooms.getOrCreate('solo', { type: 'markdown', sourceUrl: mdPath, title: 'Notes' });
-    expect(rooms.attachFile('solo', mdPath).ok).toBe(true);
+    docStore.getOrCreate('solo', { type: 'markdown', sourceUrl: mdPath, title: 'Notes' });
+    expect(docStore.attachFile('solo', mdPath).ok).toBe(true);
   });
 
   afterEach(() => {
@@ -73,13 +73,13 @@ describe('Rooms.archiveDoc / unarchiveDoc', () => {
   });
 
   it('returns not-found for an id no doc is bound under', () => {
-    const res = rooms.archiveDoc('nope', { archivedBy: 'Tester' });
+    const res = docStore.archiveDoc('nope', { archivedBy: 'Tester' });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toBe('not-found');
   });
 
   it('parks the doc under _archive and takes it out of the live list', async () => {
-    await rooms.createThreadByFind(
+    await docStore.createThreadByFind(
       'solo',
       { find: 'the unique md line' },
       REVIEWER,
@@ -87,10 +87,10 @@ describe('Rooms.archiveDoc / unarchiveDoc', () => {
     );
     await settle();
 
-    const res = rooms.archiveDoc('solo', { archivedBy: 'Tester', reason: 'draft published' });
+    const res = docStore.archiveDoc('solo', { archivedBy: 'Tester', reason: 'draft published' });
     expect(res.ok).toBe(true);
-    expect(rooms.list().length).toBe(0);
-    expect(rooms.get('solo')).toBeUndefined();
+    expect(docStore.list().length).toBe(0);
+    expect(docStore.get('solo')).toBeUndefined();
     expect(existsSync(join(dataDir, 'solo.ydoc'))).toBe(false);
     expect(existsSync(join(dataDir, '_archive', 'solo.ydoc'))).toBe(true);
     // The bound SOURCE file is the user's own and is never touched.
@@ -100,13 +100,13 @@ describe('Rooms.archiveDoc / unarchiveDoc', () => {
   it('moves the private-meta sidecar alongside the ydoc', async () => {
     await settle();
     expect(existsSync(join(dataDir, 'solo.private.json'))).toBe(true);
-    expect(rooms.archiveDoc('solo', { archivedBy: 'Tester' }).ok).toBe(true);
+    expect(docStore.archiveDoc('solo', { archivedBy: 'Tester' }).ok).toBe(true);
     expect(existsSync(join(dataDir, 'solo.private.json'))).toBe(false);
     expect(existsSync(join(dataDir, '_archive', 'solo.private.json'))).toBe(true);
   });
 
   it('flushes edits made right up to the archive, rather than losing 200ms of them', async () => {
-    await rooms.createThreadByFind(
+    await docStore.createThreadByFind(
       'solo',
       { find: 'the unique md line' },
       REVIEWER,
@@ -114,14 +114,14 @@ describe('Rooms.archiveDoc / unarchiveDoc', () => {
     );
     // No settle: the debounced write has NOT fired, so only a flush inside
     // archiveDoc can get this comment onto disk.
-    expect(rooms.archiveDoc('solo', { archivedBy: 'Tester' }).ok).toBe(true);
-    expect(rooms.unarchiveDoc('solo', { archivedBy: 'Tester' }).ok).toBe(true);
-    const threads = rooms.listThreads('solo', { status: 'open' });
+    expect(docStore.archiveDoc('solo', { archivedBy: 'Tester' }).ok).toBe(true);
+    expect(docStore.unarchiveDoc('solo', { archivedBy: 'Tester' }).ok).toBe(true);
+    const threads = docStore.listThreads('solo', { status: 'open' });
     expect(threads[0]?.comments[0]?.text).toBe('typed a heartbeat before retiring it');
   });
 
   it('records who archived it and why, and lists it as archived', () => {
-    rooms.archiveDoc('solo', { archivedBy: 'Tester', reason: 'draft published' });
+    docStore.archiveDoc('solo', { archivedBy: 'Tester', reason: 'draft published' });
 
     const manifest = readDocArchiveManifest(dataDir, 'solo');
     expect(manifest).toBeTruthy();
@@ -139,16 +139,16 @@ describe('Rooms.archiveDoc / unarchiveDoc', () => {
   });
 
   it('remembers the boards it was on so unarchive can put it back', () => {
-    rooms.archiveDoc('solo', { archivedBy: 'Tester', linkedWorkspaces: ['w-abc'] });
+    docStore.archiveDoc('solo', { archivedBy: 'Tester', linkedWorkspaces: ['w-abc'] });
     expect(readDocArchiveManifest(dataDir, 'solo')?.linkedWorkspaces).toEqual(['w-abc']);
-    const back = rooms.unarchiveDoc('solo', { archivedBy: 'Tester' });
+    const back = docStore.unarchiveDoc('solo', { archivedBy: 'Tester' });
     expect(back.ok).toBe(true);
     if (!back.ok) return;
     expect(back.manifest.linkedWorkspaces).toEqual(['w-abc']);
   });
 
   it('appends an archive event to the activity log', () => {
-    rooms.archiveDoc('solo', { archivedBy: 'Tester', reason: 'draft published' });
+    docStore.archiveDoc('solo', { archivedBy: 'Tester', reason: 'draft published' });
     const rows = readFileSync(join(dataDir, 'activity.jsonl'), 'utf8')
       .split('\n')
       .filter(Boolean)
@@ -172,21 +172,21 @@ describe('Rooms.archiveDoc / unarchiveDoc', () => {
   });
 
   it('unarchive brings the doc back: room, threads, file binding and all', async () => {
-    await rooms.createThreadByFind(
+    await docStore.createThreadByFind(
       'solo',
       { find: 'the unique md line' },
       REVIEWER,
       'still unresolved',
     );
     await settle();
-    expect(rooms.archiveDoc('solo', { archivedBy: 'Tester' }).ok).toBe(true);
+    expect(docStore.archiveDoc('solo', { archivedBy: 'Tester' }).ok).toBe(true);
 
-    const back = rooms.unarchiveDoc('solo', { archivedBy: 'Tester' });
+    const back = docStore.unarchiveDoc('solo', { archivedBy: 'Tester' });
     expect(back.ok).toBe(true);
     if (!back.ok) return;
     expect(back.docId).toBe('solo');
-    expect(rooms.list().map((m) => m.docId)).toEqual(['solo']);
-    const threads = rooms.listThreads('solo', { status: 'open' });
+    expect(docStore.list().map((m) => m.docId)).toEqual(['solo']);
+    const threads = docStore.listThreads('solo', { status: 'open' });
     expect(threads.length).toBe(1);
     expect(threads[0]?.comments[0]?.text).toBe('still unresolved');
     // Nothing left behind in _archive, manifest included.
@@ -196,7 +196,7 @@ describe('Rooms.archiveDoc / unarchiveDoc', () => {
     expect(listArchivedDocs(dataDir)).toEqual([]);
     // The binding is re-armed, so an edit still reaches the file. A doc that
     // came back read-only would look fine and silently stop writing back.
-    const edited = rooms.findAndReplace('solo', {
+    const edited = docStore.findAndReplace('solo', {
       find: 'the unique md line',
       replace: 'the edited md line',
     });
@@ -205,8 +205,8 @@ describe('Rooms.archiveDoc / unarchiveDoc', () => {
   });
 
   it('records an unarchive event naming who restored it', () => {
-    rooms.archiveDoc('solo', { archivedBy: 'Tester' });
-    rooms.unarchiveDoc('solo', { archivedBy: 'Restorer' });
+    docStore.archiveDoc('solo', { archivedBy: 'Tester' });
+    docStore.unarchiveDoc('solo', { archivedBy: 'Restorer' });
     const rows = readFileSync(join(dataDir, 'activity.jsonl'), 'utf8')
       .split('\n')
       .filter(Boolean)
@@ -218,26 +218,26 @@ describe('Rooms.archiveDoc / unarchiveDoc', () => {
   });
 
   it('unarchive of an id that was never archived is not-found', () => {
-    const res = rooms.unarchiveDoc('nope', { archivedBy: 'Tester' });
+    const res = docStore.unarchiveDoc('nope', { archivedBy: 'Tester' });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toBe('not-found');
   });
 
   it('refuses a doc that belongs to a review — that is archive_review’s job', () => {
-    rooms.getOrCreate('member', {
+    docStore.getOrCreate('member', {
       type: 'markdown',
       sourceUrl: mdPath,
       setId: 'repo-abc1234-live',
       relPath: 'notes.md',
     });
-    const res = rooms.archiveDoc('member', { archivedBy: 'Tester' });
+    const res = docStore.archiveDoc('member', { archivedBy: 'Tester' });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toBe('review-member');
     if (res.error !== 'review-member') return;
     // Name the review, so the caller knows what to call instead.
     expect(res.setId).toBe('repo-abc1234-live');
-    expect(rooms.get('member')).toBeDefined();
+    expect(docStore.get('member')).toBeDefined();
   });
 
   it('refuses a task body and a board room — live furniture, not a doc', async () => {
@@ -245,11 +245,11 @@ describe('Rooms.archiveDoc / unarchiveDoc', () => {
       // Server authority, because a CALLER may not occupy these prefixes at
       // all now — the projection is the only thing that mints them, and this
       // test is about what `archiveDoc` does once one exists.
-      rooms.getOrCreate(docId, { type: 'markdown' }, { authority: 'server' });
-      const res = rooms.archiveDoc(docId, { archivedBy: 'Tester' });
+      docStore.getOrCreate(docId, { type: 'markdown' }, { authority: 'server' });
+      const res = docStore.archiveDoc(docId, { archivedBy: 'Tester' });
       expect(res.ok).toBe(false);
       if (!res.ok) expect(res.error).toBe('hub-owned');
-      expect(rooms.get(docId)).toBeDefined();
+      expect(docStore.get(docId)).toBeDefined();
     }
     // Let these rooms' debounced first save land before the temp dir goes, so
     // the teardown race doesn't print an ENOENT that looks like a failure.
@@ -265,21 +265,21 @@ describe('Rooms.archiveDoc / unarchiveDoc', () => {
     writeFileSync(join(dataDir, '_archive', 'solo.ydoc'), 'older-snapshot');
     await settle();
 
-    const res = rooms.archiveDoc('solo', { archivedBy: 'Tester' });
+    const res = docStore.archiveDoc('solo', { archivedBy: 'Tester' });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toBe('archive-collision');
     // Nothing moved, and the older snapshot is intact.
-    expect(rooms.list().length).toBe(1);
+    expect(docStore.list().length).toBe(1);
     expect(existsSync(join(dataDir, 'solo.ydoc'))).toBe(true);
     expect(readFileSync(join(dataDir, '_archive', 'solo.ydoc'), 'utf8')).toBe('older-snapshot');
   });
 
   it('refuses to unarchive onto a live doc of the same id', () => {
-    rooms.archiveDoc('solo', { archivedBy: 'Tester' });
+    docStore.archiveDoc('solo', { archivedBy: 'Tester' });
     // Something re-minted the id while the doc was away.
     writeFileSync(join(dataDir, 'solo.ydoc'), 'live-again');
 
-    const res = rooms.unarchiveDoc('solo', { archivedBy: 'Tester' });
+    const res = docStore.unarchiveDoc('solo', { archivedBy: 'Tester' });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toBe('restore-collision');
     // Nothing moved: the archived copy and the newer doc are both whole.
@@ -291,15 +291,15 @@ describe('Rooms.archiveDoc / unarchiveDoc', () => {
 describe('an archived doc keeps feeding activity-backfill', () => {
   let dataDir: string;
   let folder: string;
-  let rooms: Rooms;
+  let docStore: DocStore;
 
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'dab-data-'));
     folder = mkdtempSync(join(tmpdir(), 'dab-src-'));
     writeFileSync(join(folder, 'notes.md'), '# Notes\n\nthe unique md line\n');
-    rooms = makeRooms(dataDir);
-    rooms.getOrCreate('solo', { type: 'markdown', sourceUrl: join(folder, 'notes.md') });
-    rooms.attachFile('solo', join(folder, 'notes.md'));
+    docStore = makeDocStore(dataDir);
+    docStore.getOrCreate('solo', { type: 'markdown', sourceUrl: join(folder, 'notes.md') });
+    docStore.attachFile('solo', join(folder, 'notes.md'));
   });
 
   afterEach(() => {
@@ -308,7 +308,7 @@ describe('an archived doc keeps feeding activity-backfill', () => {
   });
 
   it('the backfilled stream over an archived doc is BYTE-IDENTICAL', async () => {
-    const created = await rooms.createThreadByFind(
+    const created = await docStore.createThreadByFind(
       'solo',
       { find: 'the unique md line' },
       REVIEWER,
@@ -326,14 +326,14 @@ describe('an archived doc keeps feeding activity-backfill', () => {
     // move into _archive threatens: readPrivateMeta looks NEXT TO the .ydoc.
     expect(before).toContain('"sourceUrl"');
 
-    expect(rooms.archiveDoc('solo', { archivedBy: 'Tester' }).ok).toBe(true);
+    expect(docStore.archiveDoc('solo', { archivedBy: 'Tester' }).ok).toBe(true);
 
     const after = backfilledStream(dataDir);
     expect(after).toBe(before);
   });
 
   it('the doc manifest is invisible to the backfill', () => {
-    rooms.archiveDoc('solo', { archivedBy: 'Tester' });
+    docStore.archiveDoc('solo', { archivedBy: 'Tester' });
     // `.doc.json` does not end in `.ydoc`, so the enumerator skips it rather
     // than trying to parse it as a document and logging a failure per run.
     expect(() => backfilledStream(dataDir)).not.toThrow();

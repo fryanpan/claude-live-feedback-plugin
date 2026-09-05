@@ -1699,7 +1699,7 @@ export class TaskStore {
   agentStreamProbe: AgentStreamProbe | undefined;
   /**
    * The doc store's settled `contentRevision` for a docId, wired by server.ts
-   * (`rooms.settledContentRevision`). At the STORE rather than per route so
+   * (`docStore.settledContentRevision`). At the STORE rather than per route so
    * every create path — batch, promote, import, the meeting capture — stamps
    * `originDocRevision` without remembering to; a route guard here would be
    * a guarantee for that route's callers only. Left unwired (store-only

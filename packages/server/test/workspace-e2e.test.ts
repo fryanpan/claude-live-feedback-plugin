@@ -9,7 +9,7 @@ import { type ServerHandle, createServer } from '../src/server.ts';
  * End-to-end HTTP smoke test for the folder-review feature (folder bind →
  * file tree with counts → read-only code content). Exercises the actual
  * REST routes against a throwaway server on a temp dataDir + temp folder —
- * NOT the in-process Rooms API (bind-folder.test.ts already covers that).
+ * NOT the in-process DocStore API (bind-folder.test.ts already covers that).
  */
 
 describe('workspace folder-review e2e (HTTP)', () => {
@@ -127,7 +127,7 @@ describe('workspace folder-review e2e (HTTP)', () => {
     // way the read-only code surface does (code-anchor.ts): CM offsets are
     // byte-identical to indices into `content`. Send rel positions as
     // number[] — the wire shape the editor + REST routes round-trip cleanly.
-    const room = handle.rooms.get(codeDocId);
+    const room = handle.docStore.get(codeDocId);
     expect(room).toBeTruthy();
     const content = room!.ydoc.getText('content');
     const source = content.toString();

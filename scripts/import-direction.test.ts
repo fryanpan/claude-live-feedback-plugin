@@ -104,7 +104,7 @@ describe('violationsIn', () => {
     expect(
       violationsIn(
         'packages/server/src/routes/docs.ts',
-        "import type { Rooms } from '../doc-store.ts';\nimport { x } from './doc-resource.ts';",
+        "import type { DocStore } from '../doc-store.ts';\nimport { x } from './doc-resource.ts';",
       ),
     ).toEqual([]);
   });

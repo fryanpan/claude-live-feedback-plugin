@@ -12,7 +12,7 @@
  * ── Nothing here is snapshotted ──
  *
  * The context holds three LIVE stores, not values read out of them. A room
- * is looked up per frame (`rooms.get(ws.data.docId)`), because `ws.data.docId`
+ * is looked up per frame (`docStore.get(ws.data.docId)`), because `ws.data.docId`
  * is re-resolved on every message for the reason the `/y/` upgrade documents,
  * and because a room can be created, evicted or rehydrated while a socket is
  * open. The meeting relay's session map and the bot relay's token registry
@@ -25,7 +25,7 @@
  * `close` is NOT async, and must not become async. `createServer`'s shutdown
  * calls `server.stop(true)`, which force-closes every open connection and
  * fires this handler SYNCHRONOUSLY inside that call — before
- * `meetingRelay.dispose()`, before `taskStore.stop()`, before `rooms.flush()`.
+ * `meetingRelay.dispose()`, before `taskStore.stop()`, before `docStore.flush()`.
  * Those handlers write: a meeting flushes its last sentence into the doc. They
  * run there precisely so the subsystems that receive those writes are still
  * live. An `async close` would return a promise nothing awaits, and the writes
@@ -34,16 +34,16 @@
  * the synchronous shape of this handler is this file's.
  */
 import type { WebSocketHandler } from 'bun';
+import { type DocStore, type FeedbackWs } from './doc-store.ts';
 import type { MeetingRelay } from './meeting-protocol.ts';
 import type { RecallMeetingRelay } from './recall-meeting.ts';
-import { type FeedbackWs, type Rooms } from './doc-store.ts';
 import { onClose, onMessage, onOpen } from './yjs-protocol.ts';
 
 /** What the socket handlers read. All three are live stores, read at call
  *  time — see the note above on why none of it may be snapshotted. */
 export interface SocketHandlersContext {
-  /** Doc rooms. The room for a frame is looked up per frame, never held. */
-  rooms: Rooms;
+  /** Doc store. The room for a frame is looked up per frame, never held. */
+  docStore: DocStore;
   /** Live meeting sessions, keyed by socket. */
   meetingRelay: MeetingRelay;
   /** The bot relay's per-bot token registry. */
@@ -90,7 +90,7 @@ export type UpgradeData = {
  * measurement is about the very frame `open` sends first.
  */
 export function createSocketHandlers(ctx: SocketHandlersContext): WebSocketHandler<UpgradeData> {
-  const { rooms, meetingRelay, recallRelay } = ctx;
+  const { docStore, meetingRelay, recallRelay } = ctx;
 
   return {
     // Yjs sync step 2 hands a fresh tab the WHOLE room state in one binary
@@ -114,12 +114,12 @@ export function createSocketHandlers(ctx: SocketHandlersContext): WebSocketHandl
         // WeakMap nothing can enumerate: this is what makes the socket
         // reachable by the share sweeps in `doc-store.ts`. A socket carrying
         // neither stamp — the owner's — is not tracked at all.
-        rooms.trackShareSocket(ws);
+        docStore.trackShareSocket(ws);
         meetingRelay.onOpen(ws);
         return;
       }
       const typed = ws as unknown as FeedbackWs;
-      const room = rooms.get(typed.data.docId);
+      const room = docStore.get(typed.data.docId);
       if (!room) {
         ws.close(1008, 'no room');
         return;
@@ -152,7 +152,7 @@ export function createSocketHandlers(ctx: SocketHandlersContext): WebSocketHandl
         return;
       }
       const typed = ws as unknown as FeedbackWs;
-      const room = rooms.get(typed.data.docId);
+      const room = docStore.get(typed.data.docId);
       if (!room) return;
       let data: Uint8Array;
       if (typeof message === 'string') {
@@ -171,7 +171,7 @@ export function createSocketHandlers(ctx: SocketHandlersContext): WebSocketHandl
         return;
       }
       if (ws.data.kind === 'audio') {
-        rooms.untrackShareSocket(ws);
+        docStore.untrackShareSocket(ws);
         meetingRelay.onClose(ws);
         return;
       }

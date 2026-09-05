@@ -1,9 +1,9 @@
 import type { DocType, User } from '@feedback/core';
 import type { AgentWatches } from '../agent-watches.ts';
+import type { DocStore } from '../doc-store.ts';
 import type { HomeBriefStore } from '../home-brief.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
 import type { ReviewItemRow } from '../review-queue.ts';
-import type { Rooms } from '../doc-store.ts';
 import type { SseHub } from '../sse.ts';
 import type { TaskProjection } from '../task-projection.ts';
 import type { HubWorkspace, TaskStore } from '../tasks.ts';
@@ -17,7 +17,7 @@ import type { ParallelismCapView } from './task-routes-context.ts';
  * built once per server, and what only a request knows travels beside it in
  * `WorkspaceRouteRequest`. The difference from `TaskRoutesContext` is that a
  * board is where docs, agents and the client release meet, so this side
- * carries the doc rooms and the release directory the task side never needed.
+ * carries the doc store and the release directory the task side never needed.
  */
 export interface WorkspaceRoutesContext {
   /** The hub store — boards, their goals, their tasks and their agents. */
@@ -25,8 +25,8 @@ export interface WorkspaceRoutesContext {
   /** The ydoc projection of the store, refreshed by hand after the writes
    *  that emit no store event (attach, unfile, archive-in-place). */
   taskProjection: TaskProjection;
-  /** Doc rooms — a board's attached docs, its huddles and its diff reviews. */
-  rooms: Rooms;
+  /** Doc store — a board's attached docs, its huddles and its diff reviews. */
+  docStore: DocStore;
   /** The server-sent-event hub a voice frame is pushed down. */
   sse: SseHub;
   /** Per-person Home briefs and the read markers under them. */

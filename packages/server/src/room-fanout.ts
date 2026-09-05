@@ -38,10 +38,10 @@ import {
 } from '@feedback/core';
 import * as awarenessProtocol from 'y-protocols/awareness';
 import * as Y from 'yjs';
+import { DOC_STORE_TIMINGS } from './doc-store-timings.ts';
+import type { DocRoom, FeedbackWs, ShareAuthorizedSocket } from './doc-store.ts';
 import { newEventId } from './event-id.ts';
 import { isPrivateMetaKey } from './private-meta.ts';
-import { ROOM_TIMINGS } from './doc-store-timings.ts';
-import type { DocRoom, FeedbackWs, ShareAuthorizedSocket } from './doc-store.ts';
 import type { SseHub } from './sse.ts';
 import type { ThreadSummarizer } from './summarize.ts';
 import type { WebhookDispatcher } from './webhooks.ts';
@@ -120,7 +120,7 @@ function isAuthoringOrigin(room: DocRoom, origin: unknown): boolean {
 }
 
 /** How long after a content change the thread re-anchor sweep runs. */
-const REANCHOR_MS = ROOM_TIMINGS.reanchorMs;
+const REANCHOR_MS = DOC_STORE_TIMINGS.reanchorMs;
 
 /** y-protocols' own presence constants, restated because its per-instance
  *  interval is replaced by one shared ticker (see `maintainAwareness`).
@@ -168,12 +168,12 @@ export function maintainAwareness(aw: awarenessProtocol.Awareness, now = Date.no
  */
 export interface RoomFanoutHost {
   /** Every RESIDENT room — the set the share-socket sweeps walk. */
-  rooms(): Iterable<DocRoom>;
+  residentRooms(): Iterable<DocRoom>;
   sse(): SseHub;
   webhooks(): WebhookDispatcher;
-  /** `RoomsConfig.decorateDocMeta`, already defaulted to identity. */
+  /** `DocStoreConfig.decorateDocMeta`, already defaulted to identity. */
   decorate(meta: DocMeta): DocMeta;
-  /** `RoomsConfig.onRoomEvent`, already defaulted to a no-op. */
+  /** `DocStoreConfig.onRoomEvent`, already defaulted to a no-op. */
   emitRoomEvent(docId: string, payload: WebhookPayload): void;
   summarizer(): ThreadSummarizer | undefined;
   thread(docId: string, threadId: string): Thread | null;
@@ -185,11 +185,11 @@ export interface RoomFanoutHost {
 }
 
 /**
- * The fan-out for every room this server holds. One instance per `Rooms`,
+ * The fan-out for every room this server holds. One instance per `DocStore`,
  * holding the one presence ticker that serves all of them.
  */
 export class RoomFanout {
-  /** Rooms that have a live Awareness instance, i.e. the ones the shared
+  /** DocStore that have a live Awareness instance, i.e. the ones the shared
    *  presence ticker has to visit. */
   private awarenessRooms = new Set<DocRoom>();
 
@@ -197,7 +197,7 @@ export class RoomFanout {
 
   constructor(private host: RoomFanoutHost) {}
 
-  /** Rooms holding presence, and the ticker count `Rooms.stats` folds in. */
+  /** DocStore holding presence, and the ticker count `DocStore.stats` folds in. */
   stats(): { awareness: number; timers: number } {
     return { awareness: this.awarenessRooms.size, timers: this.awarenessTicker ? 1 : 0 };
   }
@@ -226,7 +226,7 @@ export class RoomFanout {
   /**
    * Stop the shared presence ticker. It stops itself when the last Awareness
    * goes, but a shutdown does not wait for that: leaving it running holds
-   * callbacks into a Rooms nobody is using any more.
+   * callbacks into a DocStore nobody is using any more.
    */
   stop(): void {
     if (this.awarenessTicker) clearInterval(this.awarenessTicker);
@@ -302,7 +302,7 @@ export class RoomFanout {
    * microphone running against a doc the person may no longer read.
    *
    * Registered from the websocket `open` handler and dropped from `close`
-   * (server.ts, via `Rooms`), so this holds exactly the live ones.
+   * (server.ts, via `DocStore`), so this holds exactly the live ones.
    */
   private readonly trackedShareSockets = new Set<ShareAuthorizedSocket>();
 
@@ -337,7 +337,7 @@ export class RoomFanout {
    * corpus in the file poll's fast lane. See `closeSocketsForDeadShares`.
    */
   private *shareAuthorizedSockets(): Generator<ShareAuthorizedSocket> {
-    for (const room of this.host.rooms()) {
+    for (const room of this.host.residentRooms()) {
       for (const ws of room.conns) yield ws;
     }
     for (const ws of this.trackedShareSockets) yield ws;
@@ -587,7 +587,7 @@ export class RoomFanout {
         for (const key of injected) meta.delete(key);
       }, PRIVATE_META_GUARD_ORIGIN);
       console.error(
-        `[rooms] ${room.docId}: dropped peer-written private meta key(s): ${injected.join(', ')}`,
+        `[doc-store] ${room.docId}: dropped peer-written private meta key(s): ${injected.join(', ')}`,
       );
     });
   }
@@ -616,7 +616,7 @@ export class RoomFanout {
         }
       }, PRIVATE_META_GUARD_ORIGIN);
       console.error(
-        `[rooms] ${room.docId}: reverted peer write to server meta key(s): ${touched.join(', ')}`,
+        `[doc-store] ${room.docId}: reverted peer write to server meta key(s): ${touched.join(', ')}`,
       );
     });
   }
@@ -654,7 +654,7 @@ export class RoomFanout {
           const res = prose.autoReanchorCodeDoc(room.ydoc);
           if (res.reanchored > 0 || res.stillOrphan > 0) {
             console.log(
-              `[rooms] ${room.docId}: code re-anchor — ${res.reanchored} fixed, ${res.stillOrphan} orphaned`,
+              `[doc-store] ${room.docId}: code re-anchor — ${res.reanchored} fixed, ${res.stillOrphan} orphaned`,
             );
           }
         }, REANCHOR_MS);
@@ -662,7 +662,7 @@ export class RoomFanout {
       const initialCode = prose.autoReanchorCodeDoc(room.ydoc);
       if (initialCode.reanchored > 0) {
         console.log(
-          `[rooms] ${room.docId}: on-load code re-anchored ${initialCode.reanchored} thread(s)`,
+          `[doc-store] ${room.docId}: on-load code re-anchored ${initialCode.reanchored} thread(s)`,
         );
       }
       return;
@@ -696,7 +696,7 @@ export class RoomFanout {
       reanchorTimer = setTimeout(() => {
         const res = prose.autoReanchorDoc(room.ydoc);
         if (res.reanchored > 0) {
-          console.log(`[rooms] ${room.docId}: auto-reanchored ${res.reanchored} thread(s)`);
+          console.log(`[doc-store] ${room.docId}: auto-reanchored ${res.reanchored} thread(s)`);
         }
       }, REANCHOR_MS);
     });
@@ -705,13 +705,15 @@ export class RoomFanout {
     // on load so an existing doc doesn't need a reparse to render correctly.
     const fixed = prose.normalizeHeadingLevels(room.ydoc);
     if (fixed > 0) {
-      console.log(`[rooms] ${room.docId}: normalized ${fixed} legacy string heading level(s)`);
+      console.log(`[doc-store] ${room.docId}: normalized ${fixed} legacy string heading level(s)`);
     }
     // Also sweep once on room load so threads recover after server
     // restart even if no new edits happen.
     const initial = prose.autoReanchorDoc(room.ydoc);
     if (initial.reanchored > 0) {
-      console.log(`[rooms] ${room.docId}: on-load auto-reanchored ${initial.reanchored} thread(s)`);
+      console.log(
+        `[doc-store] ${room.docId}: on-load auto-reanchored ${initial.reanchored} thread(s)`,
+      );
     }
   }
 }

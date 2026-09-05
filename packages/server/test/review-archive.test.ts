@@ -18,8 +18,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runBackfill } from '../src/activity-backfill.ts';
+import { DocStore } from '../src/doc-store.ts';
 import { listArchivedReviews, readArchiveManifest } from '../src/review-archive.ts';
-import { Rooms } from '../src/doc-store.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 
@@ -30,8 +30,8 @@ const REVIEWER = { id: 'u1', name: 'Reviewer', kind: 'known' as const, color: '#
  *  for exactly that reason rather than for anything the code got wrong. */
 const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 260));
 
-function makeRooms(dataDir: string): Rooms {
-  return new Rooms({
+function makeDocStore(dataDir: string): DocStore {
+  return new DocStore({
     dataDir,
     sse: new SseHub(),
     webhooks: createWebhookDispatcher({ onLog: () => {} }),
@@ -41,14 +41,14 @@ function makeRooms(dataDir: string): Rooms {
 
 /** Bind every file in the folder as a member doc (bindFolder binds lazily). */
 async function bindAllFiles(
-  rooms: Rooms,
+  docStore: DocStore,
   folderPath: string,
 ): Promise<{ setId: string; docIds: string[]; byPath: Map<string, string> }> {
-  const bound = await rooms.bindFolder({ folderPath, owner: '/cwd' });
+  const bound = await docStore.bindFolder({ folderPath, owner: '/cwd' });
   if (!bound.ok) throw new Error('bindFolder failed');
   const byPath = new Map<string, string>();
-  for (const f of rooms.listRepoFiles(bound.workspaceId).files ?? []) {
-    const opened = await rooms.openContextFile(bound.workspaceId, f.relPath);
+  for (const f of docStore.listRepoFiles(bound.workspaceId).files ?? []) {
+    const opened = await docStore.openContextFile(bound.workspaceId, f.relPath);
     if (opened.ok) byPath.set(f.relPath, opened.docId);
   }
   return { setId: bound.workspaceId, docIds: [...byPath.values()], byPath };
@@ -62,15 +62,15 @@ function backfilledStream(dataDir: string): string {
   return existsSync(p) ? readFileSync(p, 'utf8') : '';
 }
 
-describe('Rooms.archiveReview / unarchiveReview', () => {
+describe('DocStore.archiveReview / unarchiveReview', () => {
   let dataDir: string;
   let folder: string;
-  let rooms: Rooms;
+  let docStore: DocStore;
 
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'ar-data-'));
     folder = mkdtempSync(join(tmpdir(), 'ar-src-'));
-    rooms = makeRooms(dataDir);
+    docStore = makeDocStore(dataDir);
     mkdirSync(join(folder, 'src'));
     writeFileSync(join(folder, 'README.md'), '# Project\n\nthe unique md line\n');
     writeFileSync(join(folder, 'src', 'index.ts'), 'export const answer = 42;\n');
@@ -82,31 +82,31 @@ describe('Rooms.archiveReview / unarchiveReview', () => {
   });
 
   it('returns not-found for an id no review is bound under', () => {
-    const res = rooms.archiveReview('nope', { archivedBy: 'Tester' });
+    const res = docStore.archiveReview('nope', { archivedBy: 'Tester' });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toBe('not-found');
   });
 
   it('archives OVER open threads — that is the point of the verb', async () => {
-    const bound = await bindAllFiles(rooms, folder);
+    const bound = await bindAllFiles(docStore, folder);
     const mdDocId = bound.byPath.get('README.md')!;
-    await rooms.createThreadByFind(
+    await docStore.createThreadByFind(
       mdDocId,
       { find: 'the unique md line' },
       REVIEWER,
       'still unresolved',
     );
 
-    const res = rooms.archiveReview(bound.setId, {
+    const res = docStore.archiveReview(bound.setId, {
       archivedBy: 'Tester',
       reason: 'merged in #123',
     });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.archived).toBe(bound.docIds.length);
-    // Gone from memory, so gone from rooms.list() and from the home page.
-    expect(rooms.list().length).toBe(0);
-    for (const id of bound.docIds) expect(rooms.get(id)).toBeUndefined();
+    // Gone from memory, so gone from docStore.list() and from the home page.
+    expect(docStore.list().length).toBe(0);
+    for (const id of bound.docIds) expect(docStore.get(id)).toBeUndefined();
     // The ydoc still exists — under _archive, where hydrate cannot see it.
     for (const id of bound.docIds) {
       expect(existsSync(join(dataDir, `${id}.ydoc`))).toBe(false);
@@ -115,11 +115,11 @@ describe('Rooms.archiveReview / unarchiveReview', () => {
   });
 
   it('moves the private-meta sidecar alongside the ydoc', async () => {
-    const bound = await bindAllFiles(rooms, folder);
+    const bound = await bindAllFiles(docStore, folder);
     await settle();
     const sidecars = bound.docIds.filter((id) => existsSync(join(dataDir, `${id}.private.json`)));
     expect(sidecars.length).toBeGreaterThan(0);
-    expect(rooms.archiveReview(bound.setId, { archivedBy: 'Tester' }).ok).toBe(true);
+    expect(docStore.archiveReview(bound.setId, { archivedBy: 'Tester' }).ok).toBe(true);
     for (const id of sidecars) {
       expect(existsSync(join(dataDir, `${id}.private.json`))).toBe(false);
       expect(existsSync(join(dataDir, '_archive', `${id}.private.json`))).toBe(true);
@@ -127,8 +127,8 @@ describe('Rooms.archiveReview / unarchiveReview', () => {
   });
 
   it('records who archived it and why, and lists it as archived', async () => {
-    const bound = await bindAllFiles(rooms, folder);
-    rooms.archiveReview(bound.setId, { archivedBy: 'Tester', reason: 'merged in #123' });
+    const bound = await bindAllFiles(docStore, folder);
+    docStore.archiveReview(bound.setId, { archivedBy: 'Tester', reason: 'merged in #123' });
 
     const manifest = readArchiveManifest(dataDir, bound.setId);
     expect(manifest).toBeTruthy();
@@ -142,8 +142,8 @@ describe('Rooms.archiveReview / unarchiveReview', () => {
   });
 
   it('appends an archive event to the activity log', async () => {
-    const bound = await bindAllFiles(rooms, folder);
-    rooms.archiveReview(bound.setId, { archivedBy: 'Tester', reason: 'merged in #123' });
+    const bound = await bindAllFiles(docStore, folder);
+    docStore.archiveReview(bound.setId, { archivedBy: 'Tester', reason: 'merged in #123' });
     const log = readFileSync(join(dataDir, 'activity.jsonl'), 'utf8');
     const archiveRows = log
       .split('\n')
@@ -159,24 +159,24 @@ describe('Rooms.archiveReview / unarchiveReview', () => {
     expect(archiveRows[0]?.payload.reviewId).toBe(bound.setId);
   });
 
-  it('unarchive brings the review back: rooms, threads and all', async () => {
-    const bound = await bindAllFiles(rooms, folder);
+  it('unarchive brings the review back: docs, threads and all', async () => {
+    const bound = await bindAllFiles(docStore, folder);
     const mdDocId = bound.byPath.get('README.md')!;
-    await rooms.createThreadByFind(
+    await docStore.createThreadByFind(
       mdDocId,
       { find: 'the unique md line' },
       REVIEWER,
       'still unresolved',
     );
-    expect(rooms.archiveReview(bound.setId, { archivedBy: 'Tester' }).ok).toBe(true);
+    expect(docStore.archiveReview(bound.setId, { archivedBy: 'Tester' }).ok).toBe(true);
 
-    const back = rooms.unarchiveReview(bound.setId, { archivedBy: 'Tester' });
+    const back = docStore.unarchiveReview(bound.setId, { archivedBy: 'Tester' });
     expect(back.ok).toBe(true);
     if (!back.ok) return;
     expect(back.restored).toBe(bound.docIds.length);
-    expect(rooms.list().length).toBe(bound.docIds.length);
+    expect(docStore.list().length).toBe(bound.docIds.length);
     // The thread survived the round trip.
-    const threads = rooms.listThreads(mdDocId, { status: 'open' });
+    const threads = docStore.listThreads(mdDocId, { status: 'open' });
     expect(threads.length).toBe(1);
     expect(threads[0]?.comments[0]?.text).toBe('still unresolved');
     // Nothing is left behind in _archive, manifest included.
@@ -188,13 +188,13 @@ describe('Rooms.archiveReview / unarchiveReview', () => {
   });
 
   it('unarchive of an id that was never archived is not-found', () => {
-    const res = rooms.unarchiveReview('nope', { archivedBy: 'Tester' });
+    const res = docStore.unarchiveReview('nope', { archivedBy: 'Tester' });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toBe('not-found');
   });
 
   it('refuses rather than overwrites when the id is ALREADY in _archive', async () => {
-    const bound = await bindAllFiles(rooms, folder);
+    const bound = await bindAllFiles(docStore, folder);
     const mdDocId = bound.byPath.get('README.md')!;
     // An older snapshot of the same docId is already parked in _archive —
     // the state 5 docIds on the production box are in, from a hand-move in
@@ -203,14 +203,14 @@ describe('Rooms.archiveReview / unarchiveReview', () => {
     writeFileSync(join(dataDir, '_archive', `${mdDocId}.ydoc`), 'older-snapshot');
     await settle();
 
-    const res = rooms.archiveReview(bound.setId, { archivedBy: 'Tester' });
+    const res = docStore.archiveReview(bound.setId, { archivedBy: 'Tester' });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toBe('archive-collision');
     if (res.error !== 'archive-collision') return;
     expect(res.docIds).toEqual([mdDocId]);
     // ALL-OR-NOTHING: not one member moved, and the older snapshot is intact.
-    expect(rooms.list().length).toBe(bound.docIds.length);
+    expect(docStore.list().length).toBe(bound.docIds.length);
     for (const id of bound.docIds) expect(existsSync(join(dataDir, `${id}.ydoc`))).toBe(true);
     expect(readFileSync(join(dataDir, '_archive', `${mdDocId}.ydoc`), 'utf8')).toBe(
       'older-snapshot',
@@ -218,13 +218,13 @@ describe('Rooms.archiveReview / unarchiveReview', () => {
   });
 
   it('refuses to unarchive onto a live doc of the same id', async () => {
-    const bound = await bindAllFiles(rooms, folder);
-    rooms.archiveReview(bound.setId, { archivedBy: 'Tester' });
+    const bound = await bindAllFiles(docStore, folder);
+    docStore.archiveReview(bound.setId, { archivedBy: 'Tester' });
     // Something re-minted one of the ids while the review was archived.
     const revived = bound.docIds[0]!;
     writeFileSync(join(dataDir, `${revived}.ydoc`), 'live-again');
 
-    const res = rooms.unarchiveReview(bound.setId, { archivedBy: 'Tester' });
+    const res = docStore.unarchiveReview(bound.setId, { archivedBy: 'Tester' });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toBe('restore-collision');
@@ -241,12 +241,12 @@ describe('Rooms.archiveReview / unarchiveReview', () => {
 describe('archived docs keep feeding activity-backfill', () => {
   let dataDir: string;
   let folder: string;
-  let rooms: Rooms;
+  let docStore: DocStore;
 
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'arb-data-'));
     folder = mkdtempSync(join(tmpdir(), 'arb-src-'));
-    rooms = makeRooms(dataDir);
+    docStore = makeDocStore(dataDir);
     writeFileSync(join(folder, 'README.md'), '# Project\n\nthe unique md line\n');
   });
 
@@ -256,9 +256,9 @@ describe('archived docs keep feeding activity-backfill', () => {
   });
 
   it('the backfilled stream over an archived review is BYTE-IDENTICAL', async () => {
-    const bound = await bindAllFiles(rooms, folder);
+    const bound = await bindAllFiles(docStore, folder);
     const mdDocId = bound.byPath.get('README.md')!;
-    const created = await rooms.createThreadByFind(
+    const created = await docStore.createThreadByFind(
       mdDocId,
       { find: 'the unique md line' },
       REVIEWER,
@@ -276,7 +276,7 @@ describe('archived docs keep feeding activity-backfill', () => {
     // move into _archive threatens: readPrivateMeta looks NEXT TO the .ydoc.
     expect(before).toContain('"producedBy"');
 
-    expect(rooms.archiveReview(bound.setId, { archivedBy: 'Tester' }).ok).toBe(true);
+    expect(docStore.archiveReview(bound.setId, { archivedBy: 'Tester' }).ok).toBe(true);
 
     const after = backfilledStream(dataDir);
     expect(after).toBe(before);
@@ -286,9 +286,9 @@ describe('archived docs keep feeding activity-backfill', () => {
     // The 174 ydocs moved into _archive by hand in June left their
     // `.private.json` sidecars behind in the data dir. Resolving the sidecar
     // next to the .ydoc must not blind the backfill to those.
-    const bound = await bindAllFiles(rooms, folder);
+    const bound = await bindAllFiles(docStore, folder);
     const mdDocId = bound.byPath.get('README.md')!;
-    await rooms.createThreadByFind(
+    await docStore.createThreadByFind(
       mdDocId,
       { find: 'the unique md line' },
       REVIEWER,
@@ -299,7 +299,7 @@ describe('archived docs keep feeding activity-backfill', () => {
     expect(before).toContain('"producedBy"');
 
     // Hand-move: the ydoc goes, the sidecar stays.
-    rooms.archiveReview(bound.setId, { archivedBy: 'Tester' });
+    docStore.archiveReview(bound.setId, { archivedBy: 'Tester' });
     const archivedSidecar = join(dataDir, '_archive', `${mdDocId}.private.json`);
     if (existsSync(archivedSidecar)) {
       writeFileSync(join(dataDir, `${mdDocId}.private.json`), readFileSync(archivedSidecar));

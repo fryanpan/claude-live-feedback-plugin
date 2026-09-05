@@ -563,7 +563,7 @@ export class SseHub {
 
   /**
    * Close every stream whose authorizing MEMBERSHIP the predicate names — the
-   * SSE half of `Rooms.closeSocketsForShareMembers`, and there for the same
+   * SSE half of `DocStore.closeSocketsForShareMembers`, and there for the same
    * reason: a stream is authorized once at open, so a share-link visitor who
    * has been ejected keeps receiving every new comment until it drops.
    */

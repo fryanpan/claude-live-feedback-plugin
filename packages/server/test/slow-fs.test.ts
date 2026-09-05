@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_ROOM_TIMINGS, ROOM_TIMINGS } from '../src/doc-store-timings.ts';
+import { DEFAULT_DOC_STORE_TIMINGS, DOC_STORE_TIMINGS } from '../src/doc-store-timings.ts';
 import { BOUND_READ_MAX_OVERDUE, boundFiles, redactBoundPath } from '../src/slow-fs.ts';
 import { makeFifo, releaseFifo, releaseFifosIn } from './fifo.ts';
 import { waitFor } from './wait-for.ts';
@@ -195,9 +195,11 @@ describe('boundFiles', () => {
     // The deadline is a cadence like the write-back and the poll, so it rides
     // the same `CW_TEST_TIMING_SCALE` — otherwise every test here would pay
     // three real seconds and sit two seconds under the runner's own timeout.
-    expect(DEFAULT_ROOM_TIMINGS.boundReadDeadlineMs).toBe(3_000);
-    expect(DEFAULT_ROOM_TIMINGS.boundReadRetryMs).toBe(60_000);
+    expect(DEFAULT_DOC_STORE_TIMINGS.boundReadDeadlineMs).toBe(3_000);
+    expect(DEFAULT_DOC_STORE_TIMINGS.boundReadRetryMs).toBe(60_000);
     // And the suite is genuinely running the scaled ones, not the defaults.
-    expect(ROOM_TIMINGS.boundReadDeadlineMs).toBeLessThan(DEFAULT_ROOM_TIMINGS.boundReadDeadlineMs);
+    expect(DOC_STORE_TIMINGS.boundReadDeadlineMs).toBeLessThan(
+      DEFAULT_DOC_STORE_TIMINGS.boundReadDeadlineMs,
+    );
   });
 });

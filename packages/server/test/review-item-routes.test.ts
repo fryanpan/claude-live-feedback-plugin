@@ -636,8 +636,8 @@ describe("a person's plain reply answers the item it lands on", () => {
     // takes the resolved id the routes hand it, and a readable alias reaches no
     // room from in here. Resolved rather than assumed, because a miss would
     // return `no-doc` and this test would pass without ever reaching the guard.
-    const roomId = handle.rooms.get(docId)?.docId ?? docId;
-    const late = await handle.rooms.answerReviewItem(
+    const roomId = handle.docStore.get(docId)?.docId ?? docId;
+    const late = await handle.docStore.answerReviewItem(
       roomId,
       seeded.id,
       commentId,
@@ -865,7 +865,7 @@ describe('undo respects the visitor gate — a share visitor cannot spend the AP
   });
 
   function markerOf(docId: string, threadId: string): unknown {
-    const room = gatedHandle.rooms.get(docId);
+    const room = gatedHandle.docStore.get(docId);
     const threads = room?.ydoc.getMap('threads') as Y.Map<Y.Map<unknown>> | undefined;
     return threads?.get(threadId)?.get('summaryPendingTs');
   }
@@ -880,7 +880,7 @@ describe('undo respects the visitor gate — a share visitor cannot spend the AP
       body: JSON.stringify({ docId: name, type: 'markdown', sourceUrl: file }),
     });
     expect(created.status).toBe(200);
-    // The caller NAMED the doc; the server minted its id. The rooms handle
+    // The caller NAMED the doc; the server minted its id. The doc-store handle
     // below keys on the minted one, while the route still takes the name.
     const docId = ((await created.json()) as { docId: string }).docId;
     const seeded = await fetch(`${gatedBase}/api/docs/${name}/threads/by_find`, {
@@ -897,7 +897,7 @@ describe('undo respects the visitor gate — a share visitor cannot spend the AP
     const thread = ((await seeded.json()) as { thread: Thread }).thread;
     const commentId = thread.comments[0]?.id ?? '';
 
-    const answered = await gatedHandle.rooms.answerReviewItem(
+    const answered = await gatedHandle.docStore.answerReviewItem(
       docId,
       thread.id,
       commentId,
@@ -911,7 +911,7 @@ describe('undo respects the visitor gate — a share visitor cannot spend the AP
     expect(typeof afterAnswer).toBe('number');
 
     // The visitor gate, exactly as the route passes it (`generate: !visitor`).
-    const gated = gatedHandle.rooms.undoReviewItemAnswer(docId, thread.id, commentId, PERSON, {
+    const gated = gatedHandle.docStore.undoReviewItemAnswer(docId, thread.id, commentId, PERSON, {
       generate: false,
     });
     expect(gated.ok).toBe(true);
@@ -920,7 +920,7 @@ describe('undo respects the visitor gate — a share visitor cannot spend the AP
     // Second positive control, so the zero above cannot be the probe going
     // blind: an UNGATED undo moves the marker, proving undo reaches the same
     // event funnel agents watch.
-    const reAnswered = await gatedHandle.rooms.answerReviewItem(
+    const reAnswered = await gatedHandle.docStore.answerReviewItem(
       docId,
       thread.id,
       commentId,
@@ -936,7 +936,7 @@ describe('undo respects the visitor gate — a share visitor cannot spend the AP
     const afterReAnswer = markerOf(docId, thread.id);
     expect(typeof afterReAnswer).toBe('number');
     await new Promise((r) => setTimeout(r, 2));
-    const ungated = gatedHandle.rooms.undoReviewItemAnswer(docId, thread.id, commentId, PERSON);
+    const ungated = gatedHandle.docStore.undoReviewItemAnswer(docId, thread.id, commentId, PERSON);
     expect(ungated.ok).toBe(true);
     expect(markerOf(docId, thread.id)).not.toBe(afterReAnswer);
   });

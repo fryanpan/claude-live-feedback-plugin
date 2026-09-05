@@ -2,7 +2,7 @@
  * A globally unique id for one broadcast — the thing `seq` is not.
  *
  * `room.seq` is a monotonic counter on the in-memory room, initialised to 0
- * by `Rooms.getOrCreate` and never written into the `.ydoc`. It separates two
+ * by `DocStore.getOrCreate` and never written into the `.ydoc`. It separates two
  * events WITHIN one server epoch and nothing more: every restart (a deploy, a
  * `bun --watch` reload) rebuilds every room counting from 1 again, and a room
  * destroyed and re-created under a live server does the same. A subscriber

@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Rooms } from '../src/doc-store.ts';
+import { DocStore } from '../src/doc-store.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 
@@ -18,8 +18,8 @@ import { createWebhookDispatcher } from '../src/webhooks.ts';
  * every existing comment thread survives the refresh.
  */
 
-function makeRooms(dataDir: string): Rooms {
-  return new Rooms({
+function makeDocStore(dataDir: string): DocStore {
+  return new DocStore({
     dataDir,
     sse: new SseHub(),
     webhooks: createWebhookDispatcher({ onLog: () => {} }),
@@ -42,15 +42,15 @@ function git(repo: string, ...args: string[]): string {
 
 const USER = { id: 'u1', name: 'T', kind: 'known' as const, color: '#000' };
 
-describe('Rooms.refreshWorkspace — browse workspace', () => {
+describe('DocStore.refreshWorkspace — browse workspace', () => {
   let dataDir: string;
   let folder: string;
-  let rooms: Rooms;
+  let docStore: DocStore;
 
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'rw-data-'));
     folder = mkdtempSync(join(tmpdir(), 'rw-src-'));
-    rooms = makeRooms(dataDir);
+    docStore = makeDocStore(dataDir);
     writeFileSync(join(folder, 'README.md'), '# Hello\n\nbody\n');
     writeFileSync(join(folder, 'guide.md'), 'guidance here\n');
   });
@@ -61,7 +61,7 @@ describe('Rooms.refreshWorkspace — browse workspace', () => {
   });
 
   it('errors not-found for an unknown workspace', async () => {
-    const res = await rooms.refreshWorkspace('nope');
+    const res = await docStore.refreshWorkspace('nope');
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toBe('not-found');
   });
@@ -74,11 +74,11 @@ describe('Rooms.refreshWorkspace — browse workspace', () => {
     // path, so the workspace (and any share pointing at it) keeps its identity.
     const empty = mkdtempSync(join(tmpdir(), 'rw-empty-'));
     try {
-      const first = await rooms.bindFolder({ folderPath: empty });
+      const first = await docStore.bindFolder({ folderPath: empty });
       if (!first.ok) throw new Error('bind failed');
       expect(first.files).toEqual([]);
 
-      const res = await rooms.refreshWorkspace(first.workspaceId);
+      const res = await docStore.refreshWorkspace(first.workspaceId);
       expect(res.ok).toBe(false);
       if (!res.ok) {
         expect(res.error).toBe('not-found');
@@ -86,29 +86,29 @@ describe('Rooms.refreshWorkspace — browse workspace', () => {
       }
 
       writeFileSync(join(empty, 'now.md'), '# arrived late\n');
-      const second = await rooms.bindFolder({ folderPath: empty });
+      const second = await docStore.bindFolder({ folderPath: empty });
       if (!second.ok) throw new Error('rebind failed');
       expect(second.workspaceId).toBe(first.workspaceId);
-      expect((await rooms.refreshWorkspace(first.workspaceId)).ok).toBe(true);
+      expect((await docStore.refreshWorkspace(first.workspaceId)).ok).toBe(true);
     } finally {
       rmSync(empty, { recursive: true, force: true });
     }
   });
 
   it('errors root-missing when the folder itself is gone', async () => {
-    const bound = await rooms.bindFolder({ folderPath: folder });
+    const bound = await docStore.bindFolder({ folderPath: folder });
     expect(bound.ok).toBe(true);
     if (!bound.ok) return;
     rmSync(folder, { recursive: true, force: true });
-    const res = await rooms.refreshWorkspace(bound.workspaceId);
+    const res = await docStore.refreshWorkspace(bound.workspaceId);
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toBe('root-missing');
   });
 
   it('is a no-op when nothing moved', async () => {
-    const bound = await rooms.bindFolder({ folderPath: folder });
+    const bound = await docStore.bindFolder({ folderPath: folder });
     if (!bound.ok) throw new Error('bind failed');
-    const res = await rooms.refreshWorkspace(bound.workspaceId);
+    const res = await docStore.refreshWorkspace(bound.workspaceId);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.kind).toBe('browse');
@@ -118,13 +118,13 @@ describe('Rooms.refreshWorkspace — browse workspace', () => {
   });
 
   it('marks a member stale when its file disappears, keeping its threads', async () => {
-    const bound = await rooms.bindFolder({ folderPath: folder });
+    const bound = await docStore.bindFolder({ folderPath: folder });
     if (!bound.ok) throw new Error('bind failed');
-    const opened = await rooms.openContextFile(bound.workspaceId, 'guide.md');
+    const opened = await docStore.openContextFile(bound.workspaceId, 'guide.md');
     expect(opened.ok).toBe(true);
     if (!opened.ok) return;
     const docId = opened.docId;
-    const created = await rooms.createThreadByFind(
+    const created = await docStore.createThreadByFind(
       docId,
       { find: 'guidance' },
       USER,
@@ -133,32 +133,32 @@ describe('Rooms.refreshWorkspace — browse workspace', () => {
     expect(created.ok).toBe(true);
 
     rmSync(join(folder, 'guide.md'));
-    const res = await rooms.refreshWorkspace(bound.workspaceId);
+    const res = await docStore.refreshWorkspace(bound.workspaceId);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.stale.map((s) => s.relPath)).toEqual(['guide.md']);
     expect(res.stale[0]?.openThreads).toBe(1);
 
     // The doc — and the comment on it — is still there, just flagged.
-    expect(rooms.get(docId)?.meta.stale).toBe(true);
-    expect(rooms.listThreads(docId)).toHaveLength(1);
+    expect(docStore.get(docId)?.meta.stale).toBe(true);
+    expect(docStore.listThreads(docId)).toHaveLength(1);
   });
 
   it('clears the flag when the file comes back', async () => {
-    const bound = await rooms.bindFolder({ folderPath: folder });
+    const bound = await docStore.bindFolder({ folderPath: folder });
     if (!bound.ok) throw new Error('bind failed');
-    await rooms.openContextFile(bound.workspaceId, 'guide.md');
+    await docStore.openContextFile(bound.workspaceId, 'guide.md');
     rmSync(join(folder, 'guide.md'));
-    await rooms.refreshWorkspace(bound.workspaceId);
+    await docStore.refreshWorkspace(bound.workspaceId);
 
     writeFileSync(join(folder, 'guide.md'), 'guidance here\n');
-    const res = await rooms.refreshWorkspace(bound.workspaceId);
+    const res = await docStore.refreshWorkspace(bound.workspaceId);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.restored.map((r) => r.relPath)).toEqual(['guide.md']);
     expect(res.stale).toEqual([]);
-    const docId = rooms.list().find((m) => m.relPath === 'guide.md')?.docId ?? '';
-    expect(rooms.get(docId)?.meta.stale).toBeUndefined();
+    const docId = docStore.list().find((m) => m.relPath === 'guide.md')?.docId ?? '';
+    expect(docStore.get(docId)?.meta.stale).toBeUndefined();
   });
 
   it('keeps excluded paths out of the all-files view AND out of lazy opens', async () => {
@@ -167,25 +167,25 @@ describe('Rooms.refreshWorkspace — browse workspace', () => {
     // into the workspace by clicking it in "Show All Files".
     mkdirSync(join(folder, 'vendor'));
     writeFileSync(join(folder, 'vendor', 'lib.md'), 'vendored\n');
-    const bound = await rooms.bindFolder({ folderPath: folder, exclude: ['vendor'] });
+    const bound = await docStore.bindFolder({ folderPath: folder, exclude: ['vendor'] });
     if (!bound.ok) throw new Error('bind failed');
 
-    const listed = rooms.listRepoFiles(bound.workspaceId);
+    const listed = docStore.listRepoFiles(bound.workspaceId);
     expect(listed.ok).toBe(true);
     expect(listed.files?.map((f) => f.relPath)).not.toContain('vendor/lib.md');
 
-    const opened = await rooms.openContextFile(bound.workspaceId, 'vendor/lib.md');
+    const opened = await docStore.openContextFile(bound.workspaceId, 'vendor/lib.md');
     expect(opened.ok).toBe(false);
     if (!opened.ok) expect(opened.error).toBe('bad-path');
-    const editable = await rooms.openEditableFile(bound.workspaceId, 'vendor/lib.md');
+    const editable = await docStore.openEditableFile(bound.workspaceId, 'vendor/lib.md');
     expect(editable.ok).toBe(false);
   });
 
   it('reports the current scan count so a caller sees new files exist', async () => {
-    const bound = await rooms.bindFolder({ folderPath: folder });
+    const bound = await docStore.bindFolder({ folderPath: folder });
     if (!bound.ok) throw new Error('bind failed');
     writeFileSync(join(folder, 'extra.md'), 'new file\n');
-    const res = await rooms.refreshWorkspace(bound.workspaceId);
+    const res = await docStore.refreshWorkspace(bound.workspaceId);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     // Browse members bind lazily, so a new file is browsable without being
@@ -195,16 +195,16 @@ describe('Rooms.refreshWorkspace — browse workspace', () => {
   });
 });
 
-describe('Rooms.refreshWorkspace — diff review', () => {
+describe('DocStore.refreshWorkspace — diff review', () => {
   let dataDir: string;
   let repo: string;
   let base: string;
-  let rooms: Rooms;
+  let docStore: DocStore;
 
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'rw-data-'));
     repo = mkdtempSync(join(tmpdir(), 'rw-repo-'));
-    rooms = makeRooms(dataDir);
+    docStore = makeDocStore(dataDir);
     git(repo, 'init', '-q');
     mkdirSync(join(repo, 'src'));
     writeFileSync(join(repo, 'src', 'a.ts'), 'const a = 1;\n');
@@ -225,13 +225,13 @@ describe('Rooms.refreshWorkspace — diff review', () => {
   });
 
   it('picks up a file that changed AFTER the review was created', async () => {
-    const bound = await rooms.bindDiff({ repoPath: repo, base });
+    const bound = await docStore.bindDiff({ repoPath: repo, base });
     expect(bound.ok).toBe(true);
     if (!bound.ok) return;
     expect(bound.files.map((f) => f.relPath)).toEqual(['src/a.ts']);
 
     writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 2;\n');
-    const res = await rooms.refreshWorkspace(bound.reviewId);
+    const res = await docStore.refreshWorkspace(bound.reviewId);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.kind).toBe('diff');
@@ -243,14 +243,14 @@ describe('Rooms.refreshWorkspace — diff review', () => {
     // Otherwise a refresh silently widens the review's scope: a vendored or
     // generated file the caller deliberately hid walks back in the moment it
     // starts differing from the base.
-    const bound = await rooms.bindDiff({ repoPath: repo, base, exclude: ['src/b.ts'] });
+    const bound = await docStore.bindDiff({ repoPath: repo, base, exclude: ['src/b.ts'] });
     if (!bound.ok) throw new Error('bind failed');
     writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 2;\n');
-    const res = await rooms.refreshWorkspace(bound.reviewId);
+    const res = await docStore.refreshWorkspace(bound.reviewId);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.added).toEqual([]);
-    expect(rooms.list().some((m) => m.relPath === 'src/b.ts')).toBe(false);
+    expect(docStore.list().some((m) => m.relPath === 'src/b.ts')).toBe(false);
   });
 
   it('replays the NEWEST exclude, not one left on an untouched member', async () => {
@@ -259,15 +259,15 @@ describe('Rooms.refreshWorkspace — diff review', () => {
     // the old exclude — and refresh, which reads config off whichever member
     // it finds first, could replay the obsolete scope and re-include it.
     writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 2;\n');
-    const first = await rooms.bindDiff({ repoPath: repo, base, exclude: ['nothing'] });
+    const first = await docStore.bindDiff({ repoPath: repo, base, exclude: ['nothing'] });
     if (!first.ok) throw new Error('bind failed');
     expect(first.files).toHaveLength(2);
 
     // Narrow to drop src/a.ts — which is the FIRST member in insertion order,
     // so a config read that stops at the first match would find the member
     // this bind never touched, still holding exclude ['nothing'].
-    await rooms.bindDiff({ repoPath: repo, base, exclude: ['nothing', 'src/a.ts'] });
-    const res = await rooms.refreshWorkspace(first.reviewId);
+    await docStore.bindDiff({ repoPath: repo, base, exclude: ['nothing', 'src/a.ts'] });
+    const res = await docStore.refreshWorkspace(first.reviewId);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.stale.map((x) => x.relPath)).toEqual(['src/a.ts']);
@@ -275,27 +275,27 @@ describe('Rooms.refreshWorkspace — diff review', () => {
   });
 
   it("files a newly-added file into the caller's groups, not the heuristic", async () => {
-    const bound = await rooms.bindDiff({
+    const bound = await docStore.bindDiff({
       repoPath: repo,
       base,
       groups: [{ title: 'Everything', paths: ['src'] }],
     });
     if (!bound.ok) throw new Error('bind failed');
     writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 2;\n');
-    await rooms.refreshWorkspace(bound.reviewId);
-    const grouped = rooms.listGroupedDiff(bound.reviewId);
+    await docStore.refreshWorkspace(bound.reviewId);
+    const grouped = docStore.listGroupedDiff(bound.reviewId);
     // One group, both files — not "Everything" plus a heuristic bucket.
     expect(grouped.groups.map((g) => g.title)).toEqual(['Everything']);
     expect(grouped.groups[0]?.files).toHaveLength(2);
   });
 
   it('keeps groups set AFTER the bind across a later refresh', async () => {
-    const bound = await rooms.bindDiff({ repoPath: repo, base });
+    const bound = await docStore.bindDiff({ repoPath: repo, base });
     if (!bound.ok) throw new Error('bind failed');
-    rooms.setWorkspaceGroups(bound.reviewId, [{ title: 'Reviewed', paths: ['src'] }]);
+    docStore.setWorkspaceGroups(bound.reviewId, [{ title: 'Reviewed', paths: ['src'] }]);
     writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 2;\n');
-    await rooms.refreshWorkspace(bound.reviewId);
-    const grouped = rooms.listGroupedDiff(bound.reviewId);
+    await docStore.refreshWorkspace(bound.reviewId);
+    const grouped = docStore.listGroupedDiff(bound.reviewId);
     expect(grouped.groups.map((g) => g.title)).toEqual(['Reviewed']);
     expect(grouped.groups[0]?.files).toHaveLength(2);
   });
@@ -306,16 +306,16 @@ describe('Rooms.refreshWorkspace — diff review', () => {
     // clobber agent-set groups), so old members would keep the ranks from
     // the reset while new ones got freshly-computed ones. Storing the empty
     // array records "the heuristic IS the choice here" and re-applies it.
-    const bound = await rooms.bindDiff({
+    const bound = await docStore.bindDiff({
       repoPath: repo,
       base,
       groups: [{ title: 'Everything', paths: ['src'] }],
     });
     if (!bound.ok) throw new Error('bind failed');
-    rooms.setWorkspaceGroups(bound.reviewId, []);
+    docStore.setWorkspaceGroups(bound.reviewId, []);
     writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 2;\n');
-    await rooms.refreshWorkspace(bound.reviewId);
-    const grouped = rooms.listGroupedDiff(bound.reviewId);
+    await docStore.refreshWorkspace(bound.reviewId);
+    const grouped = docStore.listGroupedDiff(bound.reviewId);
     // Both files land in the same heuristic bucket ("src"), not one in a
     // leftover "Everything" and one in a fresh bucket.
     expect(grouped.groups.map((g) => g.title)).not.toContain('Everything');
@@ -339,28 +339,28 @@ describe('Rooms.refreshWorkspace — diff review', () => {
     git(repo, 'commit', '-q', '-m', 'add dirs');
     const b2 = git(repo, 'rev-parse', 'HEAD');
     writeFileSync(join(repo, 'alpha', 'x.ts'), `${'x\n'.repeat(40)}`);
-    const bound = await rooms.bindDiff({ repoPath: repo, base: b2 });
+    const bound = await docStore.bindDiff({ repoPath: repo, base: b2 });
     if (!bound.ok) throw new Error('bind failed');
-    rooms.setWorkspaceGroups(bound.reviewId, []);
-    expect(rooms.listGroupedDiff(bound.reviewId).groups[0]?.title).toBe('alpha');
+    docStore.setWorkspaceGroups(bound.reviewId, []);
+    expect(docStore.listGroupedDiff(bound.reviewId).groups[0]?.title).toBe('alpha');
 
     // zeta now churns 10x more — a live heuristic must put it first.
     writeFileSync(join(repo, 'zeta', 'x.ts'), `${'y\n'.repeat(400)}`);
-    await rooms.refreshWorkspace(bound.reviewId);
-    expect(rooms.listGroupedDiff(bound.reviewId).groups[0]?.title).toBe('zeta');
+    await docStore.refreshWorkspace(bound.reviewId);
+    expect(docStore.listGroupedDiff(bound.reviewId).groups[0]?.title).toBe('zeta');
   });
 
   it('stops re-applying a group spec once it is reset to the heuristic', async () => {
-    const bound = await rooms.bindDiff({
+    const bound = await docStore.bindDiff({
       repoPath: repo,
       base,
       groups: [{ title: 'Everything', paths: ['src'] }],
     });
     if (!bound.ok) throw new Error('bind failed');
-    rooms.setWorkspaceGroups(bound.reviewId, []);
+    docStore.setWorkspaceGroups(bound.reviewId, []);
     writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 2;\n');
-    await rooms.refreshWorkspace(bound.reviewId);
-    const grouped = rooms.listGroupedDiff(bound.reviewId);
+    await docStore.refreshWorkspace(bound.reviewId);
+    const grouped = docStore.listGroupedDiff(bound.reviewId);
     expect(grouped.groups.map((g) => g.title)).not.toContain('Everything');
   });
 
@@ -368,10 +368,10 @@ describe('Rooms.refreshWorkspace — diff review', () => {
     // Without the cap replayed, a review deliberately bound above the
     // default would start failing to refresh the moment it grew — the
     // original bind said this many files is fine.
-    const bound = await rooms.bindDiff({ repoPath: repo, base, maxFiles: 1 });
+    const bound = await docStore.bindDiff({ repoPath: repo, base, maxFiles: 1 });
     if (!bound.ok) throw new Error('bind failed');
     writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 2;\n');
-    const res = await rooms.refreshWorkspace(bound.reviewId);
+    const res = await docStore.refreshWorkspace(bound.reviewId);
     // The stored cap of 1 is what rejects this — proving it round-tripped.
     expect(res.ok).toBe(false);
     if (!res.ok) {
@@ -381,42 +381,42 @@ describe('Rooms.refreshWorkspace — diff review', () => {
   });
 
   it('keeps docIds and threads stable across a refresh', async () => {
-    const bound = await rooms.bindDiff({ repoPath: repo, base });
+    const bound = await docStore.bindDiff({ repoPath: repo, base });
     if (!bound.ok) throw new Error('bind failed');
     const docId = bound.files[0]?.docId ?? '';
-    const created = await rooms.createThreadByFind(docId, { find: 'const a' }, USER, 'why?');
+    const created = await docStore.createThreadByFind(docId, { find: 'const a' }, USER, 'why?');
     expect(created.ok).toBe(true);
 
     writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 2;\n');
-    await rooms.refreshWorkspace(bound.reviewId);
+    await docStore.refreshWorkspace(bound.reviewId);
 
-    const still = rooms.list().find((m) => m.relPath === 'src/a.ts');
+    const still = docStore.list().find((m) => m.relPath === 'src/a.ts');
     expect(still?.docId).toBe(docId);
-    expect(rooms.listThreads(docId)).toHaveLength(1);
+    expect(docStore.listThreads(docId)).toHaveLength(1);
   });
 
   it('marks a member stale once its change is reverted', async () => {
     writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 2;\n');
-    const bound = await rooms.bindDiff({ repoPath: repo, base });
+    const bound = await docStore.bindDiff({ repoPath: repo, base });
     if (!bound.ok) throw new Error('bind failed');
     expect(bound.files).toHaveLength(2);
 
     // Put b.ts back the way the base has it — it is no longer part of the diff.
     writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 1;\n');
-    const res = await rooms.refreshWorkspace(bound.reviewId);
+    const res = await docStore.refreshWorkspace(bound.reviewId);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.stale.map((s) => s.relPath)).toEqual(['src/b.ts']);
     const docId = res.stale[0]?.docId ?? '';
-    expect(rooms.get(docId)?.meta.stale).toBe(true);
+    expect(docStore.get(docId)?.meta.stale).toBe(true);
 
     // …and un-marks it when the change comes back.
     writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 3;\n');
-    const again = await rooms.refreshWorkspace(bound.reviewId);
+    const again = await docStore.refreshWorkspace(bound.reviewId);
     expect(again.ok).toBe(true);
     if (!again.ok) return;
     expect(again.restored.map((r) => r.relPath)).toEqual(['src/b.ts']);
-    expect(rooms.get(docId)?.meta.stale).toBeUndefined();
+    expect(docStore.get(docId)?.meta.stale).toBeUndefined();
   });
 
   it('clears stale on a plain re-bind too, not only on refresh', async () => {
@@ -424,17 +424,17 @@ describe('Rooms.refreshWorkspace — diff review', () => {
     // file that is back in the diff must stop rendering as a ghost without
     // needing a separate refresh_workspace call.
     writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 2;\n');
-    const bound = await rooms.bindDiff({ repoPath: repo, base });
+    const bound = await docStore.bindDiff({ repoPath: repo, base });
     if (!bound.ok) throw new Error('bind failed');
     const docId = bound.files.find((f) => f.relPath === 'src/b.ts')?.docId ?? '';
 
     writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 1;\n');
-    await rooms.refreshWorkspace(bound.reviewId);
-    expect(rooms.get(docId)?.meta.stale).toBe(true);
+    await docStore.refreshWorkspace(bound.reviewId);
+    expect(docStore.get(docId)?.meta.stale).toBe(true);
 
     writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 3;\n');
-    await rooms.bindDiff({ repoPath: repo, base });
-    expect(rooms.get(docId)?.meta.stale).toBeUndefined();
+    await docStore.bindDiff({ repoPath: repo, base });
+    expect(docStore.get(docId)?.meta.stale).toBeUndefined();
   });
 
   it("takes a .md file's companion editor doc stale along with its member", async () => {
@@ -444,57 +444,57 @@ describe('Rooms.refreshWorkspace — diff review', () => {
     // member, a share would start landing on the editor for a file that is
     // no longer under review.
     writeFileSync(join(repo, 'notes.md'), '# notes\n\nedited\n');
-    const bound = await rooms.bindDiff({ repoPath: repo, base });
+    const bound = await docStore.bindDiff({ repoPath: repo, base });
     if (!bound.ok) throw new Error('bind failed');
-    const companion = await rooms.openEditableFile(bound.reviewId, 'notes.md');
+    const companion = await docStore.openEditableFile(bound.reviewId, 'notes.md');
     expect(companion.ok).toBe(true);
     if (!companion.ok) return;
-    const memberDoc = rooms.list().find((m) => m.relPath === 'notes.md' && m.type === 'diff');
+    const memberDoc = docStore.list().find((m) => m.relPath === 'notes.md' && m.type === 'diff');
     expect(companion.docId).not.toBe(memberDoc?.docId); // really two docs
 
     // REVERT — the file still exists, it just no longer differs from base.
     // existsSync would call both of these live; only following the member
     // gets it right.
     writeFileSync(join(repo, 'notes.md'), '# notes\n\noriginal\n');
-    await rooms.refreshWorkspace(bound.reviewId);
-    expect(rooms.get(memberDoc?.docId ?? '')?.meta.stale).toBe(true);
-    expect(rooms.get(companion.docId)?.meta.stale).toBe(true);
+    await docStore.refreshWorkspace(bound.reviewId);
+    expect(docStore.get(memberDoc?.docId ?? '')?.meta.stale).toBe(true);
+    expect(docStore.get(companion.docId)?.meta.stale).toBe(true);
   });
 
   it('leaves a CONTEXT file alone — it was never in the diff', async () => {
-    const bound = await rooms.bindDiff({ repoPath: repo, base });
+    const bound = await docStore.bindDiff({ repoPath: repo, base });
     if (!bound.ok) throw new Error('bind failed');
     // src/b.ts is unchanged, so it is context, not a review member.
-    const ctx = await rooms.openContextFile(bound.reviewId, 'src/b.ts');
+    const ctx = await docStore.openContextFile(bound.reviewId, 'src/b.ts');
     expect(ctx.ok).toBe(true);
     if (!ctx.ok) return;
-    const res = await rooms.refreshWorkspace(bound.reviewId);
+    const res = await docStore.refreshWorkspace(bound.reviewId);
     expect(res.ok).toBe(true);
-    expect(rooms.get(ctx.docId)?.meta.stale).toBeUndefined();
+    expect(docStore.get(ctx.docId)?.meta.stale).toBeUndefined();
   });
 
   it('stops calling a reverted file "changed" in the all-files view', async () => {
     // Otherwise the two sidebars disagree after every refresh: the grouped
     // view dims it, "Show All Files" still badges it as changed.
     writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 2;\n');
-    const bound = await rooms.bindDiff({ repoPath: repo, base });
+    const bound = await docStore.bindDiff({ repoPath: repo, base });
     if (!bound.ok) throw new Error('bind failed');
     expect(
-      rooms.listRepoFiles(bound.reviewId).files?.find((f) => f.relPath === 'src/b.ts')?.changed,
+      docStore.listRepoFiles(bound.reviewId).files?.find((f) => f.relPath === 'src/b.ts')?.changed,
     ).toBe(true);
 
     writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 1;\n');
-    await rooms.refreshWorkspace(bound.reviewId);
-    const row = rooms.listRepoFiles(bound.reviewId).files?.find((f) => f.relPath === 'src/b.ts');
+    await docStore.refreshWorkspace(bound.reviewId);
+    const row = docStore.listRepoFiles(bound.reviewId).files?.find((f) => f.relPath === 'src/b.ts');
     expect(row?.changed).toBe(false);
     expect(row?.stale).toBe(true);
   });
 
   it('does not mark a deleted-in-diff file stale — being gone IS the change', async () => {
     rmSync(join(repo, 'src', 'b.ts'));
-    const bound = await rooms.bindDiff({ repoPath: repo, base });
+    const bound = await docStore.bindDiff({ repoPath: repo, base });
     if (!bound.ok) throw new Error('bind failed');
-    const res = await rooms.refreshWorkspace(bound.reviewId);
+    const res = await docStore.refreshWorkspace(bound.reviewId);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.stale).toEqual([]);
@@ -504,24 +504,24 @@ describe('Rooms.refreshWorkspace — diff review', () => {
     git(repo, 'add', '-A');
     git(repo, 'commit', '-q', '-m', 'target');
     const target = git(repo, 'rev-parse', 'HEAD');
-    const bound = await rooms.bindDiff({ repoPath: repo, base, target });
+    const bound = await docStore.bindDiff({ repoPath: repo, base, target });
     if (!bound.ok) throw new Error('bind failed');
-    const res = await rooms.refreshWorkspace(bound.reviewId);
+    const res = await docStore.refreshWorkspace(bound.reviewId);
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toBe('pinned');
   });
 });
 
-describe('Rooms.setWorkspaceGroups', () => {
+describe('DocStore.setWorkspaceGroups', () => {
   let dataDir: string;
   let repo: string;
   let base: string;
-  let rooms: Rooms;
+  let docStore: DocStore;
 
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'sg-data-'));
     repo = mkdtempSync(join(tmpdir(), 'sg-repo-'));
-    rooms = makeRooms(dataDir);
+    docStore = makeDocStore(dataDir);
     git(repo, 'init', '-q');
     mkdirSync(join(repo, 'src'));
     mkdirSync(join(repo, 'test'));
@@ -540,16 +540,16 @@ describe('Rooms.setWorkspaceGroups', () => {
   });
 
   it('errors not-found for an unknown workspace', () => {
-    const res = rooms.setWorkspaceGroups('nope', [{ title: 'X', paths: ['src'] }]);
+    const res = docStore.setWorkspaceGroups('nope', [{ title: 'X', paths: ['src'] }]);
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toBe('not-found');
   });
 
   it('regroups an existing review in place', async () => {
-    const bound = await rooms.bindDiff({ repoPath: repo, base });
+    const bound = await docStore.bindDiff({ repoPath: repo, base });
     if (!bound.ok) throw new Error('bind failed');
     // Heuristic grouping put these in separate buckets; override it.
-    const res = rooms.setWorkspaceGroups(bound.reviewId, [
+    const res = docStore.setWorkspaceGroups(bound.reviewId, [
       { title: 'The change', paths: ['src'], details: 'what actually moved' },
       { title: 'Coverage', paths: ['test'] },
     ]);
@@ -560,26 +560,28 @@ describe('Rooms.setWorkspaceGroups', () => {
       { title: 'Coverage', fileCount: 1 },
     ]);
 
-    const grouped = rooms.listGroupedDiff(bound.reviewId);
+    const grouped = docStore.listGroupedDiff(bound.reviewId);
     expect(grouped.groups.map((g) => g.title)).toEqual(['The change', 'Coverage']);
     expect(grouped.groups[0]?.details).toBe('what actually moved');
   });
 
   it('drops a stale details string when the group is re-set without one', async () => {
-    const bound = await rooms.bindDiff({ repoPath: repo, base });
+    const bound = await docStore.bindDiff({ repoPath: repo, base });
     if (!bound.ok) throw new Error('bind failed');
-    rooms.setWorkspaceGroups(bound.reviewId, [
+    docStore.setWorkspaceGroups(bound.reviewId, [
       { title: 'All', paths: ['src', 'test'], details: 'first pass' },
     ]);
-    rooms.setWorkspaceGroups(bound.reviewId, [{ title: 'All', paths: ['src', 'test'] }]);
-    const grouped = rooms.listGroupedDiff(bound.reviewId);
+    docStore.setWorkspaceGroups(bound.reviewId, [{ title: 'All', paths: ['src', 'test'] }]);
+    const grouped = docStore.listGroupedDiff(bound.reviewId);
     expect(grouped.groups[0]?.details).toBeUndefined();
   });
 
   it('puts unmatched files in Other and reports them', async () => {
-    const bound = await rooms.bindDiff({ repoPath: repo, base });
+    const bound = await docStore.bindDiff({ repoPath: repo, base });
     if (!bound.ok) throw new Error('bind failed');
-    const res = rooms.setWorkspaceGroups(bound.reviewId, [{ title: 'Src only', paths: ['src'] }]);
+    const res = docStore.setWorkspaceGroups(bound.reviewId, [
+      { title: 'Src only', paths: ['src'] },
+    ]);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.ungrouped).toEqual(['test/a.test.ts']);
@@ -593,18 +595,18 @@ describe('Rooms.setWorkspaceGroups', () => {
     // A malformed spec used to be written to every member before the
     // assignment blew up on it — which left the workspace permanently
     // un-refreshable, because refresh reads that spec back and re-throws.
-    const bound = await rooms.bindDiff({ repoPath: repo, base });
+    const bound = await docStore.bindDiff({ repoPath: repo, base });
     if (!bound.ok) throw new Error('bind failed');
-    const res = rooms.setWorkspaceGroups(bound.reviewId, [{ title: 'X' } as never]);
+    const res = docStore.setWorkspaceGroups(bound.reviewId, [{ title: 'X' } as never]);
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toBe('bad-groups');
-    expect(rooms.list().every((m) => m.workspaceGroups === undefined)).toBe(true);
+    expect(docStore.list().every((m) => m.workspaceGroups === undefined)).toBe(true);
     // …and the review is still usable.
-    expect((await rooms.refreshWorkspace(bound.reviewId)).ok).toBe(true);
+    expect((await docStore.refreshWorkspace(bound.reviewId)).ok).toBe(true);
   });
 
   it('rejects a group with a blank title or non-string paths', async () => {
-    const bound = await rooms.bindDiff({ repoPath: repo, base });
+    const bound = await docStore.bindDiff({ repoPath: repo, base });
     if (!bound.ok) throw new Error('bind failed');
     for (const bad of [
       [{ title: '  ', paths: ['src'] }],
@@ -612,15 +614,15 @@ describe('Rooms.setWorkspaceGroups', () => {
       [{ title: 'X', paths: [1] }],
       ['nope'],
     ]) {
-      const res = rooms.setWorkspaceGroups(bound.reviewId, bad as never);
+      const res = docStore.setWorkspaceGroups(bound.reviewId, bad as never);
       expect(res.ok).toBe(false);
       if (!res.ok) expect(res.error).toBe('bad-groups');
     }
-    expect((await rooms.refreshWorkspace(bound.reviewId)).ok).toBe(true);
+    expect((await docStore.refreshWorkspace(bound.reviewId)).ok).toBe(true);
   });
 
   it('rejects a malformed group spec at BIND time too', async () => {
-    const res = await rooms.bindDiff({
+    const res = await docStore.bindDiff({
       repoPath: repo,
       base,
       reviewId: 'bind-validate',
@@ -631,9 +633,9 @@ describe('Rooms.setWorkspaceGroups', () => {
   });
 
   it('rejects an over-long details intro rather than truncating it', async () => {
-    const bound = await rooms.bindDiff({ repoPath: repo, base });
+    const bound = await docStore.bindDiff({ repoPath: repo, base });
     if (!bound.ok) throw new Error('bind failed');
-    const res = rooms.setWorkspaceGroups(bound.reviewId, [
+    const res = docStore.setWorkspaceGroups(bound.reviewId, [
       { title: 'Long', paths: ['src'], details: 'x'.repeat(501) },
     ]);
     expect(res.ok).toBe(false);
@@ -644,9 +646,9 @@ describe('Rooms.setWorkspaceGroups', () => {
     const folder = mkdtempSync(join(tmpdir(), 'sg-folder-'));
     try {
       writeFileSync(join(folder, 'README.md'), '# hi\n');
-      const bound = await rooms.bindFolder({ folderPath: folder });
+      const bound = await docStore.bindFolder({ folderPath: folder });
       if (!bound.ok) throw new Error('bind failed');
-      const res = rooms.setWorkspaceGroups(bound.workspaceId, [
+      const res = docStore.setWorkspaceGroups(bound.workspaceId, [
         { title: 'X', paths: ['README.md'] },
       ]);
       expect(res.ok).toBe(false);

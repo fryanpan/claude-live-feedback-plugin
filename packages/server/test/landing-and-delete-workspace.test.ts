@@ -202,8 +202,8 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     expect(body.error).toBe('has-open-threads');
     expect(body.files).toEqual([{ docId: mdDocId, openThreads: 1 }]);
     // Nothing deleted — both members survive.
-    expect(handle.rooms.get(mdDocId)).toBeTruthy();
-    expect(handle.rooms.get(files.get('src/index.ts')!.docId)).toBeTruthy();
+    expect(handle.docStore.get(mdDocId)).toBeTruthy();
+    expect(handle.docStore.get(files.get('src/index.ts')!.docId)).toBeTruthy();
   });
 
   it('DELETE /api/workspaces/:id?force=true ARCHIVES the whole folder', async () => {
@@ -216,13 +216,13 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     });
     const body = await j<{ ok: true; archived: number; docIds: string[] }>(r);
     expect(body.archived).toBe(2);
-    for (const f of files.values()) expect(handle.rooms.get(f.docId)).toBeUndefined();
+    for (const f of files.values()) expect(handle.docStore.get(f.docId)).toBeUndefined();
     for (const f of files.values()) {
       expect(existsSync(join(dataDir, '_archive', `${f.docId}.ydoc`))).toBe(true);
     }
     // Standalone doc is untouched — and still answers to the readable name
     // it was created under, resolving to the id the server minted.
-    expect(handle.rooms.get('standalone-doc')?.docId).toBe(standaloneId);
+    expect(handle.docStore.get('standalone-doc')?.docId).toBe(standaloneId);
   });
 
   it('DELETE ?purge=true is the destructive half, and it has to be asked for', async () => {
@@ -233,7 +233,7 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
       { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' },
     );
     expect((await j<{ ok: true; restored: number }>(restored)).restored).toBe(2);
-    for (const f of files.values()) expect(handle.rooms.get(f.docId)).toBeTruthy();
+    for (const f of files.values()) expect(handle.docStore.get(f.docId)).toBeTruthy();
 
     const r = await fetch(
       `${base}/api/workspaces/${encodeURIComponent(workspaceId)}?force=true&purge=true`,
@@ -242,7 +242,7 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     const body = await j<{ ok: true; deleted: number }>(r);
     expect(body.deleted).toBe(2);
     for (const f of files.values()) {
-      expect(handle.rooms.get(f.docId)).toBeUndefined();
+      expect(handle.docStore.get(f.docId)).toBeUndefined();
       expect(existsSync(join(dataDir, `${f.docId}.ydoc`))).toBe(false);
       expect(existsSync(join(dataDir, '_archive', `${f.docId}.ydoc`))).toBe(false);
     }

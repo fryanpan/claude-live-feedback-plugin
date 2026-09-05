@@ -17,8 +17,8 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { assignGroups } from '../src/diff-groups.ts';
+import { DocStore } from '../src/doc-store.ts';
 import { diffFiles } from '../src/git-diff.ts';
-import { Rooms } from '../src/doc-store.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 
@@ -163,16 +163,16 @@ describe('whitespace-only grouping', () => {
  */
 describe('whitespace classification survives regrouping', async () => {
   const { repo, base, target } = makeRepo();
-  const rooms = new Rooms({
+  const docStore = new DocStore({
     dataDir: mkdtempSync(join(tmpdir(), 'ws-diff-data-')),
     sse: new SseHub(),
     webhooks: createWebhookDispatcher({ onLog: () => {} }),
     decorateDocMeta: (m) => m,
   });
-  const bound = await rooms.bindDiff({ repoPath: repo, base, target, owner: '/cwd' });
+  const bound = await docStore.bindDiff({ repoPath: repo, base, target, owner: '/cwd' });
   if (!bound.ok) throw new Error(bound.error);
   const groupOf = (rel: string) =>
-    rooms.list().find((m) => m.relPath === rel && m.workspaceId === bound.reviewId)?.diffGroup;
+    docStore.list().find((m) => m.relPath === rel && m.workspaceId === bound.reviewId)?.diffGroup;
 
   it('CONTROL: the review bound and the real file is in a source group', () => {
     expect(groupOf('src/real.ts')).toBe('src');
@@ -183,14 +183,14 @@ describe('whitespace classification survives regrouping', async () => {
   });
 
   it('persists the flag on DocMeta', () => {
-    const meta = rooms
+    const meta = docStore
       .list()
       .find((m) => m.relPath === 'src/reformatted.ts' && m.workspaceId === bound.reviewId);
     expect(meta?.diffWhitespaceOnly).toBe(true);
   });
 
   it('a groupless setWorkspaceGroups does not promote it back out', () => {
-    const res = rooms.setWorkspaceGroups(bound.reviewId, []);
+    const res = docStore.setWorkspaceGroups(bound.reviewId, []);
     expect(res.ok).toBe(true);
     expect(groupOf('src/reformatted.ts')).toBe('Whitespace only');
     expect(groupOf('src/real.ts')).toBe('src'); // control: others still regrouped

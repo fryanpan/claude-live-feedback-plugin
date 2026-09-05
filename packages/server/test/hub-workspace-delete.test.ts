@@ -2,7 +2,7 @@
  * DELETE /api/workspaces/:id, for a HUB workspace.
  *
  * The route existed and did not cover hub workspaces at all:
- * `rooms.deleteWorkspace` starts from `rooms.list().filter(m =>
+ * `docStore.deleteWorkspace` starts from `docStore.list().filter(m =>
  * m.workspaceId === id)`, and a hub workspace has no doc members — hub
  * workspaces live in `TaskStore`, a different store — so every call hit
  * `members.length === 0` and returned `not-found`. A workspace made for a
@@ -38,7 +38,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { User } from '@feedback/core';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { taskBodyDocId, workspaceRoomId } from '../src/task-projection.ts';
+import { taskBodyDocId, workspaceDocId } from '../src/task-projection.ts';
 import {
   type Task,
   TaskStore,
@@ -204,9 +204,9 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     expect(await listWorkspaceIds()).toContain(wsId);
   });
 
-  it('deletes the board, its rooms and its sidecars, with force', async () => {
+  it('deletes the board, its docs and its sidecars, with force', async () => {
     const { wsId, open, done } = await seed();
-    const boardRoom = workspaceRoomId(wsId);
+    const boardRoom = workspaceDocId(wsId);
     const openBody = taskBodyDocId(open.id);
     const doneBody = taskBodyDocId(done.id);
 
@@ -215,9 +215,9 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     expect(await listWorkspaceIds()).toContain(wsId);
     expect(await awaitFile(tasksSidecarPath(dataDir as string, wsId))).toBe(true);
     expect(existsSync(eventsLogPath(dataDir as string, wsId))).toBe(true);
-    expect(handle?.rooms.get(boardRoom)).toBeDefined();
-    expect(handle?.rooms.get(openBody)).toBeDefined();
-    expect(handle?.rooms.get(doneBody)).toBeDefined();
+    expect(handle?.docStore.get(boardRoom)).toBeDefined();
+    expect(handle?.docStore.get(openBody)).toBeDefined();
+    expect(handle?.docStore.get(doneBody)).toBeDefined();
 
     // Two sidecars that only exist when the board has been used a certain
     // way — and so are exactly the ones a delete forgets.
@@ -251,9 +251,9 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     expect(existsSync(tasksSidecarPath(dataDir as string, wsId))).toBe(false);
     expect(existsSync(eventsLogPath(dataDir as string, wsId))).toBe(false);
     expect(legacyPaths.some((p) => existsSync(p))).toBe(false);
-    expect(handle?.rooms.get(boardRoom)).toBeUndefined();
-    expect(handle?.rooms.get(openBody)).toBeUndefined();
-    expect(handle?.rooms.get(doneBody)).toBeUndefined();
+    expect(handle?.docStore.get(boardRoom)).toBeUndefined();
+    expect(handle?.docStore.get(openBody)).toBeUndefined();
+    expect(handle?.docStore.get(doneBody)).toBeUndefined();
     // The tasks no longer resolve either — a task id pointing at a workspace
     // that is gone is the shape that makes every later lookup throw.
     expect(handle?.tasks.getTask(open.id)).toBeUndefined();
@@ -299,7 +299,7 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     // This is the failure that happens at the COMMIT, after the room files
     // were already removed — and it still costs nothing, because the live
     // rooms were never torn down. The board works and the comment is there.
-    expect(handle?.rooms.get(workspaceRoomId(wsId))).toBeDefined();
+    expect(handle?.docStore.get(workspaceDocId(wsId))).toBeDefined();
     expect(await openThreadCount(open.id)).toBe(1);
     const again = await post(`/api/workspaces/${wsId}/tasks`, {
       title: 'after the failure',
@@ -317,7 +317,7 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     const { wsId, open } = await seed();
     await commentOnBody(open.id, 'still open');
     expect(await openThreadCount(open.id)).toBe(1);
-    const boardYdoc = join(dataDir as string, `${workspaceRoomId(wsId)}.ydoc`);
+    const boardYdoc = join(dataDir as string, `${workspaceDocId(wsId)}.ydoc`);
     expect(await awaitFile(boardYdoc)).toBe(true);
     // Stand in for a filesystem that won't let the file move, without
     // depending on the test user's privileges: renaming onto a non-empty
@@ -328,14 +328,14 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
 
     const res = await del(`/api/workspaces/${wsId}?force=true`);
     expect(res.status).toBe(500);
-    expect(((await res.json()) as { error: string }).error).toBe('rooms-cleanup-failed');
+    expect(((await res.json()) as { error: string }).error).toBe('docStore-cleanup-failed');
     // And it must keep refusing while the file is still there. The first
     // attempt took the room out of memory, so a check that asks the ROOM
     // ("not-found, nothing to do") would call the retry a success and delete
     // the board over the top of the orphan.
     const retry = await del(`/api/workspaces/${wsId}?force=true`);
     expect(retry.status).toBe(500);
-    expect(((await retry.json()) as { error: string }).error).toBe('rooms-cleanup-failed');
+    expect(((await retry.json()) as { error: string }).error).toBe('docStore-cleanup-failed');
     // The board and its tasks are still there, so the same call retries once
     // the filesystem is fixed.
     expect(await listWorkspaceIds()).toContain(wsId);
@@ -445,7 +445,7 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
 
     // The doc keeps working at its own URL. Deleting a board that merely
     // CITED it must not take it down.
-    expect(handle?.rooms.get(docId)).toBeDefined();
+    expect(handle?.docStore.get(docId)).toBeDefined();
     expect((await fetch(`${base}/api/docs/${docId}`)).status).toBe(200);
     rmSync(docDir, { recursive: true, force: true });
   });
@@ -474,11 +474,11 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     };
     const memberDoc = files[0]?.docId as string;
     expect(memberDoc).toBeTruthy();
-    expect(handle?.rooms.get(memberDoc)).toBeDefined();
+    expect(handle?.docStore.get(memberDoc)).toBeDefined();
 
     const res = await del(`/api/workspaces/${encodeURIComponent(workspaceId)}?force=true`);
     expect(res.status).toBe(200);
-    expect(handle?.rooms.get(memberDoc)).toBeUndefined();
+    expect(handle?.docStore.get(memberDoc)).toBeUndefined();
     rmSync(folder, { recursive: true, force: true });
   });
 });

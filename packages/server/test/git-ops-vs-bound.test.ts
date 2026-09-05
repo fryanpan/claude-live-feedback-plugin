@@ -13,9 +13,9 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DOC_STORE_TIMINGS } from '../src/doc-store-timings.ts';
+import { DocStore } from '../src/doc-store.ts';
 import { classifyExternalContent } from '../src/git-provenance.ts';
-import { ROOM_TIMINGS } from '../src/doc-store-timings.ts';
-import { Rooms } from '../src/doc-store.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 import { waitFor, waitForFile } from './wait-for.ts';
@@ -84,7 +84,7 @@ describe('git operations against a bound doc', () => {
   let dataDir: string;
   let repo: string;
   let path: string;
-  let rooms: Rooms;
+  let docStore: DocStore;
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'cw-gitops-'));
@@ -101,14 +101,14 @@ describe('git operations against a bound doc', () => {
     git(repo, 'commit', '-q', '-am', 'other version');
     git(repo, 'checkout', '-q', 'main');
 
-    rooms = new Rooms({
+    docStore = new DocStore({
       dataDir,
       sse: new SseHub(),
       webhooks: createWebhookDispatcher({ onLog: () => {} }),
       decorateDocMeta: (m) => ({ ...m, reviewUrl: `http://test/review/${m.docId}` }),
     });
-    rooms.getOrCreate('d1', { type: 'markdown', sourceUrl: path });
-    expect(rooms.attachFile('d1', path).ok).toBe(true);
+    docStore.getOrCreate('d1', { type: 'markdown', sourceUrl: path });
+    expect(docStore.attachFile('d1', path).ok).toBe(true);
   });
 
   afterEach(() => {
@@ -116,7 +116,7 @@ describe('git operations against a bound doc', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  const liveText = () => rooms.getDoc('d1')?.plainText ?? '';
+  const liveText = () => docStore.getDoc('d1')?.plainText ?? '';
   /**
    * The chain each assertion below is waiting on: one poll tick (500ms), the
    * read debounce (150ms) and the write debounce (800ms). Nothing here waits
@@ -139,7 +139,7 @@ describe('git operations against a bound doc', () => {
     expect(statSync(path).mtimeMs).not.toBe(before);
 
     await untilLive('Intro from an editor save.');
-    expect(rooms.getSyncError('d1')).toBeUndefined();
+    expect(docStore.getSyncError('d1')).toBeUndefined();
   });
 
   describe('live doc IDLE — the git content is applied into the doc', () => {
@@ -158,7 +158,7 @@ describe('git operations against a bound doc', () => {
       // as the reconcile knows this was an ordinary external save.
       await untilLive('Intro paragraph on main.');
       expect(liveText()).not.toContain('Working-tree scratch.');
-      expect(rooms.getSyncError('d1')).toBeUndefined();
+      expect(docStore.getSyncError('d1')).toBeUndefined();
     });
 
     it('a branch switch pulls the other branch content into the doc', async () => {
@@ -169,7 +169,7 @@ describe('git operations against a bound doc', () => {
       expect(statSync(path).mtimeMs).not.toBe(before);
 
       await untilLive('Intro paragraph on the other branch.');
-      expect(rooms.getSyncError('d1')).toBeUndefined();
+      expect(docStore.getSyncError('d1')).toBeUndefined();
       // Disk is untouched by us — the checkout stands.
       expect(dirty()).toBe('');
     });
@@ -187,7 +187,7 @@ describe('git operations against a bound doc', () => {
       await untilLive('Intro paragraph on main.');
       expect(liveText()).not.toContain('Working-tree scratch.');
       expect(dirty()).toBe('');
-      expect(rooms.getSyncError('d1')).toBeUndefined();
+      expect(docStore.getSyncError('d1')).toBeUndefined();
     });
 
     it('git pull fast-forwards the doc along with the working tree', async () => {
@@ -199,24 +199,24 @@ describe('git operations against a bound doc', () => {
       git(repo, 'commit', '-q', '-am', 'upstream advance');
 
       const clonePath = join(upstream, 'doc.md');
-      rooms.getOrCreate('d2', { type: 'markdown', sourceUrl: clonePath });
-      expect(rooms.attachFile('d2', clonePath).ok).toBe(true);
-      expect(rooms.getDoc('d2')?.plainText).toContain('Intro paragraph on main.');
+      docStore.getOrCreate('d2', { type: 'markdown', sourceUrl: clonePath });
+      expect(docStore.attachFile('d2', clonePath).ok).toBe(true);
+      expect(docStore.getDoc('d2')?.plainText).toContain('Intro paragraph on main.');
 
       git(upstream, 'pull', '-q', '--ff-only', 'origin', 'main');
-      await waitFor(() => rooms.getDoc('d2')?.plainText.includes('Pulled from upstream.'), {
+      await waitFor(() => docStore.getDoc('d2')?.plainText.includes('Pulled from upstream.'), {
         describe: 'the pulled content to reach the cloned doc',
       });
-      expect(rooms.getSyncError('d2')).toBeUndefined();
+      expect(docStore.getSyncError('d2')).toBeUndefined();
     });
   });
 
   describe('live doc has UN-FLUSHED edits — the git operation is partly undone', () => {
     /** Make a live edit that has not yet reached disk (800ms write debounce). */
     function liveEdit(find: string): void {
-      expect(rooms.findAndReplace('d1', { find, replace: 'Live edit, not yet flushed.' }).ok).toBe(
-        true,
-      );
+      expect(
+        docStore.findAndReplace('d1', { find, replace: 'Live edit, not yet flushed.' }).ok,
+      ).toBe(true);
     }
 
     it('a branch switch is reasserted away: git exits 0 and the tree goes dirty', async () => {
@@ -271,7 +271,7 @@ describe('git operations against a bound doc', () => {
     it('the syncError names git as the cause and points at the backup', async () => {
       liveEdit('Intro paragraph on main.');
       git(repo, 'checkout', '-q', 'other');
-      const err = await waitFor(() => rooms.getSyncError('d1'), {
+      const err = await waitFor(() => docStore.getSyncError('d1'), {
         describe: 'the conflict to raise a syncError',
       });
       expect(err).toBeDefined();
@@ -295,10 +295,10 @@ describe('git operations against a bound doc', () => {
       git(repo, 'commit', '-q', '-am', 'remote advance');
 
       const clonePath = join(upstream, 'doc.md');
-      rooms.getOrCreate('d3', { type: 'markdown', sourceUrl: clonePath });
-      expect(rooms.attachFile('d3', clonePath).ok).toBe(true);
+      docStore.getOrCreate('d3', { type: 'markdown', sourceUrl: clonePath });
+      expect(docStore.attachFile('d3', clonePath).ok).toBe(true);
       expect(
-        rooms.findAndReplace('d3', {
+        docStore.findAndReplace('d3', {
           find: 'Intro paragraph on main.',
           replace: 'Live edit, not yet flushed.',
         }).ok,
@@ -317,7 +317,7 @@ describe('git operations against a bound doc', () => {
       // as the reassert, but reading it bare turned a missing conflict into
       // "Received value must be an array type" — an error that names neither
       // the doc nor what never happened.
-      const err = await waitFor(() => rooms.getSyncError('d3'), {
+      const err = await waitFor(() => docStore.getSyncError('d3'), {
         describe: 'the pull conflict to raise a syncError on d3',
       });
       expect(err?.message).toContain('git command');
@@ -336,14 +336,14 @@ describe('git operations against a bound doc', () => {
       await waitFor(() => diskText().includes('Live edit, not yet flushed.'), {
         describe: 'the reassert to overwrite the checked-out version',
       });
-      const message = rooms.getSyncError('d1')?.message ?? '';
+      const message = docStore.getSyncError('d1')?.message ?? '';
 
-      expect(rooms.reparseFromDisk('d1').ok).toBe(true); // ...and yet:
+      expect(docStore.reparseFromDisk('d1').ok).toBe(true); // ...and yet:
       expect(liveText()).toContain('Live edit, not yet flushed.');
       expect(liveText()).not.toContain('Intro paragraph on the other branch.');
       // Worse than a no-op: the reparse clears the syncError, so following this
       // as advice also throws away the only pointer to the backup below.
-      expect(rooms.getSyncError('d1')).toBeUndefined();
+      expect(docStore.getSyncError('d1')).toBeUndefined();
 
       // That backup is what actually holds the git version, which is why the
       // hint must send the operator there (or back to git) rather than to a
@@ -361,7 +361,7 @@ describe('git operations against a bound doc', () => {
       // unconditional and every assertion above would still pass.
       liveEdit('Intro paragraph on main.');
       writeFileSync(path, MAIN_DOC.replace('Intro paragraph on main.', 'A person typed this.'));
-      const err = await waitFor(() => rooms.getSyncError('d1'), {
+      const err = await waitFor(() => docStore.getSyncError('d1'), {
         describe: 'the editor-save conflict to raise a syncError',
       });
       expect(err).toBeDefined();
@@ -392,7 +392,7 @@ describe('a flush inside the read debounce cannot overwrite unread bytes', () =>
   let dataDir: string;
   let repo: string;
   let path: string;
-  let rooms: Rooms;
+  let docStore: DocStore;
   let clock: number;
 
   beforeEach(() => {
@@ -411,7 +411,7 @@ describe('a flush inside the read debounce cannot overwrite unread bytes', () =>
     git(repo, 'checkout', '-q', 'main');
 
     clock = Date.now();
-    rooms = new Rooms({
+    docStore = new DocStore({
       dataDir,
       sse: new SseHub(),
       webhooks: createWebhookDispatcher({ onLog: () => {} }),
@@ -420,8 +420,8 @@ describe('a flush inside the read debounce cannot overwrite unread bytes', () =>
       // what lets the test poll on demand instead of waiting for a tick.
       now: () => clock,
     });
-    rooms.getOrCreate('d1', { type: 'markdown', sourceUrl: path });
-    expect(rooms.attachFile('d1', path).ok).toBe(true);
+    docStore.getOrCreate('d1', { type: 'markdown', sourceUrl: path });
+    expect(docStore.attachFile('d1', path).ok).toBe(true);
   });
 
   afterEach(() => {
@@ -431,7 +431,7 @@ describe('a flush inside the read debounce cannot overwrite unread bytes', () =>
 
   it('the checked-out version is backed up and blamed on git, not silently lost', () => {
     expect(
-      rooms.findAndReplace('d1', {
+      docStore.findAndReplace('d1', {
         find: 'Intro paragraph on main.',
         replace: 'Live edit, not yet flushed.',
       }).ok,
@@ -443,14 +443,14 @@ describe('a flush inside the read debounce cannot overwrite unread bytes', () =>
     // Step past the touch rate-limit so this `get` re-stats the file. That
     // arms the read debounce and stamps the new mtime — the state the bug
     // needed.
-    clock += ROOM_TIMINGS.filePollMs;
-    expect(rooms.get('d1')).toBeDefined();
+    clock += DOC_STORE_TIMINGS.filePollMs;
+    expect(docStore.get('d1')).toBeDefined();
 
     // The write-back now fires with that reconcile still pending. Before the
     // guard this wrote the live doc straight over the checkout.
-    rooms.flush();
+    docStore.flush();
 
-    const err = rooms.getSyncError('d1');
+    const err = docStore.getSyncError('d1');
     expect(err?.message).toContain('clobber-backups');
     expect(err?.message).toContain('git command');
 

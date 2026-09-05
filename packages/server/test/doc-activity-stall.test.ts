@@ -10,7 +10,7 @@
  * passed, both exoneration tests failed. That is what makes them tests of
  * this change rather than of the harness.
  *
- * The origin filter gets its own pair too, driven through `handle.rooms`
+ * The origin filter gets its own pair too, driven through `handle.docStore`
  * rather than a route, because the thing being pinned is which TRANSACTION
  * ORIGINS count — a `file-watch` reparse, and above all an unnamed
  * (`undefined`) server write, must not read as somebody working.
@@ -147,7 +147,7 @@ describe("a task's linked doc counts as the task moving", () => {
         author: LEAD,
       }),
     );
-    expect(handle.rooms.lastContentChangeFor(docId)).toBeGreaterThan(0);
+    expect(handle.docStore.lastContentChangeFor(docId)).toBeGreaterThan(0);
 
     handle.nudgeStalls();
     // The control above is what proves this harness fires on this board with
@@ -181,7 +181,7 @@ describe("a task's linked doc counts as the task moving", () => {
       const file = join(dataDir, `${docId}.md`);
       writeFileSync(file, '# Design\n');
       await jj(await post('/api/docs', { docId, type: 'markdown', sourceUrl: file }));
-      const room = handle.rooms.peek(docId);
+      const room = handle.docStore.peek(docId);
       expect(room, `room ${docId} should exist`).toBeTruthy();
       return (room as { ydoc: Y.Doc }).ydoc;
     }
@@ -193,7 +193,7 @@ describe("a task's linked doc counts as the task moving", () => {
       ydoc.transact(() => {
         ydoc.getMap('probe').set('k', 1);
       }, 'agent');
-      const afterAgent = handle.rooms.lastContentChangeFor('origins-doc');
+      const afterAgent = handle.docStore.lastContentChangeFor('origins-doc');
       expect(afterAgent).toBeGreaterThan(0);
 
       await settle(5);
@@ -217,7 +217,7 @@ describe("a task's linked doc counts as the task moving", () => {
           ydoc.getMap('probe').set('k', Math.random());
         }, origin);
         expect(
-          handle.rooms.lastContentChangeFor('origins-doc'),
+          handle.docStore.lastContentChangeFor('origins-doc'),
           `origin ${String(origin)} must not read as somebody working`,
         ).toBe(afterAgent);
       }

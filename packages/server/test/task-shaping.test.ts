@@ -26,7 +26,7 @@ import { join } from 'node:path';
 import type { User } from '@feedback/core';
 
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { workspaceRoomId } from '../src/task-projection.ts';
+import { workspaceDocId } from '../src/task-projection.ts';
 import type { Task, TaskStoreEvent } from '../src/tasks.ts';
 import { waitFor } from './wait-for.ts';
 
@@ -421,7 +421,7 @@ describe('triage shaping', () => {
     // asserts the subscriber actually acts on it.
     const wsId = await seedWorkspace();
     const { task } = await capture(wsId);
-    const room = handle?.rooms.get(workspaceRoomId(wsId));
+    const room = handle?.docStore.get(workspaceDocId(wsId));
     if (!room) throw new Error('ws room was not created');
     // Positive control: the room already carries the row, with the fragment.
     expect((room.ydoc.getMap('tasks').get(task.id) as { title: string }).title).toBe(CAPTURE.title);

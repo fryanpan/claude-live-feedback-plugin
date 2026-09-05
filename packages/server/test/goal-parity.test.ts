@@ -10,7 +10,7 @@
  * The design settled the naming question this suite pins: a goal's body room
  * is `task:<goalId>`, not `goal:<goalId>`. Goal ids are `g-…` and task ids are
  * `t-…`, so the namespace cannot collide, and reusing the prefix means
- * `isHubOwnedRoom`, every prose edit tool, the thread store, the SSE redactors
+ * `isHubOwnedDoc`, every prose edit tool, the thread store, the SSE redactors
  * and the doc routes all work on a goal body with no change at all. A second
  * prefix would have been an edit to each of them buying nothing.
  *
@@ -141,7 +141,7 @@ describe('a goal is at parity with a task: description + comments', () => {
     // The board renders bands off the `ws:` room's projected `goals` and
     // nothing else, so a body only the store can see is the
     // store-has-it/surface-can't-show-it bug for the field goals exist for.
-    const room = handle.rooms.get(`ws:${workspaceId}`);
+    const room = handle.docStore.get(`ws:${workspaceId}`);
     const goals = room?.ydoc.getMap('workspace').get('goals') as
       | Array<{ id: string; body?: string; bodyDocId?: string }>
       | undefined;
@@ -162,7 +162,7 @@ describe('a goal is at parity with a task: description + comments', () => {
     });
     expect(res.status).toBeLessThan(300);
     await settle();
-    const room = handle.rooms.get(`ws:${workspaceId}`);
+    const room = handle.docStore.get(`ws:${workspaceId}`);
     const goals = room?.ydoc.getMap('workspace').get('goals') as
       | Array<{ id: string; commentCount?: number }>
       | undefined;

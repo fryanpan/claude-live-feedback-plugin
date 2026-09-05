@@ -5,7 +5,7 @@
  * that reconciles membership without re-minting docIds, and a regroup that
  * doesn't require tearing the review down. The route layer is the one that
  * nothing type-checks (it hand-copies body fields), so each one gets an
- * HTTP-level test, not just a unit test against Rooms.
+ * HTTP-level test, not just a unit test against DocStore.
  *
  * A third route used to be covered here — `GET /s/:slug` re-resolving a
  * share's ENTRY DOC at redemption, so a renamed entry file did not leave the

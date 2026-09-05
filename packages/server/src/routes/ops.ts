@@ -29,19 +29,19 @@ import type { User } from '@feedback/core';
  * `createServer` closure, following `task-routes-context.ts`.
  */
 import type { Deployer } from '../deploy.ts';
+import type { DocStore } from '../doc-store.ts';
 import { isLoopbackAddress } from '../middleware/host-guard.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
 import { browserCannotOperateBody, isBrowserRequest } from '../middleware/write-gate.ts';
 import type { PluginRefresher } from '../plugin-refresh.ts';
 import type { PushNotifier } from '../push-notify.ts';
 import type { PushStore } from '../push-store.ts';
-import type { Rooms } from '../doc-store.ts';
 import type { WebhookLogEntry } from '../webhooks.ts';
 
 /** The long-lived collaborators these routes need, built once per server. */
 export interface OpsRoutesContext {
-  /** Doc rooms — read for the binding and activation stats metrics serves. */
-  rooms: Rooms;
+  /** Doc store — read for the binding and activation stats metrics serves. */
+  docStore: DocStore;
   /** The plugin-cache refresher, or null when none was injected. */
   pluginRefresher: PluginRefresher | null;
   /** The deployer, or null when none was injected. A null one is the reason
@@ -81,12 +81,12 @@ export function handleOpsMetricsRoute(
   ctx: OpsRoutesContext,
   rq: OpsRouteRequest,
 ): Response | undefined {
-  const { rooms, j } = ctx;
+  const { docStore, j } = ctx;
   const { pathname, req, visitor } = rq;
 
   if (pathname === '/api/metrics' && req.method === 'GET') {
     if (visitor) return j(403, { error: 'not available to share visitors' });
-    const stats = rooms.stats();
+    const stats = docStore.stats();
     return j(200, { ...stats, uptimeSec: Math.round(process.uptime()) });
   }
   return undefined;
@@ -108,7 +108,7 @@ export async function handleSummaryBackfillRoute(
   ctx: OpsRoutesContext,
   rq: OpsRouteRequest,
 ): Promise<Response | undefined> {
-  const { rooms, j, safeJson } = ctx;
+  const { docStore, j, safeJson } = ctx;
   const { req, pathname, visitor } = rq;
 
   if (pathname === '/api/summaries/backfill' && req.method === 'POST') {
@@ -116,7 +116,7 @@ export async function handleSummaryBackfillRoute(
     const body = await safeJson(req);
     const minutes = Number(body?.windowMinutes ?? 15);
     const windowMs = (Number.isFinite(minutes) && minutes > 0 ? minutes : 15) * 60_000;
-    const { queued, open, resolved } = rooms.backfillSummaries({ windowMs });
+    const { queued, open, resolved } = docStore.backfillSummaries({ windowMs });
     return j(200, { ok: true, queued, open, resolved, windowMs });
   }
   return undefined;

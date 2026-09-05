@@ -101,7 +101,7 @@ export interface DocThreadPersistence {
   ): void;
 }
 
-/** The thread verbs. One per `Rooms`, holding no state of its own. */
+/** The thread verbs. One per `DocStore`, holding no state of its own. */
 export class DocThreads {
   constructor(private readonly p: DocThreadPersistence) {}
 

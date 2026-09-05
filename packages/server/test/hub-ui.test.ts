@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { User } from '@feedback/core';
 import { HUB_FEEDBACK_DOC_ID, type ServerHandle, createServer } from '../src/server.ts';
-import { workspaceRoomId } from '../src/task-projection.ts';
+import { workspaceDocId } from '../src/task-projection.ts';
 import type { Task } from '../src/tasks.ts';
 
 const PERSON: User = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
@@ -177,7 +177,7 @@ describe('hub UI routes (plan §3.12 commit 7)', () => {
 
       // The board renders from the ws:<id> ydoc projection — assert the
       // rename reached the layer the UI actually reads.
-      const room = handle.rooms.get(workspaceRoomId(wsId));
+      const room = handle.docStore.get(workspaceDocId(wsId));
       expect(room).toBeDefined();
       const projected = room?.ydoc.getMap('tasks').get(task.id) as { title?: string } | undefined;
       expect(projected?.title).toBe('New sharper title');

@@ -234,8 +234,8 @@ describe('hands-on activity stream', () => {
     // the contract that lets a backfill re-run dedupe against live capture —
     // it only holds because the live event hashes the comment's PERSISTED ts,
     // not a fresh Date.now().
-    const summary = handle.rooms.listThreads(dedupId)[0];
-    const full = handle.rooms.getThread(dedupId, summary!.id);
+    const summary = handle.docStore.listThreads(dedupId)[0];
+    const full = handle.docStore.getThread(dedupId, summary!.id);
     expect(full).not.toBeNull();
     const backfill = eventsForDoc(docRes.meta, [full!]).find((e) => e.type === 'comment');
     expect(backfill).toBeDefined();

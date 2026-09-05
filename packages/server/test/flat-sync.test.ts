@@ -11,7 +11,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Rooms } from '../src/doc-store.ts';
+import { DocStore } from '../src/doc-store.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
@@ -26,8 +26,8 @@ import { pastWriteBack, waitFor, waitForFile, waitForFileToBe } from './wait-for
  * attaches must stay write-free.
  */
 
-function makeRooms(dataDir: string): Rooms {
-  return new Rooms({
+function makeDocStore(dataDir: string): DocStore {
+  return new DocStore({
     dataDir,
     sse: new SseHub(),
     webhooks: createWebhookDispatcher({ onLog: () => {} }),
@@ -70,14 +70,14 @@ const SRC = 'fun main() {\n    println("one")\n    println("two")\n}\n';
 describe('flat write-back', () => {
   let dataDir: string;
   let path: string;
-  let rooms: Rooms;
+  let docStore: DocStore;
 
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-flat-'));
     path = join(dataDir, 'Main.kt');
     writeFileSync(path, SRC);
-    rooms = makeRooms(dataDir);
-    rooms.getOrCreate('c1', { type: 'code', sourceUrl: path });
+    docStore = makeDocStore(dataDir);
+    docStore.getOrCreate('c1', { type: 'code', sourceUrl: path });
   });
 
   afterEach(() => {
@@ -85,16 +85,16 @@ describe('flat write-back', () => {
   });
 
   it('writeBack: an edit to the content Y.Text lands in the file', async () => {
-    expect(rooms.attachFlatFile('c1', path, { writeBack: true }).ok).toBe(true);
-    const content = rooms.get('c1')?.ydoc.getText('content');
+    expect(docStore.attachFlatFile('c1', path, { writeBack: true }).ok).toBe(true);
+    const content = docStore.get('c1')?.ydoc.getText('content');
     expect(content?.toString()).toBe(SRC);
     content?.insert(SRC.indexOf('one'), 'edited-');
     expect(await waitForFile(path, (t) => t.includes('edited-one'))).toContain('edited-one');
   });
 
   it('read-only attach: an edit to the content Y.Text never touches the file', async () => {
-    expect(rooms.attachReadonlyFile('c1', path).ok).toBe(true);
-    rooms.get('c1')?.ydoc.getText('content').insert(0, 'INJECTED ');
+    expect(docStore.attachReadonlyFile('c1', path).ok).toBe(true);
+    docStore.get('c1')?.ydoc.getText('content').insert(0, 'INJECTED ');
     // timed: the assertion is that NOTHING lands, so the full write-back
     // window (~800ms) has to elapse before the file can be believed.
     await sleep(pastWriteBack());
@@ -102,12 +102,12 @@ describe('flat write-back', () => {
   });
 
   it('external edits still flow in, and the write-back does not echo them back out', async () => {
-    expect(rooms.attachFlatFile('c1', path, { writeBack: true }).ok).toBe(true);
+    expect(docStore.attachFlatFile('c1', path, { writeBack: true }).ok).toBe(true);
     const changed = SRC.replace('two', 'three');
     writeExternal(path, changed);
     // The file poll (500ms) plus the read debounce (150ms) put the external
     // bytes into the doc; wait for the doc, not for the clock.
-    await waitFor(() => rooms.get('c1')?.ydoc.getText('content').toString() === changed, {
+    await waitFor(() => docStore.get('c1')?.ydoc.getText('content').toString() === changed, {
       describe: 'the external edit to reach the doc',
     });
     // The apply came in under a file-watch origin — no write-back echo, so
@@ -119,10 +119,10 @@ describe('flat write-back', () => {
   });
 
   it('conflict: un-flushed live edit + external write keeps live, backs up external, sets syncError', async () => {
-    expect(rooms.attachFlatFile('c1', path, { writeBack: true }).ok).toBe(true);
-    rooms.get('c1')?.ydoc.getText('content').insert(0, '// live edit\n');
+    expect(docStore.attachFlatFile('c1', path, { writeBack: true }).ok).toBe(true);
+    docStore.get('c1')?.ydoc.getText('content').insert(0, '// live edit\n');
     writeExternal(path, SRC.replace('two', 'external'));
-    expect(rooms.reconcileNow('c1')).toBe('conflict');
+    expect(docStore.reconcileNow('c1')).toBe('conflict');
     // Live wins on disk...
     await waitForFile(path, (t) => t.includes('// live edit'));
     // ...and the external version survives in clobber-backups.
@@ -130,17 +130,17 @@ describe('flat write-back', () => {
     expect(existsSync(backupDir)).toBe(true);
     const backups = readdirSync(backupDir).map((f) => readFileSync(join(backupDir, f), 'utf8'));
     expect(backups.some((c) => c.includes('external'))).toBe(true);
-    expect(rooms.getSyncError('c1')?.message).toContain('clobber-backups');
+    expect(docStore.getSyncError('c1')?.message).toContain('clobber-backups');
   });
 
   it('re-attach does not stack duplicate content observers', async () => {
-    expect(rooms.attachFlatFile('c1', path, { writeBack: true }).ok).toBe(true);
-    expect(rooms.attachFlatFile('c1', path, { writeBack: true }).ok).toBe(true);
-    expect(rooms.attachFlatFile('c1', path, { writeBack: true }).ok).toBe(true);
+    expect(docStore.attachFlatFile('c1', path, { writeBack: true }).ok).toBe(true);
+    expect(docStore.attachFlatFile('c1', path, { writeBack: true }).ok).toBe(true);
+    expect(docStore.attachFlatFile('c1', path, { writeBack: true }).ok).toBe(true);
     // One observer means one write per change: mutate once, then confirm the
     // file settles to exactly the doc's content (duplicates with stale
     // bindings would race and can resurrect old bytes).
-    const content = rooms.get('c1')?.ydoc.getText('content');
+    const content = docStore.get('c1')?.ydoc.getText('content');
     content?.insert(0, '// once\n');
     await waitForFileToBe(path, content?.toString() ?? '');
   });
@@ -162,7 +162,7 @@ describe('flat write-back through bindDiff', () => {
 
   let repo: string;
   let dataDir: string;
-  let rooms: Rooms;
+  let docStore: DocStore;
   let base: string;
 
   beforeEach(() => {
@@ -176,7 +176,7 @@ describe('flat write-back through bindDiff', () => {
     base = git(repo, 'rev-parse', 'HEAD');
     writeFileSync(join(repo, 'Main.kt'), SRC.replace('two', 'changed'));
     writeFileSync(join(repo, 'README.md'), '# Title\n\nBody changed.\n');
-    rooms = makeRooms(dataDir);
+    docStore = makeDocStore(dataDir);
   });
 
   afterEach(() => {
@@ -185,15 +185,15 @@ describe('flat write-back through bindDiff', () => {
   });
 
   it('working-tree members get write-back for code but NOT for markdown', async () => {
-    const res = await rooms.bindDiff({ repoPath: repo, base });
+    const res = await docStore.bindDiff({ repoPath: repo, base });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     const ktId = res.files.find((f) => f.relPath === 'Main.kt')?.docId ?? '';
     const mdId = res.files.find((f) => f.relPath === 'README.md')?.docId ?? '';
-    rooms.get(ktId)?.ydoc.getText('content').insert(0, '// from the File view\n');
+    docStore.get(ktId)?.ydoc.getText('content').insert(0, '// from the File view\n');
     // .md members flow through the (future) companion prose doc — writing
     // their flat surface back would double-write the same file.
-    rooms.get(mdId)?.ydoc.getText('content').insert(0, 'INJECTED ');
+    docStore.get(mdId)?.ydoc.getText('content').insert(0, 'INJECTED ');
     // Both edits were made in the same tick, so once the .kt write has landed
     // the .md write would have landed too if it were ever going to.
     await waitForFile(join(repo, 'Main.kt'), (t) => t.includes('// from the File view'));
@@ -204,28 +204,28 @@ describe('flat write-back through bindDiff', () => {
     // Learnings: state hydration ≠ binding hydration. hydrateFromDisk
     // re-attached flat docs read-only, so after a restart the File view
     // LOOKED editable but edits silently never reached the working tree.
-    const res = await rooms.bindDiff({ repoPath: repo, base });
+    const res = await docStore.bindDiff({ repoPath: repo, base });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     const ktId = res.files.find((f) => f.relPath === 'Main.kt')?.docId ?? '';
     await waitForYdoc(dataDir, ktId);
-    const rooms2 = makeRooms(dataDir);
-    rooms2.get(ktId)?.ydoc.getText('content').insert(0, '// post-restart edit\n');
+    const docStore2 = makeDocStore(dataDir);
+    docStore2.get(ktId)?.ydoc.getText('content').insert(0, '// post-restart edit\n');
     await waitForFile(join(repo, 'Main.kt'), (t) => t.includes('// post-restart edit'));
   });
 
   it('openEditableFile: companion markdown doc whose edits reach the working tree and the member', async () => {
-    const res = await rooms.bindDiff({ repoPath: repo, base });
+    const res = await docStore.bindDiff({ repoPath: repo, base });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    const opened = await rooms.openEditableFile(res.reviewId, 'README.md');
+    const opened = await docStore.openEditableFile(res.reviewId, 'README.md');
     expect(opened.ok).toBe(true);
     if (!opened.ok) return;
     expect(opened.meta.type).toBe('markdown');
-    expect(rooms.getDoc(opened.docId)?.plainText).toContain('Body changed.');
+    expect(docStore.getDoc(opened.docId)?.plainText).toContain('Body changed.');
     // Edits made in the full markdown editor flow to the working tree...
     expect(
-      rooms.findAndReplace(opened.docId, {
+      docStore.findAndReplace(opened.docId, {
         find: 'Body changed.',
         replace: 'Body edited in File view.',
       }).ok,
@@ -234,12 +234,12 @@ describe('flat write-back through bindDiff', () => {
     // ...and from there into the diff member's flat content (redline/diff
     // re-render), closing the loop.
     const mdId = res.files.find((f) => f.relPath === 'README.md')?.docId ?? '';
-    rooms.reconcileNow(mdId);
-    expect(rooms.get(mdId)?.ydoc.getText('content').toString()).toContain(
+    docStore.reconcileNow(mdId);
+    expect(docStore.get(mdId)?.ydoc.getText('content').toString()).toContain(
       'Body edited in File view.',
     );
     // Idempotent: repeat opens reuse the doc (threads survive).
-    const again = await rooms.openEditableFile(res.reviewId, 'README.md');
+    const again = await docStore.openEditableFile(res.reviewId, 'README.md');
     expect(again.ok && again.docId === opened.docId).toBe(true);
   });
 
@@ -247,20 +247,20 @@ describe('flat write-back through bindDiff', () => {
     git(repo, 'add', '-A');
     git(repo, 'commit', '-q', '-m', 'target');
     const target = git(repo, 'rev-parse', 'HEAD');
-    const pinned = await rooms.bindDiff({ repoPath: repo, base, target });
+    const pinned = await docStore.bindDiff({ repoPath: repo, base, target });
     expect(pinned.ok).toBe(true);
     if (!pinned.ok) return;
-    const refused = await rooms.openEditableFile(pinned.reviewId, 'README.md');
+    const refused = await docStore.openEditableFile(pinned.reviewId, 'README.md');
     expect(refused.ok).toBe(false);
     if (!refused.ok) expect(refused.error).toBe('pinned');
 
-    const live = await rooms.bindDiff({ repoPath: repo, base });
+    const live = await docStore.bindDiff({ repoPath: repo, base });
     expect(live.ok).toBe(true);
     if (!live.ok) return;
-    const notMd = await rooms.openEditableFile(live.reviewId, 'Main.kt');
+    const notMd = await docStore.openEditableFile(live.reviewId, 'Main.kt');
     expect(notMd.ok).toBe(false);
     if (!notMd.ok) expect(notMd.error).toBe('not-markdown');
-    const traversal = await rooms.openEditableFile(live.reviewId, '../evil.md');
+    const traversal = await docStore.openEditableFile(live.reviewId, '../evil.md');
     expect(traversal.ok).toBe(false);
     if (!traversal.ok) expect(traversal.error).toBe('bad-path');
   });
@@ -271,33 +271,33 @@ describe('flat write-back through bindDiff', () => {
       git(repo, 'commit', '-q', '-m', 'target');
       return git(repo, 'rev-parse', 'HEAD');
     })();
-    const res = await rooms.bindDiff({ repoPath: repo, base, target });
+    const res = await docStore.bindDiff({ repoPath: repo, base, target });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     const ktId = res.files.find((f) => f.relPath === 'Main.kt')?.docId ?? '';
-    rooms.get(ktId)?.ydoc.getText('content').insert(0, '// pinned edit\n');
+    docStore.get(ktId)?.ydoc.getText('content').insert(0, '// pinned edit\n');
     // timed: proving a write never happens needs the write window to pass.
     await sleep(pastWriteBack());
     expect(readFileSync(join(repo, 'Main.kt'), 'utf8')).not.toContain('// pinned edit');
   });
 
   it('workspace tree lists an opened editable .md once, under the diff member, badges merged', async () => {
-    const res = await rooms.bindDiff({ repoPath: repo, base });
+    const res = await docStore.bindDiff({ repoPath: repo, base });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     const mdId = res.files.find((f) => f.relPath === 'README.md')?.docId ?? '';
-    const opened = await rooms.openEditableFile(res.reviewId, 'README.md');
+    const opened = await docStore.openEditableFile(res.reviewId, 'README.md');
     expect(opened.ok).toBe(true);
     if (!opened.ok) return;
     // One thread on the diff member, one on the companion editor doc — the
     // tree must show ONE README.md row carrying BOTH.
     const author = { id: 'u1', name: 'T', kind: 'known', color: '#000' } as const;
     expect(
-      (await rooms.createThreadByFind(mdId, { find: 'Body changed.' }, author, 'on member')).ok,
+      (await docStore.createThreadByFind(mdId, { find: 'Body changed.' }, author, 'on member')).ok,
     ).toBe(true);
     expect(
       (
-        await rooms.createThreadByFind(
+        await docStore.createThreadByFind(
           opened.docId,
           { find: 'Body changed.' },
           author,
@@ -305,7 +305,7 @@ describe('flat write-back through bindDiff', () => {
         )
       ).ok,
     ).toBe(true);
-    const tree = rooms.buildWorkspaceTree(res.reviewId);
+    const tree = docStore.buildWorkspaceTree(res.reviewId);
     const readmes = tree.tree.children.filter(
       (c): c is Extract<typeof c, { type: 'file' }> =>
         c.type === 'file' && c.relPath === 'README.md',
@@ -319,7 +319,7 @@ describe('flat write-back through bindDiff', () => {
     expect(tree.totalOpen).toBe(2);
     // The grouped Changed-Files sidebar — the one a diff review actually
     // renders — must merge the companion's threads the same way.
-    const grouped = rooms.listGroupedDiff(res.reviewId);
+    const grouped = docStore.listGroupedDiff(res.reviewId);
     const row = grouped.groups.flatMap((g) => g.files).find((f) => f.relPath === 'README.md');
     expect(row?.docId).toBe(mdId);
     expect(row?.openCount).toBe(2);
@@ -339,7 +339,7 @@ describe('flat write-back through bindDiff', () => {
     // Build the persisted state WITHOUT a file binding (no poll, no writer —
     // nothing races the setup): getOrCreate + a content edit is exactly what
     // hydration will find after a crash mid-flush.
-    const setup = makeRooms(dataDir);
+    const setup = makeDocStore(dataDir);
     const room = setup.getOrCreate('crash1', {
       type: 'diff',
       sourceUrl: file,
@@ -354,7 +354,7 @@ describe('flat write-back through bindDiff', () => {
     const past = new Date(Date.now() - 60_000);
     require('node:fs').utimesSync(file, past, past);
 
-    const restarted = makeRooms(dataDir);
+    const restarted = makeDocStore(dataDir);
     expect(restarted.get('crash1')?.ydoc.getText('content').toString()).toBe(docText);
     await waitForFileToBe(file, docText);
     const backupDir = join(dataDir, 'clobber-backups');
@@ -370,7 +370,7 @@ describe('flat write-back through bindDiff', () => {
     // work. The file's newer mtime must make disk authoritative, and no
     // write-back of the stale doc may fire.
     const file = join(repo, 'Main.kt');
-    const setup = makeRooms(dataDir);
+    const setup = makeDocStore(dataDir);
     const room = setup.getOrCreate('crash2', {
       type: 'diff',
       sourceUrl: file,
@@ -383,10 +383,10 @@ describe('flat write-back through bindDiff', () => {
     const downtimeEdit = '// written while the server was down\n';
     writeExternal(file, downtimeEdit); // future mtime > .ydoc mtime
 
-    const restarted = makeRooms(dataDir);
+    const restarted = makeDocStore(dataDir);
     // `get` brings the doc back in this turn and its file binding a moment
     // later, off the thread pool — a hydrate no longer opens a bound path on
-    // the main thread (`Rooms.prereadFor`). The attach-time arbitration this
+    // the main thread (`DocStore.prereadFor`). The attach-time arbitration this
     // test is about rides along with that bind, so wait for it.
     expect(restarted.get('crash2')).toBeDefined();
     await waitFor(

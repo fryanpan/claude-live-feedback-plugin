@@ -126,7 +126,7 @@ describe('broadcast event ids', () => {
     expect(docEids[0]).not.toBe(docEids[1]);
   });
 
-  it('is unique within a process even across rooms', () => {
+  it('is unique within a process even across docs', () => {
     const ids = new Set<string>();
     for (let i = 0; i < 1000; i++) ids.add(newEventId());
     expect(ids.size).toBe(1000);

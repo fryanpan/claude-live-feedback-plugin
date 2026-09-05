@@ -53,7 +53,7 @@ async function j<T>(res: Response): Promise<T> {
 
 /**
  * Seed one doc + thread. `name` is the readable name the caller asks for; the
- * server mints the doc's real id, and the rooms handle keys on THAT — so the
+ * server mints the doc's real id, and the doc-store handle keys on THAT — so the
  * minted id comes back with the thread rather than being reconstructed.
  */
 async function seedThread(
@@ -81,7 +81,7 @@ async function seedThread(
 }
 
 function markerOf(handle: ServerHandle, docId: string, threadId: string): unknown {
-  const room = handle.rooms.get(docId);
+  const room = handle.docStore.get(docId);
   const threads = room?.ydoc.getMap('threads') as Y.Map<Y.Map<unknown>> | undefined;
   return threads?.get(threadId)?.get('summaryPendingTs');
 }
@@ -130,14 +130,14 @@ describe('summaryPendingTs marker', () => {
     it('does NOT stamp for a gated write — visitor activity queues nothing', async () => {
       const { docId, threadId } = await seedThread(base, dataDir, 'marker-gated');
       // The readable name still addresses the doc — and resolves to the id the
-      // rooms handle keys on.
-      const room = handle.rooms.get('marker-gated');
+      // doc-store handle keys on.
+      const room = handle.docStore.get('marker-gated');
       if (!room) throw new Error('room missing');
       expect(room.docId).toBe(docId);
       const stampedAtCreate = markerOf(handle, docId, threadId) as number;
 
       // The same gate the routes apply to share visitors (`generate: !visitor`).
-      const res = await handle.rooms.postComment(
+      const res = await handle.docStore.postComment(
         docId,
         threadId,
         bryan,
