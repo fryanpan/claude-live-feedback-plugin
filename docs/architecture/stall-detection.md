@@ -98,14 +98,22 @@ clock at zero forever.
 
 Detection is two stages and the second only ever narrows the first
 (`note-ask.ts`). A deterministic prefilter reads the note for a waiting phrase
-(waiting on, parked on, blocked on, needs a decision, for your read) AND a
-person — the board's own people by name, or a pronoun — with an explicit
-release vocabulary that wins: a note opening "Not waiting", "Not stalled" or
-"Not blocked", or saying the person answered, is not an ask. A prefilter HIT
+(waiting on, parked on, blocked on, needs, ready for) whose OBJECT is a
+person: a name the board supplied, an object pronoun, or a possessive plus an
+act — "your read", "his call", "their sign-off". The object test is what
+separates an ask from ordinary work, and it is not a refinement but the
+finding itself: "any waiting phrase anywhere AND any person word anywhere"
+reads "Blocked on the CI runner outage; the vendor says their fix is rolling
+out." as an ask, and with no key configured that row leaves `in-progress`,
+drops off the stalled list where `builder-silent` could still have named it,
+and wakes the lead to file an ask nobody has. An explicit release vocabulary
+wins over all of it: a note opening "Not waiting", "Not stalled" or "Not
+blocked", or saying the person answered, is not an ask. A prefilter HIT
 is then confirmed by the same Haiku key the review gate uses
 (`note-ask-judge.ts`, `CW_NOTE_ASK_JUDGE=0` to turn it off), one word back,
 cached per note by timestamp and text hash, run in the background between
-ticks and at most four in flight. A prefilter MISS is never sent anywhere, so
+ticks and at most four in flight. A prefilter MISS is never sent anywhere, and neither is a row the board
+already reads as waiting on a person — no verdict could move that bucket — so
 the spend is one call per new ask-note and none at all on a board whose notes
 have been read. No key, an error, a timeout or an unparseable reply leaves the
 prefilter's verdict standing — a nudge, never a door that closes when the API
