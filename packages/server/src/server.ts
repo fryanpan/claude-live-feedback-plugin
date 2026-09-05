@@ -14,6 +14,10 @@ import { AgentNoteRing } from './agent-notes.ts';
 import { AgentWatches } from './agent-watches.ts';
 import { AllowRuleProposals } from './allow-rules.ts';
 import { ARTIFACT_CHECK_ACTOR, ArtifactChecker } from './artifact-check.ts';
+import {
+  createLegacyAgentWarner,
+  agentTokenKey as deriveAgentTokenKey,
+} from './auth/agent-token.ts';
 import type { CodeSender } from './auth/code-sender.ts';
 import { DEFAULT_HUB_WORKSPACE_NAME, createBoardMembership } from './board-membership.ts';
 import { type BrowserSentryConfig } from './browser-sentry.ts';
@@ -230,6 +234,20 @@ export interface ServerOptions {
    * agents are outside the gate and what that boundary is worth.
    */
   requireSignInToWrite?: boolean;
+  /**
+   * Whether the two agent-id-keyed routes refuse a caller that presents no
+   * `at1` agent token: `GET /api/agents/<id>/watches` and
+   * `GET /events/agent/<id>`.
+   *
+   * Defaults to FALSE — the deprecation window, not an opinion about the
+   * gate. Presenting the token needs the MCP child to change, and that ships
+   * in a plugin bundle each peer updates on their own schedule; refusing an
+   * un-updated child would take its watch restore and its whole event stream
+   * away mid-session. The shape gate (loopback, not a browser, not through
+   * the edge) is enforced on both routes regardless of this flag. The
+   * deployment switch is `CW_REQUIRE_AGENT_TOKEN`; see auth/agent-token.ts.
+   */
+  requireAgentToken?: boolean;
   /**
    * ACCESS-ONLY browser hosts. Defaults to TRUE — every hostname that is not
    * loopback is browser-facing and must carry a verified Cloudflare Access
@@ -2010,6 +2028,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * blocks down: `Bun.serve` has not returned yet, and it is narrowed to
    * `upgrade` so this module can take a connection over and nothing else.
    */
+  /**
+   * The agent-stream proof, shared by the three routes that speak it: the
+   * mint, the durable watch set, and the multiplexed stream. Derived lazily
+   * from the one key file, cached like every other protocol key here.
+   */
+  let agentTokenKeyCache: string | null = null;
+  const agentTokenKeyFor = (): string => {
+    agentTokenKeyCache ??= deriveAgentTokenKey(cookieKey());
+    return agentTokenKeyCache;
+  };
+  const requireAgentToken = opts.requireAgentToken ?? false;
+  /** One warning per agent id per route for the whole process life. */
+  const warnLegacyAgentCaller = createLegacyAgentWarner();
+
   const { serveUpgradeAndStreamRoutes } = createUpgradeStream({
     server: { upgrade: (req, options) => server.upgrade(req, options) },
     rooms,
@@ -2024,6 +2056,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     canonicalDocId,
     fileUnderHubWorkspace,
     j,
+    requestAddress: (req) => server.requestIP(req)?.address,
+    agentTokenKey: agentTokenKeyFor,
+    requireAgentToken,
+    warnLegacyAgentCaller,
   });
   /**
    * What the operator routes read instead of this closure's scope. Built
@@ -2066,6 +2102,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     watchKeyExists,
     watchCoverageFor,
     canonicalDocId,
+    agentTokenKey: agentTokenKeyFor,
+    requireAgentToken,
+    warnLegacyAgentCaller,
   };
 
   /**
