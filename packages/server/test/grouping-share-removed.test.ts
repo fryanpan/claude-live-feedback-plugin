@@ -12,7 +12,7 @@
  * the per-doc removal cheap to guard. An older bundle sends a grouping id and
  * a board id in the SAME `workspaceId` field, so the only thing that can tell
  * them apart is a lookup: a board is what `taskStore` answers for, and a
- * grouping is what only `rooms` knows about. Every assertion below therefore
+ * grouping is what only `docStore` knows about. Every assertion below therefore
  * pairs a refusal with a board doing the same thing on the same server — a
  * server that answered nothing at all would otherwise pass this whole file.
  *

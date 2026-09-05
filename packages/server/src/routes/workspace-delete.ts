@@ -23,7 +23,7 @@ export async function handleWorkspaceDelete(
     // what every shipped plugin bundle and skill has always called, from
     // sessions nobody can restart. New callers use DELETE
     // /api/reviews/<setId> above, which cannot touch a board at all.
-    // Ask the task store first: `rooms.deleteWorkspace` enumerates DOC
+    // Ask the task store first: `docStore.deleteWorkspace` enumerates DOC
     // members, so a board — which has none — always came back not-found,
     // and a board created for a five-minute experiment was permanent.
     if (taskStore.getWorkspace(workspaceId)) {
@@ -62,7 +62,7 @@ export async function handleWorkspaceDelete(
         // gone" and stop asking.
         return j(board.error === 'persist-failed' ? 500 : 404, board);
       }
-      taskProjection.dropWorkspaceRooms(workspaceId, board.taskIds);
+      taskProjection.dropWorkspaceDocs(workspaceId, board.taskIds);
       return j(200, { ok: true, deletedTasks: board.deletedTasks });
     }
     return deleteReview(workspaceId, force, url.searchParams.get('purge') === 'true');

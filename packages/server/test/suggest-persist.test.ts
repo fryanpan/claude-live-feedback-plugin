@@ -10,7 +10,7 @@ import {
   type SuggestionAttrs,
   readSuggestionAttrs,
 } from '../../core/src/suggest.ts';
-import { Rooms } from '../src/rooms.ts';
+import { DocStore } from '../src/doc-store.ts';
 import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 import { waitForFile } from './wait-for.ts';
@@ -23,8 +23,8 @@ import { waitForFile } from './wait-for.ts';
  * CRDT — disk has no suggestion syntax).
  */
 
-function makeRooms(dataDir: string): Rooms {
-  return new Rooms({
+function makeDocStore(dataDir: string): DocStore {
+  return new DocStore({
     dataDir,
     sse: new SseBus(),
     webhooks: createWebhookDispatcher({ onLog: () => {} }),
@@ -51,15 +51,15 @@ function paragraphText(ydoc: Y.Doc): Y.XmlText {
 describe('suggestions vs disk and hydration', () => {
   let dataDir: string;
   let path: string;
-  let rooms: Rooms;
+  let docStore: DocStore;
 
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-suggest-'));
     path = join(dataDir, 'doc.md');
     writeFileSync(path, MD);
-    rooms = makeRooms(dataDir);
-    rooms.getOrCreate('s1', { type: 'markdown', sourceUrl: path });
-    expect(rooms.attachFile('s1', path).ok).toBe(true);
+    docStore = makeDocStore(dataDir);
+    docStore.getOrCreate('s1', { type: 'markdown', sourceUrl: path });
+    expect(docStore.attachFile('s1', path).ok).toBe(true);
   });
 
   afterEach(() => {
@@ -67,7 +67,7 @@ describe('suggestions vs disk and hydration', () => {
   });
 
   it('a suggestion never reaches disk; accepted edits still flow; hydrate keeps the marks', async () => {
-    const ydoc = rooms.get('s1')!.ydoc;
+    const ydoc = docStore.get('s1')!.ydoc;
     ydoc.transact(() => {
       const t = paragraphText(ydoc);
       // Replace proposal under one sid: delete 'beta', insert 'delta' after it.
@@ -75,7 +75,7 @@ describe('suggestions vs disk and hydration', () => {
       t.insert('Alpha beta'.length, ' delta', { [SUGGEST_INSERT_MARK]: sattrs('rp') });
     }, 'agent');
     // An accepted edit alongside, so the write-back definitely fires.
-    expect(rooms.findAndReplace('s1', { find: 'gamma', replace: 'omega' }).ok).toBe(true);
+    expect(docStore.findAndReplace('s1', { find: 'gamma', replace: 'omega' }).ok).toBe(true);
     // The accepted edit is the positive observable; once it is on disk, the
     // same write either carried the proposal out or never will.
     const onDisk = await waitForFile(path, (t) => t.includes('omega'));
@@ -84,9 +84,9 @@ describe('suggestions vs disk and hydration', () => {
     expect(onDisk).toContain('beta'); // proposed deletion still on disk
     expect(onDisk).toBe('# Title\n\nAlpha beta omega.\n');
 
-    // Restart: a fresh Rooms over the same dataDir hydrates from .ydoc.
-    const rooms2 = makeRooms(dataDir);
-    const ydoc2 = rooms2.get('s1')?.ydoc;
+    // Restart: a fresh DocStore over the same dataDir hydrates from .ydoc.
+    const docStore2 = makeDocStore(dataDir);
+    const ydoc2 = docStore2.get('s1')?.ydoc;
     expect(ydoc2).toBeDefined();
     const delta = paragraphText(ydoc2!).toDelta() as Array<{
       insert?: string;

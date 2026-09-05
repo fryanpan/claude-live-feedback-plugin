@@ -23,7 +23,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { workspaceRoomId } from '../src/task-projection.ts';
+import { workspaceDocId } from '../src/task-projection.ts';
 import {
   type AgentAttachment,
   TaskStore,
@@ -655,7 +655,7 @@ describe('attachment routes + lead-addressed delivery', () => {
     await post(`/api/workspaces/${wsId}/attachments/relay-agent/heartbeat`, {});
     await settle();
 
-    const room = handle.rooms.get(workspaceRoomId(wsId));
+    const room = handle.docStore.get(workspaceDocId(wsId));
     if (!room) throw new Error('ws room missing');
     const dump = JSON.stringify({
       tasks: room.ydoc.getMap('tasks').toJSON(),

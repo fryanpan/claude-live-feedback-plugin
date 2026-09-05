@@ -87,7 +87,7 @@ export interface DocMeta {
    * them meant the only way to rename a doc was to re-key it, which orphans
    * every thread anchored to it and every link anyone saved.
    *
-   * Written once, at creation, and never repointed — see `Rooms.claimAlias`.
+   * Written once, at creation, and never repointed — see `DocStore.claimAlias`.
    * Absent on docs created before minting: those carry the caller's string as
    * their `docId` and need no alias to keep resolving.
    */
@@ -341,7 +341,7 @@ export interface TextRangeAnchor {
    *
    * Persisted for free: the REST route passes `anchor` through as an opaque
    * object and `createThread` stores it wholesale as frozen JSON, so no route
-   * or rooms change is needed. `deleted-snippet.test.ts` guards that at the
+   * or doc-store change is needed. `deleted-snippet.test.ts` guards that at the
    * HTTP level in case the route is ever "tightened" into hand-copying fields.
    */
   deletedSnippet?: string;

@@ -17,13 +17,14 @@
  * The context is explicit, the same shape `board-membership.ts` and
  * `stall-wiring.ts` use, and every member of it is a VALUE: nothing here is
  * built later than the stores it reads, so `createServer` composes this
- * wherever the stores, the rooms and the summarizer seam are already in hand.
+ * wherever the stores, the doc store and the summarizer seam are already in hand.
  *
  * `homeBriefInflight`, `homeBriefInput` and `generateHomeBriefFor` stay
  * internal: nothing outside this module reached them inside `createServer`
  * either, and the in-flight set is only correct if exactly one thing owns it.
  */
 import { reviewItemState } from '@feedback/core';
+import type { DocStore } from './doc-store.ts';
 import {
   type BriefCoverage,
   type BriefInput,
@@ -39,7 +40,6 @@ import {
   readerKey,
 } from './home-brief.ts';
 import { type ReviewItemRow, reviewItemRows } from './review-queue.ts';
-import type { Rooms } from './rooms.ts';
 import type { ThreadSummarizer } from './summarize.ts';
 import { taskBodyDocId } from './task-projection.ts';
 import {
@@ -56,8 +56,8 @@ export interface HomePaneContext {
   dataDir: string;
   /** The board itself: tasks, goals, review items, decisions. */
   taskStore: TaskStore;
-  /** Doc rooms: the meta a doc's label is read from, and its threads. */
-  rooms: Rooms;
+  /** Doc store: the meta a doc's label is read from, and its threads. */
+  docStore: DocStore;
   /** The summarizer seam, or null on a server with generation off. A server
    *  with no summarizer serves the deterministic brief and never calls out. */
   summarizer: ThreadSummarizer | null;
@@ -94,7 +94,7 @@ export interface HomePane {
 }
 
 export function createHomePane(ctx: HomePaneContext): HomePane {
-  const { dataDir, taskStore, rooms, summarizer } = ctx;
+  const { dataDir, taskStore, docStore, summarizer } = ctx;
 
   const homeBriefs = new HomeBriefStore(dataDir);
   /** One generation in flight per workspace+reader: the client polls while
@@ -130,7 +130,7 @@ export function createHomePane(ctx: HomePaneContext): HomePane {
         done: g.status === 'done',
       })),
       docs: workspace.docIds.map((docId) => {
-        const meta = rooms.peekMeta(docId);
+        const meta = docStore.peekMeta(docId);
         // Title, else the file's BASENAME — never `relPath` whole and
         // never `sourceUrl`. Those describe the host machine, and a
         // share visitor reads this route (§3.3): a label is workspace
@@ -139,10 +139,10 @@ export function createHomePane(ctx: HomePaneContext): HomePane {
         return { docId, title: meta?.title || base || docId };
       }),
       source: {
-        threadsOf: (docId) => rooms.listThreads(docId, { status: 'open' }),
+        threadsOf: (docId) => docStore.listThreads(docId, { status: 'open' }),
         // Unfiltered, and only for the roster: who counts as a person
         // here must not depend on whether their thread is still open.
-        allThreadsOf: (docId) => rooms.listThreads(docId),
+        allThreadsOf: (docId) => docStore.listThreads(docId),
       },
     });
 

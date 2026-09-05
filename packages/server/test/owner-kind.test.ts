@@ -23,7 +23,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { attachedAgentTest, declaredAssigneeKind, resolveOwnerKind } from '../src/task-owner.ts';
-import { workspaceRoomId } from '../src/task-projection.ts';
+import { workspaceDocId } from '../src/task-projection.ts';
 import type { Task } from '../src/tasks.ts';
 
 const NOBODY_ATTACHED = () => false;
@@ -151,7 +151,7 @@ describe('owner kind over the real routes', () => {
    *  browser renders from this map and from nothing else, so a field that is
    *  correct in the store and absent here is invisible on the surface. */
   function projected(wsId: string, taskId: string): Record<string, unknown> | undefined {
-    const room = handle.rooms.get(workspaceRoomId(wsId));
+    const room = handle.docStore.get(workspaceDocId(wsId));
     return room?.ydoc.getMap('tasks').get(taskId) as Record<string, unknown> | undefined;
   }
 
@@ -455,7 +455,7 @@ describe('owner id beside the owner name', () => {
   const get = (path: string) => fetch(`${base}${path}`);
 
   function projected(wsId: string, taskId: string): Record<string, unknown> | undefined {
-    const room = handle.rooms.get(workspaceRoomId(wsId));
+    const room = handle.docStore.get(workspaceDocId(wsId));
     return room?.ydoc.getMap('tasks').get(taskId) as Record<string, unknown> | undefined;
   }
 

@@ -31,7 +31,7 @@ import * as encoding from 'lib0/encoding';
 import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { taskBodyDocId, workspaceRoomId } from '../src/task-projection.ts';
+import { taskBodyDocId, workspaceDocId } from '../src/task-projection.ts';
 
 const CANARY = 'CANARY-9271 the contents of a private file\n';
 
@@ -153,7 +153,7 @@ describe('board rooms defend everything the server owns', () => {
 
   it('a peer cannot bind the board room to a file by writing meta.sourceUrl', async () => {
     const wsId = await makeWorkspace('meta-injection');
-    const roomId = workspaceRoomId(wsId);
+    const roomId = workspaceDocId(wsId);
     const client = connectDoc(`${wsBase}/y/${roomId}`);
     try {
       await waitForOpen(client.ws);
@@ -170,7 +170,7 @@ describe('board rooms defend everything the server owns', () => {
       client.close();
     }
 
-    const room = handle.rooms.get(roomId);
+    const room = handle.docStore.get(roomId);
     if (!room) throw new Error('ws room missing');
     // POSITIVE CONTROL: the write really reached the server's copy of the
     // room — a non-private key the guard has no opinion about survives, so
@@ -180,7 +180,7 @@ describe('board rooms defend everything the server owns', () => {
     expect(room.meta.sourceUrl).toBeUndefined();
 
     await restart();
-    const after = handle.rooms.get(roomId);
+    const after = handle.docStore.get(roomId);
     if (!after) throw new Error('ws room missing after restart');
     expect(after.meta.sourceUrl).toBeUndefined();
     // The file's bytes never entered the room the peer still syncs.
@@ -196,7 +196,7 @@ describe('board rooms defend everything the server owns', () => {
       (await post('/api/docs', { docId: 'bound', type: 'markdown', sourceUrl: bound })).status,
     ).toBe(200);
     await restart();
-    const boundRoom = handle.rooms.get('bound');
+    const boundRoom = handle.docStore.get('bound');
     if (!boundRoom) throw new Error('bound doc missing after restart');
     expect(prose.serializeFragmentToMarkdown(prose.getProseFragment(boundRoom.ydoc))).toContain(
       'CANARY-9271',
@@ -220,13 +220,13 @@ describe('board rooms defend everything the server owns', () => {
     } finally {
       client.close();
     }
-    const room = handle.rooms.get(docId);
+    const room = handle.docStore.get(docId);
     if (!room) throw new Error('body room missing');
     expect(room.ydoc.getMap('meta').get('probeReachedTheServer')).toBe('yes'); // positive control
     expect(room.ydoc.getMap('meta').get('sourceUrl')).toBeUndefined();
 
     await restart();
-    const after = handle.rooms.get(docId);
+    const after = handle.docStore.get(docId);
     if (!after) throw new Error('body room missing after restart');
     expect(after.meta.sourceUrl).toBeUndefined();
     expect(prose.serializeFragmentToMarkdown(prose.getProseFragment(after.ydoc))).not.toContain(
@@ -236,7 +236,7 @@ describe('board rooms defend everything the server owns', () => {
 
   it('re-arms the revert guard when the board room is deleted and recreated', async () => {
     const wsId = await makeWorkspace('guard-rearm');
-    const roomId = workspaceRoomId(wsId);
+    const roomId = workspaceDocId(wsId);
     await makeTask(wsId, { title: 'Real task' });
 
     const forge = async (id: string): Promise<unknown> => {
@@ -252,7 +252,7 @@ describe('board rooms defend everything the server owns', () => {
       } finally {
         client.close();
       }
-      return handle.rooms.get(roomId)?.ydoc.getMap('tasks').get(id);
+      return handle.docStore.get(roomId)?.ydoc.getMap('tasks').get(id);
     };
 
     // POSITIVE CONTROL: the guard is armed on the freshly created room.
@@ -262,7 +262,7 @@ describe('board rooms defend everything the server owns', () => {
     expect(del.status).toBe(200);
     // Any store mutation re-creates the board room — with a NEW Y.Doc.
     await makeTask(wsId, { title: 'Task after the delete' });
-    expect(handle.rooms.get(roomId)).toBeDefined();
+    expect(handle.docStore.get(roomId)).toBeDefined();
 
     expect(await forge('t-forged-2')).toBeUndefined();
   });

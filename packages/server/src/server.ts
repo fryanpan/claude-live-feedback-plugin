@@ -23,6 +23,7 @@ import { type BrowserSentryConfig } from './browser-sentry.ts';
 import { ChatAudit } from './chat-audit.ts';
 import { maybeCompress, maybeNotModified } from './compress.ts';
 import { DispatchRegistry } from './dispatch-registry.ts';
+import { DocStore } from './doc-store.ts';
 import { createEffortScoring } from './effort-scoring.ts';
 import { taskDeepLink } from './home-brief.ts';
 import { createHomePane } from './home-pane.ts';
@@ -56,7 +57,6 @@ import { listArchivedReviews, readDocArchiveManifest } from './review-archive.ts
 import { backfillReviewFiling } from './review-backfill.ts';
 import { createReviewGate } from './review-gate.ts';
 import type { ReviewThreadItem } from './review-queue.ts';
-import { Rooms } from './rooms.ts';
 import {
   type AgentIdentityRoutesContext,
   handleAgentIdentityRoutes,
@@ -195,7 +195,7 @@ function parseRevisedRange(
 
 export interface ServerHandle {
   port: number;
-  rooms: Rooms;
+  docStore: DocStore;
   /** The board task store — workspaces, tasks, the transition gate. */
   tasks: TaskStore;
   /** The ydoc projection of the task store (ws:<id> board rooms + task
@@ -315,7 +315,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // `withReviewUrl` is a hoisted function declaration; it captures
   // `server` lazily and is only invoked during requests / thread events,
   // after Bun.serve has assigned. Same instance is reused for SSE +
-  // webhook payloads via the Rooms decorator.
+  // webhook payloads via the DocStore decorator.
   // Generation is opt-IN at this seam: no summarizer, no outbound call, ever.
   // See ServerOptions.summarizer for why constructing one here was wrong.
   const summarizer = opts.summarizer ?? null;
@@ -325,11 +325,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // streaming session. See ServerOptions.transcription.
   const meetingStore = new MeetingStore(dataDir, {
     // The raw companion's tie back to the doc: bound path and title as they
-    // are at meeting start and stop. A thunk over `rooms`, which is
+    // are at meeting start and stop. A thunk over `docStore`, which is
     // constructed below; a meeting can only start long after it exists.
     docInfo: (docId) => {
-      const path = rooms.boundPathOf(docId);
-      const title = rooms.peekMeta(docId)?.title;
+      const path = docStore.boundPathOf(docId);
+      const title = docStore.peekMeta(docId)?.title;
       return { ...(path ? { path } : {}), ...(title ? { title } : {}) };
     },
   });
@@ -342,11 +342,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         : [],
     // The server supplies the notes sink — the write into the meeting doc —
     // and the context resolver (doc title, board task titles). Thunks, not
-    // references: rooms and the task store are constructed below, and both
+    // references: the doc store and the task store are constructed below, and both
     // exist long before any meeting can start.
     notes: opts.meetingNotes
       ? withServerNotesSinks(opts.meetingNotes, {
-          rooms: () => rooms,
+          docStore: () => docStore,
           tasks: () => taskStore,
           // Two readers. The legacy-transcript removal, which must not take a
           // `Raw transcript` heading out of a doc bound into somebody's
@@ -464,11 +464,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * only costs the person one more click on Connect.
    */
   const calendarOauthStates = new Map<string, number>();
-  // Late-bound because Rooms is constructed before the task store and the
+  // Late-bound because DocStore is constructed before the task store and the
   // projection it needs. Nothing can fire through it until a room exists,
   // which is after both.
   let onDocRoomEvent: ((docId: string, payload: WebhookPayload) => void) | null = null;
-  const rooms = new Rooms({
+  const docStore = new DocStore({
     dataDir,
     sse,
     webhooks,
@@ -481,7 +481,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // connect has no title and no type, so it reads as a ghost in list_docs —
   // and this one is meant to be found and watched by an agent that never
   // visited a board.
-  rooms.getOrCreate(BOARD_FEEDBACK_DOC_ID, {
+  docStore.getOrCreate(BOARD_FEEDBACK_DOC_ID, {
     type: 'mockup',
     title: 'Board feedback (all workspaces)',
   });
@@ -517,11 +517,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * they agree.
    */
   const watchKeyExists = (key: string): boolean => {
-    if (rooms.docExists(key)) return true;
+    if (docStore.docExists(key)) return true;
     if (!key.startsWith('ws:')) return false;
     const wsId = key.slice('ws:'.length);
     return (
-      taskStore.getWorkspace(wsId) !== undefined || rooms.list().some((m) => m.workspaceId === wsId)
+      taskStore.getWorkspace(wsId) !== undefined ||
+      docStore.list().some((m) => m.workspaceId === wsId)
     );
   };
   if (agentWatches.loadError) {
@@ -545,7 +546,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     return boardLookupDocs(
       {
         docIds: (id) => taskStore.getWorkspace(id)?.docIds,
-        docTitle: (docId) => rooms.peekMeta(docId)?.title,
+        docTitle: (docId) => docStore.peekMeta(docId)?.title,
         // Oldest first, so the newest meeting is the tail.
         lastMeetingAt: (docId) => meetingStore.list(docId).at(-1)?.startedAt,
       },
@@ -821,18 +822,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // writes and defends (foreign writes reverted), plus task:<taskId> body
   // rooms. init() runs after both stores hydrated, so the sidecar is
   // authoritative for gated fields on restart.
-  const taskProjection = new TaskProjection({ rooms, tasks: taskStore });
+  const taskProjection = new TaskProjection({ docStore, tasks: taskStore });
   taskProjection.init();
 
   // Provenance stamping at the store's one choke point: every create whose
   // origin names a doc records the doc's settled content revision, whichever
   // route (or the meeting capture) filed it.
-  taskStore.setDocRevisionReader((docId) => rooms.settledContentRevision(docId));
+  taskStore.setDocRevisionReader((docId) => docStore.settledContentRevision(docId));
   // …and the return half: a settled edit burst on a doc flags the open rows
   // derived from an earlier revision of it. Flagging emits no store event
   // (§3.6's table is exhaustive), so the projection refresh happens here,
   // the same pattern as the links route.
-  rooms.onContentRevision = (docIds, revision) => {
+  docStore.onContentRevision = (docIds, revision) => {
     const touched = new Set(taskStore.flagStaleFromDocEdit(docIds, revision));
     // The settled doc's prose is the linkage record: any task/goal link the
     // edit wrote (or that was never mined) becomes a structured ref now, so
@@ -841,10 +842,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // the one doc they both name.
     const scanned = new Set<string>();
     for (const docId of docIds) {
-      const canonical = rooms.resolveDocId(docId);
+      const canonical = docStore.resolveDocId(docId);
       if (scanned.has(canonical)) continue;
       scanned.add(canonical);
-      for (const wsId of scanSettledDocRefs(rooms, taskStore, canonical)) touched.add(wsId);
+      for (const wsId of scanSettledDocRefs(docStore, taskStore, canonical)) touched.add(wsId);
     }
     for (const workspaceId of touched) {
       taskProjection.ensureWorkspace(workspaceId);
@@ -864,7 +865,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // counts as delivered. Review members archive under a set manifest, not
     // a per-doc one, so both archive shapes are consulted.
     docStatus: (docId) => {
-      if (rooms.list().some((m) => m.docId === docId)) return 'live';
+      if (docStore.list().some((m) => m.docId === docId)) return 'live';
       if (readDocArchiveManifest(dataDir, docId) !== null) return 'archived';
       if (listArchivedReviews(dataDir).some((m) => m.docIds.includes(docId))) return 'archived';
       return 'missing';
@@ -873,7 +874,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       taskProjection.ensureTaskBody(task);
       // Same actor-shape cast as the park migration's comment: the server's
       // own identity, rendered as a known author rather than an anonymous one.
-      await rooms.postComment(
+      await docStore.postComment(
         taskBodyDocId(task.id),
         null,
         { ...ARTIFACT_CHECK_ACTOR, kind: 'known' } as unknown as User,
@@ -896,7 +897,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // and does not derive any of it.
   //
   // Composed HERE, above the stall wiring, because everything it reads is
-  // already built — `rooms`, both stores, and the access deps at the top of
+  // already built — `docStore`, both stores, and the access deps at the top of
   // this function. That is what lets `boardsForDoc` and `backTargetFor` go
   // into the wiring below as VALUES rather than as thunks over a block
   // declared later in the file.
@@ -915,7 +916,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     unfileFromDefault,
     unlinkFromEveryBoardWorkspace,
   } = createBoardMembership({
-    rooms,
+    docStore,
     taskStore,
     taskProjection,
     shares,
@@ -945,7 +946,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const stallWiring = createStallWiring({
     taskStore,
     taskProjection,
-    rooms,
+    docStore,
     sse,
     dispatches,
     agentWatches,
@@ -978,19 +979,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const taskScheduler = createTaskScheduler(taskStore, {
     ...(opts.schedulerNow !== undefined ? { now: opts.schedulerNow } : {}),
   });
-  // The late binding `Rooms` was constructed with: the bridge needs the task
-  // store and the projection, which are built after `Rooms` is.
+  // The late binding `DocStore` was constructed with: the bridge needs the task
+  // store and the projection, which are built after `DocStore` is.
   onDocRoomEvent = stallWiring.onDocRoomEvent;
 
   // ── Home pane: per-person read markers + the "What's New?" brief ─────────
   // One subject, one module (`home-pane.ts`); `createServer` composes it here
-  // because everything the pane reads — the stores, the rooms and the
+  // because everything the pane reads — the stores, the doc store and the
   // summarizer seam — is in hand by this line, and the routes below take the
   // same four names off it that they used to take off this closure.
   const { homeBriefs, reviewItemsFor, homeQueueTotal, homePayload } = createHomePane({
     dataDir,
     taskStore,
-    rooms,
+    docStore,
     summarizer,
   });
   /**
@@ -1001,7 +1002,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    *
    * ONE function because there are TWO routes: `POST /api/tasks/:id/body` and
    * `POST /api/docs/task:<id>/content`. The second one used to reach
-   * `rooms.setDocContent` directly and got none of this, which is how a
+   * `docStore.setDocContent` directly and got none of this, which is how a
    * rewrite through `set_doc_content` destroyed a capture with nothing
    * recorded while both the caller and the board saw success.
    *
@@ -1021,8 +1022,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       reason?: string;
     },
   ): { ok: true } | { ok: false; error: string } => {
-    const docId = taskProjection.ensureBodyRoom(task);
-    const res = rooms.setDocContent(docId, markdown);
+    const docId = taskProjection.ensureBodyDoc(task);
+    const res = docStore.setDocContent(docId, markdown);
     if (!res.ok) return res;
     taskProjection.flushBodySnapshot(task.id);
     // Attribution is the one half a route can lack: `POST /api/docs/:id/content`
@@ -1065,7 +1066,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     docResource: (workspaceId, docId) => {
       const workspace = taskStore.getWorkspace(workspaceId);
       if (!workspace) return undefined;
-      const meta = rooms.peekMeta(docId);
+      const meta = docStore.peekMeta(docId);
       // Title, else the file's BASENAME — never the path. Same rule, and the
       // same reason, as the review-items route: a label is workspace content,
       // a host path is not, and this text leaves the machine.
@@ -1108,7 +1109,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // board calls it. Title, else the file's basename — never the path, for
     // the reason given twice above.
     docTitle: (_workspaceId, docId) => {
-      const meta = rooms.peekMeta(docId);
+      const meta = docStore.peekMeta(docId);
       // Title, else the file's NAME. The review-items route stops at
       // `relPath`'s basename because a share visitor reads it; this label
       // reaches only the local speaker's ack and the classification prompt,
@@ -1134,14 +1135,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // already funnels through — and `answerReviewItem` exactly as it stands,
     // so a spoken comment and a typed one are the same write, fire the same
     // events, and reach a watching agent identically.
-    rooms,
+    docStore,
     // A task's discussion room, CREATED if this process has not served it
     // yet. Body rooms are lazy, so on a freshly restarted server the room for
     // a task nobody has opened does not exist and a comment aimed straight at
     // `task:<id>` is dropped with a `null` the caller reads as "no such doc".
     taskCommentDoc: (taskId) => {
       const task = taskStore.getTask(taskId);
-      return task ? taskProjection.ensureBodyRoom(task) : undefined;
+      return task ? taskProjection.ensureBodyDoc(task) : undefined;
     },
   });
 
@@ -1167,7 +1168,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     author: User,
     text: string,
   ): Promise<{ threadId: string; requestedAt?: number } | null> => {
-    const thread = await rooms.postComment(
+    const thread = await docStore.postComment(
       docId,
       null,
       author,
@@ -1176,7 +1177,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       { generate: false },
     );
     if (!thread) return null;
-    const stamped = rooms.setReviewRequested(docId, author.name, thread.id);
+    const stamped = docStore.setReviewRequested(docId, author.name, thread.id);
     return { threadId: thread.id, ...(stamped.ok ? { requestedAt: stamped.requestedAt } : {}) };
   };
 
@@ -1215,7 +1216,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * Unknown ids pass through unchanged, so a 404 still reads as "no such
    * doc" rather than becoming a different error on the way.
    */
-  const canonicalDocId = (addressed: string): string => rooms.get(addressed)?.docId ?? addressed;
+  const canonicalDocId = (addressed: string): string => docStore.get(addressed)?.docId ?? addressed;
 
   /**
    * The workspace to address a doc under, or null when nothing holds it.
@@ -1228,7 +1229,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * that is a security decision rather than an addressing one.
    */
   const resolveWorkspaceForDoc = (docId: string): string | null =>
-    backTargetFor(docId, reviewIdOf(rooms.peekMeta(docId) ?? {}))?.id ?? null;
+    backTargetFor(docId, reviewIdOf(docStore.peekMeta(docId) ?? {}))?.id ?? null;
 
   // Browser push, and the review-item quality gate that decides whether an
   // item may be announced at all. Built HERE rather than beside the other
@@ -1255,7 +1256,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     heldFields,
     askBackOnItem,
   } = createReviewGate({
-    rooms,
+    docStore,
     taskStore,
     taskProjection,
     sse,
@@ -1276,7 +1277,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    */
   const runReviewBackfill = (): void => {
     const res = backfillReviewFiling({
-      docs: () => rooms.list(),
+      docs: () => docStore.list(),
       isFiled: (reviewId) => taskStore.workspaceOfDoc(reviewId) !== null,
       file: (reviewId) => fileUnderBoardWorkspace(reviewId),
     });
@@ -1383,7 +1384,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * are passed, never anything read out of them, so every frame sees the
    * state as it is when the frame arrives.
    */
-  const socketHandlers = createSocketHandlers({ rooms, meetingRelay, recallRelay });
+  const socketHandlers = createSocketHandlers({ docStore, meetingRelay, recallRelay });
 
   /**
    * Whose name goes on a write — see request-attribution.ts. Composed
@@ -1413,7 +1414,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     markdownAppDist,
     demosDir,
     dataDir,
-    rooms,
+    docStore,
     taskStore,
     browserSentry,
     emailCodeSignIn,
@@ -1453,7 +1454,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
   const { serveUpgradeAndStreamRoutes } = createUpgradeStream({
     server: { upgrade: (req, options) => server.upgrade(req, options) },
-    rooms,
+    docStore,
     taskStore,
     sse,
     agentWatches,
@@ -1475,7 +1476,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * once — every collaborator in it is long-lived.
    */
   const opsRoutesCtx: OpsRoutesContext = {
-    rooms,
+    docStore,
     pluginRefresher,
     deployer,
     pushStore,
@@ -1487,7 +1488,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   };
 
   /** A review's own files — thread roll-up, grouped diff, tree, lazy opens. */
-  const reviewFileRoutesCtx: ReviewFileRoutesContext = { rooms, j, safeJson };
+  const reviewFileRoutesCtx: ReviewFileRoutesContext = { docStore, j, safeJson };
 
   /** The chat-audit counters — one store, read and written by two routes. */
   const chatAuditRoutesCtx: ChatAuditRoutesContext = { chatAudit, j, safeJson };
@@ -1506,7 +1507,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   /** The archive family — the four archive/unarchive routes and the
    *  review-only delete the board delete two positions below still calls. */
   const archiveRoutesCtx: ArchiveRoutesContext = {
-    rooms,
+    docStore,
     taskStore,
     taskProjection,
     dataDir,
@@ -1539,7 +1540,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * closure's scope. Built once — every collaborator in it is long-lived.
    */
   const meetingCalendarRoutesCtx: MeetingCalendarRoutesContext = {
-    rooms,
+    docStore,
     taskStore,
     meetingStore,
     meetingRelay,
@@ -1559,7 +1560,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * scope. Built once — every collaborator in it is long-lived.
    */
   const docRoutesCtx: DocRoutesContext = {
-    rooms,
+    docStore,
     taskStore,
     taskProjection,
     webhooks,
@@ -1598,7 +1599,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * scope. Built once — every collaborator in it is long-lived.
    */
   const authShareRoutesCtx: AuthShareRoutesContext = {
-    rooms,
+    docStore,
     sse,
     taskStore,
     shares,
@@ -1634,7 +1635,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const taskRoutesCtx: TaskRoutesContext = {
     taskStore,
     taskProjection,
-    rooms,
+    docStore,
     dispatches,
     agentNotes,
     readyNudger,
@@ -1665,7 +1666,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const workspaceRoutesCtx: WorkspaceRoutesContext = {
     taskStore,
     taskProjection,
-    rooms,
+    docStore,
     sse,
     homeBriefs,
     agentWatches,
@@ -1723,7 +1724,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       const prewarmUrl = new URL(req.url);
       const prewarmIds = docIdsAddressedBy(prewarmUrl);
       if (prewarmIds.length > 0) {
-        await Promise.all(prewarmIds.map((id) => rooms.prewarmHydration(id)));
+        await Promise.all(prewarmIds.map((id) => docStore.prewarmHydration(id)));
       }
       // Server-side Sentry (a no-op passthrough when unconfigured — see
       // sentry.ts): one span per request, named by route PATTERN never raw
@@ -1929,7 +1930,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         //
         // The 2026-08-29 jetsam kill left nothing to read: the server was at
         // 2.6 GB and the only evidence of how it got there was the absence of
-        // the process. `Rooms.stats()` is also written to the log every five
+        // the process. `DocStore.stats()` is also written to the log every five
         // minutes; this route is the same numbers on demand, so the NEXT
         // incident can be sampled over time instead of reconstructed.
         //
@@ -2257,7 +2258,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // Reuse `withReviewUrl` rather than rebuild the /review/ path here: it
     // already branches on doc type (a mockup is not served from /review/),
     // and one builder is the same reason `externalBaseUrl` is one function.
-    const meta = rooms.peekMeta(docId);
+    const meta = docStore.peekMeta(docId);
     return meta ? withReviewUrl(meta).reviewUrl : undefined;
   }
 
@@ -2311,7 +2312,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const sweepDeadShares = (): void => {
     if (!shares) return;
     const isLive = (id: string) => shares.findLive(id) !== null;
-    rooms.closeSocketsForDeadShares(isLive);
+    docStore.closeSocketsForDeadShares(isLive);
     // Websockets aren't the only long-lived grant — an SSE stream is
     // authorized once at open too, and would otherwise keep delivering
     // comments to a visitor whose share has lapsed.
@@ -2356,7 +2357,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       }),
     comment: async (task, text) => {
       taskProjection.ensureTaskBody(task);
-      const posted = await rooms.postComment(
+      const posted = await docStore.postComment(
         taskBodyDocId(task.id),
         null,
         { ...PARK_MIGRATION_ACTOR, kind: 'known' } as unknown as User,
@@ -2383,7 +2384,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
   return {
     port: server.port ?? port,
-    rooms,
+    docStore,
     tasks: taskStore,
     projection: taskProjection,
     agentWatches,
@@ -2440,7 +2441,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // Force-closing fires every `close(ws)` handler SYNCHRONOUSLY inside
       // this call, and those handlers write: a meeting's flushes its last
       // sentence into the doc. So they have to run while the subsystems
-      // below are still live — after `rooms.flush()` that write would have
+      // below are still live — after `docStore.flush()` that write would have
       // nowhere left to land.
       server.stop(true);
       // Close the books on any live meeting, so a restart never finds a doc
@@ -2464,8 +2465,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // after the last keystroke, on both signals).
       // Stop the sweeps BEFORE flushing: an eviction landing mid-flush would
       // drop a room the flush is about to write.
-      rooms.stop();
-      rooms.flush();
+      docStore.stop();
+      docStore.flush();
       // Hand the next process each channel's final event id. Without it every
       // subscriber's cursor is unrecognisable after the restart and every
       // stream opens with a `replay.gap` that has nothing behind it.
@@ -2527,7 +2528,7 @@ function isValidDocId(s: string): boolean {
   // can't masquerade as hidden files on disk. Length cap protects the
   // filename from being pathological. `~` is permitted because workspace
   // member docIds encode the relPath's `/` separators as `~`
-  // (`${workspaceId}:${relPath.replaceAll('/', '~')}` in rooms.ts), so any
+  // (`${workspaceId}:${relPath.replaceAll('/', '~')}` in doc-store.ts), so any
   // file in a subdirectory of a bound folder needs `~` to be reachable via
   // the /api/docs/:docId routes. `~` is RFC 3986 unreserved (URL-safe) and a
   // valid filename char, matching the .ydoc-on-disk naming.

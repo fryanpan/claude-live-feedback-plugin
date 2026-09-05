@@ -20,7 +20,7 @@ type SsePayload = { event: string };
  * up); anything longer is a session that should refetch state anyway, which
  * is exactly what the `replay.gap` signal tells it to do. TWO HUNDRED events
  * bounds the memory side, with one honest caveat: thread events embed the
- * WHOLE current thread (`fireEvent` in rooms.ts sends `thread.comments` in
+ * WHOLE current thread (`fireEvent` in doc-store.ts sends `thread.comments` in
  * full, not a delta), so a buffered event is ~1-2KB for a short thread but
  * scales with the thread's size at the time it fired — a hot thread with
  * tens of long replies can push a saturated channel's buffer to several MB
@@ -270,7 +270,7 @@ export class SseBus {
     payload: SsePayload,
     forSink?: (who: { shareId?: string; agentId?: string }) => SsePayload | undefined,
   ): void {
-    // Reuse the broadcast's own `eid` (rooms.ts stamps one per fan-out, so
+    // Reuse the broadcast's own `eid` (doc-store.ts stamps one per fan-out, so
     // both channels of one broadcast carry the SAME wire id) and mint one for
     // the direct broadcasts that carry none (task/triage frames), keeping a
     // single monotonic id namespace per process. `newEventId`'s counter is
@@ -563,7 +563,7 @@ export class SseBus {
 
   /**
    * Close every stream whose authorizing MEMBERSHIP the predicate names — the
-   * SSE half of `Rooms.closeSocketsForShareMembers`, and there for the same
+   * SSE half of `DocStore.closeSocketsForShareMembers`, and there for the same
    * reason: a stream is authorized once at open, so a share-link visitor who
    * has been ejected keeps receiving every new comment until it drops.
    */

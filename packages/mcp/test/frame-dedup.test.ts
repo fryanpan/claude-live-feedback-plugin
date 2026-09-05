@@ -9,7 +9,7 @@
  *
  * What identifies an event, in order: the server's `eid` (one per broadcast,
  * unique across restarts by construction), then `${event}#${docId}#${seq}`
- * for a server older than that stamp. `rooms.ts` bumps a PER-ROOM monotonic
+ * for a server older than that stamp. `doc-store.ts` bumps a PER-ROOM monotonic
  * `seq` on every thread and suggestion event, so two events in one room can
  * never share it and two rooms freely can — which is why docId has to be in
  * the fallback key and why seq alone is not a key at all. And because that
@@ -117,7 +117,7 @@ describe('createFrameDedup', () => {
 
   /**
    * THE REGRESSION THIS SUITE MISSED. `room.seq` is a plain field on the room
-   * object, initialised to 0 in `rooms.ts` `getOrCreate` and never persisted
+   * object, initialised to 0 in `doc-store.ts` `getOrCreate` and never persisted
    * into the `.ydoc` — so every server start (a deploy, a `bun --watch`
    * reload, a `delete_workspace` + re-create of the same id) rebuilds every
    * room counting from 1 again, while this process and its `seen` set live

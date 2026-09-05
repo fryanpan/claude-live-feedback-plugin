@@ -2,7 +2,7 @@ import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
 import * as awarenessProtocol from 'y-protocols/awareness';
 import * as syncProtocol from 'y-protocols/sync';
-import type { DocRoom, FeedbackWs } from './rooms.ts';
+import type { DocRoom, FeedbackWs } from './doc-store.ts';
 import { captureServerError } from './sentry.ts';
 
 /**

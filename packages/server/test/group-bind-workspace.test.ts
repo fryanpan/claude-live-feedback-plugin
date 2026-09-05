@@ -20,7 +20,7 @@
  * hundred.
  *
  * Route-level on purpose. Every REST handler here hand-copies body fields into
- * the rooms call and nothing type-checks that layer.
+ * the doc-store call and nothing type-checks that layer.
  *
  * All fixtures are synthetic. The repo is public.
  */
@@ -163,7 +163,7 @@ describe('a group bind lands on a board, as one unit', () => {
     expect(body.files.length).toBeGreaterThan(1);
     expect(handle.tasks.getWorkspace(boardId)?.docIds).toContain('rev-members');
     for (const f of body.files) {
-      expect(handle.rooms.get(f.docId)).toBeTruthy();
+      expect(handle.docStore.get(f.docId)).toBeTruthy();
       expect(handle.tasks.workspaceOfDoc(f.docId)).toBeNull();
     }
   });

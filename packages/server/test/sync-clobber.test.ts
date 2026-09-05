@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as Y from 'yjs';
 import { getProseFragment } from '../../core/src/prose.ts';
-import { Rooms } from '../src/rooms.ts';
+import { DocStore } from '../src/doc-store.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
@@ -38,8 +38,8 @@ import { afterPersist, insideWriteBack, pastWriteBack, waitFor, waitForFile } fr
  *       direct Writes in the first place.
  */
 
-function makeRooms(dataDir: string): Rooms {
-  return new Rooms({
+function makeDocStore(dataDir: string): DocStore {
+  return new DocStore({
     dataDir,
     sse: new SseBus(),
     webhooks: createWebhookDispatcher({ onLog: () => {} }),
@@ -99,15 +99,15 @@ Keep this sentence intact.
 describe('sync-clobber regressions', () => {
   let dataDir: string;
   let path: string;
-  let rooms: Rooms;
+  let docStore: DocStore;
 
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-clobber-'));
     path = join(dataDir, 'doc.md');
     writeFileSync(path, DOC);
-    rooms = makeRooms(dataDir);
-    rooms.getOrCreate('d1', { type: 'markdown', sourceUrl: path });
-    expect(rooms.attachFile('d1', path).ok).toBe(true);
+    docStore = makeDocStore(dataDir);
+    docStore.getOrCreate('d1', { type: 'markdown', sourceUrl: path });
+    expect(docStore.attachFile('d1', path).ok).toBe(true);
   });
 
   afterEach(() => {
@@ -117,14 +117,14 @@ describe('sync-clobber regressions', () => {
   describe('RC1 — serializer-space bookkeeping', () => {
     it('applies a second external edit instead of misjudging it a conflict', async () => {
       writeExternal(path, EXT_ONE);
-      expect(rooms.reconcileNow('d1')).toBe('apply');
+      expect(docStore.reconcileNow('d1')).toBe('apply');
 
       // The live doc has NO un-flushed edits — the only "divergence" is that
       // the serializer normalizes the extra blank lines. The next external
       // edit must therefore be an apply, not a conflict.
       writeExternal(path, EXT_TWO);
-      expect(rooms.reconcileNow('d1')).toBe('apply');
-      expect(rooms.getDoc('d1')?.plainText).toContain('second external edit');
+      expect(docStore.reconcileNow('d1')).toBe('apply');
+      expect(docStore.getDoc('d1')?.plainText).toContain('second external edit');
 
       // And nothing may flush a stale copy back over it.
       // timed: the write-back fires at ~800ms, so only a fully elapsed
@@ -136,19 +136,19 @@ describe('sync-clobber regressions', () => {
     it('reparse_from_disk cancels a pending conflict reassert so disk keeps the forced version', async () => {
       // A genuine conflict: un-flushed live edit + external write.
       expect(
-        rooms.findAndReplace('d1', {
+        docStore.findAndReplace('d1', {
           find: 'Intro paragraph.',
           replace: 'Live edit, not yet flushed.',
         }).ok,
       ).toBe(true);
       writeExternal(path, EXT_ONE);
-      expect(rooms.reconcileNow('d1')).toBe('conflict');
+      expect(docStore.reconcileNow('d1')).toBe('conflict');
 
       // The agent decides disk should win and force-pulls it. The conflict
       // path scheduled a reassert write — reparse must cancel it, or ~800ms
       // later the server rewrites the file (this is the "stale in-memory copy
       // flushed to disk" step of the 2026-08-03 incident).
-      expect(rooms.reparseFromDisk('d1').ok).toBe(true);
+      expect(docStore.reparseFromDisk('d1').ok).toBe(true);
       // timed: the cancelled reassert would have fired at ~800ms; the file can
       // only be believed byte-identical once that moment has passed.
       await sleep(pastWriteBack());
@@ -160,13 +160,13 @@ describe('sync-clobber regressions', () => {
   describe('RC2 — no blind, unrecoverable overwrites', () => {
     it('backs up the external version before a conflict reasserts live edits', async () => {
       expect(
-        rooms.findAndReplace('d1', {
+        docStore.findAndReplace('d1', {
           find: 'Intro paragraph.',
           replace: 'Live edit, not yet flushed.',
         }).ok,
       ).toBe(true);
       writeExternal(path, EXT_ONE);
-      expect(rooms.reconcileNow('d1')).toBe('conflict');
+      expect(docStore.reconcileNow('d1')).toBe('conflict');
 
       // Policy: live wins on disk...
       await waitForFile(path, (t) => t.includes('Live edit, not yet flushed.'));
@@ -179,13 +179,13 @@ describe('sync-clobber regressions', () => {
       const backedUp = backups.map((f) => readFileSync(join(backupDir, f), 'utf8'));
       expect(backedUp.some((c) => c.includes('first external edit'))).toBe(true);
       // The doc reports WHY and WHERE, so an agent can recover.
-      const syncError = rooms.getSyncError('d1');
+      const syncError = docStore.getSyncError('d1');
       expect(syncError?.message).toContain('clobber-backups');
     });
 
     it('stats before writing: an external write inside the debounce window is not silently lost', async () => {
       expect(
-        rooms.findAndReplace('d1', {
+        docStore.findAndReplace('d1', {
           find: 'Intro paragraph.',
           replace: 'Live edit racing the external write.',
         }).ok,
@@ -208,7 +208,7 @@ describe('sync-clobber regressions', () => {
         { describe: 'the racing external write to be backed up' },
       );
       expect(backedUp.some((c) => c.includes('first external edit'))).toBe(true);
-      expect(rooms.getSyncError('d1')).toBeDefined();
+      expect(docStore.getSyncError('d1')).toBeDefined();
     });
   });
 
@@ -216,7 +216,7 @@ describe('sync-clobber regressions', () => {
     it('picks up an edit made while the server was down', async () => {
       // Flush a live edit so the .ydoc has non-empty state on disk.
       expect(
-        rooms.findAndReplace('d1', { find: 'Intro paragraph.', replace: 'Flushed edit.' }).ok,
+        docStore.findAndReplace('d1', { find: 'Intro paragraph.', replace: 'Flushed edit.' }).ok,
       ).toBe(true);
       await waitForFile(path, (t) => t.includes('Flushed edit.'));
 
@@ -226,13 +226,13 @@ describe('sync-clobber regressions', () => {
       // Fresh process over the same dataDir. attachFile used to skip the
       // non-empty fragment entirely and re-baseline the mtime poll — the
       // downtime edit was never seen, and the next flush overwrote it.
-      const rooms2 = makeRooms(dataDir);
+      const docStore2 = makeDocStore(dataDir);
       // The hydrate answers now and binds a moment later, off the thread pool
-      // (`Rooms.prereadFor`), and the attach-time reconcile this test is about
+      // (`DocStore.prereadFor`), and the attach-time reconcile this test is about
       // happens with the bind. Waiting is the assertion: a hydrate that never
       // picked disk up would never satisfy it.
       await waitFor(
-        () => (rooms2.getDoc('d1')?.plainText ?? '').includes('edited while server was down'),
+        () => (docStore2.getDoc('d1')?.plainText ?? '').includes('edited while server was down'),
         { describe: 'the restart hydrate to pick up the edit made while it was down' },
       );
     });
@@ -243,7 +243,7 @@ describe('sync-clobber regressions', () => {
       // the hydrated doc NEWER than the file — the attach-time reconcile must
       // compare mtimes and keep the live edit, not revert it from disk.
       expect(
-        rooms.findAndReplace('d1', {
+        docStore.findAndReplace('d1', {
           find: 'Intro paragraph.',
           replace: 'Edit persisted to ydoc only.',
         }).ok,
@@ -251,8 +251,8 @@ describe('sync-clobber regressions', () => {
       // timed: the whole case is a crash BETWEEN the two debounces, so this has
       // to land after the .ydoc persist and before the .md write-back.
       await sleep(afterPersist());
-      const rooms2 = makeRooms(dataDir);
-      expect(rooms2.getDoc('d1')?.plainText).toContain('Edit persisted to ydoc only.');
+      const docStore2 = makeDocStore(dataDir);
+      expect(docStore2.getDoc('d1')?.plainText).toContain('Edit persisted to ydoc only.');
       // And the reassert flushes the live edit to disk.
       await waitForFile(path, (t) => t.includes('Edit persisted to ydoc only.'));
     });
@@ -266,10 +266,11 @@ describe('sync-clobber regressions', () => {
         writeFileSync(realPath, DOC);
         const linkPath = join(dataDir, 'link.md');
         symlinkSync(realPath, linkPath);
-        rooms.getOrCreate('s1', { type: 'markdown', sourceUrl: linkPath });
-        expect(rooms.attachFile('s1', linkPath).ok).toBe(true);
+        docStore.getOrCreate('s1', { type: 'markdown', sourceUrl: linkPath });
+        expect(docStore.attachFile('s1', linkPath).ok).toBe(true);
         expect(
-          rooms.findAndReplace('s1', { find: 'Intro paragraph.', replace: 'Through the link.' }).ok,
+          docStore.findAndReplace('s1', { find: 'Intro paragraph.', replace: 'Through the link.' })
+            .ok,
         ).toBe(true);
         await waitForFile(realPath, (t) => t.includes('Through the link.'));
         expect(lstatSync(linkPath).isSymbolicLink()).toBe(true);
@@ -288,14 +289,14 @@ describe('sync-clobber regressions', () => {
       // in-sync: no write, no backup, mtime untouched.
       const p2 = join(dataDir, 'never-edited.md');
       writeFileSync(p2, EXT_ONE); // extra blank lines = pure normalization drift
-      rooms.getOrCreate('n1', { type: 'markdown', sourceUrl: p2 });
-      expect(rooms.attachFile('n1', p2).ok).toBe(true);
+      docStore.getOrCreate('n1', { type: 'markdown', sourceUrl: p2 });
+      expect(docStore.attachFile('n1', p2).ok).toBe(true);
       // timed: the .ydoc has to persist for the restart to see a real mtime skew.
       await sleep(afterPersist());
       const bytesBefore = readFileSync(p2, 'utf8');
       const mtimeBefore = statSync(p2).mtimeMs;
 
-      makeRooms(dataDir); // restart
+      makeDocStore(dataDir); // restart
       // timed: a wrongly-scheduled reassert would flush at ~800ms, so the
       // "no write happened" claim needs that window to have passed.
       await sleep(pastWriteBack());
@@ -310,14 +311,14 @@ describe('sync-clobber regressions', () => {
       // server never backed up — make it symmetric with the apply branch,
       // which snapshots the live side before pulling disk in.
       expect(
-        rooms.findAndReplace('d1', { find: 'Intro paragraph.', replace: 'Unflushed edit.' }).ok,
+        docStore.findAndReplace('d1', { find: 'Intro paragraph.', replace: 'Unflushed edit.' }).ok,
       ).toBe(true);
       // timed: the restart below must happen inside the write-back window, with
       // the .ydoc already saved — that is what makes the reassert fire.
       await sleep(afterPersist());
       const diskBefore = readFileSync(path, 'utf8');
 
-      makeRooms(dataDir); // restart inside the write-back window
+      makeDocStore(dataDir); // restart inside the write-back window
       await waitForFile(path, (t) => t.includes('Unflushed edit.'));
       const backupDir = join(dataDir, 'clobber-backups');
       const backups = readdirSync(backupDir);
@@ -333,24 +334,24 @@ describe('sync-clobber regressions', () => {
       // must re-arm the flush, exactly like md === prior.
       const p2 = join(dataDir, 'drifty.md');
       writeFileSync(p2, EXT_ONE);
-      rooms.getOrCreate('r1', { type: 'markdown', sourceUrl: p2 });
-      expect(rooms.attachFile('r1', p2).ok).toBe(true);
+      docStore.getOrCreate('r1', { type: 'markdown', sourceUrl: p2 });
+      expect(docStore.attachFile('r1', p2).ok).toBe(true);
       // timed: the .ydoc has to persist so the restart hydrate sees it as newer.
       await sleep(afterPersist());
-      const rooms2 = makeRooms(dataDir); // suppression fires on hydrate
+      const docStore2 = makeDocStore(dataDir); // suppression fires on hydrate
       // Suppression fires when the deferred bind lands, not when `get`
-      // returns — see `Rooms.prereadFor`. Editing before it would be a
+      // returns — see `DocStore.prereadFor`. Editing before it would be a
       // different test (an edit into the attach gap), and the re-attach below
       // is what this one is about.
-      expect(rooms2.get('r1')).toBeDefined();
-      await waitFor(() => rooms2.boundPathOf('r1') === p2, {
+      expect(docStore2.get('r1')).toBeDefined();
+      await waitFor(() => docStore2.boundPathOf('r1') === p2, {
         describe: 'the hydrate bind that suppresses the normalization drift',
       });
       expect(
-        rooms2.findAndReplace('r1', { find: 'first external edit', replace: 'edited live' }).ok,
+        docStore2.findAndReplace('r1', { find: 'first external edit', replace: 'edited live' }).ok,
       ).toBe(true);
-      expect(rooms2.attachFile('r1', p2).ok).toBe(true); // inside the 800ms window
-      expect(rooms2.getSyncError('r1')).toBeUndefined();
+      expect(docStore2.attachFile('r1', p2).ok).toBe(true); // inside the 800ms window
+      expect(docStore2.getSyncError('r1')).toBeUndefined();
       expect(existsSync(join(dataDir, 'clobber-backups'))).toBe(false);
       await waitForFile(p2, (t) => t.includes('edited live'));
     });
@@ -361,11 +362,12 @@ describe('sync-clobber regressions', () => {
       // this classified as 'conflict': backup + syncError + the reassert
       // overwrote the external formatting — while the human was typing.
       expect(
-        rooms.findAndReplace('d1', { find: 'Intro paragraph.', replace: 'Live edit pending.' }).ok,
+        docStore.findAndReplace('d1', { find: 'Intro paragraph.', replace: 'Live edit pending.' })
+          .ok,
       ).toBe(true);
       writeExternal(path, DOC.replace(/\n\n/g, '\n\n\n'));
-      expect(rooms.reconcileNow('d1')).toBe('catch-up');
-      expect(rooms.getSyncError('d1')).toBeUndefined();
+      expect(docStore.reconcileNow('d1')).toBe('catch-up');
+      expect(docStore.getSyncError('d1')).toBeUndefined();
       expect(existsSync(join(dataDir, 'clobber-backups'))).toBe(false);
       await waitForFile(path, (t) => t.includes('Live edit pending.'));
     });
@@ -376,8 +378,8 @@ describe('sync-clobber regressions', () => {
       // identical. Semantically-equal disk must read as in-sync (and the
       // file keeps the external formatting at rest).
       writeExternal(path, DOC.replace(/\n\n/g, '\n\n\n'));
-      expect(rooms.reconcileNow('d1')).toBe('in-sync');
-      expect(rooms.getSyncError('d1')).toBeUndefined();
+      expect(docStore.reconcileNow('d1')).toBe('in-sync');
+      expect(docStore.getSyncError('d1')).toBeUndefined();
     });
 
     it('does not stack duplicate write-back observers on re-attach', () => {
@@ -385,18 +387,18 @@ describe('sync-clobber regressions', () => {
       // observer is a duplicate write-back scheduler with stale binding state.
       // (wireEvents holds one permanent observer of its own, so assert the
       // DELTA across re-attaches, not an absolute count.)
-      const fragment = getProseFragment(rooms.get('d1')!.ydoc);
+      const fragment = getProseFragment(docStore.get('d1')!.ydoc);
       const count = () => (fragment as unknown as { _dEH: { l: unknown[] } })._dEH.l.length;
       const before = count();
-      expect(rooms.attachFile('d1', path).ok).toBe(true);
-      expect(rooms.attachFile('d1', path).ok).toBe(true);
+      expect(docStore.attachFile('d1', path).ok).toBe(true);
+      expect(docStore.attachFile('d1', path).ok).toBe(true);
       expect(count()).toBe(before);
     });
   });
 
   describe('RC3 — setDocContent, the legitimate whole-doc rewrite', () => {
     it('rewrites the doc, keeps threads on untouched blocks, and flushes to disk', async () => {
-      const created = await rooms.createThreadByFind(
+      const created = await docStore.createThreadByFind(
         'd1',
         { find: 'Keep this sentence intact.' },
         AUTHOR,
@@ -416,14 +418,14 @@ Keep this sentence intact.
 
 With new body text.
 `;
-      const res = rooms.setDocContent('d1', next);
+      const res = docStore.setDocContent('d1', next);
       expect(res.ok).toBe(true);
-      expect(rooms.getDoc('d1')?.plainText).toContain('Brand new section');
+      expect(docStore.getDoc('d1')?.plainText).toContain('Brand new section');
 
       // The thread on the untouched block still resolves.
-      const thread = rooms.listThreads('d1')[0];
+      const thread = docStore.listThreads('d1')[0];
       const anchor = thread?.anchor as { startRel: Uint8Array; endRel: Uint8Array };
-      const ydoc = rooms.get('d1')!.ydoc;
+      const ydoc = docStore.get('d1')!.ydoc;
       for (const rel of [anchor.startRel, anchor.endRel]) {
         const abs = Y.createAbsolutePositionFromRelativePosition(
           Y.decodeRelativePosition(new Uint8Array(rel)),
@@ -439,13 +441,13 @@ With new body text.
     it('rejects flat (code/diff) docs', () => {
       const codePath = join(dataDir, 'src.ts');
       writeFileSync(codePath, 'export const x = 1;\n');
-      rooms.getOrCreate('c1', { type: 'code', sourceUrl: codePath });
-      expect(rooms.attachReadonlyFile('c1', codePath).ok).toBe(true);
-      expect(rooms.setDocContent('c1', 'nope')).toEqual({ ok: false, error: 'unsupported' });
+      docStore.getOrCreate('c1', { type: 'code', sourceUrl: codePath });
+      expect(docStore.attachReadonlyFile('c1', codePath).ok).toBe(true);
+      expect(docStore.setDocContent('c1', 'nope')).toEqual({ ok: false, error: 'unsupported' });
     });
 
     it('rejects empty markdown instead of wiping the doc', () => {
-      expect(rooms.setDocContent('d1', '   \n')).toEqual({ ok: false, error: 'empty' });
+      expect(docStore.setDocContent('d1', '   \n')).toEqual({ ok: false, error: 'empty' });
     });
   });
 });
@@ -496,18 +498,18 @@ describe('sync-clobber HTTP surface', () => {
       body: JSON.stringify({ docId: 'h2', type: 'markdown', sourceUrl: path }),
     });
     expect(create.ok).toBe(true);
-    // `h2` was the NAME the caller chose; the server minted the id. The rooms
+    // `h2` was the NAME the caller chose; the server minted the id. The doc-store
     // handle keys on the canonical one, while the HTTP paths below stay
     // addressed by the readable name — which is the alias contract holding in
     // both directions on one doc.
     const h2 = ((await create.json()) as { docId: string }).docId;
 
-    // Force a genuine conflict through the rooms handle.
+    // Force a genuine conflict through the doc-store handle.
     expect(
-      handle.rooms.findAndReplace(h2, { find: 'Intro paragraph.', replace: 'Un-flushed.' }).ok,
+      handle.docStore.findAndReplace(h2, { find: 'Intro paragraph.', replace: 'Un-flushed.' }).ok,
     ).toBe(true);
     writeExternal(path, EXT_ONE);
-    expect(handle.rooms.reconcileNow(h2)).toBe('conflict');
+    expect(handle.docStore.reconcileNow(h2)).toBe('conflict');
 
     const res = await fetch(`${base}/api/docs/h2/find_and_replace`, {
       method: 'POST',
@@ -520,7 +522,7 @@ describe('sync-clobber HTTP surface', () => {
 
     // Thread-anchored edits are the other common agent path (codex P2) —
     // the recovery signal must ride those responses too.
-    const created = await handle.rooms.createThreadByFind(
+    const created = await handle.docStore.createThreadByFind(
       h2,
       // The find_and_replace above already rewrote the original sentence.
       { find: 'Changed.' },

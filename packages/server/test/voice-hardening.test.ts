@@ -283,7 +283,7 @@ describe('handle(): every added call site degrades to the agent route', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('a rooms.postComment that REJECTS still answers, and still records', async () => {
+  it('a DocStore.postComment that REJECTS still answers, and still records', async () => {
     const { dir, store, wsId } = mkStore();
     const made = store.createTask(wsId, { title: 'Tune the ranking weights' });
     expect(made.ok).toBe(true);
@@ -292,7 +292,7 @@ describe('handle(): every added call site degrades to the agent route', () => {
     const router = new VoiceRouter({
       tasks: store,
       complete: () => Promise.resolve(`{"kind":"action","action":"comment","id":"${taskId}"}`),
-      rooms: {
+      docStore: {
         postComment: () => Promise.reject(new Error('room store offline')),
         answerReviewItem: () => Promise.reject(new Error('room store offline')),
       },

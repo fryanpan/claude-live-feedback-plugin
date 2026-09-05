@@ -944,7 +944,7 @@ export function shareScopeAllows(
   // The last three matter because members bind LAZILY: `bind_folder` binds
   // only the entry doc, and everything else in the tree comes into being
   // through these calls. Block them and a shared folder shows one file.
-  // They are bounded by the workspace root — rooms.openContextFile /
+  // They are bounded by the workspace root — docStore.openContextFile /
   // openEditableFile reject any relPath that escapes it ('bad-path').
   //
   // Two things stay closed: a workspace this share does not cover, and
@@ -973,7 +973,7 @@ export function shareScopeAllows(
   //
   // "Any of them" means any file the TREE shows. Both open verbs are bound
   // by `git ls-files --cached --others --exclude-standard` in
-  // rooms.openContextFile / openEditableFile — an ignored `.env` under the
+  // docStore.openContextFile / openEditableFile — an ignored `.env` under the
   // root, or anything under `.git/`, answers 404 by path however the caller
   // spells it (Urgent-fixes ticket, 2026-09-02). This allowlist admits the
   // route; the listing decides the file.

@@ -32,6 +32,7 @@ import type { ServerWebSocket } from 'bun';
 import * as awarenessProtocol from 'y-protocols/awareness';
 import * as Y from 'yjs';
 import { DocEditOps, type DocEditPersistence } from './doc-edit-ops.ts';
+import { type DocStoreWorkspacePersistence, DocStoreWorkspaces } from './doc-store-workspaces.ts';
 import { type DocThreadPersistence, DocThreads } from './doc-threads.ts';
 import {
   type AttachOpts,
@@ -39,7 +40,6 @@ import {
   FileBindings,
   type PrereadFile,
 } from './file-binding.ts';
-import { type RoomsWorkspacePersistence, RoomsWorkspaces } from './rooms-workspaces.ts';
 
 /** Moved to `room-fanout.ts` with the presence ticker it drives — re-exported
  *  under the name it was first published as. */
@@ -48,7 +48,7 @@ export { maintainAwareness } from './room-fanout.ts';
 export { randomId } from './doc-threads.ts';
 /** Moved to `doc-ids.ts`, one line from the prefix list it reads — re-exported
  *  under the name it was first published as. */
-export { isBoardOwnedRoom } from './doc-ids.ts';
+export { isBoardOwnedDoc } from './doc-ids.ts';
 /** Moved to `file-binding.ts` with the reconcile it decides — re-exported
  *  under the name it was first published as. */
 export { decideReconcile } from './file-binding.ts';
@@ -81,7 +81,7 @@ import { resolveHomeCheckout } from './doc-home.ts';
 import {
   type DocIdAuthority,
   ReservedDocIdError,
-  isBoardOwnedRoom,
+  isBoardOwnedDoc,
   isReservedDocId,
   newDocId,
 } from './doc-ids.ts';
@@ -96,6 +96,7 @@ import {
   unstageDocIndex,
   writeDocIndex,
 } from './doc-index.ts';
+import { DOC_STORE_TIMINGS } from './doc-store-timings.ts';
 import { deleteMockupCapture } from './mockup-capture.ts';
 import {
   deletePrivateMeta,
@@ -105,7 +106,6 @@ import {
 } from './private-meta.ts';
 import { type ArchivedDoc, type ArchivedReview } from './review-archive.ts';
 import { CONTENT_REVISION_ORIGIN, RoomFanout, type RoomFanoutHost } from './room-fanout.ts';
-import { ROOM_TIMINGS } from './room-timings.ts';
 import { boundFiles, redactBoundPath } from './slow-fs.ts';
 import type { SseBus } from './sse.ts';
 import type { ScheduleArgs, ThreadSummarizer } from './summarize.ts';
@@ -296,7 +296,7 @@ export interface WorkspaceTree {
   tree: WorkspaceDirNode;
 }
 
-export interface RoomsConfig {
+export interface DocStoreConfig {
   dataDir: string;
   /** Called on new thread / reply / status change to dispatch webhooks + SSE. */
   sse: SseBus;
@@ -312,7 +312,7 @@ export interface RoomsConfig {
    * Called for every thread/comment event, alongside the room's own fan-out.
    * A doc can belong to something that wants to hear about its discussion
    * without being a member of a review — a task's
-   * body room is one — and this is the seam for that, so Rooms stays
+   * body room is one — and this is the seam for that, so DocStore stays
    * ignorant of what a `task:` docId means.
    */
   onRoomEvent?: (docId: string, payload: WebhookPayload) => void;
@@ -334,11 +334,11 @@ export interface RoomsConfig {
 /** How long a doc must go quiet before an authoring burst commits one
  *  `contentRevision` bump. Same order as the ~1s write-back flush: a burst
  *  is a person or agent mid-thought, not N revisions. */
-const REVISION_SETTLE_MS = ROOM_TIMINGS.revisionSettleMs;
+const REVISION_SETTLE_MS = DOC_STORE_TIMINGS.revisionSettleMs;
 
 /** How long after a human's live edit an UNTRACKED caller's whole-doc
  *  rewrite is refused (callers with a tracked read are judged by order,
- *  not the clock). See `Rooms.staleWriteCheck`. */
+ *  not the clock). See `DocStore.staleWriteCheck`. */
 const STALE_WRITE_WINDOW_MS = 10 * 60_000;
 
 /**
@@ -365,13 +365,13 @@ const IDLE_EVICT_MS = 2 * 24 * 60 * 60 * 1000;
 const EVICT_SWEEP_MS = 10 * 60_000;
 
 /** Doc → `.ydoc`: how long a change waits before the CRDT snapshot is persisted. */
-const PERSIST_MS = ROOM_TIMINGS.persistMs;
+const PERSIST_MS = DOC_STORE_TIMINGS.persistMs;
 
 /** How often the always-on memory line is written. */
 const MEMORY_LOG_MS = 5 * 60_000;
 
-export class Rooms {
-  private rooms = new Map<string, DocRoom>();
+export class DocStore {
+  private docs = new Map<string, DocRoom>();
 
   /**
    * Everything that keeps a live doc and a file on disk saying the same
@@ -385,7 +385,7 @@ export class Rooms {
     return {
       dataDir: () => this.cfg.dataDir,
       room: (docId) => this.resolveRoom(docId),
-      residentRoom: (docId) => this.rooms.get(docId),
+      residentRoom: (docId) => this.docs.get(docId),
       ydocPath: (docId) => this.pathFor(docId),
       schedulePersist: (room) => this.saveToDisk(room),
       persistNow: (room) => this.persistRoomNow(room),
@@ -410,7 +410,7 @@ export class Rooms {
 
   private fanoutHost(): RoomFanoutHost {
     return {
-      rooms: () => this.rooms.values(),
+      residentRooms: () => this.docs.values(),
       sse: () => this.cfg.sse,
       webhooks: () => this.cfg.webhooks,
       decorate: (meta) => this.cfg.decorateDocMeta?.(meta) ?? meta,
@@ -462,7 +462,7 @@ export class Rooms {
 
   /**
    * Set by `stop()`. A deferred bind is the one piece of work that can land
-   * after this Rooms is finished with — the pool read outlives the call that
+   * after this DocStore is finished with — the pool read outlives the call that
    * started it — and binding then is never right: it re-hydrates a doc into
    * an instance nobody holds, schedules a persist into a data dir a test has
    * already removed, and can re-attach a file the next instance now owns.
@@ -478,14 +478,14 @@ export class Rooms {
    */
   private hydratedAt = new Map<string, number>();
 
-  /** The eviction policy's clock. See `RoomsConfig.now`. */
+  /** The eviction policy's clock. See `DocStoreConfig.now`. */
   /** The thread verbs, and this store seen through the contract they need. */
   private readonly docThreads = new DocThreads(this.docThreadPersistence());
 
   private docThreadPersistence(): DocThreadPersistence {
     return {
       room: (docId) => this.resolveRoom(docId),
-      residentRoom: (docId) => this.rooms.get(docId),
+      residentRoom: (docId) => this.docs.get(docId),
       fireThreadEvent: (room, event, thread, comment, opts, actor) =>
         this.fanout.fireEvent(room, event, thread, comment, opts, actor),
       recordActivity: (room, type, author, threadId, opts) =>
@@ -506,9 +506,9 @@ export class Rooms {
     };
   }
 
-  private readonly workspaces = new RoomsWorkspaces(this.workspacePersistence());
+  private readonly workspaces = new DocStoreWorkspaces(this.workspacePersistence());
 
-  private workspacePersistence(): RoomsWorkspacePersistence {
+  private workspacePersistence(): DocStoreWorkspacePersistence {
     return {
       dataDir: () => this.cfg.dataDir,
       decorate: (meta) => this.cfg.decorateDocMeta?.(meta) ?? meta,
@@ -518,7 +518,7 @@ export class Rooms {
       peekMeta: (docId) => this.peekMeta(docId),
       docExists: (docId) => this.docExists(docId),
       room: (docId) => this.resolveRoom(docId),
-      residentRoom: (docId) => this.rooms.get(docId),
+      residentRoom: (docId) => this.docs.get(docId),
       getOrCreate: (docId, init) => this.getOrCreate(docId, init),
       attachFileAsync: (docId, filePath) => this.attachFileAsync(docId, filePath),
       attachReadonlyFileAsync: (docId, filePath) => this.attachReadonlyFileAsync(docId, filePath),
@@ -541,7 +541,7 @@ export class Rooms {
   /** How many docs are actually in memory. The number lazy hydration exists
    *  to keep small, and the one a test has to be able to read. */
   residentCount(): number {
-    return this.rooms.size;
+    return this.docs.size;
   }
 
   /**
@@ -574,7 +574,7 @@ export class Rooms {
    * Returns false if the doc was not in memory to begin with.
    */
   evictRoom(docId: string): boolean {
-    const room = this.rooms.get(docId);
+    const room = this.docs.get(docId);
     if (!room) return false;
 
     // 0. Settle the revision debounce BEFORE the flush below persists the
@@ -610,7 +610,7 @@ export class Rooms {
 
     // 3. Out of memory. Aliases and the index row are deliberately untouched;
     //    `activityMtime` stays too, so a listing still answers without a stat.
-    this.rooms.delete(docId);
+    this.docs.delete(docId);
     this.lastTouchedAt.delete(docId);
     this.hydratedAt.delete(docId);
     // The row written above carries the marker now, so the in-memory copy has
@@ -667,11 +667,11 @@ export class Rooms {
    * pass — a test that reimplemented the policy would prove only that the
    * test agrees with itself.
    */
-  evictIdleRooms(): string[] {
+  evictIdleDocs(): string[] {
     const now = this.now();
     const evicted: string[] = [];
     // Snapshot: `evictRoom` mutates the map being walked.
-    for (const [docId, room] of [...this.rooms]) {
+    for (const [docId, room] of [...this.docs]) {
       const last = this.lastTouchedAt.get(docId) ?? this.hydratedAt.get(docId) ?? now;
       if (now - last < IDLE_EVICT_MS) continue;
       if (this.evictionHold(docId, room, now) !== null) continue;
@@ -684,10 +684,10 @@ export class Rooms {
     if (this.evictTicker) return;
     const timer = setInterval(() => {
       try {
-        const gone = this.evictIdleRooms();
-        if (gone.length > 0) console.error(`[rooms] evicted ${gone.length} idle doc(s)`);
+        const gone = this.evictIdleDocs();
+        if (gone.length > 0) console.error(`[doc-store] evicted ${gone.length} idle doc(s)`);
       } catch (err) {
-        console.error('[rooms] eviction sweep failed:', err);
+        console.error('[doc-store] eviction sweep failed:', err);
       }
     }, EVICT_SWEEP_MS);
     timer.unref?.();
@@ -695,9 +695,9 @@ export class Rooms {
   }
 
   /**
-   * Stop this Rooms' background timers. Every one of them is `unref`'d, so
+   * Stop this DocStore's background timers. Every one of them is `unref`'d, so
    * this is not needed to let a process exit — it is here so a test can build
-   * several Rooms over one data dir without their sweeps overlapping, and so
+   * several DocStores over one data dir without their sweeps overlapping, and so
    * a shutdown stops sweeping before `flush` runs.
    */
   stop(): void {
@@ -728,7 +728,7 @@ export class Rooms {
    */
   private docIndex = new Map<string, DocIndexEntry>();
 
-  constructor(private cfg: RoomsConfig) {
+  constructor(private cfg: DocStoreConfig) {
     if (!existsSync(cfg.dataDir)) mkdirSync(cfg.dataDir, { recursive: true });
     // The index IS the boot. Nothing is hydrated here: a start now costs one
     // read per doc of a small JSON row instead of decoding every CRDT ever
@@ -764,7 +764,7 @@ export class Rooms {
       // pre-index `.ydoc`s this pass runs before.
       if (docId !== alias && existsSync(this.pathFor(alias))) {
         console.warn(
-          `[rooms] alias "${alias}" is also a doc id on disk; leaving it to that doc (${docId} keeps its own id)`,
+          `[doc-store] alias "${alias}" is also a doc id on disk; leaving it to that doc (${docId} keeps its own id)`,
         );
         continue;
       }
@@ -793,7 +793,7 @@ export class Rooms {
       .map(([docId]) => docId);
     if (pending.length === 0) return;
     console.warn(
-      `[rooms] ${pending.length} doc(s) had an un-flushed file write at shutdown; reasserting`,
+      `[doc-store] ${pending.length} doc(s) had an un-flushed file write at shutdown; reasserting`,
     );
     for (const docId of pending) {
       try {
@@ -803,7 +803,7 @@ export class Rooms {
         // flush.
         this.hydrateDoc(docId, { blocking: true });
       } catch (err) {
-        console.error(`[rooms] could not reassert ${docId}:`, err);
+        console.error(`[doc-store] could not reassert ${docId}:`, err);
       }
     }
   }
@@ -826,7 +826,7 @@ export class Rooms {
     try {
       files = readdirSync(this.cfg.dataDir);
     } catch (err) {
-      console.error('[rooms] could not read the data dir:', err);
+      console.error('[doc-store] could not read the data dir:', err);
       return;
     }
     for (const file of files) {
@@ -836,7 +836,7 @@ export class Rooms {
       try {
         // Boot, and the row is written from the room in the same turn.
         this.hydrateDoc(docId, { blocking: true });
-        const room = this.rooms.get(docId);
+        const room = this.docs.get(docId);
         if (!room) continue;
         const entry = this.indexEntryFor(room);
         writeDocIndex(this.cfg.dataDir, docId, entry);
@@ -846,7 +846,7 @@ export class Rooms {
         // Loud: a doc with no row is invisible to every listing, so this is
         // not a cosmetic failure. It is also self-healing — the next write to
         // that doc writes its row — which is why it does not abort the boot.
-        console.error(`[rooms] failed to index ${docId}:`, err);
+        console.error(`[doc-store] failed to index ${docId}:`, err);
       } finally {
         // Straight back out. Writing a row is not somebody opening the doc,
         // and a migration that left 5,000 docs resident would be the very
@@ -855,7 +855,7 @@ export class Rooms {
       }
     }
     if (written > 0) {
-      console.error(`[rooms] wrote ${written} missing doc index row(s) at startup`);
+      console.error(`[doc-store] wrote ${written} missing doc index row(s) at startup`);
     }
   }
 
@@ -873,7 +873,7 @@ export class Rooms {
     const timer = setInterval(() => {
       const s = this.stats();
       console.error(
-        `[rooms] mem rss=${s.rssMb}MB rooms=${s.rooms} bindings=${s.bindings} ` +
+        `[doc-store] mem rss=${s.rssMb}MB rooms=${s.rooms} bindings=${s.bindings} ` +
           `activeBindings=${s.activeBindings} awareness=${s.awareness} timers=${s.timers} ` +
           // The busiest activator, so a log-only reading of an incident still
           // names a caller instead of only a count.
@@ -885,7 +885,7 @@ export class Rooms {
   }
 
   /**
-   * What this Rooms currently costs: resident memory, how many rooms are in
+   * What this DocStore currently costs: resident memory, how many rooms are in
    * it, and how many timers it actually holds.
    *
    * Public because the memory line and the tests that pin these numbers must
@@ -899,9 +899,9 @@ export class Rooms {
     bindings: number;
     /** Bindings the sweep would stat on this tick (see `bindingIsActive`). */
     activeBindings: number;
-    /** Rooms holding a live Awareness instance. */
+    /** DocStore holding a live Awareness instance. */
     awareness: number;
-    /** Timers owned by this Rooms: pending saves + file debounces + tickers. */
+    /** Timers owned by this DocStore: pending saves + file debounces + tickers. */
     timers: number;
     /**
      * Who has been promoting bindings into the file poll's fast lane, since
@@ -916,7 +916,7 @@ export class Rooms {
     const presence = this.fanout.stats();
     return {
       rssMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
-      rooms: this.rooms.size,
+      rooms: this.docs.size,
       bindings: files.count,
       activeBindings: files.active,
       awareness: presence.awareness,
@@ -961,9 +961,9 @@ export class Rooms {
    */
   list(): DocMeta[] {
     const out: DocMeta[] = [];
-    for (const room of this.rooms.values()) out.push(this.withActivity(room.meta));
+    for (const room of this.docs.values()) out.push(this.withActivity(room.meta));
     for (const [docId, entry] of this.docIndex) {
-      if (this.rooms.has(docId)) continue;
+      if (this.docs.has(docId)) continue;
       out.push(this.withActivity(entry.meta));
     }
     return out;
@@ -1014,7 +1014,7 @@ export class Rooms {
       const entry = this.docIndex.get(docId);
       if (entry) return { ...entry.threads };
     }
-    const room = this.rooms.get(docId);
+    const room = this.docs.get(docId);
     if (!room) return { open: 0, total: 0 };
     const all = listThreads(room.ydoc);
     return { open: all.filter((t) => t.status === 'open').length, total: all.length };
@@ -1029,7 +1029,7 @@ export class Rooms {
       const entry = this.docIndex.get(docId);
       if (entry) return entry.lastThreadActivityAt ?? 0;
     }
-    const room = this.rooms.get(docId);
+    const room = this.docs.get(docId);
     if (!room) return 0;
     return listThreads(room.ydoc).reduce((max, t) => Math.max(max, t.lastActivity), 0);
   }
@@ -1125,7 +1125,7 @@ export class Rooms {
     this.saveTimers.delete(docId);
     this.bindings.discard(docId);
     this.fanout.closeSockets(room, closeReason);
-    this.rooms.delete(docId);
+    this.docs.delete(docId);
     this.activityMtime.delete(docId);
     this.lastTouchedAt.delete(docId);
     this.hydratedAt.delete(docId);
@@ -1174,7 +1174,7 @@ export class Rooms {
       renameSync(path, `${path}.deleting`);
       return true;
     } catch (err) {
-      console.error(`[rooms] failed to stage ${docId} for deletion:`, err);
+      console.error(`[doc-store] failed to stage ${docId} for deletion:`, err);
       return false;
     }
   }
@@ -1190,7 +1190,7 @@ export class Rooms {
     try {
       renameSync(staged, this.pathFor(docId));
     } catch (err) {
-      console.error(`[rooms] failed to restore staged ${docId}:`, err);
+      console.error(`[doc-store] failed to restore staged ${docId}:`, err);
     }
   }
 
@@ -1201,7 +1201,7 @@ export class Rooms {
     try {
       rmSync(`${this.pathFor(docId)}.deleting`, { force: true });
     } catch (err) {
-      console.error(`[rooms] failed to remove staged ${docId}:`, err);
+      console.error(`[doc-store] failed to remove staged ${docId}:`, err);
     }
   }
 
@@ -1220,7 +1220,7 @@ export class Rooms {
       deleteMockupCapture(this.cfg.dataDir, docId);
       return !existsSync(p);
     } catch (err) {
-      console.error(`[rooms] failed to remove persisted ${docId}:`, err);
+      console.error(`[doc-store] failed to remove persisted ${docId}:`, err);
       return false;
     }
   }
@@ -1279,8 +1279,8 @@ export class Rooms {
     // here is the second, independent stop behind `guardPrivateMeta` —
     // binding is what turns a stray meta key into "read (then overwrite)
     // any file this process can reach".
-    if (src && isBoardOwnedRoom(docId)) {
-      console.error(`[rooms] ${docId}: ignoring a sourceUrl on a server-owned board room`);
+    if (src && isBoardOwnedDoc(docId)) {
+      console.error(`[doc-store] ${docId}: ignoring a sourceUrl on a server-owned board room`);
       return false;
     }
     // A home-pinned doc re-resolves its home rather than trusting the path
@@ -1288,11 +1288,11 @@ export class Rooms {
     // restarts. Unplaced parks exactly like a live park: content is in the
     // .ydoc, no binding, the pin persists for the next resolve.
     const home = room.meta.docHome;
-    if (home && !isBoardOwnedRoom(docId) && contentKind(room.meta.type) === 'prose') {
+    if (home && !isBoardOwnedDoc(docId) && contentKind(room.meta.type) === 'prose') {
       const placement = resolveHomeCheckout(home);
       if (!placement.placed) {
         console.warn(
-          `[rooms] ${docId}: doc home unplaced at hydrate (${placement.reason}); writes parked`,
+          `[doc-store] ${docId}: doc home unplaced at hydrate (${placement.reason}); writes parked`,
         );
         return false;
       }
@@ -1366,13 +1366,13 @@ export class Rooms {
     }
     if (boundFiles.quarantined(path)) {
       console.warn(
-        `[rooms] ${docId}: bound file is not answering; writes parked (${redactBoundPath(path)})`,
+        `[doc-store] ${docId}: bound file is not answering; writes parked (${redactBoundPath(path)})`,
       );
       return 'unavailable';
     }
     if (boundFiles.busy()) {
       console.warn(
-        `[rooms] ${docId}: bound reads are backed up; writes parked (${redactBoundPath(path)})`,
+        `[doc-store] ${docId}: bound reads are backed up; writes parked (${redactBoundPath(path)})`,
       );
       return 'unavailable';
     }
@@ -1448,7 +1448,7 @@ export class Rooms {
     // a `file-watch` apply or a meta write must NOT count, or a restart that
     // picks up an edit made while the server was down would reassert the
     // stale doc over it.
-    const editedBefore = this.rooms.get(docId)?.lastContentChangeAt;
+    const editedBefore = this.docs.get(docId)?.lastContentChangeAt;
     void boundFiles
       .read(path)
       .then(() => {
@@ -1458,13 +1458,13 @@ export class Rooms {
         // there is nothing here to do, and re-hydrating an evicted doc would
         // pull it back into memory as a side effect of a read it never asked
         // for.
-        if (!this.rooms.has(docId) || this.bindings.has(docId)) return;
-        const editedAfter = this.rooms.get(docId)?.lastContentChangeAt;
+        if (!this.docs.has(docId) || this.bindings.has(docId)) return;
+        const editedAfter = this.docs.get(docId)?.lastContentChangeAt;
         const editedInGap = editedAfter !== undefined && editedAfter !== editedBefore;
         this.hydrateDoc(docId, editedInGap ? { liveWins: true } : {});
       })
       .catch((err) => {
-        console.error(`[rooms] ${docId}: deferred bind failed:`, err);
+        console.error(`[doc-store] ${docId}: deferred bind failed:`, err);
       })
       .finally(() => {
         this.deferredBinds.delete(docId);
@@ -1487,8 +1487,8 @@ export class Rooms {
    */
   async prewarmHydration(docId: string): Promise<void> {
     const target = this.aliases.get(docId) ?? docId;
-    if (this.rooms.has(target)) return; // resident: no hydrate ahead of us
-    if (isBoardOwnedRoom(target)) return; // never file-bound (§3.3)
+    if (this.docs.has(target)) return; // resident: no hydrate ahead of us
+    if (isBoardOwnedDoc(target)) return; // never file-bound (§3.3)
     // The index row carries the whole DocMeta, so the bound path is known
     // WITHOUT loading the `.ydoc` — which is the point: nothing about this
     // may pull the doc into memory as a side effect.
@@ -1548,7 +1548,7 @@ export class Rooms {
     if ((opts?.authority ?? 'caller') === 'caller' && isReservedDocId(docId)) {
       throw new ReservedDocIdError(docId);
     }
-    const existing = this.rooms.get(docId);
+    const existing = this.docs.get(docId);
     if (existing) {
       this.touchDoc(docId);
       if (init?.webhookUrl !== undefined) existing.webhookUrl = init.webhookUrl;
@@ -1569,7 +1569,7 @@ export class Rooms {
       if (
         init?.sourceUrl !== undefined &&
         init.sourceUrl !== existing.meta.sourceUrl &&
-        !isBoardOwnedRoom(docId)
+        !isBoardOwnedDoc(docId)
       ) {
         existing.meta.sourceUrl = init.sourceUrl;
         this.saveToDisk(existing);
@@ -1627,7 +1627,7 @@ export class Rooms {
     // back off disk at boot. Same call either way, so the alias table cannot
     // be complete at creation and empty after a restart.
     if (meta.alias) this.claimAlias(meta.alias, docId);
-    // Captured so the `awareness` getter below can reach the Rooms instance:
+    // Captured so the `awareness` getter below can reach the DocStore instance:
     // inside a getter, `this` is the room, not the map that owns it.
     const owner = this;
     let awareness: awarenessProtocol.Awareness | null = null;
@@ -1644,7 +1644,7 @@ export class Rooms {
       webhookUrl: init?.webhookUrl,
       seq: 0,
     };
-    this.rooms.set(docId, room);
+    this.docs.set(docId, room);
     this.hydratedAt.set(docId, this.now());
     this.fanout.wireEvents(room);
     // For freshly-created rooms (no on-disk state), the initDocMeta call
@@ -1703,7 +1703,7 @@ export class Rooms {
     const target = this.aliases.get(docId) ?? docId;
     if (!existsSync(this.pathFor(target))) return undefined;
     this.hydrateDoc(target);
-    return this.rooms.get(target);
+    return this.docs.get(target);
   }
 
   /**
@@ -1724,11 +1724,11 @@ export class Rooms {
    * real access and the poll should speed up for it.
    */
   peek(docId: string): DocRoom | undefined {
-    const direct = this.rooms.get(docId);
+    const direct = this.docs.get(docId);
     if (direct) return direct;
     const aliased = this.aliases.get(docId);
     if (!aliased) return undefined;
-    return this.rooms.get(aliased);
+    return this.docs.get(aliased);
   }
 
   /**
@@ -1769,14 +1769,14 @@ export class Rooms {
    * for docs that are not in memory.
    */
   resolveDocId(docId: string): string {
-    if (this.rooms.has(docId)) return docId;
+    if (this.docs.has(docId)) return docId;
     return this.aliases.get(docId) ?? docId;
   }
 
   /** Whether a doc exists at all — resident, indexed, or a file on disk. */
   docExists(docId: string): boolean {
     const target = this.resolveDocId(docId);
-    return this.rooms.has(target) || this.docIndex.has(target) || existsSync(this.pathFor(target));
+    return this.docs.has(target) || this.docIndex.has(target) || existsSync(this.pathFor(target));
   }
 
   /**
@@ -1793,7 +1793,7 @@ export class Rooms {
       contentKind(room.meta.type) === 'flat'
         ? room.ydoc.getText('content').toString()
         : prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
-    const resident = this.rooms.get(target);
+    const resident = this.docs.get(target);
     if (resident) return serialize(resident);
     if (!this.docExists(target)) return null;
     try {
@@ -1802,10 +1802,10 @@ export class Rooms {
       // the fan-out shape that must never open a bound file on the main
       // thread. Every hydrate defers now, so there is nothing to ask for.
       this.hydrateDoc(target);
-      const room = this.rooms.get(target);
+      const room = this.docs.get(target);
       return room ? serialize(room) : null;
     } catch (err) {
-      console.error(`[rooms] failed to read ${target} for a body sweep:`, err);
+      console.error(`[doc-store] failed to read ${target} for a body sweep:`, err);
       return null;
     } finally {
       this.evictRoom(target);
@@ -1829,7 +1829,7 @@ export class Rooms {
    */
   createForCaller(
     requested: string,
-    init?: Parameters<Rooms['getOrCreate']>[1],
+    init?: Parameters<DocStore['getOrCreate']>[1],
   ): { ok: true; room: DocRoom; minted: boolean } | { ok: false; error: 'reserved-namespace' } {
     if (isReservedDocId(requested)) return { ok: false, error: 'reserved-namespace' };
     const existing = this.get(requested);
@@ -1861,7 +1861,7 @@ export class Rooms {
     const held = this.aliases.get(alias);
     if (held !== undefined && held !== docId) {
       console.error(
-        `[rooms] alias "${alias}" already resolves to ${held}; leaving it there (${docId} keeps its own id)`,
+        `[doc-store] alias "${alias}" already resolves to ${held}; leaving it there (${docId} keeps its own id)`,
       );
       return;
     }
@@ -1874,7 +1874,7 @@ export class Rooms {
     // map honest is still worth a line — a resolver whose table disagrees
     // with its own answers is how the next bug reads as impossible. Measured:
     // removing this line alone turns nothing red.
-    if (this.rooms.has(alias) && alias !== docId) return;
+    if (this.docs.has(alias) && alias !== docId) return;
     this.aliases.set(alias, docId);
   }
 
@@ -2461,7 +2461,7 @@ export class Rooms {
 
   // ---------------------------------------------------------------------
   // The file bindings, from the outside. Every body moved to
-  // `file-binding.ts`; these keep the published names on `Rooms` so no
+  // `file-binding.ts`; these keep the published names on `DocStore` so no
   // caller has to learn that binding a doc now crosses a file boundary.
   // ---------------------------------------------------------------------
 
@@ -2634,7 +2634,7 @@ export class Rooms {
    * fast lane — see `peek`'s own note). Going through `peek` rather than the
    * raw map is also what makes ALIASES resolve: a task's saved `doc` ref
    * usually holds the caller-chosen name, not the minted id, so a raw
-   * `this.rooms.get` answered undefined for exactly the docs this is for.
+   * `this.docs.get` answered undefined for exactly the docs this is for.
    */
   lastContentChangeFor(docId: string): number | undefined {
     return this.peek(docId)?.lastContentChangeAt;
@@ -3044,7 +3044,7 @@ export class Rooms {
       };
       appendActivity(this.cfg.dataDir, event);
     } catch (err) {
-      console.error('[rooms] recordActivity failed:', err);
+      console.error('[doc-store] recordActivity failed:', err);
     }
   }
 
@@ -3093,7 +3093,7 @@ export class Rooms {
       appendActivity(this.cfg.dataDir, event);
       return { ok: true };
     } catch (err) {
-      console.error('[rooms] recordReadEvent failed:', err);
+      console.error('[doc-store] recordReadEvent failed:', err);
       return { ok: false, error: 'append-failed' };
     }
   }
@@ -3131,13 +3131,13 @@ export class Rooms {
     // Under lazy hydration those are two very different sets, and the whole
     // point of this sweep is the OLD threads — which are exactly the ones in
     // docs nobody has opened.
-    for (const docId of new Set([...this.docIndex.keys(), ...this.rooms.keys()])) {
+    for (const docId of new Set([...this.docIndex.keys(), ...this.docs.keys()])) {
       // The index says how many threads a doc has, so a doc with none is
       // skipped without loading it. On the measured corpus that is most of
       // them, and it is the difference between a sweep that reads a few
       // hundred docs and one that reads five thousand.
       if (this.threadCounts(docId).total === 0) continue;
-      const wasResident = this.rooms.has(docId);
+      const wasResident = this.docs.has(docId);
       const room = this.resolveRoom(docId);
       if (!room) continue;
       let queuedHere = 0;
@@ -3216,7 +3216,7 @@ export class Rooms {
       const buf = readFileSync(path);
       Y.applyUpdate(ydoc, new Uint8Array(buf));
     } catch (err) {
-      console.error(`[rooms] failed to load ${docId}:`, err);
+      console.error(`[doc-store] failed to load ${docId}:`, err);
     }
   }
 
@@ -3260,7 +3260,7 @@ export class Rooms {
       writeDocIndex(this.cfg.dataDir, room.docId, entry);
       this.docIndex.set(room.docId, entry);
     } catch (err) {
-      console.error(`[rooms] failed to persist ${room.docId}:`, err);
+      console.error(`[doc-store] failed to persist ${room.docId}:`, err);
     }
   }
 
@@ -3306,7 +3306,7 @@ export class Rooms {
     // schedules the very saves the passes below persist. After a restart the
     // counter is all that remains of an edit burst — the in-memory clocks are
     // deliberately not durable.
-    for (const room of this.rooms.values()) this.commitRevisionBump(room);
+    for (const room of this.docs.values()) this.commitRevisionBump(room);
     // A write-back can re-arm a timer while flushing (the reconcile guard's
     // conflict path re-schedules the flush it just consumed), so sweep until
     // quiescent — bounded, so a wedged binding cannot loop forever.
@@ -3317,11 +3317,11 @@ export class Rooms {
       for (const [docId, timer] of saves) {
         clearTimeout(timer);
         this.saveTimers.delete(docId);
-        const room = this.rooms.get(docId);
+        const room = this.docs.get(docId);
         if (room) this.persistRoomNow(room);
       }
       for (const docId of writes) {
-        this.bindings.flushWrite(docId, this.rooms.get(docId));
+        this.bindings.flushWrite(docId, this.docs.get(docId));
       }
     }
   }

@@ -20,9 +20,9 @@
  * `task-routes-context.ts`.
  */
 import { reviewIdOf } from '@feedback/core';
+import type { DocStore } from '../doc-store.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
 import { listArchivedDocs, listArchivedReviews } from '../review-archive.ts';
-import type { Rooms } from '../rooms.ts';
 import type { TaskProjection } from '../task-projection.ts';
 import type { TaskStore } from '../tasks.ts';
 
@@ -31,8 +31,8 @@ const REVIEW_DELETE = /^\/api\/reviews\/([^/]+)$/;
 
 /** The long-lived collaborators these routes need. */
 export interface ArchiveRoutesContext {
-  /** Doc rooms — the archive and unarchive verbs live on them. */
-  rooms: Rooms;
+  /** Doc store — the archive and unarchive verbs live on them. */
+  docStore: DocStore;
   /** The board store — which boards link a review, and where it goes back. */
   taskStore: TaskStore;
   /** The ydoc projection, refreshed by hand after an unarchive re-attaches. */
@@ -74,7 +74,7 @@ export function createArchiveRoutes(ctx: ArchiveRoutesContext): {
   handleArchiveRoutes: (rq: ArchiveRouteRequest) => Promise<Response | undefined>;
 } {
   const {
-    rooms,
+    docStore,
     taskStore,
     taskProjection,
     dataDir,
@@ -97,7 +97,7 @@ export function createArchiveRoutes(ctx: ArchiveRoutesContext): {
    * threads it still shows have stopped mattering.
    */
   const archiveReview = (setId: string, by: string, reason: string | undefined): Response => {
-    const res = rooms.archiveReview(setId, {
+    const res = docStore.archiveReview(setId, {
       archivedBy: by,
       ...(reason !== undefined ? { reason } : {}),
       linkedWorkspaces: boardsLinking(setId),
@@ -126,12 +126,12 @@ export function createArchiveRoutes(ctx: ArchiveRoutesContext): {
       // caller that passed no `force` gets the refusal it has always
       // got rather than a surprise retirement.
       if (!force) {
-        const blocked = rooms
+        const blocked = docStore
           .list()
           .filter((m) => reviewIdOf(m) === setId)
           .map((m) => ({
             docId: m.docId,
-            openThreads: rooms.listThreads(m.docId, { status: 'open' }).length,
+            openThreads: docStore.listThreads(m.docId, { status: 'open' }).length,
           }))
           .filter((f) => f.openThreads > 0);
         if (blocked.length > 0) {
@@ -140,7 +140,7 @@ export function createArchiveRoutes(ctx: ArchiveRoutesContext): {
       }
       return archiveReview(setId, 'delete_review', undefined);
     }
-    const res = rooms.deleteWorkspace(setId, { force });
+    const res = docStore.deleteWorkspace(setId, { force });
     if (res.ok) {
       // The review was one row on a board; deleting it must take the
       // row with it, the same way a deleted doc does.
@@ -184,7 +184,7 @@ export function createArchiveRoutes(ctx: ArchiveRoutesContext): {
       const setId = decodeURIComponent(reviewUnarchiveMatch[1] ?? '');
       const body = await safeJson(req);
       const author = body?.author as { name?: string } | undefined;
-      const res = rooms.unarchiveReview(setId, { archivedBy: author?.name ?? 'unknown' });
+      const res = docStore.unarchiveReview(setId, { archivedBy: author?.name ?? 'unknown' });
       if (!res.ok) return j(res.error === 'not-found' ? 404 : 409, res);
       // Put the review back on every board it was on when it was archived.
       for (const workspaceId of res.manifest.linkedWorkspaces) {
@@ -194,7 +194,7 @@ export function createArchiveRoutes(ctx: ArchiveRoutesContext): {
     }
     // The same pair for ONE free-standing doc. They sit HERE rather than in
     // the `/api/docs/:id/...` block below because that block opens with
-    // `rooms.get(docId)` and 404s without a room — which is precisely the
+    // `docStore.get(docId)` and 404s without a room — which is precisely the
     // state an archived doc is in, so an unarchive route inside it could
     // never be reached.
     const docArchiveMatch = pathname.match(/^\/api\/docs\/([^/]+)\/archive$/);
@@ -204,7 +204,7 @@ export function createArchiveRoutes(ctx: ArchiveRoutesContext): {
       const body = await safeJson(req);
       const author = body?.author as { name?: string } | undefined;
       const reason = typeof body?.reason === 'string' ? (body.reason as string) : undefined;
-      const res = rooms.archiveDoc(docId, {
+      const res = docStore.archiveDoc(docId, {
         archivedBy: author?.name ?? 'unknown',
         ...(reason !== undefined ? { reason } : {}),
         linkedWorkspaces: boardsLinking(docId),
@@ -227,7 +227,7 @@ export function createArchiveRoutes(ctx: ArchiveRoutesContext): {
       const docId = decodeURIComponent(docUnarchiveMatch[1] ?? '');
       const body = await safeJson(req);
       const author = body?.author as { name?: string } | undefined;
-      const res = rooms.unarchiveDoc(docId, { archivedBy: author?.name ?? 'unknown' });
+      const res = docStore.unarchiveDoc(docId, { archivedBy: author?.name ?? 'unknown' });
       if (!res.ok) return j(res.error === 'not-found' ? 404 : 409, res);
       for (const workspaceId of res.manifest.linkedWorkspaces) {
         if (taskStore.attachDoc(workspaceId, docId).ok) taskProjection.ensureWorkspace(workspaceId);

@@ -18,7 +18,7 @@ flowchart TB
   mcp["mcp<br/>stdio MCP server"]
   subgraph srv["server — one Bun process"]
     edge["HTTP edge<br/>server.ts · routes/ · middleware/ · shells.ts<br/>request-admission · request-attribution<br/>socket-handlers · server-options"]
-    docs["Docs and rooms<br/>rooms.ts · binds.ts · file-binding.ts<br/>doc-*.ts · yjs-protocol.ts · sse.ts · sse-mux.ts"]
+    docs["Doc store and rooms<br/>doc-store.ts · binds.ts · file-binding.ts<br/>doc-*.ts · yjs-protocol.ts · sse.ts · sse-mux.ts"]
     board["Board<br/>tasks.ts · task-*.ts · review-items/<br/>home-pane.ts · board-membership.ts · activity.ts"]
     meet["Meetings<br/>meetings.ts · meeting-*.ts · notes-*.ts<br/>transcribe-*.ts · recall*.ts"]
     keep["Keep-moving<br/>stall-wiring · stall-gate · stall-nudge<br/>stall-escalation · note-ask · keep-moving"]
@@ -94,7 +94,7 @@ value. *SSE* pushes changes to anyone holding no Yjs socket for them.
 | Layer | Where it lives | Why it is its own layer |
 | --- | --- | --- |
 | **HTTP** | `server.ts`, `routes/**`, `middleware/**`, `shells.ts`, `request-admission.ts`, `request-attribution.ts`, `socket-handlers.ts` | The only code that knows about HTTP. Parse, admit, call one service, format. |
-| **Services / stores** | `rooms.ts`, `tasks.ts` and the `task-*` stores, `review-items/**`, `home-pane.ts`, `share/**`, `auth/**`, the `meeting-*` and `notes-*` families, `sse.ts`, `activity.ts` | Owns durable state and orchestrates one change across stores and adapters. |
+| **Services / stores** | `doc-store.ts`, `tasks.ts` and the `task-*` stores, `review-items/**`, `home-pane.ts`, `share/**`, `auth/**`, the `meeting-*` and `notes-*` families, `sse.ts`, `activity.ts` | Owns durable state and orchestrates one change across stores and adapters. |
 | **Domain (pure)** | `task-owner.ts`, `task-fields.ts`, `task-row.ts`, `decision-shape.ts`, `safe-path.ts`, `diff-groups.ts`, `pause-ticker.ts`, `keep-moving.ts`, `stall-gate.ts`, `notes-section.ts`, `ask-detection.ts`, `notes-link-intent.ts` | Functions over values: no clock, filesystem or socket unless passed in, so a rule is testable without a server. |
 | **Adapters** | `transcribe-*.ts`, `recall*.ts`, `google-oauth.ts`, `summarize.ts`, `deploy*.ts`, `client-release.ts`, `push-notify.ts`, `share/cf-api.ts`, `share/keychain.ts`, `git-diff.ts`, `sentry.ts` | One vendor or OS facility each, behind an injected interface, so a swap or a test double touches one file and no state. |
 | *Composition root* | `bin.ts`, `server-config.ts`, `server-deps.ts` | Reads the environment once, builds adapters, wires services. Beside the stack, not on top of it. |
@@ -117,7 +117,7 @@ two cannot drift into a suggestion nobody can accept).
 ```mermaid
 flowchart LR
   subgraph f1["A comment: browser → .ydoc → agent"]
-    B1[Browser] -->|Yjs update over WS| R1["Room ydoc<br/>rooms.ts"]
+    B1[Browser] -->|Yjs update over WS| R1["Room ydoc<br/>doc-store.ts"]
     R1 -->|debounced persist| Y1[(".ydoc · bound .md")]
     R1 -->|thread event| S1["SSE bus<br/>sse.ts · sse-mux.ts"]
     S1 -->|channel frame| A1["Agent<br/>mcp watch_doc"]

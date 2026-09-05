@@ -23,7 +23,7 @@ export async function handleTaskStatusAndLinks(
   const {
     taskStore,
     taskProjection,
-    rooms,
+    docStore,
     j,
     safeJson,
     boardIndexForListing,
@@ -163,7 +163,7 @@ export async function handleTaskStatusAndLinks(
   if (pathname === '/api/refs/backfill' && req.method === 'POST') {
     const body = await safeJson(req);
     const dryRun = body?.dryRun === true;
-    const stats = runRefsBackfill({ rooms, tasks: taskStore, dryRun });
+    const stats = runRefsBackfill({ docStore, tasks: taskStore, dryRun });
     // Link writes emit no store event (§3.6's exhaustive table), so
     // the projection refresh happens here — same as the links route.
     if (!dryRun) {
@@ -191,9 +191,9 @@ export async function handleTaskStatusAndLinks(
       linkTitlesFor(
         urls.filter((u): u is string => typeof u === 'string'),
         {
-          docMeta: (docId) => rooms.peekMeta(docId),
+          docMeta: (docId) => docStore.peekMeta(docId),
           docInWorkspace: (docId, workspaceId) => {
-            const meta = rooms.peekMeta(docId);
+            const meta = docStore.peekMeta(docId);
             if (!meta) return false;
             if (meta.workspaceId === workspaceId) return true;
             boardIndex ??= boardIndexForListing();

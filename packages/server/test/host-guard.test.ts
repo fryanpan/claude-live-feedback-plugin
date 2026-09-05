@@ -474,7 +474,7 @@ describe('shareScopeAllows (workspace share)', () => {
 
   it('allows the LAZY-OPEN endpoints — without them a shared folder shows one file', () => {
     // bind_folder binds only the entry doc; every other member comes into
-    // being through these calls. Bounded by the workspace root (rooms
+    // being through these calls. Bounded by the workspace root (the doc store
     // rejects an escaping relPath with 'bad-path').
     expect(shareScopeAllows('/api/workspaces/ws-1/files', 'GET', WS, workspaceOf)).toBe(true);
     expect(shareScopeAllows('/api/workspaces/ws-1/context-file', 'POST', WS, workspaceOf)).toBe(

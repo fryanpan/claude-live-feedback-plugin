@@ -8,7 +8,7 @@
  * make one first.
  *
  * These go through the real HTTP routes on purpose — the route layer
- * hand-copies body fields into the rooms call and nothing type-checks it,
+ * hand-copies body fields into the doc-store call and nothing type-checks it,
  * which is exactly how `groups` was accepted and discarded.
  *
  * All fixtures are synthetic. The repo is public.
@@ -74,7 +74,7 @@ describe('a doc always lands in a workspace', () => {
     const ws = await post('/api/workspaces', { name: 'named-ws', goal: 'Ship.' });
     const wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
     // The body an MCP `create_review_doc` call puts on the wire, so this also
-    // covers the layer that hand-copies fields into the rooms call.
+    // covers the layer that hand-copies fields into the doc-store call.
     const r = await post('/api/docs', {
       docId: 'doc-named-ws',
       type: 'markdown',
@@ -260,7 +260,7 @@ describe('a doc always lands in a workspace', () => {
 
       // Positive control: the socket really did create the doc, so a claim
       // about its workspace is a claim about something that exists.
-      expect(open.rooms.get(docId)).toBeTruthy();
+      expect(open.docStore.get(docId)).toBeTruthy();
       expect(open.tasks.workspaceOfDoc(docId)).toBeTruthy();
     } finally {
       await open.stop();
@@ -278,13 +278,13 @@ describe('docs that predate the rule stay reachable', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'doc-legacy-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
-    // The gate lives in the route, so going straight at Rooms produces the
+    // The gate lives in the route, so going straight at DocStore produces the
     // shape a doc persisted before this rule has: meta with no workspaceId.
     // That is the state we promise not to strand, and after this change it is
     // unreachable through any HTTP path — which is the point.
     const p = join(dataDir, 'legacy.md');
     writeFileSync(p, '# Legacy\n\nStill here.\n');
-    handle.rooms.getOrCreate('legacy-doc', { type: 'markdown', sourceUrl: p });
+    handle.docStore.getOrCreate('legacy-doc', { type: 'markdown', sourceUrl: p });
   });
 
   afterAll(() => {
@@ -296,7 +296,7 @@ describe('docs that predate the rule stay reachable', () => {
     // Positive control that the fixture is the shape we mean: it really has
     // no workspace, so "still reachable" is a claim about an orphan.
     expect(handle.tasks.workspaceOfDoc('legacy-doc')).toBeNull();
-    expect(handle.rooms.get('legacy-doc')?.meta.workspaceId ?? '').toBe('');
+    expect(handle.docStore.get('legacy-doc')?.meta.workspaceId ?? '').toBe('');
     const r = await fetch(`${base}/api/docs/legacy-doc`, {
       headers: { host: `localhost:${handle.port}` },
     });

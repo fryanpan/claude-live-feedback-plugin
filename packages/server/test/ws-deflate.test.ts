@@ -24,7 +24,7 @@ import * as encoding from 'lib0/encoding';
 import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { workspaceRoomId } from '../src/task-projection.ts';
+import { workspaceDocId } from '../src/task-projection.ts';
 
 let dataDir: string;
 let handle: ServerHandle;
@@ -183,7 +183,7 @@ describe('yjs websocket compression', () => {
       );
       expect(r.status).toBe(200);
     }
-    const path = `/y/${encodeURIComponent(workspaceRoomId(workspace.id))}?type=workspace`;
+    const path = `/y/${encodeURIComponent(workspaceDocId(workspace.id))}?type=workspace`;
 
     const offered = await handshakeAndSync(path, 'permessage-deflate; client_max_window_bits');
     expect(offered.status).toBe(101);

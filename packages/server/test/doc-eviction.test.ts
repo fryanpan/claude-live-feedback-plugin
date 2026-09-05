@@ -27,7 +27,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { memberDocId } from '../src/binds.ts';
-import { Rooms } from '../src/rooms.ts';
+import { DocStore } from '../src/doc-store.ts';
 import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 import { waitFor } from './wait-for.ts';
@@ -41,11 +41,11 @@ const onDisk = (p: string) => readFileSync(p, 'utf8');
 describe('evicting an idle doc', () => {
   let dataDir: string;
   let srcDir: string;
-  let rooms: Rooms;
+  let docStore: DocStore;
   let clock: number;
 
-  function makeRooms(dir: string): Rooms {
-    return new Rooms({
+  function makeDocStore(dir: string): DocStore {
+    return new DocStore({
       dataDir: dir,
       sse: new SseBus(),
       webhooks: createWebhookDispatcher({ onLog: () => {} }),
@@ -57,10 +57,10 @@ describe('evicting an idle doc', () => {
     clock = Date.now();
     dataDir = mkdtempSync(join(tmpdir(), 'evict-data-'));
     srcDir = mkdtempSync(join(tmpdir(), 'evict-src-'));
-    rooms = makeRooms(dataDir);
+    docStore = makeDocStore(dataDir);
   });
   afterEach(() => {
-    rooms.stop();
+    docStore.stop();
     rmSync(dataDir, { recursive: true, force: true });
     rmSync(srcDir, { recursive: true, force: true });
   });
@@ -69,12 +69,12 @@ describe('evicting an idle doc', () => {
   function bound(docId: string, body = '# Title\n\nfirst line\n'): string {
     const path = join(srcDir, `${docId}.md`);
     writeFileSync(path, body);
-    rooms.getOrCreate(docId, { type: 'markdown', title: docId });
-    expect(rooms.attachFile(docId, path).ok).toBe(true);
+    docStore.getOrCreate(docId, { type: 'markdown', title: docId });
+    expect(docStore.attachFile(docId, path).ok).toBe(true);
     return path;
   }
 
-  const resident = (docId: string) => rooms.peek(docId) !== undefined;
+  const resident = (docId: string) => docStore.peek(docId) !== undefined;
 
   it('a write-back that FAILS during eviction is repaired by the next boot', () => {
     // `writeBoundFileNow` swallows its own errors, so a failed write looks
@@ -82,9 +82,9 @@ describe('evicting an idle doc', () => {
     // then wrote an index row saying there was nothing to reassert. For a
     // doc nobody opens again, that is a stale `.md` for ever.
     const path = bound('wedged');
-    rooms.flush();
+    docStore.flush();
 
-    expect(rooms.findAndReplace('wedged', { find: 'first line', replace: 'rescued' }).ok).toBe(
+    expect(docStore.findAndReplace('wedged', { find: 'first line', replace: 'rescued' }).ok).toBe(
       true,
     );
     // Make the write throw: an unwritable parent directory is a real
@@ -96,7 +96,7 @@ describe('evicting an idle doc', () => {
       // write (that is one of the four guards), so the flush-on-evict path
       // belongs to the direct callers — the boot migration and the summary
       // backfill, both of which put back every doc they had to open.
-      expect(rooms.evictRoom('wedged')).toBe(true);
+      expect(docStore.evictRoom('wedged')).toBe(true);
       expect(resident('wedged')).toBe(false);
       // Control: the write really did fail — disk still holds the old line.
       expect(onDisk(path)).toContain('first line');
@@ -111,8 +111,8 @@ describe('evicting an idle doc', () => {
     expect(row.pendingFileWrite).toBe(true);
 
     // ...and a restart does, without anybody opening it.
-    rooms.stop();
-    const next = makeRooms(dataDir);
+    docStore.stop();
+    const next = makeDocStore(dataDir);
     try {
       expect(next.residentCount()).toBe(1);
       next.flush();
@@ -132,13 +132,13 @@ describe('evicting an idle doc', () => {
     // had the same signature.) The index row's `pendingFileWrite` is the
     // fact the mtimes only approximate; the boot must trust it.
     const path = bound('wedged');
-    rooms.flush();
-    expect(rooms.findAndReplace('wedged', { find: 'first line', replace: 'rescued' }).ok).toBe(
+    docStore.flush();
+    expect(docStore.findAndReplace('wedged', { find: 'first line', replace: 'rescued' }).ok).toBe(
       true,
     );
     chmodSync(srcDir, 0o500);
     try {
-      expect(rooms.evictRoom('wedged')).toBe(true);
+      expect(docStore.evictRoom('wedged')).toBe(true);
       expect(onDisk(path)).toContain('first line');
     } finally {
       chmodSync(srcDir, 0o700);
@@ -149,8 +149,8 @@ describe('evicting an idle doc', () => {
     utimesSync(path, t, t);
     expect(statSync(path).mtimeMs).toBe(statSync(join(dataDir, 'wedged.ydoc')).mtimeMs);
 
-    rooms.stop();
-    const next = makeRooms(dataDir);
+    docStore.stop();
+    const next = makeDocStore(dataDir);
     try {
       next.flush();
       expect(onDisk(path)).toContain('rescued');
@@ -162,58 +162,58 @@ describe('evicting an idle doc', () => {
   it('drops a doc idle for two days and keeps one touched an hour ago', () => {
     bound('stale');
     bound('fresh');
-    rooms.flush();
+    docStore.flush();
 
     // Three days on, then a real interaction with one of them an hour ago.
     clock += 3 * DAY - HOUR;
-    expect(rooms.get('fresh')).toBeDefined();
+    expect(docStore.get('fresh')).toBeDefined();
     clock += HOUR;
 
-    expect(rooms.evictIdleRooms()).toEqual(['stale']);
+    expect(docStore.evictIdleDocs()).toEqual(['stale']);
     expect(resident('stale')).toBe(false);
     expect(resident('fresh')).toBe(true);
   });
 
   it('an interaction resets the clock, so a doc opened today survives', () => {
     bound('reopened');
-    rooms.flush();
+    docStore.flush();
 
     clock += 3 * DAY;
     // "if the user opens the doc again or interacts with it that resets the
     // clock" — `get` is that open.
-    expect(rooms.get('reopened')).toBeDefined();
+    expect(docStore.get('reopened')).toBeDefined();
 
-    expect(rooms.evictIdleRooms()).toEqual([]);
+    expect(docStore.evictIdleDocs()).toEqual([]);
     expect(resident('reopened')).toBe(true);
 
     // Control: the clock really is what is holding it — three more days with
     // nobody touching it and the same doc goes.
     clock += 3 * DAY;
-    expect(rooms.evictIdleRooms()).toEqual(['reopened']);
+    expect(docStore.evictIdleDocs()).toEqual(['reopened']);
   });
 
   it('still resolves every docId after eviction, by id and by alias', () => {
-    const room = rooms.getOrCreate('minted-id', { type: 'markdown', alias: 'readable-name' });
+    const room = docStore.getOrCreate('minted-id', { type: 'markdown', alias: 'readable-name' });
     expect(room.meta.alias).toBe('readable-name');
-    rooms.flush();
+    docStore.flush();
 
     clock += 3 * DAY;
-    expect(rooms.evictIdleRooms()).toEqual(['minted-id']);
+    expect(docStore.evictIdleDocs()).toEqual(['minted-id']);
     // Control: it really is gone from memory, so the lookups below are doing
     // work rather than reading a room that never left.
     expect(resident('minted-id')).toBe(false);
 
     // A captured alias URL must not 404. `teardownRoom` releases aliases;
     // eviction must not.
-    expect(rooms.get('readable-name')?.docId).toBe('minted-id');
-    expect(rooms.get('minted-id')?.docId).toBe('minted-id');
-    expect(rooms.list().some((m) => m.docId === 'minted-id')).toBe(true);
+    expect(docStore.get('readable-name')?.docId).toBe('minted-id');
+    expect(docStore.get('minted-id')?.docId).toBe('minted-id');
+    expect(docStore.list().some((m) => m.docId === 'minted-id')).toBe(true);
   });
 
   it('refuses to evict a doc that is connected, mid-write, just edited, or wedged', () => {
     // 1. A live connection.
     bound('connected');
-    (rooms.peek('connected') as { conns: Set<unknown> }).conns.add({ data: {} });
+    (docStore.peek('connected') as { conns: Set<unknown> }).conns.add({ data: {} });
 
     // 2. A pending write-back — an edit still inside its debounce window.
     const midPath = bound('mid-write');
@@ -224,39 +224,42 @@ describe('evicting an idle doc', () => {
     // 4. A doc whose last reconcile hit a conflict.
     const wedgedPath = bound('wedged');
 
-    rooms.flush();
+    docStore.flush();
     clock += 3 * DAY;
 
     expect(
-      rooms.findAndReplace('mid-write', { find: 'first line', replace: 'typed, not yet flushed' })
-        .ok,
+      docStore.findAndReplace('mid-write', {
+        find: 'first line',
+        replace: 'typed, not yet flushed',
+      }).ok,
     ).toBe(true);
-    (rooms.peek('just-edited') as { lastHumanEditAt?: number }).lastHumanEditAt = clock;
-    expect(rooms.findAndReplace('wedged', { find: 'first line', replace: 'live edit' }).ok).toBe(
+    (docStore.peek('just-edited') as { lastHumanEditAt?: number }).lastHumanEditAt = clock;
+    expect(docStore.findAndReplace('wedged', { find: 'first line', replace: 'live edit' }).ok).toBe(
       true,
     );
     writeFileSync(wedgedPath, '# Title\n\nexternal edit\n');
-    expect(rooms.reconcileNow('wedged')).toBe('conflict');
-    expect(rooms.getDoc('wedged')?.syncError).toBeDefined();
+    expect(docStore.reconcileNow('wedged')).toBe('conflict');
+    expect(docStore.getDoc('wedged')?.syncError).toBeDefined();
 
-    expect(rooms.evictIdleRooms()).toEqual([]);
+    expect(docStore.evictIdleDocs()).toEqual([]);
 
     // POSITIVE CONTROL: with every hold released, the same four DO evict — so
     // the empty list above is the guards, not a sweep that never ran.
-    (rooms.peek('connected') as { conns: Set<unknown> }).conns.clear();
-    rooms.flush();
-    (rooms.peek('just-edited') as { lastHumanEditAt?: number }).lastHumanEditAt = clock - 3 * DAY;
+    (docStore.peek('connected') as { conns: Set<unknown> }).conns.clear();
+    docStore.flush();
+    (docStore.peek('just-edited') as { lastHumanEditAt?: number }).lastHumanEditAt =
+      clock - 3 * DAY;
     writeFileSync(wedgedPath, '# Title\n\nexternal edit, uncontested\n');
-    expect(rooms.reconcileNow('wedged')).toBe('apply');
-    expect(rooms.getDoc('wedged')?.syncError).toBeUndefined();
-    rooms.flush();
+    expect(docStore.reconcileNow('wedged')).toBe('apply');
+    expect(docStore.getDoc('wedged')?.syncError).toBeUndefined();
+    docStore.flush();
     // Clearing the wedge means reconciling, and a reconcile IS an
     // interaction — it resets the idle clock, exactly as an open does. So
     // idle them all again; the guards are the only thing that differs
     // between this call and the one above.
     clock += 3 * DAY;
 
-    expect(rooms.evictIdleRooms().sort()).toEqual([
+    expect(docStore.evictIdleDocs().sort()).toEqual([
       'connected',
       'just-edited',
       'mid-write',
@@ -268,9 +271,9 @@ describe('evicting an idle doc', () => {
 
   it('flushes a pending save instead of cancelling it', () => {
     const path = bound('flushme');
-    rooms.flush();
+    docStore.flush();
     expect(
-      rooms.findAndReplace('flushme', {
+      docStore.findAndReplace('flushme', {
         find: 'first line',
         replace: 'the sentence that must survive',
       }).ok,
@@ -279,20 +282,20 @@ describe('evicting an idle doc', () => {
     // Control: it is genuinely still pending — nothing has written it yet.
     expect(onDisk(path)).not.toContain('the sentence that must survive');
 
-    expect(rooms.evictRoom('flushme')).toBe(true);
+    expect(docStore.evictRoom('flushme')).toBe(true);
     expect(resident('flushme')).toBe(false);
     expect(onDisk(path)).toContain('the sentence that must survive');
 
     // The .ydoc got the same treatment, so a restart agrees with the file.
-    const back = makeRooms(dataDir);
+    const back = makeDocStore(dataDir);
     expect(back.getDoc('flushme')?.plainText).toContain('the sentence that must survive');
     back.stop();
   });
 
   it('re-attaches a re-opened doc so it still writes back', async () => {
     const path = bound('rebind');
-    rooms.flush();
-    expect(rooms.evictRoom('rebind')).toBe(true);
+    docStore.flush();
+    expect(docStore.evictRoom('rebind')).toBe(true);
     expect(resident('rebind')).toBe(false);
 
     // Re-open, then edit. The 2026-05-09 bug is a doc that comes back
@@ -300,18 +303,20 @@ describe('evicting an idle doc', () => {
     //
     // `get` answers in the same turn and the binding follows a moment later,
     // off the thread pool: a hydrate stopped opening bound files on the main
-    // thread (`Rooms.prereadFor`), so the re-attach this test is about is
+    // thread (`DocStore.prereadFor`), so the re-attach this test is about is
     // something to wait for rather than something to assume. Waiting is also
     // the assertion — a doc that never re-binds never satisfies it.
-    expect(rooms.get('rebind')).toBeDefined();
-    await waitFor(() => rooms.boundPathOf('rebind') === path, {
+    expect(docStore.get('rebind')).toBeDefined();
+    await waitFor(() => docStore.boundPathOf('rebind') === path, {
       describe: 're-opening an evicted doc to re-establish its file binding',
     });
     expect(
-      rooms.findAndReplace('rebind', { find: 'first line', replace: 'written after coming back' })
-        .ok,
+      docStore.findAndReplace('rebind', {
+        find: 'first line',
+        replace: 'written after coming back',
+      }).ok,
     ).toBe(true);
-    rooms.flush();
+    docStore.flush();
 
     expect(onDisk(path)).toContain('written after coming back');
   });
@@ -329,16 +334,16 @@ describe('evicting an idle doc', () => {
    */
   it('keeps both edits when a doc is evicted mid-edit and then edited externally', async () => {
     const path = bound('both', '# Both\n\nbaseline\n');
-    rooms.flush();
+    docStore.flush();
 
     // In-memory edit, still inside its debounce window.
-    expect(rooms.findAndReplace('both', { find: 'baseline', replace: 'from the editor' }).ok).toBe(
-      true,
-    );
+    expect(
+      docStore.findAndReplace('both', { find: 'baseline', replace: 'from the editor' }).ok,
+    ).toBe(true);
     expect(onDisk(path)).not.toContain('from the editor');
 
     // Evicted mid-edit.
-    expect(rooms.evictRoom('both')).toBe(true);
+    expect(docStore.evictRoom('both')).toBe(true);
     expect(resident('both')).toBe(false);
 
     // The flush landed, so the external editor sees the in-memory edit.
@@ -350,19 +355,19 @@ describe('evicting an idle doc', () => {
 
     // Re-open. The doc must reconcile FROM disk, not assert its own stale
     // copy — which is what a stale `lastMtimeMs` would make it do.
-    expect(rooms.get('both')).toBeDefined();
+    expect(docStore.get('both')).toBeDefined();
     // The re-attach — and with it the reconcile this test is about — lands
     // with the deferred bind. See the note in the test above.
-    await waitFor(() => rooms.boundPathOf('both') === path, {
+    await waitFor(() => docStore.boundPathOf('both') === path, {
       describe: 're-opening an evicted doc to re-establish its file binding',
     });
-    const text = rooms.getDoc('both')?.plainText ?? '';
+    const text = docStore.getDoc('both')?.plainText ?? '';
     expect(text).toContain('from the editor');
     expect(text).toContain('from the filesystem');
 
     // And the file still holds both once the doc settles: the re-attach must
     // not write its pre-eviction state back over the external edit.
-    rooms.flush();
+    docStore.flush();
     const after = onDisk(path);
     expect(after).toContain('from the editor');
     expect(after).toContain('from the filesystem');
@@ -374,7 +379,7 @@ describe('booting against docs that are not loaded', () => {
   let srcDir: string;
 
   const make = (dir: string) =>
-    new Rooms({
+    new DocStore({
       dataDir: dir,
       sse: new SseBus(),
       webhooks: createWebhookDispatcher({ onLog: () => {} }),

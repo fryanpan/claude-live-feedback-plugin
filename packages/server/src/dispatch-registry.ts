@@ -22,7 +22,7 @@
  *   honest, and self-correcting within one write.
  * - **Activity is an event, never a poll.** The watcher records a timestamp
  *   when the OS says something changed; nothing walks the tree on a timer.
- *   rooms.ts avoids fs.watch for BOUND FILES because a file watch pins the
+ *   doc-store.ts avoids fs.watch for BOUND FILES because a file watch pins the
  *   inode an editor's rename-save replaces; a directory watch has no single
  *   inode to go stale on, and this consumer needs none of the file watch's
  *   precision — any event at all is the answer.

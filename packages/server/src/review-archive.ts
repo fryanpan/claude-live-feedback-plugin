@@ -9,8 +9,8 @@ import { join } from 'node:path';
  * the data dir, which is the whole mechanism — `hydrateFromDisk` reads only
  * the top level, so the docs stop loading, stop costing a poll, and leave the
  * home page; `activity-backfill` scans `_archive` explicitly, so they keep
- * feeding analysis. But that move also takes the members out of `rooms.list()`,
- * and `rooms.list()` is the ONLY thing that knows which docIds belong to a
+ * feeding analysis. But that move also takes the members out of `docStore.list()`,
+ * and `docStore.list()` is the ONLY thing that knows which docIds belong to a
  * review (membership lives in each member's own meta). Without a manifest,
  * "unarchive this review" would mean parsing every `.ydoc` in `_archive` to
  * find out — so the writer records the member list, and the operator's reason,
@@ -45,7 +45,7 @@ export interface ArchivedReview {
  * `create_review_doc`, a mockup from `bind_mock`.
  *
  * It needs a manifest for a different reason than a review does. A review's
- * membership is only knowable from `rooms.list()`, so without a manifest the
+ * membership is only knowable from `docStore.list()`, so without a manifest the
  * member list would be unrecoverable; a single doc's id is the filename, so
  * that part is never in doubt. What is lost without a manifest is everything
  * ELSE the round trip needs — which boards to re-attach it to, and who retired

@@ -17,7 +17,7 @@ import * as encoding from 'lib0/encoding';
 import * as awarenessProtocol from 'y-protocols/awareness';
 import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
-import type { DocRoom, FeedbackWs } from '../src/rooms.ts';
+import type { DocRoom, FeedbackWs } from '../src/doc-store.ts';
 import { MSG_AWARENESS, MSG_SYNC, onClose, onMessage, onOpen } from '../src/yjs-protocol.ts';
 
 /** Everything created in a test, torn down after it. Awareness starts a 3s
@@ -63,7 +63,7 @@ function socket(opts: { readOnly?: boolean; failSend?: boolean } = {}) {
  *
  * `new Awareness(ydoc)` gives itself a local state, so a room always carries
  * one entry of its own — the server's — and every joiner is told about it.
- * That is production's shape (`RoomStore.createAwareness` constructs it the
+ * That is production's shape (`DocStore.createAwareness` constructs it the
  * same way and only clears the library's timer), so the fake keeps it and the
  * assertions subtract it rather than pretending rooms start empty.
  */

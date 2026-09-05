@@ -55,8 +55,8 @@ describe('relativeSpecifiers', () => {
 
 describe('resolveSpecifier', () => {
   it('resolves against the importing file, not the repo root', () => {
-    expect(resolveSpecifier('packages/server/src/routes/docs.ts', '../rooms.ts')).toBe(
-      'packages/server/src/rooms.ts',
+    expect(resolveSpecifier('packages/server/src/routes/docs.ts', '../doc-store.ts')).toBe(
+      'packages/server/src/doc-store.ts',
     );
     expect(resolveSpecifier('packages/server/src/routes/docs.ts', './doc-resource.ts')).toBe(
       'packages/server/src/routes/doc-resource.ts',
@@ -104,7 +104,7 @@ describe('violationsIn', () => {
     expect(
       violationsIn(
         'packages/server/src/routes/docs.ts',
-        "import type { Rooms } from '../rooms.ts';\nimport { x } from './doc-resource.ts';",
+        "import type { DocStore } from '../doc-store.ts';\nimport { x } from './doc-resource.ts';",
       ),
     ).toEqual([]);
   });
@@ -126,8 +126,8 @@ describe('audit over a tree', () => {
   it('is silent on a tree that points the right way', () => {
     const root = fixture();
     write(root, 'packages/server/src/server.ts', "import { a } from './routes/docs.ts';");
-    write(root, 'packages/server/src/routes/docs.ts', "import type { R } from '../rooms.ts';");
-    write(root, 'packages/server/src/rooms.ts', 'export const R = 1;');
+    write(root, 'packages/server/src/routes/docs.ts', "import type { R } from '../doc-store.ts';");
+    write(root, 'packages/server/src/doc-store.ts', 'export const R = 1;');
     expect(audit(root)).toEqual([]);
   });
 

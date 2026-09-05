@@ -255,7 +255,7 @@ export class TaskLinksStore {
   /**
    * A plan doc's content moved past the revision some derived rows were
    * stamped at — flag them `possiblyStale`. Wired to the doc store's settled
-   * revision bump (`rooms.onContentRevision`); `docIds` carries the canonical
+   * revision bump (`docStore.onContentRevision`); `docIds` carries the canonical
    * id AND the alias because origin refs routinely hold the caller-chosen
    * name. Advisory only: nothing here gates a transition. Open rows only —
    * a done row's premise no longer matters, and an archived one has left the

@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { workspaceRoomId } from '../src/task-projection.ts';
+import { workspaceDocId } from '../src/task-projection.ts';
 
 const AGENT = { id: 'agent-x', name: 'Search Revamp', kind: 'agent' };
 
@@ -67,7 +67,7 @@ describe('projection narrows legacy triagedAgainst rows', () => {
   });
 
   it('the board ydoc row carries only { goalId, ts }', () => {
-    const room = handle.rooms.get(workspaceRoomId(wsId));
+    const room = handle.docStore.get(workspaceDocId(wsId));
     if (!room) throw new Error('ws room was not created');
     const row = room.ydoc.getMap('tasks').get(taskId) as {
       triagedAgainst?: Record<string, unknown>;

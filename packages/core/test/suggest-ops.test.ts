@@ -18,7 +18,7 @@ import { SUGGEST_DELETE_MARK, SUGGEST_INSERT_MARK, type SuggestionAttrs } from '
 
 /**
  * Suggestion operations (redline-suggestions phase 2, commit 2): the pure
- * Yjs-level registry + mutations rooms-level tools delegate to.
+ * Yjs-level registry + mutations doc-store-level tools delegate to.
  *
  * Semantics pinned here:
  *   - suggestReplace mirrors findAndReplace's matching (same single-match

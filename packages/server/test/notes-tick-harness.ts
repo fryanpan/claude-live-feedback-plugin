@@ -186,7 +186,7 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
     type: opts.docType ?? ('markdown' as DocType),
     ...(opts.docTitle ? { title: opts.docTitle } : {}),
   };
-  const rooms = {
+  const docStore = {
     get: (id: string) => (id === docId ? { ydoc, meta } : undefined),
     boundPathOf: (id: string) => (id === docId ? opts.boundPath : undefined),
   };
@@ -225,7 +225,7 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
       },
     },
     {
-      rooms: () => rooms,
+      docStore: () => docStore,
       tasks: () => ({ listTasks: () => opts.tasks ?? [] }),
       ...(opts.workspaceId ? { boardOf: () => opts.workspaceId } : {}),
       ...(opts.boardDocs ? { lookup: { docs: () => opts.boardDocs ?? [] } } : {}),
