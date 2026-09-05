@@ -285,6 +285,16 @@ wakes correctly:
   unchanged board is re-said at most once per window. The default repeat
   floor across a 9-board fleet prices at roughly 43M tokens/day — the knob
   exists because that floor has to be tunable faster than a release.
+- **The repeat bucket is HELD, never lowered by a flicker**: a
+  remembered row that drops off the findings for one pass used to take the
+  armed bucket down with it, so its return read as another window crossed and
+  woke the lead about a row nothing had changed on — two wakes three minutes
+  apart on one 12h `ready-unpicked` row, measured 2026-09-04. Two things make
+  a row flicker without moving: an escalation item masks its anchor row from
+  the gate until it is withdrawn or re-anchored, and a row on the parallelism
+  cap's boundary leaves the judged set whenever another row starts or stops
+  being runnable. The bucket now only rises, and resets when the board goes
+  wholly clean and drops its arming.
 - **An unreachable lead escalates, and only then costs nothing**: the wake
   goes to any other session holding a stream on that board, carrying
   `escalatedFrom: <lead>` so the stand-in knows why it was told. The frame
