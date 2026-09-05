@@ -4,7 +4,7 @@
  * A hand-maintained tracker is "group headings + status tables" (§1 goal
  * 3b: adoption isn't re-keying). The importer maps headings → board goals
  * and table rows → tasks, with a DRY-RUN that returns the mapping first; a
- * successful apply stamps the source file with a banner + hub link so the
+ * successful apply stamps the source file with a banner + board link so the
  * old tracker can't quietly stay a second source of truth.
  *
  * Golden-file test uses SYNTHETIC content only (§6, ultrareview 2026-08-13):
@@ -318,7 +318,7 @@ describe('import banner + marker', () => {
   it('the banner round-trips through the marker detector', () => {
     const banner = importBanner({
       workspaceId: 'w-abc123',
-      hubUrl: 'http://mac.example:8787/workspaces/w-abc123',
+      boardUrl: 'http://mac.example:8787/workspaces/w-abc123',
       taskCount: 6,
       ts: Date.parse('2026-08-13T12:00:00Z'),
     });
@@ -418,7 +418,7 @@ describe('import route (dry-run first, apply stamps the file)', () => {
     });
     const res = await jj<{
       ok: boolean;
-      hubUrl: string;
+      boardUrl: string;
       goalsCreated: Array<{ id: string; title: string }>;
       tasksCreated: Array<{ id: string; title: string; goal: string; status: string }>;
     }>(
@@ -439,7 +439,7 @@ describe('import route (dry-run first, apply stamps the file)', () => {
     ]);
     for (const g of res.goalsCreated) expect(g.id).toMatch(GENERATED);
     expect(res.tasksCreated).toHaveLength(6);
-    expect(res.hubUrl).toContain(`/workspaces/${workspaceId}`);
+    expect(res.boardUrl).toContain(`/workspaces/${workspaceId}`);
 
     // The board goals actually exist on the workspace — the reported ids are
     // the board's ids, which is the whole claim `goalsCreated` makes.
@@ -482,7 +482,7 @@ describe('import route (dry-run first, apply stamps the file)', () => {
     expect(events.filter((e) => e.type === 'task.transitioned')).toHaveLength(4);
     expect(events.filter((e) => e.type === 'workspace.goals_changed')).toHaveLength(1);
 
-    // The source file is stamped: banner + hub link + marker, original below.
+    // The source file is stamped: banner + board link + marker, original below.
     const stamped = readFileSync(path, 'utf8');
     expect(importMarkerFor(stamped)).toBe(workspaceId);
     expect(stamped).toContain(`/workspaces/${workspaceId}`);
@@ -594,12 +594,12 @@ describe('import route (dry-run first, apply stamps the file)', () => {
     ).toBe(404);
   });
 
-  it('a hub-share visitor cannot import (403), though the hub page serves them (presence)', async () => {
+  it('a board-share visitor cannot import (403), though the board page serves them (presence)', async () => {
     const workspaceId = await seedWorkspace();
     const path = trackerCopy();
-    const visitor = await mintAccessShare(base, access, workspaceId, { label: 'hub share' });
+    const visitor = await mintAccessShare(base, access, workspaceId, { label: 'board share' });
     const visitorHeaders = { ...visitor.headers, 'content-type': 'application/json' };
-    // Presence: the visitor's cookie DOES reach the hub page.
+    // Presence: the visitor's cookie DOES reach the board page.
     const page = await fetch(`${base}/workspaces/${workspaceId}`, { headers: visitorHeaders });
     expect(page.status).toBe(200);
     // Absence: the same credentials cannot import.

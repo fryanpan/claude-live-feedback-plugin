@@ -14,13 +14,13 @@
  */
 import { parseWorkspaceLink } from '@feedback/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { type HubActionDeps, createHubActions } from '../src/hub/hub-actions.ts';
-import type { HubTask } from '../src/hub/hub-board-model.ts';
+import { type BoardActionDeps, createBoardActions } from '../src/board/board-actions.ts';
+import type { BoardTask } from '../src/board/board-model.ts';
 
 const NOW = 1_700_000_000_000;
 const WS = 'w-test';
 
-function task(over: Partial<HubTask> = {}): HubTask {
+function task(over: Partial<BoardTask> = {}): BoardTask {
   return {
     id: 't-me',
     title: 'Wire the task panel',
@@ -35,7 +35,7 @@ function task(over: Partial<HubTask> = {}): HubTask {
     createdAt: NOW,
     updatedAt: NOW,
     ...over,
-  } as HubTask;
+  } as BoardTask;
 }
 
 type Sent = { path: string; body: Record<string, unknown> };
@@ -46,22 +46,22 @@ function actions() {
   const deps = {
     workspaceId: WS,
     author: { id: 'u-1', name: 'Wren', kind: 'known', color: '#68a' },
-    state: {} as HubActionDeps['state'],
+    state: {} as BoardActionDeps['state'],
     renderAll: vi.fn(),
     renderDetail: vi.fn(),
     renderLead: vi.fn(),
     focusTitle: vi.fn(),
-  } as HubActionDeps;
-  return createHubActions(deps);
+  } as BoardActionDeps;
+  return createBoardActions(deps);
 }
 
-const toastText = () => document.getElementById('hub-toast')?.textContent ?? '';
+const toastText = () => document.getElementById('board-toast')?.textContent ?? '';
 
 beforeEach(() => {
   sent = [];
   reply = { status: 200, body: { ok: true } };
   const toast = document.createElement('div');
-  toast.id = 'hub-toast';
+  toast.id = 'board-toast';
   document.body.replaceChildren(toast);
   vi.stubGlobal('fetch', (path: string, init: { body?: string }) => {
     sent.push({ path, body: JSON.parse(init?.body ?? '{}') as Record<string, unknown> });

@@ -30,12 +30,12 @@ import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-
 
 let cleanup = () => {};
 beforeEach(() => {
-  // The review editor's page loads styles.css; the board loads hub.css before
-  // it (`renderHubShell`, packages/server/src/shells.ts). tokens.css is left
+  // The review editor's page loads styles.css; the board loads board.css before
+  // it (`renderBoardShell`, packages/server/src/shells.ts). tokens.css is left
   // out on purpose — the served /app/tokens.css is the vendored Open Props
   // subset concatenated with src/tokens.css, and the mapping layer alone
   // resolves its `var(--gray-9)` chain to nothing.
-  cleanup = installSheets('hub.css', 'styles.css');
+  cleanup = installSheets('board.css', 'styles.css');
 });
 afterEach(() => {
   cleanup();

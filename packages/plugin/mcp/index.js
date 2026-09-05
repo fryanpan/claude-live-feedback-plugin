@@ -14224,7 +14224,7 @@ function voiceRequestLine(p) {
 function createChannelMessages(deps) {
   return {
     emitChannelMessage: (event, payload) => emitChannelMessage(deps, event, payload),
-    emitHubChannelMessage: (event, payload) => emitHubChannelMessage(deps, event, payload)
+    emitBoardChannelMessage: (event, payload) => emitBoardChannelMessage(deps, event, payload)
   };
 }
 function nowMs(deps) {
@@ -14233,8 +14233,8 @@ function nowMs(deps) {
 function nowIso(deps) {
   return new Date(nowMs(deps)).toISOString();
 }
-var HUB_EVENT_RE = /^(task|decision|workspace|agent|voice)\./;
-async function emitHubChannelMessage(deps, event, rawPayload) {
+var BOARD_EVENT_RE = /^(task|decision|workspace|agent|voice)\./;
+async function emitBoardChannelMessage(deps, event, rawPayload) {
   const p = rawPayload ?? {};
   if (event === "agent.heartbeat")
     return;
@@ -14324,8 +14324,8 @@ async function emitHubChannelMessage(deps, event, rawPayload) {
   }
 }
 async function emitChannelMessage(deps, event, rawPayload) {
-  if (HUB_EVENT_RE.test(event)) {
-    await emitHubChannelMessage(deps, event, rawPayload);
+  if (BOARD_EVENT_RE.test(event)) {
+    await emitBoardChannelMessage(deps, event, rawPayload);
     return;
   }
   if (isSelfAuthoredEvent(event, rawPayload, deps.authorId))
@@ -15090,7 +15090,7 @@ var TOOL_LIST = {
         properties: {
           workspaceId: {
             type: "string",
-            description: "Only docs in this workspace. Matches hub-board membership and the reviewId folder binds / diff reviews stamp on their members. An unknown id returns an empty list."
+            description: "Only docs in this workspace. Matches board membership and the reviewId folder binds / diff reviews stamp on their members. An unknown id returns an empty list."
           },
           kind: {
             type: "string",
@@ -15934,7 +15934,7 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
-          workspaceId: { type: "string", description: "Hub workspace id." },
+          workspaceId: { type: "string", description: "Board workspace id." },
           name: { type: "string", description: "The new name. Trimmed; may not be empty." }
         },
         required: ["workspaceId", "name"]
@@ -15946,7 +15946,7 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
-          workspaceId: { type: "string", description: "Hub workspace id." },
+          workspaceId: { type: "string", description: "Board workspace id." },
           reason: {
             type: "string",
             description: "Why, in one line. Shown to every agent that hits the retired board — name the board that replaced it if there is one."
@@ -15957,10 +15957,10 @@ var TOOL_LIST = {
     },
     {
       name: "unretire_workspace",
-      description: "Bring a retired hub board back. It ranks again, takes new work again, and stops warning readers. Nothing has to be restored — retiring only ever wrote one field — so this is a plain reversal and not a recovery.",
+      description: "Bring a retired board back. It ranks again, takes new work again, and stops warning readers. Nothing has to be restored — retiring only ever wrote one field — so this is a plain reversal and not a recovery.",
       inputSchema: {
         type: "object",
-        properties: { workspaceId: { type: "string", description: "Hub workspace id." } },
+        properties: { workspaceId: { type: "string", description: "Board workspace id." } },
         required: ["workspaceId"]
       }
     },
@@ -15970,7 +15970,7 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
-          workspaceId: { type: "string", description: "Hub workspace id from create_workspace." },
+          workspaceId: { type: "string", description: "Board workspace id from create_workspace." },
           leadAgentId: {
             type: "string",
             description: "The agent id taking responsibility. Omit it to declare yourself — the common case, and the only form that also attaches and subscribes you. Naming another agent hands the seat over and does nothing else."
@@ -15989,7 +15989,7 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
-          workspaceId: { type: "string", description: "Hub workspace id from create_workspace." },
+          workspaceId: { type: "string", description: "Board workspace id from create_workspace." },
           docId: { type: "string", description: "Doc id, or a diff-review/folder-bind id." }
         },
         required: ["workspaceId", "docId"]
@@ -16094,7 +16094,7 @@ var TOOL_LIST = {
         properties: {
           docId: { type: "string" },
           threadId: { type: "string" },
-          workspaceId: { type: "string", description: "Hub workspace the task lands in." },
+          workspaceId: { type: "string", description: "Board workspace the task lands in." },
           title: {
             type: "string",
             description: "Override the drafted title — worth sending, since the draft is a clip of a comment and names what was said rather than what will be done. `<persona> can <do x> so that <goal y>`, 20 words or less."
@@ -16573,7 +16573,7 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
-          workspaceId: { type: "string", description: "Hub workspace id from create_workspace." },
+          workspaceId: { type: "string", description: "Board workspace id from create_workspace." },
           path: { type: "string", description: "Absolute path to the tracker .md file." },
           apply: {
             type: "boolean",
@@ -16750,7 +16750,7 @@ var TOOL_LIST = {
     },
     {
       name: "list_attachments",
-      description: "List the agents attached to a hub workspace with their derived state: active, 'process up, agent unresponsive' (fresh heartbeat, stale tool calls), or 'away — requests queue'. The ambient-awareness read: who is where, and is anyone wedged.",
+      description: "List the agents attached to a board workspace with their derived state: active, 'process up, agent unresponsive' (fresh heartbeat, stale tool calls), or 'away — requests queue'. The ambient-awareness read: who is where, and is anyone wedged.",
       inputSchema: {
         type: "object",
         properties: { workspaceId: { type: "string" } },
@@ -16901,7 +16901,14 @@ async function handleDocsTool(name, a, ctx) {
       return ok2(res);
     }
     case "create_review_doc": {
-      const { docId, path, title, setId, hubWorkspaceId, producedBy } = a;
+      const {
+        docId,
+        path,
+        title,
+        setId,
+        hubWorkspaceId: boardWorkspaceId,
+        producedBy
+      } = a;
       const res = await http("POST", "/api/docs", {
         docId,
         type: "markdown",
@@ -16909,7 +16916,7 @@ async function handleDocsTool(name, a, ctx) {
         owner: process.cwd(),
         ...title ? { title } : {},
         ...setId ? { setId } : {},
-        ...hubWorkspaceId ? { hubWorkspaceId } : {},
+        ...boardWorkspaceId ? { hubWorkspaceId: boardWorkspaceId } : {},
         ...producedBy ? { producedBy } : {}
       });
       return ok2(res);
@@ -16936,14 +16943,19 @@ async function handleDocsTool(name, a, ctx) {
     }
     case "bind_mock":
     case "attach_mockup": {
-      const { docId, sourceHtmlPath, title, hubWorkspaceId } = a;
+      const {
+        docId,
+        sourceHtmlPath,
+        title,
+        hubWorkspaceId: boardWorkspaceId
+      } = a;
       const res = await http("POST", "/api/docs", {
         docId,
         type: "mockup",
         owner: process.cwd(),
         ...sourceHtmlPath ? { sourceUrl: sourceHtmlPath } : {},
         ...title ? { title } : {},
-        ...hubWorkspaceId ? { hubWorkspaceId } : {}
+        ...boardWorkspaceId ? { hubWorkspaceId: boardWorkspaceId } : {}
       });
       return ok2(res);
     }
@@ -16952,7 +16964,7 @@ async function handleDocsTool(name, a, ctx) {
       const {
         folderPath,
         workspaceId,
-        hubWorkspaceId,
+        hubWorkspaceId: boardWorkspaceId,
         title,
         include,
         exclude,
@@ -16964,7 +16976,7 @@ async function handleDocsTool(name, a, ctx) {
         folderPath,
         owner: process.cwd(),
         ...workspaceId ? { workspaceId } : {},
-        ...hubWorkspaceId ? { hubWorkspaceId } : {},
+        ...boardWorkspaceId ? { hubWorkspaceId: boardWorkspaceId } : {},
         ...title ? { title } : {},
         ...include ? { include } : {},
         ...exclude ? { exclude } : {},
@@ -16982,7 +16994,7 @@ async function handleDocsTool(name, a, ctx) {
         base,
         target,
         reviewId,
-        hubWorkspaceId,
+        hubWorkspaceId: boardWorkspaceId,
         title,
         exclude,
         groups,
@@ -16996,7 +17008,7 @@ async function handleDocsTool(name, a, ctx) {
         ...target ? { target } : {},
         owner: process.cwd(),
         ...reviewId ? { reviewId } : {},
-        ...hubWorkspaceId ? { hubWorkspaceId } : {},
+        ...boardWorkspaceId ? { hubWorkspaceId: boardWorkspaceId } : {},
         ...title ? { title } : {},
         ...exclude ? { exclude } : {},
         ...groups ? { groups } : {},
@@ -18561,7 +18573,7 @@ var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.165";
+var PLUGIN_VERSION = "0.1.167";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
@@ -18653,7 +18665,7 @@ var server = new Server({
     "BEFORE YOU EDIT A .md FILE: call list_docs first. If a doc has sourceUrl",
     "matching the path, route through the MCP. If not, normal file edits are fine.",
     "",
-    "WORKSPACE HUB: a hub workspace is a goal + a task board + linked docs.",
+    "WORKSPACE BOARD: a board workspace is a goal + a task board + linked docs.",
     "create_workspace mints one; attach_doc links existing docs/reviews to it;",
     "create_tasks (ALWAYS a list — one idea is a one-row list) and",
     "spin_off_task add work (omit `goal` and the task lands UNPLACED in",

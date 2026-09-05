@@ -20,7 +20,7 @@ Two smaller grants used to exist, and both are gone:
 | `share_workspace` with a folder-bind or diff-review id | a share scoped to that grouping | `410 grouping_sharing_removed` |
 | `share_link` | a Cloudflare Access application per share | `410 link_share_mint_retired` |
 
-So the id you pass is always a hub board id — the one `create_workspace`
+So the id you pass is always a board id — the one `create_workspace`
 returned, or the `hubWorkspaceId` that `attach_folder` / `create_diff_review`
 reports back.
 

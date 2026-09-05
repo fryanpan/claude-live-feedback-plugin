@@ -4,8 +4,8 @@ import { OVERVIEW_DOC, judge, moduleOf, topLevelModules } from './architecture-f
 describe('moduleOf', () => {
   it('records a source file sitting directly in a package src', () => {
     expect(moduleOf('packages/server/src/tasks.ts')).toBe('packages/server/src/tasks.ts');
-    expect(moduleOf('packages/workspaces-app/src/hub.css')).toBe(
-      'packages/workspaces-app/src/hub.css',
+    expect(moduleOf('packages/workspaces-app/src/board.css')).toBe(
+      'packages/workspaces-app/src/board.css',
     );
     expect(moduleOf('packages/workspaces-app/src/app-entry.tsx')).toBe(
       'packages/workspaces-app/src/app-entry.tsx',

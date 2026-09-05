@@ -17,7 +17,7 @@ import {
   maintainAwareness,
 } from '../src/room-fanout.ts';
 import type { DocRoom, FeedbackWs } from '../src/rooms.ts';
-import { SseHub } from '../src/sse.ts';
+import { SseBus } from '../src/sse.ts';
 import type { ThreadSummarizer } from '../src/summarize.ts';
 
 type Closed = { code: number; reason: string };
@@ -72,7 +72,7 @@ function givePresence(fanout: RoomFanout, room: DocRoom): DocRoom['awareness'] {
 
 interface Recorder {
   host: RoomFanoutHost;
-  sse: SseHub;
+  sse: SseBus;
   webhooks: { url: string; payload: WebhookPayload }[];
   roomEvents: { docId: string; payload: WebhookPayload }[];
   persisted: string[];
@@ -84,7 +84,7 @@ function makeHost(
   rooms: DocRoom[],
   opts: { summarizer?: ThreadSummarizer; companionOf?: Record<string, string> } = {},
 ): Recorder {
-  const sse = new SseHub();
+  const sse = new SseBus();
   const rec: Omit<Recorder, 'host'> = {
     sse,
     webhooks: [],

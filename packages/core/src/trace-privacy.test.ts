@@ -147,9 +147,13 @@ describe('a browser transaction event, scrubbed', () => {
     // key-targeted precisely so it survives.
     const out = scrubEventForPrivacy({
       exception: {
-        values: [{ stacktrace: { frames: [{ filename: '/app/src/hub/hub-app.ts', lineno: 12 }] } }],
+        values: [
+          { stacktrace: { frames: [{ filename: '/app/src/board/board-app.ts', lineno: 12 }] } },
+        ],
       },
     }) as { exception: { values: Array<{ stacktrace: { frames: Array<{ filename: string }> } }> } };
-    expect(out.exception.values[0]?.stacktrace.frames[0]?.filename).toBe('/app/src/hub/hub-app.ts');
+    expect(out.exception.values[0]?.stacktrace.frames[0]?.filename).toBe(
+      '/app/src/board/board-app.ts',
+    );
   });
 });

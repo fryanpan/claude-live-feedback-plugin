@@ -33,7 +33,7 @@ const REVIEW_DELETE = /^\/api\/reviews\/([^/]+)$/;
 export interface ArchiveRoutesContext {
   /** Doc rooms — the archive and unarchive verbs live on them. */
   rooms: Rooms;
-  /** The hub store — which boards link a review, and where it goes back. */
+  /** The board store — which boards link a review, and where it goes back. */
   taskStore: TaskStore;
   /** The ydoc projection, refreshed by hand after an unarchive re-attaches. */
   taskProjection: TaskProjection;
@@ -48,7 +48,7 @@ export interface ArchiveRoutesContext {
 
   /** Take a doc or review off every board holding it, so an archived row is
    *  not left as a dead end. */
-  unlinkFromEveryHubWorkspace: (attachmentId: string) => void;
+  unlinkFromEveryBoardWorkspace: (attachmentId: string) => void;
   /** A doc's own id, whichever spelling it was addressed by. */
   canonicalDocId: (addressed: string) => string;
 }
@@ -80,7 +80,7 @@ export function createArchiveRoutes(ctx: ArchiveRoutesContext): {
     dataDir,
     j,
     safeJson,
-    unlinkFromEveryHubWorkspace,
+    unlinkFromEveryBoardWorkspace,
     canonicalDocId,
   } = ctx;
   /** Boards that link this review, so an archive can put them back. */
@@ -106,7 +106,7 @@ export function createArchiveRoutes(ctx: ArchiveRoutesContext): {
     // A board row pointing at a review that no longer loads is a dead
     // end, so archiving takes the row too — and the manifest remembers
     // which boards, so unarchiving puts it back rather than orphaning it.
-    unlinkFromEveryHubWorkspace(setId);
+    unlinkFromEveryBoardWorkspace(setId);
     return j(200, res);
   };
   // Delete a REVIEW as one unit (all-or-nothing open-thread guardrail;
@@ -144,7 +144,7 @@ export function createArchiveRoutes(ctx: ArchiveRoutesContext): {
     if (res.ok) {
       // The review was one row on a board; deleting it must take the
       // row with it, the same way a deleted doc does.
-      unlinkFromEveryHubWorkspace(setId);
+      unlinkFromEveryBoardWorkspace(setId);
       return j(200, res);
     }
     return j(res.error === 'has-open-threads' ? 409 : 404, res);
@@ -213,7 +213,7 @@ export function createArchiveRoutes(ctx: ArchiveRoutesContext): {
       // A board row pointing at a doc that no longer loads is a dead end,
       // so archiving takes the row too — and the manifest remembers which
       // boards, so unarchiving puts it back rather than orphaning it.
-      unlinkFromEveryHubWorkspace(docId);
+      unlinkFromEveryBoardWorkspace(docId);
       return j(200, res);
     }
     const docUnarchiveMatch = pathname.match(/^\/api\/docs\/([^/]+)\/unarchive$/);

@@ -7,7 +7,7 @@
  * Asked on 2026-08-29: "I want to understand the load time for each page
  * (home page, doc, mockup, board) and see if there are issues sometimes."
  * Only the board could answer. There was exactly one browser Sentry init, in
- * `hub-app.ts`, reading a meta tag only `renderHubShell` emitted — so every
+ * `board-app.ts`, reading a meta tag only `renderBoardShell` emitted — so every
  * transaction Sentry held was a `/workspaces/...` path and every other
  * surface was silent. "Docs load fine" was not a finding anyone had made; it
  * was a question nobody could ask.
@@ -23,7 +23,7 @@
  *
  * `/app/sentry.js` is its own build entry, loaded by a `<script type=
  * "module">` that a shell emits ONLY when a DSN is configured. Three reasons
- * it is not an `import()` inside app.js / hub.js / the widget:
+ * it is not an `import()` inside app.js / board.js / the widget:
  *
  * - `app.ts` and the widget build with `splitting: false`, so a dynamic
  *   `import('@sentry/browser')` inside either is INLINED into the entry —

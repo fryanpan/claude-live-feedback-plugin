@@ -48,8 +48,8 @@ import { type NestedGoalInput, flattenNestedGoals, isAttachmentRuntime } from '.
 import type {
   AgentAttachment,
   AgentRoster,
+  BoardWorkspace,
   GoalRow,
-  HubWorkspace,
   RenameTaskResult,
   TaskStoreEvent,
   WorkspaceState,
@@ -106,7 +106,7 @@ export interface TaskPersistenceHost {
   getGoalRow(goalId: string): GoalRow | undefined;
   hasLiveLeadAttachment(workspaceId: string): boolean;
   listUntriaged(workspaceId: string): Task[];
-  goalIdExists(workspace: HubWorkspace, goalId: string): boolean;
+  goalIdExists(workspace: BoardWorkspace, goalId: string): boolean;
   /** Re-derive the workspace's goal rows after the band list changed. */
   syncGoalRows(state: WorkspaceState, mintStatus: TaskStatus): void;
   scheduleSave(workspaceId: string): void;
@@ -343,7 +343,7 @@ export function hydrateTasksFromDisk(store: TaskPersistenceHost): void {
     if (!entry.endsWith('.tasks.json')) continue;
     try {
       const parsed = JSON.parse(readFileSync(join(dir, entry), 'utf8')) as {
-        workspace?: HubWorkspace;
+        workspace?: BoardWorkspace;
         tasks?: Task[];
         goalRows?: GoalRow[];
       };

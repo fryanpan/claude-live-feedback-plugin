@@ -16,7 +16,7 @@
  * NOTHING WORD-RATE GOES OVER SSE. Transcript frames ride back down this same
  * socket; only `meeting.started` and `meeting.stopped` are broadcast to the
  * doc's channel, where other viewers learn that recording is live. The SSE
- * hub keeps 200 events per channel for reconnect replay, and a conversation
+ * bus keeps 200 events per channel for reconnect replay, and a conversation
  * emits that many words in about a minute — broadcasting partials would
  * evict every real doc event from the buffer for the length of a meeting.
  *

@@ -31,7 +31,7 @@ import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-
 
 let cleanup = () => {};
 beforeEach(() => {
-  cleanup = installSheets('hub.css', 'styles.css', 'doc.css');
+  cleanup = installSheets('board.css', 'styles.css', 'doc.css');
 });
 afterEach(() => {
   cleanup();

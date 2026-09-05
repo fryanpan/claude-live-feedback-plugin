@@ -62,7 +62,7 @@ describe('GET /api/docs pages', () => {
    *  listing answers in minted ids. */
   const mintedId: Record<string, string> = {};
   const minted = () => Object.values(mintedId).sort();
-  /** Docs the server seeds for itself (the hub feedback doc, a board room).
+  /** Docs the server seeds for itself (the board feedback doc, a board room).
    *  Counted once so every total below is a claim about the seeded set. */
   let builtin: string[] = [];
   const isSeeded = (r: Row) => !builtin.includes(r.docId);
@@ -196,7 +196,7 @@ describe('GET /api/docs pages', () => {
   });
 
   it('walks the whole set by cursor with no gaps and no duplicates', async () => {
-    // Scoped to the seeded rows: the server's own docs (the hub feedback
+    // Scoped to the seeded rows: the server's own docs (the board feedback
     // doc, the board room) get their first activity stamp a beat after
     // boot, and a row whose recency MOVES while a walk is in flight is the
     // one case a keyset cursor is defined not to revisit. That is the

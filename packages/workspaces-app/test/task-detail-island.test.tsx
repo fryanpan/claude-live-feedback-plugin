@@ -1,22 +1,22 @@
 import type { Thread, User } from '@feedback/core';
 import { options } from 'preact';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { DetailHandlers, TaskDiscussion } from '../src/board/board-detail-render.ts';
 import {
+  type BoardNote,
+  type BoardTask,
+  type BoardTransition,
   CHORES_ID,
-  type HubNote,
-  type HubTask,
-  type HubTransition,
   type TaskStatus,
-} from '../src/hub/hub-board-model.ts';
-import type { DetailHandlers, TaskDiscussion } from '../src/hub/hub-detail-render.ts';
-import { type ActivityEvent } from '../src/hub/hub-presence-model.ts';
-import { mountTaskDetailIsland, taskDetailData } from '../src/hub/task-detail-island.tsx';
+} from '../src/board/board-model.ts';
+import { type ActivityEvent } from '../src/board/board-presence-model.ts';
+import { mountTaskDetailIsland, taskDetailData } from '../src/board/task-detail-island.tsx';
 import { IPAD, installSheets, setViewport, styleOf } from './css-harness.ts';
 import { frame, surfaceOf, typeInComposer } from './support/composer.ts';
 
 /**
  * The island's own contract, as opposed to what the panel SHOWS — that is
- * `hub-render.test.ts`, which drives the same island through the app's call
+ * `board-render.test.ts`, which drives the same island through the app's call
  * shape and is where every behavioural assertion still lives.
  *
  * What is pinned here is the four things that stop being true the moment the
@@ -36,7 +36,7 @@ const NOW = 1_700_000_000_000;
 options.debounceRendering = (cb: () => void) => cb();
 
 let seq = 0;
-function task(overrides: Partial<HubTask> = {}): HubTask {
+function task(overrides: Partial<BoardTask> = {}): BoardTask {
   seq += 1;
   return {
     id: `t-${seq}`,
@@ -72,7 +72,7 @@ const EMPTY: TaskDiscussion = { loading: false, threads: [] };
 let live: (() => void) | null = null;
 function mount(): HTMLElement {
   const host = document.createElement('div');
-  host.className = 'hub-detail hidden';
+  host.className = 'board-detail hidden';
   document.body.replaceChildren(host);
   live = mountTaskDetailIsland(host);
   return host;
@@ -81,7 +81,7 @@ function mount(): HTMLElement {
 /** A repaint: the same task, arriving again the way an SSE event delivers it.
  *  The object is fresh — `taskDetailData.value = <same object>` would not
  *  notify, and a test whose repaint is a no-op proves nothing. */
-function repaint(t: HubTask, discussion?: TaskDiscussion, extra?: Partial<DetailHandlers>): void {
+function repaint(t: BoardTask, discussion?: TaskDiscussion, extra?: Partial<DetailHandlers>): void {
   taskDetailData.value = {
     task: { ...t },
     discussion,
@@ -89,13 +89,13 @@ function repaint(t: HubTask, discussion?: TaskDiscussion, extra?: Partial<Detail
   };
 }
 
-/** The page's own sheets, in the order the hub shell loads them, so any test
+/** The page's own sheets, in the order the board shell loads them, so any test
  *  here may read a computed value. Installing a stylesheet changes no text and
  *  no structure, so the behavioural cases either side are unaffected. */
 let sheets = () => {};
 beforeEach(() => {
   setViewport(IPAD);
-  sheets = installSheets('hub.css', 'styles.css');
+  sheets = installSheets('board.css', 'styles.css');
 });
 
 afterEach(() => {
@@ -107,9 +107,9 @@ afterEach(() => {
 
 describe('which tab the panel opens on', () => {
   const selected = (host: HTMLElement, id: string) =>
-    host.querySelector(`.hub-detail-tab-${id}`)?.getAttribute('aria-selected') === 'true';
+    host.querySelector(`.board-detail-tab-${id}`)?.getAttribute('aria-selected') === 'true';
   const shown = (host: HTMLElement, id: string) =>
-    host.querySelector(`.hub-detail-tabpanel-${id}`)?.classList.contains('hidden') === false;
+    host.querySelector(`.board-detail-tabpanel-${id}`)?.classList.contains('hidden') === false;
 
   it('opens on Activity when the opener asks for it — the Home activity pane’s title tap', () => {
     const host = mount();
@@ -141,7 +141,7 @@ describe('the task detail island’s mount contract', () => {
 
     const wrapper = host.querySelector('[data-preact-island="task-detail"]');
     expect(wrapper).not.toBeNull();
-    expect(wrapper?.querySelector('.hub-detail-panel')).not.toBeNull();
+    expect(wrapper?.querySelector('.board-detail-panel')).not.toBeNull();
     expect(host.firstChild).toBe(vanillaChild);
 
     unmount();
@@ -155,15 +155,15 @@ describe('the task detail island’s mount contract', () => {
   });
 
   it('the wrapper is out of layout, so the panel stays a direct child of the backdrop', () => {
-    // `.hub-detail` is a centring flex container, and without `display:
+    // `.board-detail` is a centring flex container, and without `display:
     // contents` the wrapper — not the panel — becomes the flex item, so the
-    // panel stretches to fill it and the `min(var(--hub-detail-w), …)` width
+    // panel stretches to fill it and the `min(var(--board-detail-w), …)` width
     // stops describing anything on screen.
     //
     // Measured off the mounted island rather than read out of the stylesheet:
-    // the rule is `.hub-detail > [data-preact-island]`, and only a real mount
+    // the rule is `.board-detail > [data-preact-island]`, and only a real mount
     // shows that the wrapper Preact creates is a DIRECT child of a
-    // `.hub-detail` host — the half a text read cannot see. happy-dom lays
+    // `.board-detail` host — the half a text read cannot see. happy-dom lays
     // nothing out, so what is asserted is the `display` the browser would
     // use, not the geometry that follows from it.
     const host = mount();
@@ -175,12 +175,12 @@ describe('the task detail island’s mount contract', () => {
     // backdrop the rule is scoped to. An unstyled element reads `''` for every
     // property, which would satisfy an "is not a box" assertion vacuously.
     //
-    // So the panel is checked by VALUE. `.hub-detail-panel` sets no `display`
+    // So the panel is checked by VALUE. `.board-detail-panel` sets no `display`
     // at all, which made the old `not.toBe('')` here true of the UA default
     // for a div with no stylesheet in the document — a control that could not
     // fail. `overflow` and `padding` come only from the rule.
     expect(styleOf(host).position).toBe('fixed');
-    const panel = styleOf(host.querySelector('.hub-detail-panel') as HTMLElement);
+    const panel = styleOf(host.querySelector('.board-detail-panel') as HTMLElement);
     expect(panel.overflow).toBe('auto');
     expect(panel.padding).toBe('0px 16px 24px');
   });
@@ -193,7 +193,7 @@ describe('the task detail island’s mount contract', () => {
     // The tap has to be the backdrop itself. A click inside the panel bubbles
     // through the same listener and must not close the task the reader is
     // reading — the assertion pair below is what tells those two apart.
-    (host.querySelector('.hub-detail-panel') as HTMLElement).dispatchEvent(
+    (host.querySelector('.board-detail-panel') as HTMLElement).dispatchEvent(
       new Event('click', { bubbles: true }),
     );
     expect(onClose).not.toHaveBeenCalled();
@@ -213,7 +213,7 @@ describe('the task detail island’s mount contract', () => {
 
     taskDetailData.value = { task: null, handlers: handlers() };
     expect(host.classList.contains('hidden')).toBe(true);
-    expect(host.querySelector('.hub-detail-panel')).toBeNull();
+    expect(host.querySelector('.board-detail-panel')).toBeNull();
     // Still mounted, though — the wrapper is the island's for as long as the
     // app runs, and a closed panel is a render of nothing rather than an
     // unmount.
@@ -229,22 +229,24 @@ describe('the task detail island keeps its nodes across a repaint', () => {
     const host = mount();
     const t = task();
     repaint(t, EMPTY);
-    const panel = host.querySelector('.hub-detail-panel');
-    const title = host.querySelector('.hub-detail-title');
+    const panel = host.querySelector('.board-detail-panel');
+    const title = host.querySelector('.board-detail-title');
     expect(panel).not.toBeNull();
 
     // A status flip lands: the same ticket, drawn again.
     repaint({ ...t, status: 'in-progress' }, EMPTY);
-    expect(host.querySelector('.hub-detail-panel')).toBe(panel);
-    expect(host.querySelector('.hub-detail-title')).toBe(title);
+    expect(host.querySelector('.board-detail-panel')).toBe(panel);
+    expect(host.querySelector('.board-detail-title')).toBe(title);
     // …and it really was a repaint rather than a skipped render.
-    expect(host.querySelector<HTMLSelectElement>('.hub-detail-status')?.value).toBe('in-progress');
+    expect(host.querySelector<HTMLSelectElement>('.board-detail-status')?.value).toBe(
+      'in-progress',
+    );
 
     // A different ticket is a different panel. Keyed on the task id precisely
     // so this case does NOT reuse: one reader's half-typed comment must not
     // reappear in a box belonging to somebody else's task.
     repaint(task(), EMPTY);
-    expect(host.querySelector('.hub-detail-panel')).not.toBe(panel);
+    expect(host.querySelector('.board-detail-panel')).not.toBe(panel);
   });
 
   it('keeps the comment composer itself — the node, its words and its caret', async () => {
@@ -257,7 +259,7 @@ describe('the task detail island keeps its nodes across a repaint', () => {
     const host = mount();
     const t = task();
     repaint(t, EMPTY, { onComment: vi.fn() });
-    const ta = host.querySelector<HTMLTextAreaElement>('.hub-detail-panel textarea');
+    const ta = host.querySelector<HTMLTextAreaElement>('.board-detail-panel textarea');
     expect(ta).not.toBeNull();
     const surface = surfaceOf(ta as HTMLTextAreaElement);
     expect(surface).not.toBeNull(); // control: a live editor, not a bare box
@@ -266,7 +268,7 @@ describe('the task detail island keeps its nodes across a repaint', () => {
     repaint({ ...t, status: 'in-progress' }, EMPTY, { onComment: vi.fn() });
     await frame();
 
-    const after = host.querySelector<HTMLTextAreaElement>('.hub-detail-panel textarea');
+    const after = host.querySelector<HTMLTextAreaElement>('.board-detail-panel textarea');
     // The same node, so nothing had to be carried across: no `keepFields`
     // snapshot, no `restoreFields` pass, and no editor torn down and rebuilt
     // under a caret that was in it.
@@ -280,12 +282,12 @@ describe('the task detail island keeps its nodes across a repaint', () => {
     // than global: a draft belongs to the ticket it was typed on.
     const host = mount();
     repaint(task(), EMPTY, { onComment: vi.fn() });
-    const ta = host.querySelector<HTMLTextAreaElement>('.hub-detail-panel textarea');
+    const ta = host.querySelector<HTMLTextAreaElement>('.board-detail-panel textarea');
     await typeInComposer(ta as HTMLTextAreaElement, 'meant for this one');
 
     repaint(task(), EMPTY, { onComment: vi.fn() });
     await frame();
-    const after = host.querySelector<HTMLTextAreaElement>('.hub-detail-panel textarea');
+    const after = host.querySelector<HTMLTextAreaElement>('.board-detail-panel textarea');
     expect(after).not.toBe(ta);
     expect(after?.value).toBe('');
   });
@@ -298,11 +300,11 @@ describe('the task detail island keeps its nodes across a repaint', () => {
     const host = mount();
     const t = task({ quote: 'the original words, verbatim' });
     repaint(t, EMPTY);
-    const quote = host.querySelector('.hub-detail-quote-block') as HTMLDetailsElement;
+    const quote = host.querySelector('.board-detail-quote-block') as HTMLDetailsElement;
     quote.open = true;
 
     repaint({ ...t, status: 'in-progress' }, EMPTY);
-    const after = host.querySelector('.hub-detail-quote-block') as HTMLDetailsElement;
+    const after = host.querySelector('.board-detail-quote-block') as HTMLDetailsElement;
     expect(after).toBe(quote);
     expect(after.open).toBe(true);
   });
@@ -313,11 +315,11 @@ describe('the task detail island keeps its nodes across a repaint', () => {
 const MIN = 60_000;
 const ME: User = { id: 'u-me', name: 'Sam Reviewer', kind: 'known', color: '#2e7dd7' };
 
-function note(agoMs: number, text: string, overrides: Partial<HubNote> = {}): HubNote {
+function note(agoMs: number, text: string, overrides: Partial<BoardNote> = {}): BoardNote {
   return { at: NOW - agoMs, kind: 'turn', text, agent: 'Beacon Bot', ...overrides };
 }
 
-function move(agoMs: number, from: TaskStatus, to: TaskStatus): HubTransition {
+function move(agoMs: number, from: TaskStatus, to: TaskStatus): BoardTransition {
   return { ts: NOW - agoMs, from, to, by: { name: 'Beacon Bot', kind: 'agent' } };
 }
 
@@ -335,7 +337,7 @@ function retitled(agoMs: number, taskId: string): ActivityEvent {
 /** Open `t` on its Activity tab with the feed handlers wired. Every call is
  *  a fresh handlers object, as every paint of the real app is. */
 function openActivity(
-  t: HubTask,
+  t: BoardTask,
   extra: Partial<DetailHandlers> = {},
   events: ActivityEvent[] = [],
 ): DetailHandlers {
@@ -352,7 +354,7 @@ function openActivity(
 }
 
 const rowsIn = (host: HTMLElement) => [
-  ...host.querySelectorAll<HTMLElement>('.hub-detail-transitions > li'),
+  ...host.querySelectorAll<HTMLElement>('.board-detail-transitions > li'),
 ];
 
 /** The pill keys off `selectionchange`, debounced — wait it out. */
@@ -392,7 +394,7 @@ function threadOn(phrase: string, text: string, id = 'th-1'): Thread {
   };
 }
 
-const pillIn = (host: HTMLElement) => host.querySelector('.hub-hist-pill') as HTMLElement;
+const pillIn = (host: HTMLElement) => host.querySelector('.board-hist-pill') as HTMLElement;
 const pillShown = (host: HTMLElement) => !pillIn(host).classList.contains('hidden');
 const composer = (host: HTMLElement) =>
   host.querySelector('.acti-thread textarea') as HTMLTextAreaElement;
@@ -425,7 +427,7 @@ describe('the Activity tab is one feed: moves, audit rows and every note in full
     const host = mount();
     openActivity(task({ id: 't-fresh', transitions: [], notes: [] }), {}, []);
     expect(rowsIn(host).length).toBe(0);
-    const empty = host.querySelector('.hub-hist-empty');
+    const empty = host.querySelector('.board-hist-empty');
     expect(empty?.textContent).toContain('Nothing yet');
   });
 
@@ -436,17 +438,17 @@ describe('the Activity tab is one feed: moves, audit rows and every note in full
     });
     openActivity(t);
     const row = rowsIn(host)[0] as HTMLElement;
-    expect(row.classList.contains('hub-hist-row-turn')).toBe(true);
-    expect(row.querySelector('.hub-note-agent')?.textContent).toBe('Beacon Bot');
-    expect(row.querySelector('.hub-note-age')?.textContent).toBe('4m');
-    expect(row.querySelector('.hub-note-kind')?.textContent).toBe('turn');
-    const body = row.querySelector('.hub-note-body') as HTMLElement;
+    expect(row.classList.contains('board-hist-row-turn')).toBe(true);
+    expect(row.querySelector('.board-note-agent')?.textContent).toBe('Beacon Bot');
+    expect(row.querySelector('.board-note-age')?.textContent).toBe('4m');
+    expect(row.querySelector('.board-note-kind')?.textContent).toBe('turn');
+    const body = row.querySelector('.board-note-body') as HTMLElement;
     expect(body.querySelector('p')?.textContent).toBe('Shipped the CSV route');
     const bullets = [...body.querySelectorAll('li')].map((li) => li.textContent);
     expect(bullets).toEqual(['writer done', 'download tests next']);
     // Nothing folds a two-paragraph note.
     expect(body.classList.contains('is-folded')).toBe(false);
-    expect(row.querySelector('.hub-note-more')).toBeNull();
+    expect(row.querySelector('.board-note-more')).toBeNull();
   });
 
   it('a status note is labelled status; a denial is labelled blocked with its shape in code', () => {
@@ -459,13 +461,15 @@ describe('the Activity tab is one feed: moves, audit rows and every note in full
     });
     openActivity(t);
     const [status, denial] = rowsIn(host) as [HTMLElement, HTMLElement];
-    expect(status.querySelector('.hub-note-kind')?.textContent).toBe('status');
-    expect(status.querySelector('.hub-note-body')?.textContent).toBe('Waiting on CI');
-    expect(denial.classList.contains('hub-hist-row-denial')).toBe(true);
-    expect(denial.querySelector('.hub-note-kind')?.textContent).toBe('blocked');
+    expect(status.querySelector('.board-note-kind')?.textContent).toBe('status');
+    expect(status.querySelector('.board-note-body')?.textContent).toBe('Waiting on CI');
+    expect(denial.classList.contains('board-hist-row-denial')).toBe(true);
+    expect(denial.querySelector('.board-note-kind')?.textContent).toBe('blocked');
     // The kind token already says "blocked"; the body is just the shape.
-    expect(denial.querySelector('.hub-note-body')?.textContent).toBe('rm -rf dist');
-    expect(denial.querySelector('.hub-note-body code.acti-shape')?.textContent).toBe('rm -rf dist');
+    expect(denial.querySelector('.board-note-body')?.textContent).toBe('rm -rf dist');
+    expect(denial.querySelector('.board-note-body code.acti-shape')?.textContent).toBe(
+      'rm -rf dist',
+    );
   });
 
   it('at an equal timestamp a move sorts above an audit row, and both above a note', () => {
@@ -498,7 +502,7 @@ describe('the Activity tab is one feed: moves, audit rows and every note in full
     openActivity(t);
     const rows = rowsIn(host);
     expect(rows.length).toBe(2);
-    const texts = rows.map((r) => r.querySelector('.hub-note-body')?.textContent);
+    const texts = rows.map((r) => r.querySelector('.board-note-body')?.textContent);
     expect(texts).toEqual(['First status', 'Second status']);
     const keys = rows.map((r) => r.dataset.histKey);
     expect(new Set(keys).size).toBe(2);
@@ -508,7 +512,7 @@ describe('the Activity tab is one feed: moves, audit rows and every note in full
     const host = mount();
     const t = task({ notes: [note(MIN, 'Ran:\n```\n# not a heading\n- not a bullet\n```')] });
     openActivity(t);
-    const body = rowsIn(host)[0]?.querySelector('.hub-note-body') as HTMLElement;
+    const body = rowsIn(host)[0]?.querySelector('.board-note-body') as HTMLElement;
     expect(body.querySelector('pre.cm-code code')?.textContent).toBe(
       '# not a heading\n- not a bullet',
     );
@@ -523,9 +527,9 @@ describe('the Activity tab is one feed: moves, audit rows and every note in full
     const t = task({ notes: [note(MIN, lines)] });
     openActivity(t);
     const row = rowsIn(host)[0] as HTMLElement;
-    const body = row.querySelector('.hub-note-body') as HTMLElement;
+    const body = row.querySelector('.board-note-body') as HTMLElement;
     expect(body.classList.contains('is-folded')).toBe(true);
-    const more = row.querySelector('.hub-note-more') as HTMLButtonElement;
+    const more = row.querySelector('.board-note-more') as HTMLButtonElement;
     expect(more.textContent).toBe('more');
     more.click();
     expect(body.classList.contains('is-folded')).toBe(false);
@@ -534,7 +538,7 @@ describe('the Activity tab is one feed: moves, audit rows and every note in full
     openActivity(t);
     expect(
       (rowsIn(host)[0] as HTMLElement)
-        .querySelector('.hub-note-body')
+        .querySelector('.board-note-body')
         ?.classList.contains('is-folded'),
     ).toBe(false);
   });
@@ -561,7 +565,7 @@ describe('commenting on the feed like a doc', () => {
     expect(pill, 'no pill rendered').not.toBeNull();
     expect(pill.classList.contains('comment-pill')).toBe(true);
     expect(pillShown(host)).toBe(false);
-    await select(host.querySelector('.hub-detail-transitions') as Element, 'download route');
+    await select(host.querySelector('.board-detail-transitions') as Element, 'download route');
     expect(pillShown(host)).toBe(true);
     const elsewhere = document.createElement('p');
     elsewhere.textContent = 'other words';
@@ -574,7 +578,7 @@ describe('commenting on the feed like a doc', () => {
   it('the pill is for the words only: an age, a kind label or an agent name gets none; a move row’s words do', async () => {
     const host = mount();
     openActivity(feedTask());
-    const list = host.querySelector('.hub-detail-transitions') as HTMLElement;
+    const list = host.querySelector('.board-detail-transitions') as HTMLElement;
     const selectAll = async (el: Element): Promise<void> => {
       const r = document.createRange();
       r.selectNodeContents(el);
@@ -584,7 +588,7 @@ describe('commenting on the feed like a doc', () => {
       document.dispatchEvent(new Event('selectionchange'));
       await settle();
     };
-    for (const sel of ['.hub-note-age', '.hub-note-kind', '.hub-note-agent']) {
+    for (const sel of ['.board-note-age', '.board-note-kind', '.board-note-agent']) {
       await selectAll(list.querySelector(sel) as Element);
       expect(pillShown(host), sel).toBe(false);
     }
@@ -595,7 +599,7 @@ describe('commenting on the feed like a doc', () => {
   it('the pill opens the real thread card UNDER that row, quoting the phrase and marking it in the note', async () => {
     const host = mount();
     openActivity(feedTask());
-    const list = host.querySelector('.hub-detail-transitions') as HTMLElement;
+    const list = host.querySelector('.board-detail-transitions') as HTMLElement;
     await select(list, 'download route');
     pillIn(host).click();
     const row = rowsIn(host)[0] as HTMLElement;
@@ -605,7 +609,7 @@ describe('commenting on the feed like a doc', () => {
     expect(card.querySelector('.thread-head .thread-who')?.textContent).toBe('Sam Reviewer');
     expect(card.querySelector('.thread-topic')?.textContent).toBe('download route');
     expect(composer(host).placeholder).toBe('Reply as Sam Reviewer…');
-    const mark = row.querySelector('.hub-note-body mark.thread-range') as HTMLElement;
+    const mark = row.querySelector('.board-note-body mark.thread-range') as HTMLElement;
     expect(mark?.textContent).toBe('download route');
     expect(pillShown(host)).toBe(false);
     // One card: no other row carries one.
@@ -628,7 +632,7 @@ describe('commenting on the feed like a doc', () => {
       onActivityComment: vi.fn().mockResolvedValue(created),
       onActivityReply: vi.fn().mockResolvedValue(replied),
     });
-    await select(host.querySelector('.hub-detail-transitions') as Element, 'download route');
+    await select(host.querySelector('.board-detail-transitions') as Element, 'download route');
     pillIn(host).click();
     reply(host, 'Which route?');
     expect(h.onActivityComment).toHaveBeenCalledWith(
@@ -657,7 +661,7 @@ describe('commenting on the feed like a doc', () => {
     const host = mount();
     const t = feedTask();
     openActivity(t);
-    await select(host.querySelector('.hub-detail-transitions') as Element, 'download route');
+    await select(host.querySelector('.board-detail-transitions') as Element, 'download route');
     pillIn(host).click();
     composer(host).value = 'Which rou';
     // A board event: the same task, a new note on top, a fresh handlers object.
@@ -675,13 +679,13 @@ describe('commenting on the feed like a doc', () => {
   it('Escape puts a draft away, and so does folding its card', async () => {
     const host = mount();
     openActivity(feedTask());
-    await select(host.querySelector('.hub-detail-transitions') as Element, 'download route');
+    await select(host.querySelector('.board-detail-transitions') as Element, 'download route');
     pillIn(host).click();
     expect(host.querySelector('.acti-thread')).not.toBeNull();
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(host.querySelector('.acti-thread')).toBeNull();
     expect(host.querySelector('mark.thread-range')).toBeNull();
-    await select(host.querySelector('.hub-detail-transitions') as Element, 'download route');
+    await select(host.querySelector('.board-detail-transitions') as Element, 'download route');
     pillIn(host).click();
     (host.querySelector('.acti-thread .thread-caret') as HTMLElement).click();
     expect(host.querySelector('.acti-thread')).toBeNull();
@@ -703,7 +707,7 @@ describe('a review item the quality gate is holding shows on the ticket', () => 
       }),
       EMPTY,
     );
-    const note = host.querySelector('.hub-decide-held');
+    const note = host.querySelector('.board-decide-held');
     expect(note).not.toBeNull();
     expect(note?.getAttribute('data-review-item-id')).toBe('ri-1');
     expect(note?.textContent).toContain('Held');
@@ -715,7 +719,7 @@ describe('a review item the quality gate is holding shows on the ticket', () => 
     expect(note?.textContent).not.toContain('cost. — ');
     expect(note?.textContent).toContain('the agent has been asked to revise');
     // Not a card: there is nothing for the reader to answer yet.
-    expect(host.querySelector('.hub-decide-card')).toBeNull();
+    expect(host.querySelector('.board-decide-card')).toBeNull();
   });
 
   it('renders nothing for a passed item, or a task with no reviews (control)', () => {
@@ -732,9 +736,9 @@ describe('a review item the quality gate is holding shows on the ticket', () => 
       }),
       EMPTY,
     );
-    expect(host.querySelector('.hub-decide-held')).toBeNull();
+    expect(host.querySelector('.board-decide-held')).toBeNull();
     repaint(task(), EMPTY);
-    expect(host.querySelector('.hub-decide-held')).toBeNull();
+    expect(host.querySelector('.board-decide-held')).toBeNull();
   });
 
   // Found by the UX review: the note named a fault and named no agent, while
@@ -756,7 +760,7 @@ describe('a review item the quality gate is holding shows on the ticket', () => 
       }),
       EMPTY,
     );
-    const meta = host.querySelector('.hub-decide-held-meta');
+    const meta = host.querySelector('.board-decide-held-meta');
     expect(meta?.textContent).toContain('Index Keeper');
     // Spelled by `waitShort`, the same clock the answerable card above it
     // uses, so the two can never round differently.
@@ -781,7 +785,7 @@ describe('a review item the quality gate is holding shows on the ticket', () => 
         return Promise.resolve(true);
       },
     });
-    const btn = host.querySelector('.hub-decide-held-release') as HTMLButtonElement;
+    const btn = host.querySelector('.board-decide-held-release') as HTMLButtonElement;
     expect(btn).not.toBeNull();
     btn.click();
     await Promise.resolve();
@@ -805,7 +809,7 @@ describe('a review item the quality gate is holding shows on the ticket', () => 
       EMPTY,
       { onReleaseHeld: undefined },
     );
-    expect(host.querySelector('.hub-decide-held')).not.toBeNull();
-    expect(host.querySelector('.hub-decide-held-release')).toBeNull();
+    expect(host.querySelector('.board-decide-held')).not.toBeNull();
+    expect(host.querySelector('.board-decide-held-release')).toBeNull();
   });
 });

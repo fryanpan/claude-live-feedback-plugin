@@ -695,7 +695,7 @@ describe('reviewThreadItems — declared review items vs the inferred band', () 
    * release: a person typing ANYTHING into the task's one composer retired the
    * question they had not answered.
    *
-   * The composer's destination is derived (`composerTarget` in hub-render) as
+   * The composer's destination is derived (`composerTarget` in board-render) as
    * the thread of the newest comment — which, on a task an agent has just
    * asked about, is the ask's own thread. So an ordinary remark landed there,
    * ended the unanswered run, and the whole card — headline, why, every option

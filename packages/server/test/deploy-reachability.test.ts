@@ -52,19 +52,19 @@ describe('a share visitor cannot reach the deploy route', () => {
   // The layer the gate actually lives in. An end-to-end 403 here would be
   // measuring the allowlist while claiming to measure the route — the exact
   // mistake recorded for the refresh route's first test.
-  const HUB = { docId: '', workspaceId: 'hub-1' };
+  const BOARD = { docId: '', workspaceId: 'board-1' };
   const DOC = { docId: 'auth-rfc', workspaceId: 'ws-a' };
   const wsOf = (d: string) =>
-    d === 'auth-rfc' ? ['ws-a'] : d.startsWith('hub-1:') ? ['hub-1'] : [];
+    d === 'auth-rfc' ? ['ws-a'] : d.startsWith('board-1:') ? ['board-1'] : [];
 
   it('refuses /api/deploy for every share target and both methods', () => {
-    for (const target of [HUB, DOC]) {
+    for (const target of [BOARD, DOC]) {
       expect(shareScopeAllows('/api/deploy', 'POST', target, wsOf)).toBe(false);
       expect(shareScopeAllows('/api/deploy', 'GET', target, wsOf)).toBe(false);
     }
     // Positive control: these same targets DO reach their own surfaces, so
     // the refusals above are about this path and not about the fixture.
-    expect(shareScopeAllows('/workspaces/hub-1', 'GET', HUB, wsOf)).toBe(true);
+    expect(shareScopeAllows('/workspaces/board-1', 'GET', BOARD, wsOf)).toBe(true);
     expect(shareScopeAllows('/api/docs/auth-rfc', 'GET', DOC, wsOf)).toBe(true);
   });
 });

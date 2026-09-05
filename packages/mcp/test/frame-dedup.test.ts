@@ -20,7 +20,7 @@
  * The direction of the failure matters more than the dedup: a dropped frame
  * is silence, and silence is the whole bug class this ticket exists for. So
  * anything the key cannot positively identify — no numeric `seq`, no docId —
- * is forwarded. Every hub `task.*` / `decision.*` / `voice.*` event is in
+ * is forwarded. Every board `task.*` / `decision.*` / `voice.*` event is in
  * that category: they carry no seq, they ride exactly one channel, and
  * swallowing one would be a real drop rather than a saved duplicate.
  */
@@ -52,11 +52,11 @@ describe('createFrameDedup', () => {
     expect(shouldForward('thread.resolved', threadFrame('doc-alpha', 9))).toBe(true);
   });
 
-  // POSITIVE CONTROL 2 — hub events carry no seq. Two of them can be byte
+  // POSITIVE CONTROL 2 — board events carry no seq. Two of them can be byte
   // identical (two voice notes with the same text, two `triage.requested`
   // for the same batch) and BOTH are real. They ride one channel, so there
   // is no duplicate to suppress and a collision here would be a true drop.
-  it('forwards every seq-less hub frame, even byte-identical ones', () => {
+  it('forwards every seq-less board frame, even byte-identical ones', () => {
     const { shouldForward } = createFrameDedup();
     const voice = { workspaceId: 'ws-1', text: 'make token usage the top goal' };
     expect(shouldForward('voice.note', voice)).toBe(true);

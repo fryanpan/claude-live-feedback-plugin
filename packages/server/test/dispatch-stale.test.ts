@@ -1,7 +1,7 @@
 /**
  * A slot under the parallelism cap is an OPEN DISPATCH — and a dispatch on
  * work the board has already finished is not open, whatever the registry
- * file says. Right after deploy v0.1.0-91 the hub read `inUse 12 / free 0`:
+ * file says. Right after deploy v0.1.0-91 the board read `inUse 12 / free 0`:
  * every holder was a task already `done`, left behind by builders that never
  * sent `close_dispatch`, and the first real spawn would have been refused.
  *
@@ -83,7 +83,7 @@ describe('the registry drops a dispatch the board is done with', () => {
     try {
       expect(reg.register('t-done', worktree, 'Builder A').ok).toBe(true);
       expect(reg.register('t-open', worktree, 'Builder B').ok).toBe(true);
-      // The directory is still on disk — exactly the shape the hub had.
+      // The directory is still on disk — exactly the shape the board had.
       over.add('t-done');
       expect(existsSync(worktree)).toBe(true);
       expect(reg.list().map((d) => d.taskId)).toEqual(['t-open']);
@@ -267,7 +267,7 @@ describe('the cap through the server never counts finished work', () => {
     for (let i = 0; i < 4; i++) ids.push(await addRow(workspaceId, `Finished row ${i}`));
     const live = await addRow(workspaceId, 'Rebuild the ranker');
     const wt = dir('wt-restart-');
-    // Finish the four the way the hub's were finished: done on the board,
+    // Finish the four the way the board's were finished: done on the board,
     // directory still on disk, `close_dispatch` never sent.
     for (const id of ids) {
       await jj(

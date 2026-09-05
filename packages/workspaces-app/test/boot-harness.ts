@@ -1,7 +1,7 @@
 /**
  * The environment a page's boot sequence runs against, faked.
  *
- * `app.ts` and `hub/hub-app.ts` now export their boot as a function of an
+ * `app.ts` and `board/board-app.ts` now export their boot as a function of an
  * environment (see `src/boot-env.ts`), so a suite can drive the real sequence
  * instead of reading its source text. What it needs is a throwaway document, an
  * address that goes nowhere, a history that records instead of navigating, a
@@ -320,7 +320,7 @@ export function installFakeServer(): FakeServer {
  * The board's live feed, as an event target that never opens a connection.
  *
  * `EventSource` does not exist under happy-dom at all, so without this the
- * board's boot throws at `wireHubLive` and nothing after it runs. Every
+ * board's boot throws at `wireBoardLive` and nothing after it runs. Every
  * instance is recorded, and dispatching at one drives the real listeners the
  * boot registered.
  */

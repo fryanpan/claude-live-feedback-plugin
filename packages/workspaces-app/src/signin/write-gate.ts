@@ -284,11 +284,11 @@ export function promptSignIn(message?: string): void {
  * with, and the row goes directly under it.
  */
 function mountSignInBar(bar: HTMLElement): void {
-  // The board. `#hub-root` is ordinary flow, and `.conn-banner` already
+  // The board. `#board-root` is ordinary flow, and `.conn-banner` already
   // occupies this exact slot for the same kind of message.
-  const hubTopbar = document.querySelector('.hub-topbar');
-  if (hubTopbar?.parentElement) {
-    hubTopbar.insertAdjacentElement('afterend', bar);
+  const boardTopbar = document.querySelector('.board-topbar');
+  if (boardTopbar?.parentElement) {
+    boardTopbar.insertAdjacentElement('afterend', bar);
     return;
   }
   // The doc. `#shell` is a two-row grid (`48px 1fr`), so declaring the row is

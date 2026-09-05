@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  type BoardTask,
   CHORES_ID,
   DEFAULT_DONE_WINDOW,
-  type HubTask,
   boardSections,
-} from '../src/hub/hub-board-model.ts';
-import type { GoalDetailHandlers } from '../src/hub/hub-render.ts';
+} from '../src/board/board-model.ts';
+import type { GoalDetailHandlers } from '../src/board/board-render.ts';
 import { disposeGoalDetail, renderGoalDetail } from './support/goal-detail.ts';
 
 /**
@@ -22,7 +22,7 @@ import { disposeGoalDetail, renderGoalDetail } from './support/goal-detail.ts';
 const NOW = 1_700_000_000_000;
 
 let seq = 0;
-function task(overrides: Partial<HubTask> = {}): HubTask {
+function task(overrides: Partial<BoardTask> = {}): BoardTask {
   seq += 1;
   return {
     id: `t-${seq}`,
@@ -53,7 +53,7 @@ function handlers(over: Partial<GoalDetailHandlers> = {}): GoalDetailHandlers {
 /** The commentForm submits on its own form element; find whichever node the
  *  helper actually built so the test does not encode its internals. */
 function submitComposer(panel: HTMLElement): void {
-  const form = panel.querySelector('.hub-comment-form');
+  const form = panel.querySelector('.board-comment-form');
   const target = form instanceof HTMLFormElement ? form : panel.querySelector('form');
   target?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
 }
@@ -67,7 +67,7 @@ const filters = {
 
 function sectionWith(
   goalOver: Record<string, unknown> = {},
-  tasks: HubTask[] = [],
+  tasks: BoardTask[] = [],
 ): ReturnType<typeof boardSections>[number] {
   const sections = boardSections(
     [{ id: 'g-pr', title: '1. Get the PR out', ...goalOver }],
@@ -85,7 +85,7 @@ beforeEach(() => {
   document.body.replaceChildren();
   document.body.className = '';
   root = document.createElement('div');
-  root.className = 'hub-detail hidden';
+  root.className = 'board-detail hidden';
   document.body.append(root);
 });
 
@@ -94,13 +94,13 @@ describe('renderGoalDetail', () => {
     const h = handlers();
     renderGoalDetail(root, sectionWith(), h);
     expect(root.classList.contains('hidden')).toBe(false);
-    expect(document.body.classList.contains('hub-detail-open')).toBe(true);
-    const panel = root.querySelector('.hub-detail-panel') as HTMLElement;
+    expect(document.body.classList.contains('board-detail-open')).toBe(true);
+    const panel = root.querySelector('.board-detail-panel') as HTMLElement;
     expect(panel.dataset.goalId).toBe('g-pr');
-    expect(panel.querySelector('.hub-detail-kind')?.textContent).toBe('Goal');
-    expect(panel.querySelector('.hub-detail-id')?.textContent).toBe('g-pr');
-    expect(panel.querySelector('.hub-detail-title')?.textContent).toBe('1. Get the PR out');
-    (panel.querySelector('.hub-detail-close') as HTMLButtonElement).click();
+    expect(panel.querySelector('.board-detail-kind')?.textContent).toBe('Goal');
+    expect(panel.querySelector('.board-detail-id')?.textContent).toBe('g-pr');
+    expect(panel.querySelector('.board-detail-title')?.textContent).toBe('1. Get the PR out');
+    (panel.querySelector('.board-detail-close') as HTMLButtonElement).click();
     expect(h.onClose).toHaveBeenCalled();
   });
 
@@ -108,8 +108,8 @@ describe('renderGoalDetail', () => {
     renderGoalDetail(root, sectionWith(), handlers());
     renderGoalDetail(root, null, handlers());
     expect(root.classList.contains('hidden')).toBe(true);
-    expect(document.body.classList.contains('hub-detail-open')).toBe(false);
-    expect(root.querySelector('.hub-detail-panel')).toBeNull();
+    expect(document.body.classList.contains('board-detail-open')).toBe(false);
+    expect(root.querySelector('.board-detail-panel')).toBeNull();
   });
 
   // The panel is where renaming lives on a coarse pointer (the row's tap
@@ -118,7 +118,7 @@ describe('renderGoalDetail', () => {
   it('renames the goal from the panel title', () => {
     const h = handlers();
     renderGoalDetail(root, sectionWith(), h);
-    const title = root.querySelector('.hub-detail-title') as HTMLElement;
+    const title = root.querySelector('.board-detail-title') as HTMLElement;
     title.click();
     const input = title.querySelector('input') as HTMLInputElement;
     expect(input).not.toBeNull();
@@ -133,7 +133,7 @@ describe('renderGoalDetail', () => {
   it('shows the goal status and lets somebody declare it', () => {
     const h = handlers();
     renderGoalDetail(root, sectionWith({ status: 'todo' }), h);
-    const select = root.querySelector('.hub-goal-detail-status') as HTMLSelectElement;
+    const select = root.querySelector('.board-goal-detail-status') as HTMLSelectElement;
     expect(select.value).toBe('todo');
     select.value = 'done';
     select.dispatchEvent(new Event('change', { bubbles: true }));
@@ -147,18 +147,18 @@ describe('renderGoalDetail', () => {
   it('offers Triage in the picker and says what it holds back', () => {
     const h = handlers();
     renderGoalDetail(root, sectionWith({ status: 'todo' }), h);
-    const select = root.querySelector('.hub-goal-detail-status') as HTMLSelectElement;
+    const select = root.querySelector('.board-goal-detail-status') as HTMLSelectElement;
     expect([...select.options].map((o) => o.value)).toContain('triage');
-    expect(root.querySelector('.hub-goal-triage-note')).toBeNull();
+    expect(root.querySelector('.board-goal-triage-note')).toBeNull();
     select.value = 'triage';
     select.dispatchEvent(new Event('change', { bubbles: true }));
     expect(h.onStatusSet).toHaveBeenCalledWith('g-pr', 'triage');
 
     renderGoalDetail(root, sectionWith({ status: 'triage' }), h);
-    expect((root.querySelector('.hub-goal-detail-status') as HTMLSelectElement).value).toBe(
+    expect((root.querySelector('.board-goal-detail-status') as HTMLSelectElement).value).toBe(
       'triage',
     );
-    const note = root.querySelector('.hub-goal-triage-note') as HTMLElement;
+    const note = root.querySelector('.board-goal-triage-note') as HTMLElement;
     expect(note).not.toBeNull();
     expect(note.textContent).toContain('not ready');
   });
@@ -178,7 +178,7 @@ describe('renderGoalDetail', () => {
       ]),
       handlers(),
     );
-    const text = (root.querySelector('.hub-detail-panel') as HTMLElement).textContent ?? '';
+    const text = (root.querySelector('.board-detail-panel') as HTMLElement).textContent ?? '';
     // The positive half first — without it every assertion below passes on a
     // panel that never rendered, which is the same shape as the feature
     // working.
@@ -187,7 +187,7 @@ describe('renderGoalDetail', () => {
     expect(text).not.toContain('1 in progress');
     // The field is GONE, not merely emptied — an empty `Tasks` row would still
     // spend a line of the panel's scarcest axis.
-    const keys = [...root.querySelectorAll('.hub-detail-field-k')].map((n) => n.textContent);
+    const keys = [...root.querySelectorAll('.board-detail-field-k')].map((n) => n.textContent);
     expect(keys).toContain('Status');
     expect(keys).not.toContain('Tasks');
   });
@@ -198,10 +198,10 @@ describe('renderGoalDetail', () => {
   // what the panel SAYS, not what anyone is allowed to do.
   it('no longer warns about what a done declaration would leave open', () => {
     renderGoalDetail(root, sectionWith({}, [task(), task({ status: 'in-progress' })]), handlers());
-    const panel = root.querySelector('.hub-detail-panel') as HTMLElement;
+    const panel = root.querySelector('.board-detail-panel') as HTMLElement;
     const text = panel.textContent ?? '';
     expect(text).toContain('1. Get the PR out');
-    expect(root.querySelector('.hub-goal-advisory')).toBeNull();
+    expect(root.querySelector('.board-goal-advisory')).toBeNull();
     expect(text).not.toContain('open task');
   });
 
@@ -211,11 +211,11 @@ describe('renderGoalDetail', () => {
     // does not depend on the test runner's timezone.
     const due = new Date(2026, 7, 20, 12).getTime();
     renderGoalDetail(root, sectionWith({ dueAt: due }), handlers());
-    let text = (root.querySelector('.hub-detail-panel') as HTMLElement).textContent ?? '';
+    let text = (root.querySelector('.board-detail-panel') as HTMLElement).textContent ?? '';
     expect(text).toContain('Nobody yet');
-    expect(root.querySelector<HTMLInputElement>('.hub-detail-due')?.value).toBe('2026-08-20');
+    expect(root.querySelector<HTMLInputElement>('.board-detail-due')?.value).toBe('2026-08-20');
     renderGoalDetail(root, sectionWith({ assignee: 'search-revamp' }), handlers());
-    text = (root.querySelector('.hub-detail-panel') as HTMLElement).textContent ?? '';
+    text = (root.querySelector('.board-detail-panel') as HTMLElement).textContent ?? '';
     expect(text).toContain('search-revamp');
   });
 
@@ -227,7 +227,7 @@ describe('renderGoalDetail', () => {
   it('the Due field is human-editable, the same as the task panel’s', () => {
     const onDueSet = vi.fn();
     renderGoalDetail(root, sectionWith(), handlers({ onDueSet }));
-    const due = root.querySelector<HTMLInputElement>('.hub-detail-due');
+    const due = root.querySelector<HTMLInputElement>('.board-detail-due');
     expect(due).not.toBeNull();
     expect(due?.value).toBe('');
 
@@ -253,12 +253,12 @@ describe('renderGoalDetail', () => {
       sectionWith({ links: [{ kind: 'doc', docId: 'd-plan' }] }),
       handlers({ workspaceId: 'w-test' }),
     );
-    expect(root.querySelector('.hub-related-links-k')?.textContent).toBe('Related Links');
-    const link = root.querySelector<HTMLAnchorElement>('.hub-related-link');
+    expect(root.querySelector('.board-related-links-k')?.textContent).toBe('Related Links');
+    const link = root.querySelector<HTMLAnchorElement>('.board-related-link');
     expect(link?.getAttribute('href')).toBe('/workspaces/w-test/docs/d-plan');
 
     renderGoalDetail(root, sectionWith(), handlers({ workspaceId: 'w-test' }));
-    expect(root.querySelector('.hub-related-links-k')).toBeNull();
+    expect(root.querySelector('.board-related-links-k')).toBeNull();
   });
 
   // The live board repaints the panel on every projection change, and a
@@ -267,11 +267,11 @@ describe('renderGoalDetail', () => {
   it('a repaint keeps a rename in flight', () => {
     const h = handlers();
     renderGoalDetail(root, sectionWith(), h);
-    (root.querySelector('.hub-detail-title') as HTMLElement).click();
-    const input = root.querySelector('.hub-detail-title input') as HTMLInputElement;
+    (root.querySelector('.board-detail-title') as HTMLElement).click();
+    const input = root.querySelector('.board-detail-title input') as HTMLInputElement;
     input.value = '1. Ship';
     renderGoalDetail(root, sectionWith(), h);
-    const again = root.querySelector('.hub-detail-title input') as HTMLInputElement;
+    const again = root.querySelector('.board-detail-title input') as HTMLInputElement;
     expect(again).not.toBeNull();
     expect(again.value).toBe('1. Ship');
   });
@@ -279,7 +279,7 @@ describe('renderGoalDetail', () => {
   it('Escape closes the panel', () => {
     const h = handlers();
     renderGoalDetail(root, sectionWith(), h);
-    const panel = root.querySelector('.hub-detail-panel') as HTMLElement;
+    const panel = root.querySelector('.board-detail-panel') as HTMLElement;
     panel.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(h.onClose).toHaveBeenCalled();
   });
@@ -302,9 +302,9 @@ describe('renderGoalDetail', () => {
       sectionWith({ bodyDocId: 'task:g-pr', body: 'Ten teams using it weekly, unprompted.' }),
       handlers(),
     );
-    const panel = root.querySelector('.hub-detail-panel') as HTMLElement;
+    const panel = root.querySelector('.board-detail-panel') as HTMLElement;
     expect(panel.textContent).toContain('Description');
-    const slot = panel.querySelector('.hub-detail-body-slot') as HTMLElement;
+    const slot = panel.querySelector('.board-detail-body-slot') as HTMLElement;
     expect(slot).not.toBeNull();
     // The app keys `bodyEditor.sync` on this, and it is what `keptBodySlot`
     // matches to keep a mounted editor alive through a repaint.
@@ -314,7 +314,7 @@ describe('renderGoalDetail', () => {
 
   it('says so plainly when nobody has described the goal yet', () => {
     renderGoalDetail(root, sectionWith({ bodyDocId: 'task:g-pr' }), handlers());
-    const slot = root.querySelector('.hub-detail-body-slot') as HTMLElement;
+    const slot = root.querySelector('.board-detail-body-slot') as HTMLElement;
     expect(slot.textContent).toContain('No description yet.');
   });
 
@@ -329,10 +329,10 @@ describe('renderGoalDetail', () => {
         },
       ],
     });
-    const panel = root.querySelector('.hub-detail-panel') as HTMLElement;
-    expect(panel.querySelector('.hub-discussion')).not.toBeNull();
+    const panel = root.querySelector('.board-detail-panel') as HTMLElement;
+    expect(panel.querySelector('.board-discussion')).not.toBeNull();
     expect(panel.textContent).toContain('Ten teams, or ten that renew?');
-    const box = panel.querySelector('.hub-comment-form textarea') as HTMLTextAreaElement;
+    const box = panel.querySelector('.board-comment-form textarea') as HTMLTextAreaElement;
     expect(box).not.toBeNull();
     box.value = 'Ten that renew.';
     submitComposer(panel);
@@ -345,7 +345,7 @@ describe('renderGoalDetail', () => {
 
   it('carries no discussion at all when the app has not fetched one', () => {
     renderGoalDetail(root, sectionWith({ bodyDocId: 'task:g-pr' }), handlers());
-    expect(root.querySelector('.hub-discussion')).toBeNull();
+    expect(root.querySelector('.board-discussion')).toBeNull();
   });
 
   // A description is a live editor over a websocket. The repaint guarantee
@@ -354,11 +354,11 @@ describe('renderGoalDetail', () => {
   // the editor down under whoever is typing in it.
   it('a repaint keeps a mounted description editor in place', () => {
     renderGoalDetail(root, sectionWith({ bodyDocId: 'task:g-pr' }), handlers());
-    const slot = root.querySelector('.hub-detail-body-slot') as HTMLElement;
-    slot.classList.add('hub-detail-body-live');
+    const slot = root.querySelector('.board-detail-body-slot') as HTMLElement;
+    slot.classList.add('board-detail-body-live');
     slot.dataset.marker = 'mounted';
     renderGoalDetail(root, sectionWith({ bodyDocId: 'task:g-pr' }), handlers());
-    const after = root.querySelector('.hub-detail-body-slot') as HTMLElement;
+    const after = root.querySelector('.board-detail-body-slot') as HTMLElement;
     expect(after.dataset.marker).toBe('mounted');
     expect(after).toBe(slot);
   });
@@ -368,7 +368,7 @@ describe('renderGoalDetail', () => {
     const chores = sections.find((s) => s.id === CHORES_ID);
     if (!chores) throw new Error('chores section missing');
     renderGoalDetail(root, chores, handlers());
-    expect(root.querySelector('.hub-detail-panel')).toBeNull();
+    expect(root.querySelector('.board-detail-panel')).toBeNull();
     expect(root.classList.contains('hidden')).toBe(true);
   });
 });

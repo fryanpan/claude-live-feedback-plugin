@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { CHORES_ID, type HubTask } from '../src/hub/hub-board-model.ts';
-import { decisionQueue } from '../src/hub/hub-review-model.ts';
+import { type BoardTask, CHORES_ID } from '../src/board/board-model.ts';
+import { decisionQueue } from '../src/board/board-review-model.ts';
 
 /**
  * Urgency is DERIVED. "This decision is blocking work now" is the same fact
@@ -15,7 +15,7 @@ const NOW = 1_700_000_000_000;
 const HOUR = 3_600_000;
 
 let seq = 0;
-function task(overrides: Partial<HubTask> = {}): HubTask {
+function task(overrides: Partial<BoardTask> = {}): BoardTask {
   seq += 1;
   return {
     id: `t-${seq}`,
@@ -34,7 +34,7 @@ function task(overrides: Partial<HubTask> = {}): HubTask {
   };
 }
 
-function decision(overrides: Partial<HubTask> = {}): HubTask {
+function decision(overrides: Partial<BoardTask> = {}): BoardTask {
   return task({ assignee: 'human', needs: 'decision', ...overrides });
 }
 

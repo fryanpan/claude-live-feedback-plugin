@@ -94,7 +94,7 @@ describe('ready work that has sat idle wakes the lead — once', () => {
     expect(sent[0]!.agentId).toBe('agent-cartographer');
     expect(sent[0]!.workspaceId).toBe('w-search');
     expect(sent[0]!.frame.event).toBe('workspace.ready_idle');
-    // The MCP renders an unrecognised hub event off `taskId` alone, so the
+    // The MCP renders an unrecognised board event off `taskId` alone, so the
     // top ready row has to ride the frame or the wake says nothing.
     expect(sent[0]!.frame.taskId).toBe('t-1');
     expect(sent[0]!.frame.readyCount).toBe(1);

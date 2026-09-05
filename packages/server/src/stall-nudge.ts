@@ -104,7 +104,7 @@ export const STALL_REPEAT_DEFAULT_MS = 4 * 60 * 60_000;
 export const STALL_TICK_DEFAULT_MS = 60_000;
 
 /** Its own event name rather than a reason field on an existing one, because
- *  the plugin renders a hub event off the name alone — one name would make a
+ *  the plugin renders a board event off the name alone — one name would make a
  *  stall and a ready-work wake indistinguishable in the lead's channel. */
 export const STALL_EVENT = 'workspace.stalled';
 

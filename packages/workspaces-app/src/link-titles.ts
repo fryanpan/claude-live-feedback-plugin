@@ -62,8 +62,8 @@ export function _resetLinkTitlesForTest(): void {
   cache.clear();
 }
 
-/** Chip words, mirroring hub-board-model's STATUS_LABEL — copied rather than
- *  imported so the doc page's renderer does not pull the hub module in.
+/** Chip words, mirroring board-model's STATUS_LABEL — copied rather than
+ *  imported so the doc page's renderer does not pull the board module in.
  *  An unknown status renders as its raw string: not nice, but TRUE. */
 const STATUS_CHIP_LABEL: Record<string, string> = {
   triage: 'Triage',
@@ -189,7 +189,7 @@ export function scheduleLinkTitleHydration(): void {
 /**
  * A task somewhere changed status: forget every cached status and mark the
  * chipped anchors pending again, so the next hydration pass re-asks. Wired to
- * the hub's `task.transitioned` SSE event — the chip's freshness rides the
+ * the board's `task.transitioned` SSE event — the chip's freshness rides the
  * same push every other REST-fed region refreshes on. Whole-cache on purpose:
  * the event does not say which URL the row was pasted under, and the refetch
  * is one debounced batch.

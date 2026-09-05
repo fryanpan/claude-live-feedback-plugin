@@ -62,12 +62,12 @@ import {
   sameOriginPath,
 } from './voice-prompt.ts';
 import {
-  type HubDestination,
+  type BoardDestination,
   type ScoredCandidate,
   type TitleCandidate,
   answerBody,
+  boardDestinationAsk,
   goalOrdinalAsk,
-  hubDestinationAsk,
   navigationAsk,
   parseOrdinal,
   pickByLabel,
@@ -82,7 +82,7 @@ import { type StatusQueueRow, type StatusTask, composeStatus } from './voice-sta
 export {
   answerBody,
   goalOrdinalAsk,
-  hubDestinationAsk,
+  boardDestinationAsk,
   navigationAsk,
   parseOrdinal,
   pickByLabel,
@@ -104,7 +104,7 @@ export const CHOICE_WINDOW_MS = 30_000;
 export function parseVoiceContext(raw: unknown): VoiceContext | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined;
   const r = raw as Record<string, unknown>;
-  if (r.surface !== 'hub' && r.surface !== 'doc' && r.surface !== 'task') return undefined;
+  if (r.surface !== 'board' && r.surface !== 'doc' && r.surface !== 'task') return undefined;
   const str = (v: unknown, max: number): string | undefined =>
     typeof v === 'string' && v.length > 0 ? v.slice(0, max) : undefined;
   const docId = str(r.docId, 300);
@@ -314,7 +314,7 @@ export class VoiceRouter {
    * The same rule for a doc: attached to THIS workspace, or not present.
    *
    * A task's BODY room (`task:<taskId>`) is the second half, and it was
-   * missing. `/review/task:<id>` is a real surface the hub links to, and
+   * missing. `/review/task:<id>` is a real surface the board links to, and
    * `workspaceOfDoc` deliberately resolves those rooms to the task's
    * workspace — but `attachDoc` is the only writer of `docIds` and it never
    * holds one, so speaking on that page had its docId silently dropped from
@@ -753,13 +753,13 @@ export class VoiceRouter {
       if (!direct && statusAsk(transcript)) {
         direct = this.statusResult(workspaceId, workspace.name, resource);
       }
-      // The hub's own places and a goal by its rank come BEFORE the title
+      // The board's own places and a goal by its rank come BEFORE the title
       // index: "the homepage" and "my top goal" are not titles, and both
       // used to fall through to a model that had nothing to match them to
       // and a lead agent that cannot drive a browser (Bryan, 2026-08-29).
       if (!direct) {
-        const nav = hubDestinationAsk(transcript, [workspace.name]);
-        if (nav !== null) direct = this.openHubDestination(workspaceId, transcript, nav);
+        const nav = boardDestinationAsk(transcript, [workspace.name]);
+        if (nav !== null) direct = this.openBoardDestination(workspaceId, transcript, nav);
       }
       if (!direct) {
         const at = goalOrdinalAsk(transcript, workspace.goals.length, [workspace.name]);
@@ -1006,14 +1006,14 @@ export class VoiceRouter {
   }
 
   /**
-   * One of the hub's own places. The paths are `navPath` in the client
-   * (`hub-presence-model.ts`) spelled out: Tasks is the bare board, the other three
+   * One of the board's own places. The paths are `navPath` in the client
+   * (`board-presence-model.ts`) spelled out: Tasks is the bare board, the other three
    * are suffixes. The ack names the place the way the nav labels it.
    */
-  private openHubDestination(
+  private openBoardDestination(
     workspaceId: string,
     transcript: string,
-    nav: HubDestination,
+    nav: BoardDestination,
   ): VoiceResult | undefined {
     const board = `/workspaces/${encodeURIComponent(workspaceId)}`;
     const navigate = sameOriginPath(nav === 'tasks' ? board : `${board}/${nav}`);

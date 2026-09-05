@@ -3,7 +3,7 @@
  * board banner line, and the generating-poll rule. All fixtures synthetic.
  */
 import { describe, expect, it } from 'vitest';
-import type { HubTask } from '../src/hub/hub-board-model.ts';
+import type { BoardTask } from '../src/board/board-model.ts';
 import {
   HOME_POLL_CAP_MS,
   homeSinceLabel,
@@ -15,10 +15,10 @@ import {
   shouldPollHome,
   tabForNav,
   waitingLabel,
-} from '../src/hub/hub-presence-model.ts';
-import type { HubNav } from '../src/hub/hub-presence-model.ts';
-import { reviewBannerText, reviewQueue, reviewRowTitle } from '../src/hub/hub-review-model.ts';
-import type { ReviewItem, ReviewThreadItem } from '../src/hub/hub-review-model.ts';
+} from '../src/board/board-presence-model.ts';
+import type { BoardNav } from '../src/board/board-presence-model.ts';
+import { reviewBannerText, reviewQueue, reviewRowTitle } from '../src/board/board-review-model.ts';
+import type { ReviewItem, ReviewThreadItem } from '../src/board/board-review-model.ts';
 
 const NOW = 1_700_000_000_000;
 
@@ -73,7 +73,7 @@ describe('navFromPath / navPath', () => {
 
   it('pane and tab derive from nav, and neither Home nor Activity resets the filter', () => {
     expect(paneForNav('home')).toBe('home');
-    expect(['tasks', 'mine', 'activity'].map((n) => paneForNav(n as HubNav))).toEqual([
+    expect(['tasks', 'mine', 'activity'].map((n) => paneForNav(n as BoardNav))).toEqual([
       'board',
       'board',
       'board',
@@ -184,7 +184,7 @@ describe('reviewRowTitle', () => {
 });
 
 describe('reviewBannerText', () => {
-  const decision = (id: string): HubTask => ({
+  const decision = (id: string): BoardTask => ({
     id,
     title: `Decide ${id}`,
     status: 'todo',

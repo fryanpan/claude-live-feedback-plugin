@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { IPAD, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
-import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
+import { BOARD_BOOT_SOURCES } from './support/board-boot-sources.ts';
 
 /**
  * The mic is drawn the way the rest of the chrome is drawn.
@@ -15,7 +15,7 @@ import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
  *
  * The focus half of that pass was reported as a MISSING ring and is not one.
  * Measured 2026-08-21 in headless Chrome, ten Tab presses from the top of a
- * board: `#hub-mic` matched `:focus-visible` and the UA drew
+ * board: `#board-mic` matched `:focus-visible` and the UA drew
  * `outline: auto 1px rgb(0, 95, 204)`. What the rule below changes is the
  * COLOUR — the platform blue for the accent every other focusable here uses.
  * Written down because a test that asserts a ring exists would pass on main
@@ -32,24 +32,24 @@ import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
  * the stylesheet, which is the source-shape proxy this conversion drops.
  *
  * The stylesheet halves of this file used to be regexes over `styles.css` and
- * `hub.css`; they are computed reads now. The MARKUP halves still read the app
+ * `board.css`; they are computed reads now. The MARKUP halves still read the app
  * source, because "which module mounts a mic" and "no emoji survives anywhere"
  * are facts about files, not about any one rendered element.
  */
 const SRC = resolve(import.meta.dirname, '../src');
 const ICONS = readFileSync(resolve(SRC, 'icons.ts'), 'utf8');
-// The hub's boot sources: `hub-app.ts` and the three modules split out of
+// The board's boot sources: `board-app.ts` and the three modules split out of
 // it. Read as one string because these assertions are about the board's
 // shape, not about which file a line ended up in — a move must not fail
 // them, and an absence checked across all four is the stronger read.
-const HUB_APP = HUB_BOOT_SOURCES.map((m) => readFileSync(resolve(SRC, `hub/${m}.ts`), 'utf8')).join(
-  '\n',
-);
-const HUB_RENDER = readFileSync(resolve(SRC, 'hub/hub-render.ts'), 'utf8');
+const BOARD_APP = BOARD_BOOT_SOURCES.map((m) =>
+  readFileSync(resolve(SRC, `board/${m}.ts`), 'utf8'),
+).join('\n');
+const BOARD_RENDER = readFileSync(resolve(SRC, 'board/board-render.ts'), 'utf8');
 
 let cleanup = () => {};
 beforeEach(() => {
-  cleanup = installSheets('hub.css', 'styles.css', 'doc.css');
+  cleanup = installSheets('board.css', 'styles.css', 'doc.css');
   setViewport(IPAD);
 });
 afterEach(() => {
@@ -77,7 +77,7 @@ function ringOf(classes: string): string {
 /**
  * Every mic-bearing module, and the string each one mounts.
  *
- * hub-render.ts used to be here: the board's entry button wore the mic while
+ * board-render.ts used to be here: the board's entry button wore the mic while
  * it was called "Start a planning huddle". The round-4 entry rework renamed
  * the two buttons after their OUTCOMES — "Make a plan" (pencil) and "Have a
  * discussion" (speech) — so neither is a mic any more, and the docked
@@ -85,7 +85,9 @@ function ringOf(classes: string): string {
  * assertion below is what keeps that from being a silent regression to an
  * emoji rather than a decision.
  */
-const MOUNTS: ReadonlyArray<[string, string]> = [['the board’s docked mic (hub-app.ts)', HUB_APP]];
+const MOUNTS: ReadonlyArray<[string, string]> = [
+  ['the board’s docked mic (board-app.ts)', BOARD_APP],
+];
 
 describe('the mic wears the nav’s icon convention', () => {
   it('draws it as a stroked, currentColor SVG like every other glyph', () => {
@@ -116,26 +118,26 @@ describe('the mic wears the nav’s icon convention', () => {
     // to hold them, and really can see a glyph in them.
     for (const [where, src] of MOUNTS) {
       expect(src, `${where} is not the module that mounts a mic`).toMatch(
-        /voice-mic|hub-huddle-start|doc-mic/,
+        /voice-mic|board-huddle-start|doc-mic/,
       );
       expect(src, `${where} still ships an emoji mic`).not.toMatch(/\u{1F399}|\u{1F3A4}/u);
     }
     // The board's entry buttons dropped the mic when they were renamed after
     // their outcomes; what they must never do is grow an emoji one back.
-    expect(HUB_RENDER, 'the board’s entry buttons ship an emoji mic').not.toMatch(
+    expect(BOARD_RENDER, 'the board’s entry buttons ship an emoji mic').not.toMatch(
       /\u{1F399}|\u{1F3A4}/u,
     );
     // Control for that negative: the file really is the one drawing them.
-    expect(HUB_RENDER).toMatch(/hub-huddle-start/);
+    expect(BOARD_RENDER).toMatch(/board-huddle-start/);
   });
 
   it('sizes the glyph as a box, because a font-size no longer scales it', () => {
-    // `.voice-mic` carried `font-size: 19px` and `.hub-quick-mic` carried 16px
+    // `.voice-mic` carried `font-size: 19px` and `.board-quick-mic` carried 16px
     // to size an emoji. An SVG ignores both, so leaving them set is how the
     // next reader concludes the glyph is still text. A button with no
     // font-size of its own computes `inherit` here; one that declares a size
     // computes the pixels — which is what the control below pins.
-    for (const host of ['voice-mic', 'hub-huddle-start']) {
+    for (const host of ['voice-mic', 'board-huddle-start']) {
       const button = attach(host, { tag: 'button' });
       const glyph = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
       button.appendChild(glyph);

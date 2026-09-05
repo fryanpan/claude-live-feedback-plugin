@@ -10,7 +10,7 @@
  * Fixtures are synthetic.
  */
 import { describe, expect, it } from 'vitest';
-import { type DepRowBox, depCurves, depGutter, depLanes } from '../src/hub/dep-curves.ts';
+import { type DepRowBox, depCurves, depGutter, depLanes } from '../src/board/dep-curves.ts';
 
 const GUTTER = depGutter(34);
 

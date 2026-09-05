@@ -319,8 +319,8 @@ describe('voice actions, hardened: end to end', () => {
   /** The agent's event stream, held the way the MCP holds it after attaching. */
   let agentStream: AgentStream | null = null;
   let base: string;
-  let hubId: string;
-  let quietHubId: string;
+  let boardId: string;
+  let quietBoardId: string;
   let quietTaskId: string;
   let injectedDocId: string;
   let plainDocId: string;
@@ -376,7 +376,7 @@ describe('voice actions, hardened: end to end', () => {
     const made = await post('/api/docs', { docId, type: 'markdown', sourceUrl: file });
     expect(made.status).toBe(200);
     const mintedId = ((await made.json()) as { docId: string }).docId;
-    expect((await post(`/api/workspaces/${hubId}/docs`, { docId: mintedId })).status).toBe(200);
+    expect((await post(`/api/workspaces/${boardId}/docs`, { docId: mintedId })).status).toBe(200);
     return mintedId;
   };
 
@@ -447,10 +447,10 @@ describe('voice actions, hardened: end to end', () => {
       goal: 'Ship the new search.',
     });
     expect(ws.status).toBe(200);
-    hubId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
+    boardId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
     expect(
       (
-        await post(`/api/workspaces/${hubId}/attachments`, {
+        await post(`/api/workspaces/${boardId}/attachments`, {
           agentId: 'agent-search-revamp',
           runtime: 'claude-code-local',
         })
@@ -463,7 +463,7 @@ describe('voice actions, hardened: end to end', () => {
     // `route === 'agent'` assertion below is about voice DECLINING to act and
     // handing over; it needs a handover target that exists. This is what the
     // MCP does immediately after attaching (`subscribe !== false`).
-    agentStream = await openWorkspaceStream(base, hubId);
+    agentStream = await openWorkspaceStream(base, boardId);
 
     injectedDocId = await newDoc('voice-hard-injected');
     await declare(injectedDocId, INJECTION);
@@ -478,17 +478,17 @@ describe('voice actions, hardened: end to end', () => {
     answerDocId = await newDoc('voice-hard-answer');
     await declare(answerDocId, 'Which ranking clause ships?');
 
-    commentTaskId = await newTask(hubId, { title: 'Tune the ranking weights' });
-    mistargetTaskId = await newTask(hubId, { title: 'Write the migration guide' });
-    bodyDocTaskId = await newTask(hubId, { title: 'Chase the upstream ticket' });
+    commentTaskId = await newTask(boardId, { title: 'Tune the ranking weights' });
+    mistargetTaskId = await newTask(boardId, { title: 'Write the migration guide' });
+    bodyDocTaskId = await newTask(boardId, { title: 'Chase the upstream ticket' });
 
     const quiet = await post('/api/workspaces', {
       name: 'billing-cleanup',
       goal: 'Retire the old invoicing path.',
     });
     expect(quiet.status).toBe(200);
-    quietHubId = ((await quiet.json()) as { workspace: { id: string } }).workspace.id;
-    quietTaskId = await newTask(quietHubId, { title: 'Drop the legacy invoice job' });
+    quietBoardId = ((await quiet.json()) as { workspace: { id: string } }).workspace.id;
+    quietTaskId = await newTask(quietBoardId, { title: 'Drop the legacy invoice job' });
   });
 
   afterAll(async () => {
@@ -500,7 +500,7 @@ describe('voice actions, hardened: end to end', () => {
   it('a poisoned review headline cannot turn a question into a comment', async () => {
     // The classifier answers exactly what the injected sentence asked for.
     classify({ kind: 'action', action: 'comment', id: injectedDocId });
-    const body = await say(hubId, 'what changed here?', {
+    const body = await say(boardId, 'what changed here?', {
       surface: 'doc',
       docId: injectedDocId,
     });
@@ -514,7 +514,7 @@ describe('voice actions, hardened: end to end', () => {
 
   it('POSITIVE CONTROL: the same doc, the same reply, an imperative utterance — it posts', async () => {
     classify({ kind: 'action', action: 'comment', id: injectedDocId });
-    const body = await say(hubId, 'note that this headline is spam', {
+    const body = await say(boardId, 'note that this headline is spam', {
       surface: 'doc',
       docId: injectedDocId,
     });
@@ -525,7 +525,7 @@ describe('voice actions, hardened: end to end', () => {
 
   it('an id-less action writes nothing — the mis-targeted shape is now visible', async () => {
     classify({ kind: 'action', action: 'set-status', status: 'done' });
-    const body = await say(hubId, 'mark the deploy task as done', {
+    const body = await say(boardId, 'mark the deploy task as done', {
       surface: 'task',
       taskId: mistargetTaskId,
     });
@@ -536,7 +536,7 @@ describe('voice actions, hardened: end to end', () => {
 
   it('an action naming a DIFFERENT task writes nothing to the one in view', async () => {
     classify({ kind: 'action', action: 'set-status', status: 'done', id: commentTaskId });
-    const body = await say(hubId, 'mark the deploy task as done', {
+    const body = await say(boardId, 'mark the deploy task as done', {
       surface: 'task',
       taskId: mistargetTaskId,
     });
@@ -549,7 +549,7 @@ describe('voice actions, hardened: end to end', () => {
   it('"reply to that review comment" works on a PLAIN open thread, not only a declared item', async () => {
     const said = 'reply that we should wait for the migration';
     classify({ kind: 'action', action: 'answer-review', id: plainDocId });
-    const body = await say(hubId, said, { surface: 'doc', docId: plainDocId });
+    const body = await say(boardId, said, { surface: 'doc', docId: plainDocId });
 
     expect(body.route).toBe('fast-path-action');
     const threads = await threadsOf(plainDocId);
@@ -563,7 +563,7 @@ describe('voice actions, hardened: end to end', () => {
 
   it('an out-of-scope action verb does NOT report the fast path as down', async () => {
     classify({ kind: 'action', action: 'resolve-thread' });
-    const body = await say(hubId, 'resolve that thread', { surface: 'hub' });
+    const body = await say(boardId, 'resolve that thread', { surface: 'board' });
 
     expect(body.route).toBe('agent');
     expect(body.ack).not.toContain('Fast path unavailable');
@@ -572,8 +572,8 @@ describe('voice actions, hardened: end to end', () => {
   it('the same spoken comment twice makes ONE thread', async () => {
     const said = 'note that the crawler is flaky on retries';
     classify({ kind: 'action', action: 'comment', id: commentTaskId });
-    const first = await say(hubId, said, { surface: 'task', taskId: commentTaskId });
-    const second = await say(hubId, said, { surface: 'task', taskId: commentTaskId });
+    const first = await say(boardId, said, { surface: 'task', taskId: commentTaskId });
+    const second = await say(boardId, said, { surface: 'task', taskId: commentTaskId });
 
     expect(first.route).toBe('fast-path-action');
     // A retry after a dropped response is the likeliest retry there is, and
@@ -594,8 +594,8 @@ describe('voice actions, hardened: end to end', () => {
     const said = 'go with the shorter clause, it reads better on mobile';
     classify({ kind: 'action', action: 'answer-review', id: answerDocId });
     const [first, second] = await Promise.all([
-      say(hubId, said, { surface: 'doc', docId: answerDocId }),
-      say(hubId, said, { surface: 'doc', docId: answerDocId }),
+      say(boardId, said, { surface: 'doc', docId: answerDocId }),
+      say(boardId, said, { surface: 'doc', docId: answerDocId }),
     ]);
 
     expect([first.route, second.route]).toContain('fast-path-action');
@@ -607,7 +607,7 @@ describe('voice actions, hardened: end to end', () => {
 
   it('an action on a board with NO agent still queues the utterance for the residue', async () => {
     classify({ kind: 'action', action: 'set-status', status: 'done', id: quietTaskId });
-    const body = await say(quietHubId, 'mark this done and then draft the migration notes', {
+    const body = await say(quietBoardId, 'mark this done and then draft the migration notes', {
       surface: 'task',
       taskId: quietTaskId,
     });
@@ -616,7 +616,7 @@ describe('voice actions, hardened: end to end', () => {
     expect(handle.tasks.getTask(quietTaskId)?.status).toBe('done');
     // The only durable channel to an away agent is the queue; without this the
     // second half of the sentence reaches nobody, ever.
-    const qPath = voiceQueuePath(dataDir, quietHubId);
+    const qPath = voiceQueuePath(dataDir, quietBoardId);
     expect(existsSync(qPath)).toBe(true);
     const queued = readFileSync(qPath, 'utf8');
     expect(queued).toContain('draft the migration notes');
@@ -626,14 +626,14 @@ describe('voice actions, hardened: end to end', () => {
 
   it('a task BODY doc keeps its id in the prompt anchor and in the queue', async () => {
     classify({ kind: 'change' });
-    const body = await say(hubId, 'regroup the ranking work', {
+    const body = await say(boardId, 'regroup the ranking work', {
       surface: 'doc',
       docId: `task:${bodyDocTaskId}`,
       visibleHeading: 'Acceptance criteria',
     });
     expect(body.route).toBe('agent');
 
-    const rows = readFileSync(eventsLogPath(dataDir, hubId), 'utf8')
+    const rows = readFileSync(eventsLogPath(dataDir, boardId), 'utf8')
       .split('\n')
       .filter((l) => l.includes('voice.request'));
     expect(rows.length).toBeGreaterThan(0);

@@ -14,8 +14,8 @@
  */
 import { options, render } from 'preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { HubTask, ScheduleWrite } from '../src/hub/hub-board-model.ts';
-import { ScheduleEditor } from '../src/hub/schedule-editor.tsx';
+import type { BoardTask, ScheduleWrite } from '../src/board/board-model.ts';
+import { ScheduleEditor } from '../src/board/schedule-editor.tsx';
 import { IPAD, PHONE, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 // A click here is asserted on the very next line, so renders flush inline —
@@ -38,7 +38,7 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-function task(over: Partial<HubTask> = {}): HubTask {
+function task(over: Partial<BoardTask> = {}): BoardTask {
   return {
     id: 't-lamp',
     title: 'Post the harbour digest',
@@ -53,10 +53,10 @@ function task(over: Partial<HubTask> = {}): HubTask {
     createdAt: NOW,
     updatedAt: NOW,
     ...over,
-  } as HubTask;
+  } as BoardTask;
 }
 
-function mount(over: Partial<HubTask> = {}, onSet = vi.fn(async () => true)) {
+function mount(over: Partial<BoardTask> = {}, onSet = vi.fn(async () => true)) {
   host = document.createElement('div');
   document.body.appendChild(host);
   render(<ScheduleEditor task={task(over)} now={NOW} timezone={TZ} onSet={onSet} />, host);
@@ -68,9 +68,9 @@ const $ = <T extends Element>(sel: string): T => {
   if (!el) throw new Error(`no ${sel} in the editor`);
   return el;
 };
-const input = (): HTMLInputElement => $<HTMLInputElement>('.hub-sched-input');
+const input = (): HTMLInputElement => $<HTMLInputElement>('.board-sched-input');
 const chipText = (): string[] =>
-  [...(host?.querySelectorAll('.hub-sched-chip') ?? [])].map((c) =>
+  [...(host?.querySelectorAll('.board-sched-chip') ?? [])].map((c) =>
     (c.textContent ?? '').replace(/\s+/g, ' ').trim(),
   );
 
@@ -88,28 +88,28 @@ function click(el: Element | null | undefined): void {
 describe('an unscheduled row', () => {
   it('shows one affordance and no phrase box', () => {
     mount();
-    expect(host?.querySelector('.hub-sched-arm')).not.toBeNull();
-    expect(host?.querySelector('.hub-sched-input')).toBeNull();
+    expect(host?.querySelector('.board-sched-arm')).not.toBeNull();
+    expect(host?.querySelector('.board-sched-input')).toBeNull();
   });
 
   it('opens the phrase box when the affordance is tapped', () => {
     mount();
-    click(host?.querySelector('.hub-sched-arm'));
+    click(host?.querySelector('.board-sched-arm'));
     expect(input().value).toBe('');
     // The examples are offered rather than explained — no caption anywhere in
     // the section (owner's standing rule).
-    expect(host?.querySelectorAll('.hub-sched-try').length).toBe(4);
+    expect(host?.querySelectorAll('.board-sched-try').length).toBe(4);
   });
 });
 
 describe('a phrase derives the chips', () => {
   it('reads "every weekday at 9am" into a cadence, a time and the lit weekdays', () => {
     mount();
-    click(host?.querySelector('.hub-sched-arm'));
+    click(host?.querySelector('.board-sched-arm'));
     type('every weekday at 9am');
     expect(chipText()).toContain('Every weekday');
     expect(chipText()).toContain('9am');
-    const lit = [...(host?.querySelectorAll('.hub-sched-day.is-on') ?? [])].map((d) =>
+    const lit = [...(host?.querySelectorAll('.board-sched-day.is-on') ?? [])].map((d) =>
       d.getAttribute('aria-label'),
     );
     expect(lit).toEqual(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']);
@@ -117,7 +117,7 @@ describe('a phrase derives the chips', () => {
 
   it('reads two times out of "twice a day at 9 and 5"', () => {
     mount();
-    click(host?.querySelector('.hub-sched-arm'));
+    click(host?.querySelector('.board-sched-arm'));
     type('twice a day at 9 and 5');
     expect(chipText()).toContain('9am×');
     expect(chipText()).toContain('5pm×');
@@ -125,17 +125,17 @@ describe('a phrase derives the chips', () => {
 
   it('reads a one-off as a date and a time, with no repeat controls', () => {
     mount();
-    click(host?.querySelector('.hub-sched-arm'));
+    click(host?.querySelector('.board-sched-arm'));
     type('Sep 10 at 3pm');
     expect(chipText()).toContain('Sep 10');
     expect(chipText()).toContain('3pm');
-    expect(host?.querySelector('.hub-sched-days')).toBeNull();
-    expect(host?.querySelector('.hub-sched-end')).toBeNull();
+    expect(host?.querySelector('.board-sched-days')).toBeNull();
+    expect(host?.querySelector('.board-sched-end')).toBeNull();
   });
 
   it('keeps the last good chips while a phrase is half-typed, and says the box is wrong', () => {
     mount();
-    click(host?.querySelector('.hub-sched-arm'));
+    click(host?.querySelector('.board-sched-arm'));
     type('every weekday at 9am');
     type('every weekday at nine');
     expect(chipText()).toContain('Every weekday');
@@ -145,10 +145,10 @@ describe('a phrase derives the chips', () => {
   it('will not save a phrase that did not read, and tells assistive tech why', () => {
     const onSet = vi.fn(async () => true);
     mount({}, onSet);
-    click(host?.querySelector('.hub-sched-arm'));
+    click(host?.querySelector('.board-sched-arm'));
     type('every weekday at 9am');
     type('every purple');
-    const save = $<HTMLButtonElement>('.hub-sched-save');
+    const save = $<HTMLButtonElement>('.board-sched-save');
     expect(input().getAttribute('aria-invalid')).toBe('true');
     expect(save.disabled).toBe(true);
     const whyId = input().getAttribute('aria-describedby') ?? '';
@@ -163,8 +163,8 @@ describe('a phrase derives the chips', () => {
 
   it('offers an example that fills the box and derives from it', () => {
     mount();
-    click(host?.querySelector('.hub-sched-arm'));
-    const example = [...(host?.querySelectorAll('.hub-sched-try') ?? [])].find(
+    click(host?.querySelector('.board-sched-arm'));
+    const example = [...(host?.querySelectorAll('.board-sched-try') ?? [])].find(
       (b) => b.textContent === 'every Monday 9:00 until Dec',
     );
     click(example);
@@ -179,14 +179,14 @@ describe('a phrase derives the chips', () => {
 describe('a chip edit rewrites the phrase', () => {
   const open = (phrase: string) => {
     const m = mount();
-    click(host?.querySelector('.hub-sched-arm'));
+    click(host?.querySelector('.board-sched-arm'));
     type(phrase);
     return m;
   };
 
   it('turning a weekday off rewrites the sentence in canonical English', () => {
     open('every weekday at 9am');
-    const wed = host?.querySelector('.hub-sched-day[aria-label="Wednesday"]');
+    const wed = host?.querySelector('.board-sched-day[aria-label="Wednesday"]');
     click(wed);
     expect(input().value).toBe('every Monday, Tuesday, Thursday and Friday at 9am');
     expect(chipText()).toContain('Every Monday, Tuesday, Thursday and Friday');
@@ -194,20 +194,20 @@ describe('a chip edit rewrites the phrase', () => {
 
   it('removing a time rewrites the sentence, and the last time cannot be removed', () => {
     open('twice a day at 9 and 5');
-    click(host?.querySelector('.hub-sched-x'));
+    click(host?.querySelector('.board-sched-x'));
     expect(input().value).toBe('every day at 5pm');
-    expect(host?.querySelector('.hub-sched-x')).toBeNull();
+    expect(host?.querySelector('.board-sched-x')).toBeNull();
   });
 
   it('adding a time rewrites the sentence', () => {
     open('every day at 9am');
-    click(host?.querySelector('.hub-sched-add'));
+    click(host?.querySelector('.board-sched-add'));
     expect(input().value).toBe('every day at 9am and 12pm');
   });
 
   it('cycling the cadence chip walks day → weekday → weekend → day', () => {
     open('every day at 9am');
-    const cadence = () => host?.querySelector('.hub-sched-chip[aria-label^="Repeats"]');
+    const cadence = () => host?.querySelector('.board-sched-chip[aria-label^="Repeats"]');
     click(cadence());
     expect(input().value).toBe('every weekday at 9am');
     click(cadence());
@@ -218,7 +218,7 @@ describe('a chip edit rewrites the phrase', () => {
 
   it('picking an end date adds the clause, and clearing it takes the clause away', () => {
     open('every day at 9am');
-    const end = $<HTMLInputElement>('.hub-sched-end-input');
+    const end = $<HTMLInputElement>('.board-sched-end-input');
     end.value = '2026-12-01';
     end.dispatchEvent(new Event('change', { bubbles: true }));
     expect(input().value).toBe('every day at 9am until Dec');
@@ -229,7 +229,7 @@ describe('a chip edit rewrites the phrase', () => {
 
   it('flipping the mode rewrites the sentence, and flipping back restores the rule', () => {
     open('every weekday at 9am');
-    const modes = () => [...(host?.querySelectorAll('.hub-sched-mode-btn') ?? [])];
+    const modes = () => [...(host?.querySelectorAll('.board-sched-mode-btn') ?? [])];
     click(modes()[1]);
     expect(input().value).toBe("1 day after it's done");
     expect(modes()[1]?.getAttribute('aria-pressed')).toBe('true');
@@ -241,9 +241,9 @@ describe('a chip edit rewrites the phrase', () => {
   it('says when the rule is next owed, and says an open instance is what it waits on', () => {
     open('every weekday at 9am');
     // NOW is a Saturday, so the next weekday nine is Monday.
-    expect($('.hub-sched-next-v').textContent).toBe('Mon, Sep 7, 9am');
-    click([...(host?.querySelectorAll('.hub-sched-mode-btn') ?? [])][1]);
-    expect($('.hub-sched-next-v').textContent).not.toBe('');
+    expect($('.board-sched-next-v').textContent).toBe('Mon, Sep 7, 9am');
+    click([...(host?.querySelectorAll('.board-sched-mode-btn') ?? [])][1]);
+    expect($('.board-sched-next-v').textContent).not.toBe('');
   });
 });
 
@@ -251,9 +251,9 @@ describe('saving and clearing', () => {
   it('sends the rule the chips are showing, with the reader’s zone', async () => {
     const onSet = vi.fn(async () => true);
     mount({}, onSet);
-    click(host?.querySelector('.hub-sched-arm'));
+    click(host?.querySelector('.board-sched-arm'));
     type('every weekday at 9am');
-    click(host?.querySelector('.hub-sched-save'));
+    click(host?.querySelector('.board-sched-save'));
     await Promise.resolve();
     expect(onSet).toHaveBeenCalledWith({
       rule: { kind: 'calendar', times: [{ hour: 9, minute: 0 }], weekdays: [1, 2, 3, 4, 5] },
@@ -270,9 +270,9 @@ describe('saving and clearing', () => {
       },
     });
     expect(input().value).toBe('every Monday at 9am');
-    expect(host?.querySelector('.hub-sched-arm')).toBeNull();
+    expect(host?.querySelector('.board-sched-arm')).toBeNull();
     // The buttons say what they do to a rule that already exists.
-    expect($('.hub-sched-save').textContent).toBe('Update');
+    expect($('.board-sched-save').textContent).toBe('Update');
   });
 
   it('clears the rule with null, which the route reads as an explicit clear', async () => {
@@ -287,7 +287,7 @@ describe('saving and clearing', () => {
       onSet,
     );
     expect(input().value).toBe('every 20 minutes');
-    click([...(host?.querySelectorAll('.hub-sched-actions .hub-btn') ?? [])][0]);
+    click([...(host?.querySelectorAll('.board-sched-actions .board-btn') ?? [])][0]);
     await Promise.resolve();
     expect(onSet).toHaveBeenCalledWith(null);
   });
@@ -295,28 +295,28 @@ describe('saving and clearing', () => {
 
 describe('the section at both tiers', () => {
   it('lays the phrase box, chips and buttons out on the panel’s scale at 1180x820', () => {
-    cleanup = installSheets('hub.css', 'styles.css', 'tokens.css');
+    cleanup = installSheets('board.css', 'styles.css', 'tokens.css');
     setViewport(IPAD);
     mount({ schedule: { rule: { kind: 'every', everyMs: 1_200_000 }, armedAt: NOW } });
     // The phrase box is a touch target and the chips clear the 28px floor, so
     // nothing in the section is a mouse-only hit area on the iPad.
-    expect(styleOf($('.hub-sched-nl')).minHeight).toBe('44px');
-    expect(styleOf($('.hub-sched-chip')).minHeight).toBe('32px');
+    expect(styleOf($('.board-sched-nl')).minHeight).toBe('44px');
+    expect(styleOf($('.board-sched-chip')).minHeight).toBe('32px');
     // The next-run line rides the right edge beside the mode control, which is
     // what keeps the section four rows tall where height is scarce.
-    expect(styleOf($('.hub-sched-next')).marginLeft).toBe('auto');
-    expect(styleOf($('.hub-sched-actions')).justifyContent).toBe('flex-end');
+    expect(styleOf($('.board-sched-next')).marginLeft).toBe('auto');
+    expect(styleOf($('.board-sched-actions')).justifyContent).toBe('flex-end');
   });
 
   it('drops the next-run line to its own row and splits the buttons at 430px', () => {
-    cleanup = installSheets('hub.css', 'styles.css', 'tokens.css');
+    cleanup = installSheets('board.css', 'styles.css', 'tokens.css');
     setViewport(PHONE);
     mount({ schedule: { rule: { kind: 'every', everyMs: 1_200_000 }, armedAt: NOW } });
-    const next = styleOf($('.hub-sched-next'));
+    const next = styleOf($('.board-sched-next'));
     expect(next.marginLeft).toBe('0px');
     expect(next.width).toBe('100%');
-    expect(styleOf($('.hub-sched-save')).flex).toBe('1 1 auto');
+    expect(styleOf($('.board-sched-save')).flex).toBe('1 1 auto');
     // …and the phrase box is still the primary control, not shrunk away.
-    expect(styleOf($('.hub-sched-nl')).minHeight).toBe('44px');
+    expect(styleOf($('.board-sched-nl')).minHeight).toBe('44px');
   });
 });

@@ -226,7 +226,7 @@ describe('/api/agents/:agentId/watches', () => {
     ]);
   });
 
-  it('treats `ws:<id>` as live for a hub workspace, and dead for a workspace nobody made', async () => {
+  it('treats `ws:<id>` as live for a board workspace, and dead for a workspace nobody made', async () => {
     const base = start();
     const ws = await fetch(`${base}/api/workspaces`, {
       method: 'POST',
@@ -318,7 +318,7 @@ describe('POST /api/agents/:id/merge re-keys watches so delivery follows the new
     // A board led by a THIRD agent, so the merged agent is addressed only
     // through its durable watch — not through the lead seat.
     const created = await post('/api/workspaces', {
-      name: 'merge-hub',
+      name: 'merge-board',
       goal: 'Ship it.',
       leadAgentId: 'agent-lead',
     });
@@ -454,7 +454,7 @@ describe('POST /api/agents/:id/merge — review findings', () => {
    *  with a durable board watch — the shape of the e2e test above. */
   async function seed(): Promise<string> {
     const created = await req('/api/workspaces', {
-      body: { name: 'merge-hub', goal: 'Ship it.', leadAgentId: 'agent-lead' },
+      body: { name: 'merge-board', goal: 'Ship it.', leadAgentId: 'agent-lead' },
     });
     const wsId = (created.json.workspace as { id: string }).id;
     const file = join(dataDir as string, 'watched.md');
@@ -647,7 +647,7 @@ describe('POST /api/agents/:id/merge — merging back reverses an earlier merge'
    *  delivery set) have something to move back. Returns the workspace id. */
   async function seedForwardMerge(): Promise<string> {
     const created = await req('/api/workspaces', {
-      body: { name: 'merge-back-hub', goal: 'Ship it.', leadAgentId: 'agent-x' },
+      body: { name: 'merge-back-board', goal: 'Ship it.', leadAgentId: 'agent-x' },
     });
     const wsId = (created.json.workspace as { id: string }).id;
     expect(

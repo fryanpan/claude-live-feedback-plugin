@@ -16,9 +16,9 @@
  * board event.
  */
 import { options } from 'preact';
-import type { HubTask } from '../../src/hub/hub-board-model.ts';
-import type { DetailHandlers, TaskDiscussion } from '../../src/hub/hub-detail-render.ts';
-import { mountTaskDetailIsland, taskDetailData } from '../../src/hub/task-detail-island.tsx';
+import type { DetailHandlers, TaskDiscussion } from '../../src/board/board-detail-render.ts';
+import type { BoardTask } from '../../src/board/board-model.ts';
+import { mountTaskDetailIsland, taskDetailData } from '../../src/board/task-detail-island.tsx';
 
 // Component re-renders are SCHEDULED, not synchronous: a signal write or a
 // `useState` from a tap lands on the following microtask. That is invisible to
@@ -30,7 +30,7 @@ let mounted: { host: HTMLElement; dispose: () => void } | null = null;
 
 export function renderTaskDetail(
   container: HTMLElement,
-  task: HubTask | null,
+  task: BoardTask | null,
   handlers: DetailHandlers,
   discussion?: TaskDiscussion,
 ): void {

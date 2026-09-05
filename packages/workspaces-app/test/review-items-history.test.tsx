@@ -12,23 +12,23 @@
  */
 import { options } from 'preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CHORES_ID, type HubReviewItem, type HubTask } from '../src/hub/hub-board-model.ts';
 import {
   type DetailHandlers,
   type TaskDiscussion,
   type TaskThread,
-} from '../src/hub/hub-detail-render.ts';
-import { commentRow, discussionStream } from '../src/hub/hub-discussion-render.ts';
-import { describeEvent } from '../src/hub/hub-presence-model.ts';
-import { reviewItemRow } from '../src/hub/hub-review-render.ts';
-import { mountTaskDetailIsland, taskDetailData } from '../src/hub/task-detail-island.tsx';
+} from '../src/board/board-detail-render.ts';
+import { commentRow, discussionStream } from '../src/board/board-discussion-render.ts';
+import { type BoardReviewItem, type BoardTask, CHORES_ID } from '../src/board/board-model.ts';
+import { describeEvent } from '../src/board/board-presence-model.ts';
+import { reviewItemRow } from '../src/board/board-review-render.ts';
+import { mountTaskDetailIsland, taskDetailData } from '../src/board/task-detail-island.tsx';
 
 const NOW = 1_700_000_000_000;
 const HOUR = 3_600_000;
 
 options.debounceRendering = (cb: () => void) => cb();
 
-function item(id: string, over: Partial<HubReviewItem> = {}): HubReviewItem {
+function item(id: string, over: Partial<BoardReviewItem> = {}): BoardReviewItem {
   return {
     id,
     review: { shape: 'decision', headline: `Ask ${id}`, detail: 'Because of the cost.' },
@@ -100,34 +100,36 @@ describe('reviewItemRow', () => {
   it('renders the ask, who raised it, and the answered record with who and when', () => {
     const li = reviewItemRow(ANSWERED, NOW, 'Someone Else');
     expect(li.dataset.reviewItemId).toBe('ri-answered');
-    expect(li.querySelector('.hub-comment-author')?.textContent).toBe('Scheduler Agent');
-    expect(li.querySelector('.hub-comment-review-k')?.textContent).toBe('Decision');
-    expect(li.querySelector('.hub-comment-review-k')?.classList.contains('is-answered')).toBe(true);
-    expect(li.querySelector('.hub-comment-review-headline')?.textContent).toBe('Ask ri-answered');
-    expect(li.querySelector('.hub-comment-body')?.textContent).toContain('Because of the cost.');
-    const record = li.querySelector('.hub-comment-answered');
+    expect(li.querySelector('.board-comment-author')?.textContent).toBe('Scheduler Agent');
+    expect(li.querySelector('.board-comment-review-k')?.textContent).toBe('Decision');
+    expect(li.querySelector('.board-comment-review-k')?.classList.contains('is-answered')).toBe(
+      true,
+    );
+    expect(li.querySelector('.board-comment-review-headline')?.textContent).toBe('Ask ri-answered');
+    expect(li.querySelector('.board-comment-body')?.textContent).toContain('Because of the cost.');
+    const record = li.querySelector('.board-comment-answered');
     expect(record?.textContent).toContain('Answered by Reviewer: “Keep disk”');
-    expect(record?.querySelector('.hub-comment-when')?.textContent).toBe('1h ago');
+    expect(record?.querySelector('.board-comment-when')?.textContent).toBe('1h ago');
   });
 
   it('says "Answered by you" for the reader’s own answer', () => {
     const li = reviewItemRow(ANSWERED, NOW, 'Reviewer');
-    expect(li.querySelector('.hub-comment-answered')?.textContent).toContain(
+    expect(li.querySelector('.board-comment-answered')?.textContent).toContain(
       'Answered by you: “Keep disk”',
     );
   });
 
   it('draws an open item as a question with no record, and a withdrawn one as withdrawn', () => {
     const open = reviewItemRow(item('ri-open', { review: { headline: 'Open ask' } }), NOW);
-    expect(open.querySelector('.hub-comment-review-k')?.textContent).toBe('Question');
-    expect(open.querySelector('.hub-comment-answered')).toBeNull();
+    expect(open.querySelector('.board-comment-review-k')?.textContent).toBe('Question');
+    expect(open.querySelector('.board-comment-answered')).toBeNull();
     const gone = reviewItemRow(
       item('ri-gone', { review: { shape: 'decision', headline: 'Gone', withdrawnAt: NOW } }),
       NOW,
     );
-    expect(gone.querySelector('.hub-comment-review-k')?.textContent).toBe('Withdrawn');
+    expect(gone.querySelector('.board-comment-review-k')?.textContent).toBe('Withdrawn');
     expect(
-      gone.querySelector('.hub-comment-review-headline')?.classList.contains('is-withdrawn'),
+      gone.querySelector('.board-comment-review-headline')?.classList.contains('is-withdrawn'),
     ).toBe(true);
   });
 });
@@ -155,8 +157,10 @@ describe('commentRow on an answered declaration', () => {
       NOW,
       'Reviewer',
     );
-    expect(li.querySelector('.hub-comment-review-k')?.classList.contains('is-answered')).toBe(true);
-    expect(li.querySelector('.hub-comment-answered')?.textContent).toContain(
+    expect(li.querySelector('.board-comment-review-k')?.classList.contains('is-answered')).toBe(
+      true,
+    );
+    expect(li.querySelector('.board-comment-answered')?.textContent).toContain(
       'Answered by you: “Keep disk”',
     );
     // Control: an unanswered declaration has no record.
@@ -168,7 +172,7 @@ describe('commentRow on an answered declaration', () => {
       undefined,
       NOW,
     );
-    expect(open.querySelector('.hub-comment-answered')).toBeNull();
+    expect(open.querySelector('.board-comment-answered')).toBeNull();
   });
 });
 
@@ -206,7 +210,7 @@ describe('the Activity line for a raised item', () => {
 
 describe('the task panel’s Comments tab', () => {
   let seq = 0;
-  function task(overrides: Partial<HubTask> = {}): HubTask {
+  function task(overrides: Partial<BoardTask> = {}): BoardTask {
     seq += 1;
     return {
       id: `t-${seq}`,
@@ -243,7 +247,7 @@ describe('the task panel’s Comments tab', () => {
 
   it('shows an answered ticket-borne item in the comment stream, and not a held one', () => {
     const host = document.createElement('div');
-    host.className = 'hub-detail hidden';
+    host.className = 'board-detail hidden';
     document.body.replaceChildren(host);
     live = mountTaskDetailIsland(host);
     const discussion: TaskDiscussion = {
@@ -260,23 +264,23 @@ describe('the task panel’s Comments tab', () => {
       discussion,
       handlers: handlers(),
     };
-    const stream = host.querySelector('.hub-comment-stream');
+    const stream = host.querySelector('.board-comment-stream');
     expect(stream).not.toBeNull();
-    const rows = Array.from(stream?.querySelectorAll('li.hub-comment') ?? []);
+    const rows = Array.from(stream?.querySelectorAll('li.board-comment') ?? []);
     expect(rows.map((r) => (r as HTMLElement).dataset.reviewItemId ?? 'comment')).toEqual([
       'comment',
       'ri-answered',
     ]);
     expect(stream?.textContent).toContain('Answered by you: “Keep disk”');
     // The held item is on the ticket's held note, not in the history.
-    expect(host.querySelector('.hub-decide-held')?.getAttribute('data-review-item-id')).toBe(
+    expect(host.querySelector('.board-decide-held')?.getAttribute('data-review-item-id')).toBe(
       'ri-held',
     );
   });
 
   it('a task with only a ticket-borne item is not "No comments yet"', () => {
     const host = document.createElement('div');
-    host.className = 'hub-detail hidden';
+    host.className = 'board-detail hidden';
     document.body.replaceChildren(host);
     live = mountTaskDetailIsland(host);
     taskDetailData.value = {
@@ -284,9 +288,9 @@ describe('the task panel’s Comments tab', () => {
       discussion: { loading: false, threads: [] },
       handlers: handlers(),
     };
-    expect(host.querySelector('.hub-discussion-empty')).toBeNull();
+    expect(host.querySelector('.board-discussion-empty')).toBeNull();
     expect(
-      host.querySelector('.hub-comment-stream li[data-review-item-id="ri-answered"]'),
+      host.querySelector('.board-comment-stream li[data-review-item-id="ri-answered"]'),
     ).not.toBeNull();
   });
 });

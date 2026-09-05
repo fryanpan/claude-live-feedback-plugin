@@ -18,10 +18,10 @@ import type { TaskSchedule } from '@feedback/core/task-schedule';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type BoardFilters,
+  type BoardGoal,
+  type BoardTask,
   CHORES_ID,
   DEFAULT_DONE_WINDOW,
-  type HubGoal,
-  type HubTask,
   SCHEDULED_ID,
   SCHEDULED_TITLE,
   boardSections,
@@ -31,7 +31,7 @@ import {
   scheduleCursorFor,
   scheduleRules,
   stepTarget,
-} from '../src/hub/hub-board-model.ts';
+} from '../src/board/board-model.ts';
 import { IPAD, PHONE, installSheets, setViewport, styleOf } from './css-harness.ts';
 import { type ShimHandlers, disposeBoards, renderBoard } from './support/board.ts';
 
@@ -41,7 +41,7 @@ const NOW = 1_700_000_000_000;
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
 
-const GOALS: HubGoal[] = [
+const GOALS: BoardGoal[] = [
   { id: 'g-ship', title: 'The release goes out' },
   { id: 'g-quiet', title: 'The board runs itself' },
 ];
@@ -54,7 +54,7 @@ const filters: BoardFilters = {
 };
 
 let seq = 0;
-function task(over: Partial<HubTask> = {}): HubTask {
+function task(over: Partial<BoardTask> = {}): BoardTask {
   seq += 1;
   return {
     id: `t-${seq}`,
@@ -82,11 +82,11 @@ function weekdays9(over: Partial<TaskSchedule> = {}): TaskSchedule {
   };
 }
 
-function sectionIds(tasks: HubTask[]): string[] {
+function sectionIds(tasks: BoardTask[]): string[] {
   return boardSections(GOALS, tasks, filters).map((s) => s.id);
 }
 
-function sectionOf(tasks: HubTask[], taskId: string): string | undefined {
+function sectionOf(tasks: BoardTask[], taskId: string): string | undefined {
   return boardSections(GOALS, tasks, filters).find((s) => s.tasks.some((t) => t.id === taskId))?.id;
 }
 
@@ -248,15 +248,15 @@ describe('what a scheduled row says', () => {
         state: { lastOccurrenceAt: NOW - 2 * DAY, lastInstanceId: done.id },
       },
     });
-    const byId = new Map<string, HubTask>([done, rule].map((t) => [t.id, t]));
+    const byId = new Map<string, BoardTask>([done, rule].map((t) => [t.id, t]));
     expect(scheduleCursorFor(rule, byId)).toEqual({ lastCompletedAt: NOW - HOUR });
     expect(scheduleChips(rule, NOW, scheduleCursorFor(rule, byId))?.next).toBe(
       'Wed 15 Nov, 9:13pm',
     );
     // The instance still OPEN: the rule is owed nothing, and the row says so
     // by saying nothing rather than by guessing a date.
-    const reopened: HubTask = { ...done, status: 'in-progress' };
-    const open = new Map<string, HubTask>([reopened, rule].map((t) => [t.id, t]));
+    const reopened: BoardTask = { ...done, status: 'in-progress' };
+    const open = new Map<string, BoardTask>([reopened, rule].map((t) => [t.id, t]));
     expect(scheduleCursorFor(rule, open)).toEqual({});
     expect(scheduleChips(rule, NOW, scheduleCursorFor(rule, open))?.next).toBeUndefined();
   });
@@ -282,10 +282,10 @@ let root: HTMLElement;
 let sheets = () => {};
 beforeEach(() => {
   root = document.createElement('div');
-  root.className = 'hub-board';
+  root.className = 'board';
   document.body.replaceChildren(root);
   setViewport(IPAD);
-  sheets = installSheets('hub.css', 'styles.css');
+  sheets = installSheets('board.css', 'styles.css');
   vi.spyOn(Date, 'now').mockReturnValue(NOW);
 });
 afterEach(() => {
@@ -295,7 +295,7 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-function paint(tasks: HubTask[], over: Partial<ShimHandlers> = {}): ShimHandlers {
+function paint(tasks: BoardTask[], over: Partial<ShimHandlers> = {}): ShimHandlers {
   const h = handlers({
     tasksById: new Map(tasks.map((t) => [t.id, t])),
     ...over,
@@ -320,17 +320,17 @@ describe('a scheduled row on screen', () => {
   it('renders under a Scheduled header, with the rule and the next run on the right', () => {
     const rule = task({ title: 'Post the evening digest', schedule: weekdays9() });
     paint([rule, task({ title: 'Cut the release' })]);
-    expect(scheduledBand().querySelector('.hub-goal-title-text')?.textContent).toBe(
+    expect(scheduledBand().querySelector('.board-goal-title-text')?.textContent).toBe(
       SCHEDULED_TITLE,
     );
-    const badges = rowOf(rule.id).querySelector('.hub-task-badges');
-    expect(badges?.querySelector('.hub-badge-rule')?.textContent).toBe('Every weekday·9am');
-    expect(badges?.querySelector('.hub-next')?.textContent).toBe('Wed 15 Nov, 9am');
+    const badges = rowOf(rule.id).querySelector('.board-task-badges');
+    expect(badges?.querySelector('.board-badge-rule')?.textContent).toBe('Every weekday·9am');
+    expect(badges?.querySelector('.board-next')?.textContent).toBe('Wed 15 Nov, 9am');
     // The row that is not scheduled carries neither — so the two marks above
     // are the schedule and not something every row gets.
-    const plain = root.querySelector('[data-goal-id="g-ship"] .hub-task-row');
-    expect(plain?.querySelector('.hub-next')).toBeNull();
-    expect(plain?.querySelector('.hub-badge-rule')).toBeNull();
+    const plain = root.querySelector('[data-goal-id="g-ship"] .board-task-row');
+    expect(plain?.querySelector('.board-next')).toBeNull();
+    expect(plain?.querySelector('.board-badge-rule')).toBeNull();
   });
 
   it('says nothing else — no caption, no kind chip, no helper text', () => {
@@ -346,35 +346,35 @@ describe('a scheduled row on screen', () => {
     for (const caption of ['Scheduled task', 'recurring', 'Recurring', 'next run', 'rule']) {
       expect(words).not.toContain(caption);
     }
-    expect(scheduledBand().querySelector('.hub-section-empty')).toBeNull();
+    expect(scheduledBand().querySelector('.board-section-empty')).toBeNull();
   });
 
   it('gives the header no rename and no open caret — it is not a goal', () => {
     paint([task({ schedule: weekdays9() })]);
-    const header = scheduledBand().querySelector<HTMLElement>('.hub-goal-row');
+    const header = scheduledBand().querySelector<HTMLElement>('.board-goal-row');
     expect(header?.getAttribute('tabindex')).toBeNull();
-    expect(header?.querySelector('.hub-owner-avatar')).toBeNull();
+    expect(header?.querySelector('.board-owner-avatar')).toBeNull();
     // The caret is emitted for the grid track and hidden by the sheet, so the
     // assertion is the computed value rather than the node's absence.
-    const caret = scheduledBand().querySelector<HTMLElement>('.hub-goal-open');
+    const caret = scheduledBand().querySelector<HTMLElement>('.board-goal-open');
     expect(caret).not.toBeNull();
     if (caret) expect(styleOf(caret).visibility).toBe('hidden');
     // The control: a real goal band's caret is visible and its header focusable.
-    const goal = root.querySelector<HTMLElement>('[data-goal-id="g-ship"] .hub-goal-open');
+    const goal = root.querySelector<HTMLElement>('[data-goal-id="g-ship"] .board-goal-open');
     if (goal) expect(styleOf(goal).visibility).not.toBe('hidden');
     expect(
-      root.querySelector('[data-goal-id="g-ship"] .hub-goal-row')?.getAttribute('tabindex'),
+      root.querySelector('[data-goal-id="g-ship"] .board-goal-row')?.getAttribute('tabindex'),
     ).toBe('0');
   });
 
   it('draws no progress strip on it — a rule has no projected finish', () => {
     paint([task({ schedule: weekdays9() })]);
-    expect(scheduledBand().querySelector('.hub-goal-effort')).toBeNull();
+    expect(scheduledBand().querySelector('.board-goal-effort')).toBeNull();
   });
 });
 
 describe('the recurrence mark on a live instance', () => {
-  function withRun(over: Partial<HubTask> = {}) {
+  function withRun(over: Partial<BoardTask> = {}) {
     const rule = task({ title: 'Post the evening digest', schedule: weekdays9() });
     const run = task({
       title: 'Post the evening digest',
@@ -388,7 +388,7 @@ describe('the recurrence mark on a live instance', () => {
   it('marks the instance in its band and opens the rule when tapped', () => {
     const { rule, run } = withRun();
     const h = paint([rule, run]);
-    const mark = rowOf(run.id).querySelector<HTMLElement>('.hub-recur');
+    const mark = rowOf(run.id).querySelector<HTMLElement>('.board-recur');
     expect(mark).not.toBeNull();
     expect(mark?.tagName).toBe('BUTTON');
     expect(mark?.getAttribute('title')).toContain('Post the evening digest');
@@ -396,16 +396,16 @@ describe('the recurrence mark on a live instance', () => {
     expect(h.onOpenTask).toHaveBeenCalledWith(rule);
     // The instance is a plain row otherwise: no rule chip, no next run. It is
     // the work, and the rule is the thing that made it.
-    expect(rowOf(run.id).querySelector('.hub-badge-rule')).toBeNull();
-    expect(rowOf(run.id).querySelector('.hub-next')).toBeNull();
+    expect(rowOf(run.id).querySelector('.board-badge-rule')).toBeNull();
+    expect(rowOf(run.id).querySelector('.board-next')).toBeNull();
     // And the rule row carries no mark — it is not a run of itself.
-    expect(rowOf(rule.id).querySelector('.hub-recur')).toBeNull();
+    expect(rowOf(rule.id).querySelector('.board-recur')).toBeNull();
   });
 
   it('still marks a run whose rule this board cannot see, and links to nothing', () => {
     const { run } = withRun();
     paint([run]);
-    const mark = rowOf(run.id).querySelector<HTMLElement>('.hub-recur');
+    const mark = rowOf(run.id).querySelector<HTMLElement>('.board-recur');
     expect(mark).not.toBeNull();
     expect(mark?.tagName).toBe('SPAN');
     expect(mark?.querySelector('svg')).not.toBeNull();
@@ -414,7 +414,7 @@ describe('the recurrence mark on a live instance', () => {
   it('does not open the row it sits on', () => {
     const { rule, run } = withRun();
     const h = paint([rule, run]);
-    rowOf(run.id).querySelector<HTMLElement>('.hub-recur')?.click();
+    rowOf(run.id).querySelector<HTMLElement>('.board-recur')?.click();
     expect(h.onOpenTask).toHaveBeenCalledTimes(1);
     expect(h.onOpenTask).toHaveBeenCalledWith(rule);
   });
@@ -429,17 +429,17 @@ describe('the two viewports this project verifies', () => {
       schedule: { rule: { kind: 'calendar', times: [{ hour: 23, minute: 30 }] }, armedAt: NOW },
     });
     paint([later, soon]);
-    const soonChip = rowOf(soon.id).querySelector<HTMLElement>('.hub-next');
-    const laterChip = rowOf(later.id).querySelector<HTMLElement>('.hub-next');
-    const ruleChip = rowOf(later.id).querySelector<HTMLElement>('.hub-badge-rule');
+    const soonChip = rowOf(soon.id).querySelector<HTMLElement>('.board-next');
+    const laterChip = rowOf(later.id).querySelector<HTMLElement>('.board-next');
+    const ruleChip = rowOf(later.id).querySelector<HTMLElement>('.board-badge-rule');
     if (!soonChip || !laterChip || !ruleChip) throw new Error('a scheduled row lost a chip');
     expect(styleOf(soonChip).display).not.toBe('none');
     expect(styleOf(ruleChip).display).not.toBe('none');
     // Today is the accent; a run further out is not, and the rule beside it
     // is muted. Read as three colours the reader actually sees, and pinned
     // against each other rather than against a token name.
-    expect(soonChip.classList.contains('hub-next-soon')).toBe(true);
-    expect(laterChip.classList.contains('hub-next-soon')).toBe(false);
+    expect(soonChip.classList.contains('board-next-soon')).toBe(true);
+    expect(laterChip.classList.contains('board-next-soon')).toBe(false);
     const accent = styleOf(soonChip).color;
     const plain = styleOf(laterChip).color;
     const muted = styleOf(ruleChip).color;
@@ -478,10 +478,10 @@ describe('the two viewports this project verifies', () => {
     });
     paint([crowded]);
     const row = rowOf(crowded.id);
-    const strip = row.querySelector<HTMLElement>('.hub-task-badges');
-    const ruleChip = row.querySelector<HTMLElement>('.hub-badge-rule');
-    const next = row.querySelector<HTMLElement>('.hub-next');
-    const state = row.querySelector<HTMLElement>('.hub-state-note');
+    const strip = row.querySelector<HTMLElement>('.board-task-badges');
+    const ruleChip = row.querySelector<HTMLElement>('.board-badge-rule');
+    const next = row.querySelector<HTMLElement>('.board-next');
+    const state = row.querySelector<HTMLElement>('.board-state-note');
     if (!strip || !ruleChip || !next || !state) throw new Error('the crowded row lost a chip');
     // The strip wraps rather than hiding, and crops nothing itself. `''` is
     // happy-dom's reading of a property no rule sets, which is the same
@@ -505,7 +505,7 @@ describe('the two viewports this project verifies', () => {
     // rule that a wider window quietly drops.
     setViewport(IPAD);
     expect(styleOf(strip).flexWrap).toBe('wrap');
-    expect(styleOf(row.querySelector('.hub-badge-rule') as HTMLElement).textOverflow).toBe(
+    expect(styleOf(row.querySelector('.board-badge-rule') as HTMLElement).textOverflow).toBe(
       'ellipsis',
     );
   });
@@ -520,8 +520,8 @@ describe('the two viewports this project verifies', () => {
     for (const size of [IPAD, PHONE]) {
       setViewport(size);
       paint([rule, run]);
-      const mark = rowOf(run.id).querySelector<HTMLElement>('.hub-recur-link');
-      const target = mark?.querySelector<HTMLElement>('.hub-recur-target');
+      const mark = rowOf(run.id).querySelector<HTMLElement>('.board-recur-link');
+      const target = mark?.querySelector<HTMLElement>('.board-recur-target');
       const glyph = mark?.querySelector('svg');
       if (!mark || !target || !glyph) throw new Error(`no tap target at ${size.width}`);
       // docs/product/design-mobile.md: "Minimum 36×36px for any interactive
@@ -535,7 +535,7 @@ describe('the two viewports this project verifies', () => {
       expect(styleOf(glyph).width).toBe('13px');
       // Nothing crops it. A target inside a clipping strip is a 13px target
       // wearing a 44px rule.
-      const strip = rowOf(run.id).querySelector<HTMLElement>('.hub-task-badges');
+      const strip = rowOf(run.id).querySelector<HTMLElement>('.board-task-badges');
       if (strip) expect(['', 'visible']).toContain(styleOf(strip).overflow);
     }
   });
@@ -543,8 +543,8 @@ describe('the two viewports this project verifies', () => {
   it('paints the Scheduled rail grey, not the goal bands’ accent', () => {
     setViewport(IPAD);
     paint([task({ schedule: weekdays9() }), task({ title: 'Cut the release' })]);
-    const sched = scheduledBand().querySelector<HTMLElement>('.hub-goal-row');
-    const goal = root.querySelector<HTMLElement>('[data-goal-id="g-ship"] .hub-goal-row');
+    const sched = scheduledBand().querySelector<HTMLElement>('.board-goal-row');
+    const goal = root.querySelector<HTMLElement>('[data-goal-id="g-ship"] .board-goal-row');
     if (!sched || !goal) throw new Error('a band lost its header');
     const grey = styleOf(sched).borderLeftColor;
     const accent = styleOf(goal).borderLeftColor;
@@ -558,20 +558,20 @@ describe('the two viewports this project verifies', () => {
     setViewport(PHONE);
     const r = task({ title: 'Post the evening digest', schedule: weekdays9() });
     paint([r]);
-    const next = rowOf(r.id).querySelector<HTMLElement>('.hub-next');
+    const next = rowOf(r.id).querySelector<HTMLElement>('.board-next');
     if (!next) throw new Error('the next run is gone at 430px');
     expect(styleOf(next).display).not.toBe('none');
     // The strip cannot win the row against the title at this width — the
     // ceiling the ≤900px block sets, resolved against THIS viewport (30vw of
     // 430). happy-dom resolves the viewport unit, so the number is the
     // evidence the media query applied.
-    const strip = rowOf(r.id).querySelector<HTMLElement>('.hub-task-badges');
+    const strip = rowOf(r.id).querySelector<HTMLElement>('.board-task-badges');
     if (!strip) throw new Error('no badge strip');
     expect(styleOf(strip).maxWidth).toBe('129px');
     // The control: the same read at the iPad width, where the block does not
     // match, so the ceiling above is the media query and not a base rule.
     setViewport(IPAD);
-    const wide = rowOf(r.id).querySelector<HTMLElement>('.hub-task-badges');
+    const wide = rowOf(r.id).querySelector<HTMLElement>('.board-task-badges');
     if (!wide) throw new Error('no badge strip');
     expect(styleOf(wide).maxWidth).not.toBe('129px');
   });
