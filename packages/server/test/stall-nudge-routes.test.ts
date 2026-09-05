@@ -149,17 +149,17 @@ describe('the board tells its lead which rows have stopped', () => {
     const workspaceId = workspace.id;
     expect(workspace.leadAgentId).toBe(LEAD.id);
     await jj(
-      await post(`/api/workspaces/${workspaceId}/attachments`, {
+      await post(`/workspaces/${workspaceId}/agents`, {
         agentId: LEAD.id,
         runtime: 'claude-code-local',
       }),
     );
     const leadRes = await fetch(
-      `${base}/events/workspace/${workspaceId}?agentId=${encodeURIComponent(LEAD.id)}`,
+      `${base}/workspaces/${workspaceId}/events:stream?agentId=${encodeURIComponent(LEAD.id)}`,
       { headers: { accept: 'text/event-stream' } },
     );
     // A browser tab on the same channel. Nothing addressed may reach it.
-    const tabRes = await fetch(`${base}/events/workspace/${workspaceId}`, {
+    const tabRes = await fetch(`${base}/workspaces/${workspaceId}/events:stream`, {
       headers: { accept: 'text/event-stream' },
     });
     return { workspaceId, lead: listenFrames(leadRes), tab: listenFrames(tabRes) };
@@ -293,13 +293,13 @@ describe('the board tells its lead which rows have stopped', () => {
           body: JSON.stringify({ name: 'quiet-window', leadAgentId: LEAD.id }),
         }),
       );
-      await fetch(`${ownBase}/api/workspaces/${workspace.id}/attachments`, {
+      await fetch(`${ownBase}/workspaces/${workspace.id}/agents`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ agentId: LEAD.id, runtime: 'claude-code-local' }),
       });
       const res = await fetch(
-        `${ownBase}/events/workspace/${workspace.id}?agentId=${encodeURIComponent(LEAD.id)}`,
+        `${ownBase}/workspaces/${workspace.id}/events:stream?agentId=${encodeURIComponent(LEAD.id)}`,
         { headers: { accept: 'text/event-stream' } },
       );
       const lead = listenFrames(res);
@@ -703,13 +703,13 @@ describe('the board tells its lead which rows have stopped', () => {
           body: JSON.stringify({ name: 'repeat-window', leadAgentId: LEAD.id }),
         }),
       );
-      await fetch(`${ownBase}/api/workspaces/${workspace.id}/attachments`, {
+      await fetch(`${ownBase}/workspaces/${workspace.id}/agents`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ agentId: LEAD.id, runtime: 'claude-code-local' }),
       });
       const res = await fetch(
-        `${ownBase}/events/workspace/${workspace.id}?agentId=${encodeURIComponent(LEAD.id)}`,
+        `${ownBase}/workspaces/${workspace.id}/events:stream?agentId=${encodeURIComponent(LEAD.id)}`,
         { headers: { accept: 'text/event-stream' } },
       );
       const lead = listenFrames(res);

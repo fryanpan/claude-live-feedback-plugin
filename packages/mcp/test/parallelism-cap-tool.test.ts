@@ -75,7 +75,7 @@ describe('set_parallelism_cap tool', () => {
   // harness that listed nothing would fail here rather than pass the rest
   // vacuously.
   it('POSITIVE CONTROL: the running bundle serves a known tool', () => {
-    expect(mcp.tool('list_attachments')).toBeDefined();
+    expect(mcp.tool('list_agents')).toBeDefined();
     expect(mcp.tool('set_parallelism_ceiling')).toBeUndefined();
   });
 

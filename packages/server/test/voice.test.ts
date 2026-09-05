@@ -318,7 +318,7 @@ describe('voice routing (§3.8)', () => {
     });
 
     it('attaching an agent DRAINS the queue into the attach result', async () => {
-      const r = await post(`/api/workspaces/${boardId}/attachments`, {
+      const r = await post(`/workspaces/${boardId}/agents`, {
         agentId: 'agent-search-revamp',
         runtime: 'claude-code-local',
       });
@@ -336,7 +336,7 @@ describe('voice routing (§3.8)', () => {
       );
       expect(existsSync(voiceQueuePath(dataDir, boardId))).toBe(false);
       // Drained means drained: a second attach delivers nothing again.
-      const r2 = await post(`/api/workspaces/${boardId}/attachments`, {
+      const r2 = await post(`/workspaces/${boardId}/agents`, {
         agentId: 'agent-search-revamp',
         runtime: 'claude-code-local',
       });

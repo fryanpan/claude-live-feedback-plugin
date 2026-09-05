@@ -882,13 +882,13 @@ describe('share links over HTTP', () => {
     });
 
     it('reads the agent roster of its own board, and no other', async () => {
-      const roster = await asMember(`/api/workspaces/${encodeURIComponent(board)}/attachments`);
+      const roster = await asMember(`/workspaces/${encodeURIComponent(board)}/agents`);
       expect(roster.status, await roster.clone().text()).toBe(200);
       // The roster's host-machine field never rides to a visitor.
       expect(await roster.text()).not.toContain('"endpoint"');
-      expect(
-        (await asMember(`/api/workspaces/${encodeURIComponent(otherBoard)}/attachments`)).status,
-      ).toBe(403);
+      expect((await asMember(`/workspaces/${encodeURIComponent(otherBoard)}/agents`)).status).toBe(
+        403,
+      );
     });
 
     it('is still refused a tracker import — it names a path on the owner’s disk', async () => {

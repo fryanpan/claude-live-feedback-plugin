@@ -192,7 +192,7 @@ export function refreshTaskLinkChips(view: EditorView): void {
  * mount scope so navigation closes the stream.
  */
 export function watchTaskLinkStatuses(workspaceId: string, view: EditorView): () => void {
-  const es = new EventSource(`/events/workspace/${encodeURIComponent(workspaceId)}`);
+  const es = new EventSource(`/workspaces/${encodeURIComponent(workspaceId)}/events:stream`);
   const onTransition = (): void => {
     staleTaskLinkStatuses();
     refreshTaskLinkChips(view);

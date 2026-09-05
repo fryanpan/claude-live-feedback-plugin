@@ -122,7 +122,7 @@ async function defaultFetchJson(url: string, init?: RequestInit): Promise<unknow
 }
 
 function defaultSubscribe(workspaceId: string, onTaskEvent: () => void): () => void {
-  const es = new EventSource(`/events/workspace/${encodeURIComponent(workspaceId)}`);
+  const es = new EventSource(`/workspaces/${encodeURIComponent(workspaceId)}/events:stream`);
   // Transitions are how an approval reaches this button (the release moves
   // the held rows); creates matter too — an agent filing more drafts while
   // the doc is open changes the count, though the count no longer renders.

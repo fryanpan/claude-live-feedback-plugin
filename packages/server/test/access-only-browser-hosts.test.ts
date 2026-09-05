@@ -228,7 +228,7 @@ describe('access-only browser hosts', () => {
     ['the board record', `/api/workspaces/${boardId}`],
     ['a doc', `/api/docs/${docId}`],
     ['its comment threads', `/api/docs/${docId}/threads`],
-    ['the board attachments', `/api/workspaces/${boardId}/attachments`],
+    ['the board attachments', `/workspaces/${boardId}/agents`],
     ['a bound folder tree', `/api/workspaces/${treeId}/tree`],
     ['a diff review file', `/api/docs/${encodeURIComponent(diffMemberDocId)}`],
     ['the doc SSE stream', `/events/${encodeURIComponent(docId)}`],

@@ -331,7 +331,7 @@ describe('POST /api/agents/:id/merge re-keys watches so delivery follows the new
     // The old identity attaches (a bystander) and persists its board watch.
     expect(
       (
-        await post(`/api/workspaces/${wsId}/attachments`, {
+        await post(`/workspaces/${wsId}/agents`, {
           agentId: 'agent-old',
           agentName: 'Old Name',
           runtime: 'claude-code-local',
@@ -347,7 +347,7 @@ describe('POST /api/agents/:id/merge re-keys watches so delivery follows the new
         anchor: { kind: 'subject' },
       });
     const queuedFor = async (agentId: string): Promise<string[]> => {
-      const r = await post(`/api/workspaces/${wsId}/attachments`, {
+      const r = await post(`/workspaces/${wsId}/agents`, {
         agentId,
         runtime: 'claude-code-local',
       });
@@ -387,7 +387,7 @@ describe('POST /api/agents/:id/merge re-keys watches so delivery follows the new
     // …and not for the old one: nothing is addressed to it any more, and
     // it cannot even attach — the id was merged away, and the refusal names
     // the survivor.
-    const stale = await post(`/api/workspaces/${wsId}/attachments`, {
+    const stale = await post(`/workspaces/${wsId}/agents`, {
       agentId: 'agent-old',
       runtime: 'claude-code-local',
     });
@@ -467,7 +467,7 @@ describe('POST /api/agents/:id/merge — review findings', () => {
     );
     expect(
       (
-        await req(`/api/workspaces/${wsId}/attachments`, {
+        await req(`/workspaces/${wsId}/agents`, {
           body: { agentId: 'agent-old', agentName: 'Old Name', runtime: 'claude-code-local' },
         })
       ).status,
@@ -510,7 +510,7 @@ describe('POST /api/agents/:id/merge — review findings', () => {
     expect(merged.json.comments).toEqual([wsId]);
 
     // The new id's first attach hands the row over…
-    const attached = await req(`/api/workspaces/${wsId}/attachments`, {
+    const attached = await req(`/workspaces/${wsId}/agents`, {
       body: { agentId: 'agent-new', runtime: 'claude-code-local' },
     });
     expect(attached.status).toBe(200);
@@ -652,7 +652,7 @@ describe('POST /api/agents/:id/merge — merging back reverses an earlier merge'
     const wsId = (created.json.workspace as { id: string }).id;
     expect(
       (
-        await req(`/api/workspaces/${wsId}/attachments`, {
+        await req(`/workspaces/${wsId}/agents`, {
           body: { agentId: 'agent-x', agentName: 'X', runtime: 'claude-code-local' },
         })
       ).status,
@@ -699,11 +699,11 @@ describe('POST /api/agents/:id/merge — merging back reverses an earlier merge'
     expect(handle.identities.get('agent-x')?.mergedFrom).toEqual(['agent-y']);
 
     // The reversed id can attach again; the id it was folded into cannot.
-    const reattach = await req(`/api/workspaces/${wsId}/attachments`, {
+    const reattach = await req(`/workspaces/${wsId}/agents`, {
       body: { agentId: 'agent-x', runtime: 'claude-code-local' },
     });
     expect(reattach.status).toBe(200);
-    const stale = await req(`/api/workspaces/${wsId}/attachments`, {
+    const stale = await req(`/workspaces/${wsId}/agents`, {
       body: { agentId: 'agent-y', runtime: 'claude-code-local' },
     });
     expect(stale.status).toBe(409);

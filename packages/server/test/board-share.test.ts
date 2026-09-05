@@ -10,7 +10,7 @@
  *   2. the ws:<id> board room socket (/y/ws:<id>) — a REAL Yjs sync, not a
  *      raw socket (a raw socket never completes the handshake and every
  *      absence it reports is vacuous; see learnings.md)
- *   3. the workspace SSE feed (/events/workspace/<id>)
+ *   3. the workspace SSE feed (/workspaces/<id>)/events:stream
  *
  * Plus the two boundaries the plan states: visitors are READ-ONLY on the
  * gate (every task/goal/decision mutation route refuses visitor auth) and
@@ -398,7 +398,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
 
   describe('transport 3: the workspace SSE feed', () => {
     it('delivers live task events to a workspace visitor, redacted to display names (presence)', async () => {
-      const stream = await pub(`/events/workspace/${boardId}`, boardCookie);
+      const stream = await pub(`/workspaces/${boardId}/events:stream`, boardCookie);
       expect(stream.status).toBe(200);
       expect(stream.headers.get('content-type')).toContain('text/event-stream');
 
@@ -420,7 +420,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
     });
 
     it('the OWNER stream still carries actor ids (positive control for the redaction)', async () => {
-      const stream = await local(`/events/workspace/${boardId}`);
+      const stream = await local(`/workspaces/${boardId}/events:stream`);
       expect(stream.status).toBe(200);
       const trigger = post(`/api/tasks/${taskId}/transition`, {
         to: 'in-progress',
@@ -434,11 +434,11 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
 
     it('refuses the feed to another workspace’s visitor (absence)', async () => {
       // Positive control: that cookie opens its OWN workspace feed.
-      const own = await pub(`/events/workspace/${otherId}`, otherCookie);
+      const own = await pub(`/workspaces/${otherId}/events:stream`, otherCookie);
       expect(own.status).toBe(200);
       await own.body?.cancel().catch(() => {});
-      expect((await pub(`/events/workspace/${boardId}`, otherCookie)).status).toBe(403);
-      expect((await pub(`/events/workspace/${boardId}`)).status).toBe(403);
+      expect((await pub(`/workspaces/${boardId}/events:stream`, otherCookie)).status).toBe(403);
+      expect((await pub(`/workspaces/${boardId}/events:stream`)).status).toBe(403);
     });
 
     // Voice landed AFTER the commit-8 share slice, and §3.3's enumeration of
@@ -448,7 +448,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
     // unbounded free text about anything he is thinking; it does not get to
     // extend the contract by arriving later.
     it('never puts a voice transcript on a visitor stream (absence)', async () => {
-      const stream = await pub(`/events/workspace/${boardId}`, boardCookie);
+      const stream = await pub(`/workspaces/${boardId}/events:stream`, boardCookie);
       expect(stream.status).toBe(200);
       const trigger = post(`/api/workspaces/${boardId}/voice`, {
         transcript: 'hold the release until legal clears the acquisition question',
@@ -469,7 +469,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
     });
 
     it('the OWNER stream still carries the transcript (positive control)', async () => {
-      const stream = await local(`/events/workspace/${boardId}`);
+      const stream = await local(`/workspaces/${boardId}/events:stream`);
       expect(stream.status).toBe(200);
       const trigger = post(`/api/workspaces/${boardId}/voice`, {
         transcript: 'open the task about the device re-run',
@@ -523,7 +523,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
     });
 
     it('serves agent presence redacted — no endpoint — with the owner’s copy as the control', async () => {
-      const att = await post(`/api/workspaces/${boardId}/attachments`, {
+      const att = await post(`/workspaces/${boardId}/agents`, {
         agentId: 'agent-search-revamp',
         runtime: 'webhook',
         endpoint: 'https://agents.internal.example/hooks/search-revamp',
@@ -531,14 +531,14 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
       });
       expect(att.status).toBe(200);
 
-      const owner = (await (await local(`/api/workspaces/${boardId}/attachments`)).json()) as {
+      const owner = (await (await local(`/workspaces/${boardId}/agents`)).json()) as {
         attachments: Array<Record<string, unknown>>;
       };
       expect(owner.attachments[0]?.endpoint).toBe(
         'https://agents.internal.example/hooks/search-revamp',
       );
 
-      const r = await pub(`/api/workspaces/${boardId}/attachments`, boardCookie);
+      const r = await pub(`/workspaces/${boardId}/agents`, boardCookie);
       expect(r.status).toBe(200);
       const seen = (await r.json()) as { attachments: Array<Record<string, unknown>> };
       // Positive control: the visitor really sees the agent…
@@ -546,8 +546,8 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
       expect(seen.attachments[0]?.state).toBeDefined();
       // …and never where it lives.
       expect(seen.attachments[0]?.endpoint).toBeUndefined();
-      expect((await pub(`/api/workspaces/${otherId}/attachments`, otherCookie)).status).toBe(200);
-      expect((await pub(`/api/workspaces/${boardId}/attachments`, otherCookie)).status).toBe(403);
+      expect((await pub(`/workspaces/${otherId}/agents`, otherCookie)).status).toBe(200);
+      expect((await pub(`/workspaces/${boardId}/agents`, otherCookie)).status).toBe(403);
     });
   });
 
@@ -797,7 +797,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
         ],
         // The agent roster's own verbs.
         [
-          `/api/workspaces/${boardId}/attachments`,
+          `/workspaces/${boardId}/agents`,
           {
             method: 'POST',
             body: JSON.stringify({ agentId: 'agent-x', runtime: 'claude-code-local' }),
@@ -1023,7 +1023,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
         client.ws.addEventListener('close', (e) => resolve((e as CloseEvent).code));
         setTimeout(() => resolve(-1), 5000);
       });
-      const stream = await pub(`/events/workspace/${boardId}`, cookie);
+      const stream = await pub(`/workspaces/${boardId}/events:stream`, cookie);
       expect(stream.status).toBe(200);
 
       const del = await local(`/api/share/${share.shareId}`, { method: 'DELETE' });

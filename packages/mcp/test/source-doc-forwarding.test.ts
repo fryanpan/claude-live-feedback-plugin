@@ -39,7 +39,7 @@ const batchOf = (sent: Recorded[]) => sent.find((r) => r.path.endsWith('/tasks/b
 
 describe('create_tasks declares sourceDoc', () => {
   it('POSITIVE CONTROL: the running bundle serves a known tool', () => {
-    expect(mcp.tool('list_attachments')).toBeDefined();
+    expect(mcp.tool('list_agents')).toBeDefined();
     expect(mcp.tool('create_tasks_from_doc')).toBeUndefined();
   });
 

@@ -31,7 +31,7 @@ describe('dispatch tools', () => {
   // Positive control for every assertion below: a tool that has shipped for
   // months is reachable, so a harness listing nothing would fail here first.
   it('POSITIVE CONTROL: the running bundle serves a known tool', () => {
-    expect(mcp.tool('list_attachments')).toBeDefined();
+    expect(mcp.tool('list_agents')).toBeDefined();
     expect(mcp.tool('register_dispatch_that_never_existed')).toBeUndefined();
   });
 

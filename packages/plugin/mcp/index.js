@@ -13801,7 +13801,7 @@ function markAttached(deps, workspaceId) {
 async function sendDueHeartbeats(deps) {
   for (const workspaceId of deps.keepalive.due()) {
     try {
-      await deps.http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/${encodeURIComponent(deps.author.id)}/heartbeat`, { toolCallAt: now(deps) });
+      await deps.http("POST", `/workspaces/${encodeURIComponent(workspaceId)}/agents/${encodeURIComponent(deps.author.id)}/heartbeat`, { toolCallAt: now(deps) });
     } catch {}
   }
 }
@@ -13917,7 +13917,8 @@ var DEPRECATED_TOOL_ALIASES = {
   bind_folder: "attach_folder",
   bind_mock: "attach_mockup",
   promote_to_task: "spin_off_task",
-  retire_workspace: "archive_workspace"
+  retire_workspace: "archive_workspace",
+  list_attachments: "list_agents"
 };
 function deprecationLine(alias, now2) {
   return `[mcp] ${alias} is the old name for ${now2} — still answered this release, removed in the next. Call ${now2}.`;
@@ -16749,7 +16750,7 @@ var TOOL_LIST = {
       }
     },
     {
-      name: "list_attachments",
+      name: "list_agents",
       description: "List the agents attached to a board workspace with their derived state: active, 'process up, agent unresponsive' (fresh heartbeat, stale tool calls), or 'away — requests queue'. The ambient-awareness read: who is where, and is anyone wedged.",
       inputSchema: {
         type: "object",
@@ -17902,7 +17903,7 @@ async function declareWorkspaceLead(args, deps) {
   let attached;
   let subscription = { open: false, persisted: false };
   if (declaring) {
-    attached = await deps.http("POST", `${path}/attachments`, {
+    attached = await deps.http("POST", `/workspaces/${encodeURIComponent(workspaceId)}/agents`, {
       agentId: deps.self.id,
       agentName: deps.self.name,
       runtime: deps.runtime,
@@ -18129,7 +18130,7 @@ async function handleWorkspaceTool(name, a, ctx) {
     }
     case "attach_agent": {
       const { workspaceId, agentId, runtime, capabilities, subscribe } = a;
-      const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`, {
+      const res = await http("POST", `/workspaces/${encodeURIComponent(workspaceId)}/agents`, {
         agentId: agentId ?? AUTHOR.id,
         ...agentId === undefined || agentId === AUTHOR.id ? { agentName: AUTHOR.name } : {},
         runtime: runtime ?? "claude-code-local",
@@ -18173,7 +18174,7 @@ async function handleWorkspaceTool(name, a, ctx) {
     }
     case "heartbeat": {
       const { workspaceId, agentId, toolCallAt } = a;
-      const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/${encodeURIComponent(agentId ?? AUTHOR.id)}/heartbeat`, { toolCallAt: toolCallAt ?? Date.now() });
+      const res = await http("POST", `/workspaces/${encodeURIComponent(workspaceId)}/agents/${encodeURIComponent(agentId ?? AUTHOR.id)}/heartbeat`, { toolCallAt: toolCallAt ?? Date.now() });
       if (agentId === undefined || agentId === AUTHOR.id)
         markAttached2(workspaceId);
       return ok2({ workspaceId, agentId: agentId ?? AUTHOR.id, state: res.attachment?.state });
@@ -18219,9 +18220,10 @@ async function handleWorkspaceTool(name, a, ctx) {
     case "request_plugin_refresh": {
       return ok2(await http("POST", "/api/plugin/refresh"));
     }
-    case "list_attachments": {
+    case "list_attachments":
+    case "list_agents": {
       const { workspaceId } = a;
-      const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`);
+      const res = await http("GET", `/workspaces/${encodeURIComponent(workspaceId)}/agents`);
       return ok2(res);
     }
   }
@@ -18380,7 +18382,7 @@ async function watchWorkspace(deps, state, workspaceId, persist = true) {
   if (!deps.watchers.has(key)) {
     const controller = new AbortController;
     deps.watchers.set(key, { controller, docId: key, open: false });
-    open = await wireKey(deps, key, `/events/workspace/${encodeURIComponent(workspaceId)}?agentId=${encodeURIComponent(deps.author.id)}`);
+    open = await wireKey(deps, key, `/workspaces/${encodeURIComponent(workspaceId)}/events:stream?agentId=${encodeURIComponent(deps.author.id)}`);
   } else if (usesMux(deps)) {
     open = deps.mux.isOpen();
   }
@@ -18492,7 +18494,7 @@ async function ensureWatchesRestored(deps, rt) {
       const reattached = [];
       for (const workspaceId of boardsToReattach(deps.registry.coverage())) {
         try {
-          const attachRes = await deps.http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`, {
+          const attachRes = await deps.http("POST", `/workspaces/${encodeURIComponent(workspaceId)}/agents`, {
             agentId: deps.author.id,
             agentName: deps.author.name,
             runtime: "claude-code-local",
@@ -18573,7 +18575,7 @@ var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.167";
+var PLUGIN_VERSION = "0.1.168";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",

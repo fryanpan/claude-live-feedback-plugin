@@ -115,7 +115,7 @@ describe('client release over the attachments route', () => {
 
     const { base, port, workspaceId } = await startWith({ clientReleaseRootDir: root });
     const body = (await (
-      await owner(base, port, `/api/workspaces/${workspaceId}/attachments`)
+      await owner(base, port, `/workspaces/${workspaceId}/agents`)
     ).json()) as ClientReleaseBody;
 
     expect(body.clientRelease?.stale).toBe(true);
@@ -137,7 +137,7 @@ describe('client release over the attachments route', () => {
 
     const { base, port, workspaceId } = await startWith({ clientReleaseRootDir: root });
     const body = (await (
-      await owner(base, port, `/api/workspaces/${workspaceId}/attachments`)
+      await owner(base, port, `/workspaces/${workspaceId}/agents`)
     ).json()) as ClientReleaseBody;
 
     expect(body.clientRelease?.stale).toBe(false);
@@ -165,7 +165,7 @@ describe('client release over the attachments route', () => {
     // Positive control: handed the root, this same state DOES report stale.
     const armed = await startWith({ clientReleaseRootDir: root });
     const armedBody = (await (
-      await owner(armed.base, armed.port, `/api/workspaces/${armed.workspaceId}/attachments`)
+      await owner(armed.base, armed.port, `/workspaces/${armed.workspaceId}/agents`)
     ).json()) as ClientReleaseBody;
     expect(armedBody.clientRelease?.stale).toBe(true);
     await handle?.stop();
@@ -173,7 +173,7 @@ describe('client release over the attachments route', () => {
 
     const { base, port, workspaceId } = await startWith();
     const body = (await (
-      await owner(base, port, `/api/workspaces/${workspaceId}/attachments`)
+      await owner(base, port, `/workspaces/${workspaceId}/agents`)
     ).json()) as ClientReleaseBody;
     expect(body.clientRelease).toBeUndefined();
   });
@@ -201,14 +201,14 @@ describe('client release over the attachments route', () => {
     // Positive control: the owner's read DOES carry it, so the visitor's
     // absence below is redaction rather than an empty payload.
     const ownerBody = (await (
-      await owner(base, port, `/api/workspaces/${workspaceId}/attachments`)
+      await owner(base, port, `/workspaces/${workspaceId}/agents`)
     ).json()) as ClientReleaseBody;
     expect(ownerBody.clientRelease?.stale).toBe(true);
 
     const visitor = await mintAccessShare(base, access as AccessHarness, workspaceId);
 
     const raw = await (
-      await fetch(`${base}/api/workspaces/${workspaceId}/attachments`, {
+      await fetch(`${base}/workspaces/${workspaceId}/agents`, {
         redirect: 'manual',
         headers: { ...visitor.headers, 'x-forwarded-proto': 'https' },
       })

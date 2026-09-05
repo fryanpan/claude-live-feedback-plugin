@@ -2,7 +2,7 @@
  * A doc's discussion reaches every BOARD holding it, not just its grouping.
  *
  * The measured gap: an agent that attached to a board and watches
- * `/events/workspace/<boardId>` hears task events and task-body comments, and
+ * `/workspaces/<boardId>/events:stream` hears task events and task-body comments, and
  * hears NOTHING from a plain attachment filed on that same board. The fan-out
  * in `doc-store.ts` is keyed on `meta.workspaceId` — the GROUPING tag a diff
  * review or folder bind sets — and a board link is not that tag. So a doc
@@ -94,14 +94,14 @@ describe('a doc thread reaches the boards holding the doc', () => {
     const w = await post('/api/workspaces', { name, goal: 'Ship the index.' });
     const { workspace } = (await w.json()) as { workspace: { id: string } };
 
-    const att = await post(`/api/workspaces/${workspace.id}/attachments`, {
+    const att = await post(`/workspaces/${workspace.id}/agents`, {
       agentId,
       runtime: 'claude-code-local',
     });
     expect(att.status).toBe(200);
     expect(((await att.json()) as { lead?: boolean }).lead).toBe(true);
 
-    const stream = await get(`/events/workspace/${encodeURIComponent(workspace.id)}`);
+    const stream = await get(`/workspaces/${encodeURIComponent(workspace.id)}/events:stream`);
     expect(stream.status).toBe(200);
     await settle(150);
     return { workspaceId: workspace.id, heard: listen(stream) };
@@ -257,7 +257,7 @@ describe('a doc thread reaches the boards holding the doc', () => {
     const memberDocId = boundJson.files[0]?.docId;
     if (!memberDocId) throw new Error('folder bind produced no entry doc');
 
-    const stream = await get(`/events/workspace/${encodeURIComponent(groupingId)}`);
+    const stream = await get(`/workspaces/${encodeURIComponent(groupingId)}/events:stream`);
     expect(stream.status).toBe(200);
     const heard = listen(stream);
     await settle(150);
