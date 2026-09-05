@@ -216,6 +216,13 @@ export async function handleDocCreateListRoutes(
     // `task:<realTaskId>` body used to land on that task's live
     // description and file-bind it, 200 and no audit row. A caller
     // cannot address a server-owned namespace by a name it invents.
+    // The docId arrives in the BODY, so the per-request prewarm in server.ts
+    // — which reads ids out of the URL — never saw it. Re-binding an existing
+    // doc hydrates it, and hydration off a cold path is a blocking read; this
+    // route was measured parking production for 328 seconds. Prewarming here
+    // puts the bytes in hand (or quarantines the path) before the synchronous
+    // create below can reach for the file.
+    await rooms.prewarmHydration(docId);
     const created = rooms.createForCaller(docId, {
       type,
       sourceUrl,
