@@ -15,6 +15,27 @@ and stay long; nothing here repeats them. Each constant's argument sits beside
 the constant — the priors in `effort-calibration.ts`, the pace window in
 `effort-task.ts`, the projection horizon in `goal-effort.ts`.
 
+## The modules
+
+```mermaid
+flowchart LR
+  T["A ticket write<br/>create · retitle · body edit · re-triage"] --> SC["effort-scoring.ts<br/>when to ask, and the boot re-ask pass"]
+  SC --> ES["effort-estimator.ts<br/>the Haiku call: key, HTTP, timeout"]
+  ES --> EP["core/effort-estimate-prompt.ts<br/>prompt and parser, both pure"]
+  ES --> TR["task-row.ts<br/>the estimate, stored on the row"]
+  TR --> WIRE[("task rows, over REST and SSE")]
+  WIRE --> BM["hub/hub-board-model.ts<br/>recomputes in the browser"]
+  BM --> ET["core/effort-task.ts<br/>what one ticket contributes"]
+  ET --> EC["core/effort-calibration.ts<br/>actual ÷ estimate, with priors"]
+  EC --> GE["core/goal-effort.ts<br/>rollup · pace · projected date"]
+  GE --> EF["core/effort-format.ts<br/>the readouts"]
+  EF --> UI["hub/board-island.tsx · hub/hub-detail-render.ts<br/>the goal bar and the detail panel"]
+```
+
+The server asks for the estimate and stores it; every number a reader sees is
+computed in the browser from rows it already holds. That is why the four
+`effort-*` files are in `core` and not in the server.
+
 ## The chain
 
 ```mermaid

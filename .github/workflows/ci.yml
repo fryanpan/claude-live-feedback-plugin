@@ -65,6 +65,14 @@ jobs:
       # nobody having written down why it is one.
       - name: Files over 500 lines are accounted for
         run: bun run loc:audit
+      # Adding, removing or moving a TOP-LEVEL module — a file or a directory
+      # sitting directly in packages/<pkg>/src/ — is what makes the diagram in
+      # docs/architecture/overview.md wrong. Files added inside a directory the
+      # diagram already draws do not fire it; a gate that fires on every PR is
+      # one people satisfy with a whitespace edit. Needs the base ref, which
+      # fetch-depth: 0 above provides.
+      - name: Architecture overview is current
+        run: bun run check:architecture --base origin/${{ github.event.pull_request.base.ref || 'main' }}
       - name: Build widget
         run: bun run build:widget
       - name: Widget bundle size
