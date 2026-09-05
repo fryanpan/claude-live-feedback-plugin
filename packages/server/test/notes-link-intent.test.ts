@@ -14,7 +14,7 @@
  * the title alone still reaches.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'bun:test';
 import {
   ASK_AMBIGUITY_MARGIN,
   ASK_LINK_MIN_SCORE,
