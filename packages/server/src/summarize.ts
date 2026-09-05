@@ -353,6 +353,31 @@ export class ThreadSummarizer {
         const keepsDiscussion = parsed.discussion === '' || reparsed.discussion !== '';
         if (keepsTopic && keepsDiscussion) return { ...reparsed, ...stamp };
       }
+      // THE RETRY WAS SENT BECAUSE THE FIRST ANSWER WAS BLANK, AND CAME BACK
+      // BLANK TOO. Falling through to the fallback below stores that first
+      // answer — a `discussion: ""` stamped with the CURRENT hash — and that
+      // is what made the 2026-08-12 production failure permanent rather than
+      // momentary: `needsCall` reads a current hash and a current prompt
+      // version and says no, so nothing asks again for as long as the thread
+      // stands still. Not a backfill (same prompt version), not a repeat of
+      // the same state, not the on-demand route unless a human sets `force`.
+      // The card keeps the raw latest comment — the verbatim snippet
+      // generation exists to replace — and it keeps it for good.
+      //
+      // So store NOTHING, the same remedy the delivery-claim branch below
+      // reaches for. An absent summary is the one state `needsCall` always
+      // treats as stale, so the thread's next change gets a real attempt.
+      if (hasReplies && parsed.discussion === '') {
+        // The retry's line still counts when it filled the blank but missed
+        // some OTHER check — over budget beats absent, exactly as a complete
+        // 15-word line beats a chopped 12-word one. A delivery claim is the
+        // one exception, as it is everywhere else in this method.
+        if (reparsed && reparsed.discussion !== '' && !findDeliveryClaim(reparsed)) {
+          return { ...reparsed, ...stamp };
+        }
+        console.error('[summarize] dropped an empty discussion on a thread with replies');
+        return null;
+      }
       // An over-long first answer SHIPS as the fallback below, because a
       // complete 15-word line beats a chopped 12-word one. A first answer that
       // asserted delivery status must not: shipping it is shipping the false
