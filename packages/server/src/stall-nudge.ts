@@ -336,7 +336,28 @@ export interface StallNudgerOptions {
    * Omitted → nothing escalates, which is the behaviour this option
    * replaced.
    */
-  escalate?: (board: StallSnapshot, toldAt: ReadonlyMap<string, number>, now: number) => void;
+  escalate?: (board: StallSnapshot, told: ReadonlyMap<string, ToldTime>, now: number) => void;
+}
+
+/**
+ * When a board's lead learned about a row — or, when there was nobody to
+ * learn it, when the board first COULD NOT tell anyone.
+ *
+ * The second case is the one the escalation was built for. A lead session
+ * that has died with nothing else attached is exactly the board that most
+ * needs a person told, and keying the escalation on delivery alone would make
+ * that board the one board that never escalates: no addressee, no delivered
+ * wake, no told-time, no clock. So an undeliverable finding stamps its own
+ * moment and the window runs from there — and `delivered` travels with it,
+ * because "the lead was told two hours ago" and "nobody could be reached for
+ * two hours" are different sentences to put in front of a person.
+ *
+ * It does NOT make the row told: the `told` memory is untouched, so the wake
+ * stays owed and fires in full when a session finally attaches.
+ */
+export interface ToldTime {
+  at: number;
+  delivered: boolean;
 }
 
 /** The stamp file's shape. Versioned so a later format change can recognise an
@@ -356,6 +377,10 @@ interface StampFile {
    * worth billing anybody for going backwards.
    */
   toldAt?: Record<string, Record<string, number>>;
+  /** workspaceId → rowId → when the board first held a finding it could tell
+   *  nobody about. Its own map for the same reason `toldAt` is: an older
+   *  build reads the file it always read. */
+  undeliverable?: Record<string, Record<string, number>>;
 }
 
 const STAMP_FORMAT_VERSION = 1;
@@ -462,6 +487,17 @@ export class StallNudger {
    * would restore the exact loop this removes.
    */
   private readonly told = new Map<string, Map<string, ToldRow>>();
+  /**
+   * Rows this board has a finding about and NOBODY to tell — by row, from the
+   * first tick that was true.
+   *
+   * Separate from `told` on purpose, and the separation is the whole point: an
+   * entry here must not make a row stop being news, or a board whose lead
+   * comes back would be handed silence about the rows it was away for. This
+   * only gives the escalation a clock to run from (`ToldTime`), and it is
+   * cleared the moment a wake about that row is actually delivered.
+   */
+  private readonly undeliverable = new Map<string, Map<string, number>>();
   /** The unevaluable condition each workspace was last REPORTED for. Separate
    *  from `armed` because the two fire on different rules: a wake is owed once
    *  per board stamp, while the report is owed once per distinct condition
@@ -518,6 +554,7 @@ export class StallNudger {
     // life of the install while the in-memory one stays bounded.
     for (const key of this.armed.keys()) if (!live.has(key)) this.armed.delete(key);
     for (const key of this.told.keys()) if (!live.has(key)) this.told.delete(key);
+    for (const key of this.undeliverable.keys()) if (!live.has(key)) this.undeliverable.delete(key);
     for (const key of this.reported.keys()) if (!live.has(key)) this.reported.delete(key);
     for (const key of this.filersTold) {
       if (!live.has(key.slice(0, key.indexOf('|')))) this.filersTold.delete(key);
@@ -556,10 +593,14 @@ export class StallNudger {
    * know when you were told" and "you were told just now" lead to opposite
    * escalations, and only one of them is a guess.
    */
-  toldAtFor(workspaceId: string): ReadonlyMap<string, number> {
-    const out = new Map<string, number>();
+  toldTimesFor(workspaceId: string): ReadonlyMap<string, ToldTime> {
+    const out = new Map<string, ToldTime>();
+    // Undeliverable first, so a row that was later actually told overwrites
+    // it: a delivered wake is the stronger fact and the better sentence.
+    for (const [id, at] of this.undeliverable.get(workspaceId) ?? [])
+      out.set(id, { at, delivered: false });
     for (const [id, row] of this.told.get(workspaceId) ?? []) {
-      if (row.toldAt !== undefined) out.set(id, row.toldAt);
+      if (row.toldAt !== undefined) out.set(id, { at: row.toldAt, delivered: true });
     }
     return out;
   }
@@ -568,7 +609,7 @@ export class StallNudger {
     const hook = this.opts.escalate;
     if (!hook) return;
     try {
-      hook(board, this.toldAtFor(board.workspaceId), now);
+      hook(board, this.toldTimesFor(board.workspaceId), now);
     } catch (err) {
       console.error('[stall] escalation failed:', err);
     }
@@ -591,6 +632,10 @@ export class StallNudger {
       // …but an unreadable row on a board with no lead is exactly the case
       // the reporter exists for, so it is named BEFORE returning.
       this.reportUnevaluable(board);
+      // An EMPTY SEAT is nobody told, which is the escalation's other clock.
+      // A retired board is not: nobody is working it, and it is not a stall.
+      if (board.retired) this.undeliverable.delete(key);
+      else this.rememberUndeliverable(board, now);
       return;
     }
     // "Nothing to say" takes all four being empty. A pass that examined nine
@@ -606,6 +651,7 @@ export class StallNudger {
     ) {
       this.armed.delete(key);
       this.reported.delete(key);
+      this.undeliverable.delete(key);
       return;
     }
     const stamp = this.stampFor(board);
@@ -628,7 +674,13 @@ export class StallNudger {
     // reached nobody must stay owed, or the lead returns to a board that has
     // already decided it told them.
     const to = this.addressee(key, lead);
-    if (to === undefined) return;
+    if (to === undefined) {
+      // The wake stays owed — nothing is recorded in `told` — but the board
+      // now knows how long it has been unable to tell anyone, which is what
+      // the escalation runs on when a lead seat has gone dark.
+      this.rememberUndeliverable(board, now);
+      return;
+    }
     const top = board.stalled[0] ?? board.unfiled[0] ?? held[0];
     this.emit(key, to.agentId, {
       event: STALL_EVENT,
@@ -683,6 +735,36 @@ export class StallNudger {
         memory.rows.set(item.id, { bucket: UNKNOWN_BUCKET, seenAt: now, toldAt: now });
     }
     this.capTold(memory.rows);
+    // Delivered beats undeliverable: these rows have a real told-time now.
+    const dark = this.undeliverable.get(key);
+    if (dark) {
+      for (const row of [...board.stalled, ...board.unfiled]) dark.delete(row.id);
+      if (dark.size === 0) this.undeliverable.delete(key);
+    }
+  }
+
+  /**
+   * Stamp — once — when each of this board's findings first had nobody to be
+   * told to, and forget the rows that have left the list.
+   *
+   * Once, not per tick: the question is how long the board has been unable to
+   * reach anybody about this row, so the first moment is the answer and every
+   * later one would restart the clock a lead's absence is supposed to run.
+   */
+  private rememberUndeliverable(board: StallSnapshot, now: number): void {
+    const rows = [...board.stalled, ...board.unfiled];
+    if (rows.length === 0) {
+      this.undeliverable.delete(board.workspaceId);
+      return;
+    }
+    let dark = this.undeliverable.get(board.workspaceId);
+    if (!dark) {
+      dark = new Map<string, number>();
+      this.undeliverable.set(board.workspaceId, dark);
+    }
+    const live = new Set(rows.map((row) => row.id));
+    for (const id of dark.keys()) if (!live.has(id)) dark.delete(id);
+    for (const id of live) if (!dark.has(id)) dark.set(id, now);
   }
 
   /**
@@ -1073,6 +1155,17 @@ export class StallNudger {
           if (map.size > 0) this.told.set(workspaceId, map);
         }
       }
+      const dark = parsed.undeliverable;
+      if (dark && typeof dark === 'object') {
+        for (const [workspaceId, rows] of Object.entries(dark)) {
+          if (!rows || typeof rows !== 'object') continue;
+          const map = new Map<string, number>();
+          for (const [id, at] of Object.entries(rows)) {
+            if (typeof at === 'number') map.set(id, at);
+          }
+          if (map.size > 0) this.undeliverable.set(workspaceId, map);
+        }
+      }
       // A file written before this memory existed: seed it from the stamp, so
       // the upgrade costs no board the one wake it would otherwise re-fire
       // over rows their leads had already been told about.
@@ -1115,7 +1208,21 @@ export class StallNudger {
       told[key] = out;
       if (Object.keys(at).length > 0) toldAt[key] = at;
     }
-    const file: StampFile = { version: STAMP_FORMAT_VERSION, stamps, told, toldAt };
+    const undeliverable: Record<string, Record<string, number>> = {};
+    for (const key of Array.from(this.undeliverable.keys()).sort()) {
+      const rows = this.undeliverable.get(key);
+      if (!rows || rows.size === 0) continue;
+      const out: Record<string, number> = {};
+      for (const id of Array.from(rows.keys()).sort()) out[id] = rows.get(id) as number;
+      undeliverable[key] = out;
+    }
+    const file: StampFile = {
+      version: STAMP_FORMAT_VERSION,
+      stamps,
+      told,
+      toldAt,
+      undeliverable,
+    };
     return `${JSON.stringify(file, null, 2)}\n`;
   }
 
