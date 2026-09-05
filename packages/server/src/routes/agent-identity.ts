@@ -23,6 +23,7 @@ import {
   isValidAgentId,
   isValidWatchKey,
 } from '../agent-watches.ts';
+import { authorizeAgentCaller, mintAgentToken } from '../auth/agent-token.ts';
 import type { Identities } from '../identities.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
 import { isLoopbackAddress } from '../middleware/host-guard.ts';
@@ -56,6 +57,18 @@ export interface AgentIdentityRoutesContext {
   watchCoverageFor: (agentId: string, keys: string[]) => unknown;
   /** A doc's own id, whichever spelling it was addressed by. */
   canonicalDocId: (addressed: string) => string;
+
+  /** The key the `at1` agent bearer is minted and verified under. A thunk
+   *  because the key file is read lazily, the way every other derived key on
+   *  this server is. See auth/agent-token.ts. */
+  agentTokenKey: () => string;
+  /** Whether the watch set and the agent stream REFUSE a caller that
+   *  presents no token. Off during the deprecation window: a session on a
+   *  bundle that predates the token keeps working, with one logged warning.
+   *  `CW_REQUIRE_AGENT_TOKEN` is the deployment switch. */
+  requireAgentToken: boolean;
+  /** Logs that warning, at most once per agent id per route. */
+  warnLegacyAgentCaller: (agentId: string, route: string) => void;
 }
 
 /** What only this request knows. */
@@ -83,8 +96,50 @@ export async function handleAgentIdentityRoutes(
     watchKeyExists,
     watchCoverageFor,
     canonicalDocId,
+    agentTokenKey,
+    requireAgentToken,
+    warnLegacyAgentCaller,
   } = ctx;
   const { req, pathname, visitor, authorFor } = rq;
+
+  // --- REST: mint this agent's stream bearer ---
+  //
+  // The one place an `at1` token comes from. Behind the SAME shape gate as
+  // the routes it unlocks (loopback peer, no `cf-ray`, not a browser), which
+  // is the honest boundary this machine has: an agent's own MCP child can
+  // ask for its token without a secret it was never given, and nothing off
+  // the box or inside a page can ask at all. auth/agent-token.ts spells out
+  // what that is worth and what it is not.
+  //
+  // Stateless and idempotent: the token is an HMAC over the id, so this
+  // route stores nothing, a re-mint returns the same bytes, and rotating the
+  // key file revokes every token that was ever handed out.
+  const agentTokenMatch = pathname.match(/^\/api\/agents\/([^/]+)\/token$/);
+  if (agentTokenMatch && req.method === 'GET') {
+    if (visitor) return j(403, { error: 'not available to share visitors' });
+    const agentId = decodeURIComponent(agentTokenMatch[1] ?? '');
+    if (!isValidAgentId(agentId)) return j(400, { error: 'bad agentId' });
+    if (SHARED_AGENT_IDS.has(agentId)) {
+      // The shared id is every anonymous session at once, so a token over it
+      // would be a token every one of them holds. Those sessions keep the
+      // per-key routes, which is where they already are.
+      return j(400, { error: SHARED_IDENTITY_ERROR, message: SHARED_IDENTITY_MESSAGE });
+    }
+    // `requireToken: false` — a caller asking for its FIRST token obviously
+    // has none. The shape refusals above are what gate this route; the
+    // bearer branch only ever fires if a caller sent one anyway, and then a
+    // wrong one is still refused.
+    const allowed = authorizeAgentCaller({
+      agentId,
+      req,
+      address: requestAddress(req),
+      key: agentTokenKey(),
+      requireToken: false,
+    });
+    if (!allowed.ok) return j(allowed.status, allowed.body);
+    return j(200, { agentId, token: mintAgentToken(agentId, agentTokenKey()) });
+  }
+
   // --- REST: durable agent watches ---
   // The MCP child's watch set, remembered here per agent identity so a
   // respawned child can ask for it back. The server never opens the
@@ -104,6 +159,18 @@ export async function handleAgentIdentityRoutes(
     if (SHARED_AGENT_IDS.has(agentId)) {
       return j(400, { error: SHARED_IDENTITY_ERROR, message: SHARED_IDENTITY_MESSAGE });
     }
+    // Prove it is that agent. This list IS the feed's index — it names every
+    // key `/events/agent/<id>` will carry — so it is gated identically to the
+    // stream, and by the same function, so the two cannot drift apart.
+    const allowed = authorizeAgentCaller({
+      agentId,
+      req,
+      address: requestAddress(req),
+      key: agentTokenKey(),
+      requireToken: requireAgentToken,
+    });
+    if (!allowed.ok) return j(allowed.status, allowed.body);
+    if (allowed.proof === 'legacy') warnLegacyAgentCaller(agentId, '/api/agents/<id>/watches');
     if (req.method === 'GET') {
       const listed = agentWatches.list(agentId, watchKeyExists);
       // ADDITIVE. `coverage` is a new key on an existing 200 body, so a
