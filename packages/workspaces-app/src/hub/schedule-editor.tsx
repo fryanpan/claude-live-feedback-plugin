@@ -51,7 +51,7 @@ import {
   zonedParts,
 } from '@feedback/core';
 import type { VNode } from 'preact';
-import { useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { HubTask, ScheduleWrite } from './hub-board-model.ts';
 
 export interface ScheduleEditorProps {
@@ -138,6 +138,11 @@ export function ScheduleEditor({ task, now, timezone, onSet }: ScheduleEditorPro
   const [phrase, setPhrase] = useState<SchedulePhrase | undefined>(stored);
   const [text, setText] = useState(stored === undefined ? '' : phraseOf(stored, now, tz));
   const [bad, setBad] = useState(false);
+  // The parser's reason. Not printed under the box (affordances, not
+  // captions) — it is the accessible description of an invalid box.
+  const [why, setWhy] = useState('');
+  const whyId = useId();
+  const actionsRef = useRef<HTMLDivElement>(null);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   // What the reader flipped AWAY from, so flipping the mode back restores the
@@ -174,13 +179,23 @@ export function ScheduleEditor({ task, now, timezone, onSet }: ScheduleEditorPro
     if (read.ok) {
       setPhrase(read.phrase);
       setBad(false);
+      setWhy('');
       return;
     }
     // The last good chips stay put. A phrase mid-typing is unreadable most of
     // the way through, and clearing the readback on every keystroke would
-    // make the section flash rather than inform.
+    // make the section flash rather than inform. Saving is off until the box
+    // reads again: the chips show the LAST rule, not this sentence.
     setBad(value.trim() !== '');
+    setWhy(read.error);
   };
+
+  // On a phone the fixed nav sits over the panel's last rows, so a section
+  // that opens at rest can leave its buttons under the tab bar. Ask for the
+  // buttons once, when the section appears; jsdom has no scrollIntoView.
+  useEffect(() => {
+    if (open) actionsRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [open]);
 
   const save = async (): Promise<void> => {
     if (phrase === undefined) return;
@@ -238,8 +253,14 @@ export function ScheduleEditor({ task, now, timezone, onSet }: ScheduleEditorPro
           placeholder="every weekday at 9am"
           aria-label="When should this run"
           aria-invalid={bad ? 'true' : 'false'}
+          aria-describedby={bad ? whyId : undefined}
           onInput={(e) => onType((e.currentTarget as HTMLInputElement).value)}
         />
+        {bad && (
+          <span id={whyId} class="hub-sched-why">
+            {why}
+          </span>
+        )}
       </label>
 
       <div class="hub-sched-tries">
@@ -288,7 +309,7 @@ export function ScheduleEditor({ task, now, timezone, onSet }: ScheduleEditorPro
         </div>
       )}
 
-      <div class="hub-sched-actions">
+      <div class="hub-sched-actions" ref={actionsRef}>
         <button
           type="button"
           class="hub-btn hub-btn-ghost"
@@ -309,7 +330,7 @@ export function ScheduleEditor({ task, now, timezone, onSet }: ScheduleEditorPro
         <button
           type="button"
           class="hub-btn hub-btn-primary hub-sched-save"
-          disabled={busy || phrase === undefined}
+          disabled={busy || bad || phrase === undefined}
           onClick={() => void save()}
         >
           {stored === undefined ? 'Schedule' : 'Update'}
