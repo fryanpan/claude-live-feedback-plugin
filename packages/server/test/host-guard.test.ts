@@ -955,9 +955,15 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
       ['/api/tasks/t-1', 'GET'],
       ['/api/tasks/t-1/reopen', 'POST'],
       ['/api/goals/g-1/rename', 'POST'],
-      // Share administration and the operator routes.
+      // Share administration and the operator routes. The two that END an
+      // access are named beside the two that grant one: revoking a link is a
+      // DELETE on the link's own id, and removing a member is its own route,
+      // so neither is covered by the `/api/share/workspace` line above.
+      ['/api/share', 'GET'],
       ['/api/share/workspace', 'POST'],
       ['/api/share/enabled', 'POST'],
+      ['/api/share/link-abc123', 'DELETE'],
+      ['/api/share/member/remove', 'POST'],
       ['/api/deploy', 'POST'],
       // The whole-server lists.
       ['/api/workspaces', 'GET'],
