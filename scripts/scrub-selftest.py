@@ -668,7 +668,268 @@ def check_allow_token_position(registry: str, denylist: str, fixture) -> None:
         expect(f"allow token: {label}", r.returncode, want, r.stderr)
 
 
+def check_attribution(registry: str, denylist: str) -> None:
+    """The push gate keeps the whole-blob read, and says who wrote each hit.
+
+    Whole blobs are right for a push and produce a finding the branch may not
+    have written — a file it merely touched, whose offending line has been on
+    the remote for weeks (PR 723). The remedy for the two cases is completely
+    different, and the expensive one, a history rewrite, is the step an agent
+    is not allowed to take. So each case below asserts the VERDICT TEXT, not
+    just the exit code: both push scans block, and being told which kind of
+    block it is, is the entire value.
+    """
+    clean = clean_git_env()
+
+    def build(branch_line: str) -> tuple[str, str, str]:
+        root = tempfile.mkdtemp(prefix="scrub-attr-")
+
+        def g(*args: str) -> str:
+            return subprocess.run(
+                ["git", *IDENT, *args], cwd=root, check=True,
+                capture_output=True, text=True, env=clean,
+            ).stdout.strip()
+
+        g("init", "-q")
+        with open(os.path.join(root, "plan.md"), "w") as f:
+            f.write(f"a dated plan\nan old line naming {PUBLIC_TOKEN}\n")
+        g("add", "-A")
+        g("commit", "-qm", "the plan, with the name already in it")
+        base = g("rev-parse", "HEAD")
+        # `origin/main` already carries the line above.
+        g("update-ref", "refs/remotes/origin/main", base)
+        with open(os.path.join(root, "plan.md"), "a") as f:
+            f.write(branch_line)
+        g("add", "-A")
+        g("commit", "-qm", "the branch's own commit")
+        return root, base, g("rev-parse", "HEAD")
+
+    # 1. The branch touched the file and added nothing sensitive. The blob
+    #    still carries the name, so the push gate still blocks — and must say
+    #    the line is already public, which is what makes a forward fix the
+    #    right answer.
+    root, base, tip = build("a line the branch actually wrote\n")
+    r = run(["--push-tip", tip, "--already-public", base], registry, denylist, cwd=root)
+    expect("attribution: the push gate still reads whole blobs", r.returncode, 1, r.stderr)
+    expect("attribution: ...and names the already-public commit (forward fix)",
+           0 if ("already on the remote in " + base[:9]) in r.stderr else 1, 0, r.stderr)
+    expect("attribution: ...and does not call it introduced",
+           0 if "introduced by" not in r.stderr else 1, 0, r.stderr)
+
+    # 2. The branch wrote the line itself: the push publishes it, so the
+    #    remedy is the history, and the message has to say so.
+    root, base, tip = build(f"the branch adds {PUBLIC_TOKEN} itself\n")
+    r = run(["--push-tip", tip, "--already-public", base], registry, denylist, cwd=root)
+    expect("attribution: a line the branch wrote blocks too", r.returncode, 1, r.stderr)
+    expect("attribution: ...and is named as introduced by the branch commit",
+           0 if ("introduced by " + tip[:9]) in r.stderr else 1, 0, r.stderr)
+
+
+REPO_ROOT = os.path.dirname(HERE)
+PRE_COMMIT_HOOK = os.path.join(REPO_ROOT, ".githooks", "pre-commit")
+
+
+def check_commit_path(registry: str, denylist: str) -> None:
+    """The COMMIT gate: can it see, and does it judge only what is added?
+
+    Both halves are load-bearing and neither is worth anything alone. A gate
+    that cannot see reports every commit clean — the failure this whole file
+    exists for. A gate that reads whole blobs refuses every edit to a file
+    whose untouched lines already carry a match, which is a tax on working
+    near old content and the reliable way to train people into SCRUB_SKIP=1.
+    So the pre-existing-match case below ships with its own control: the same
+    index, read whole-blob by `--staged`, MUST fire. Without that control,
+    "it committed cleanly" would also be the reading if the fixture never
+    carried the needle at all.
+    """
+    clean = clean_git_env()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = os.path.join(tmp, "repo")
+        os.makedirs(root)
+
+        def g(*args: str, check: bool = True):
+            return subprocess.run(
+                ["git", *IDENT, *args], cwd=root, check=check,
+                capture_output=True, text=True, env=clean,
+            )
+
+        def write(rel: str, body: str) -> None:
+            path = os.path.join(root, rel)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                f.write(body)
+
+        def commits() -> int:
+            out = g("rev-list", "--count", "HEAD", check=False).stdout.strip()
+            return int(out) if out.isdigit() else 0
+
+        g("init", "-q")
+        # The pre-existing match: committed, public, untouched by anything below.
+        write("notes.md", f"seed line one\nan older line naming {DENY_TOKEN}\nseed line three\n")
+        g("add", "-A")
+        g("commit", "-qm", "seed")
+
+        # 1. THE POSITIVE CONTROL. A staged addition carrying a needle must be
+        #    caught, or every other result here is worthless.
+        write("fresh.md", f"We are reusing {NEW_TOKEN} for this.\n")
+        g("add", "-A")
+        r = run(["--staged-added"], registry, denylist, cwd=root)
+        expect("commit path: catches a needle in a staged ADDED line", r.returncode, 1, r.stderr)
+        g("reset", "-q")
+        os.remove(os.path.join(root, "fresh.md"))
+
+        # 2. THE POINT OF THE COMMIT GATE. One unrelated line changed in a file
+        #    whose OTHER lines already carry a match: nothing new is added, so
+        #    nothing is refused.
+        write("notes.md", f"seed line one EDITED\nan older line naming {DENY_TOKEN}\nseed line three\n")
+        g("add", "-A")
+        r = run(["--staged-added"], registry, denylist, cwd=root)
+        expect("commit path: an edit near a pre-existing match commits cleanly",
+               r.returncode, 0, r.stderr)
+
+        # 2b. ...and the control that makes 2 mean something: the same index,
+        #     read whole-blob, still fires. So the file really does carry it.
+        r = run(["--staged"], registry, denylist, cwd=root)
+        expect("commit path: control — whole-blob --staged still sees that match",
+               r.returncode, 1, r.stderr)
+
+        # 3. A line the commit adds that STARTS WITH `++` must not be read as a
+        #    diff file header. Misparsed, it retargets every finding after it to
+        #    a file that was never touched — a finding pointing at the wrong
+        #    file is how a writer edits the wrong thing and re-commits the leak.
+        write("notes.md",
+              f"seed line one EDITED\nan older line naming {DENY_TOKEN}\nseed line three\n"
+              f"++ b/decoy.md\nand then {NEW_TOKEN} on the next line\n")
+        g("add", "-A")
+        r = run(["--staged-added"], registry, denylist, cwd=root)
+        expect("commit path: a `++`-prefixed added line is content, not a header",
+               r.returncode, 1, r.stderr)
+        expect("commit path: ...and the finding names the real file",
+               0 if "notes.md:" in r.stderr and "decoy.md" not in r.stderr else 1, 0, r.stderr)
+        g("reset", "-q")
+        g("checkout", "-q", "--", "notes.md")
+
+        # 4. A never-push name is refused at commit time too — the cheapest
+        #    place to catch a meeting transcript is before it is written down.
+        write("q3-raw-transcript.md", "- [10:00:00Z] Speaker 1: nothing trips a pattern\n")
+        g("add", "-A")
+        r = run(["--staged-added"], registry, denylist, cwd=root)
+        expect("commit path: a raw transcript is refused by name", r.returncode, 1, r.stderr)
+        g("commit", "-qm", "land the transcript so it can be removed", check=False)
+        # ...and REMOVING one is the fix, not the leak: a deletion must pass.
+        os.remove(os.path.join(root, "q3-raw-transcript.md"))
+        g("add", "-A")
+        r = run(["--staged-added"], registry, denylist, cwd=root)
+        expect("commit path: deleting a never-push file commits cleanly",
+               r.returncode, 0, r.stderr)
+        g("commit", "-qm", "remove it")
+
+        # 5. END TO END, through the real hook. Everything above tests the
+        #    scanner; this tests that `git commit` actually stops — and that it
+        #    leaves NO COMMIT behind, which is the difference between a warning
+        #    and a gate.
+        os.makedirs(os.path.join(root, "scripts"), exist_ok=True)
+        os.makedirs(os.path.join(root, ".githooks"), exist_ok=True)
+        for name in ("scrub-check.py", "scrub_git.py"):
+            with open(os.path.join(HERE, name)) as fsrc:
+                write(os.path.join("scripts", name), fsrc.read())
+        with open(PRE_COMMIT_HOOK) as fsrc:
+            write(os.path.join(".githooks", "pre-commit"), fsrc.read())
+        os.chmod(os.path.join(root, ".githooks", "pre-commit"), 0o755)
+        g("add", "-A")
+        g("commit", "-qm", "install the gate")
+        g("config", "core.hooksPath", ".githooks")
+
+        hook_env = dict(clean)
+        hook_env["SCRUB_REGISTRY"] = registry
+        hook_env["SCRUB_DENYLIST"] = denylist
+        # The suite is already running; the hook must not start it again.
+        hook_env["SCRUB_IN_SELFTEST"] = "1"
+        hook_env.pop("SCRUB_SKIP", None)
+
+        def hook_commit(message: str):
+            return subprocess.run(
+                ["git", *IDENT, "commit", "-q", "-m", message],
+                cwd=root, capture_output=True, text=True, env=hook_env,
+            )
+
+        before = commits()
+        write("leak.md", f"An aside mentioning {DENY_TOKEN} in passing.\n")
+        g("add", "-A")
+        r = hook_commit("this must not land")
+        expect("commit hook: `git commit` of a needle exits non-zero",
+               0 if r.returncode != 0 else 1, 0, r.stdout + r.stderr)
+        expect("commit hook: ...and no commit was created",
+               0 if commits() == before else 1, 0,
+               f"HEAD moved from {before} to {commits()} commits")
+        expect("commit hook: ...and the message names the file, line and category",
+               0 if ("leak.md:1" in r.stderr and DENY_TOKEN in r.stderr
+                     and "denylist:" in r.stderr) else 1, 0, r.stdout + r.stderr)
+
+        # The control: with the leak taken out, the same commit lands. A hook
+        # that refused everything would pass every assertion above.
+        write("leak.md", "An aside mentioning nothing in particular.\n")
+        g("add", "-A")
+        r = hook_commit("this one lands")
+        expect("commit hook: control — a clean commit still lands",
+               r.returncode, 0, r.stdout + r.stderr)
+        expect("commit hook: ...and HEAD moved", 0 if commits() == before + 1 else 1, 0,
+               f"{before} -> {commits()}")
+
+        # Criterion 2 through the hook, not just the scanner: notes.md has
+        # carried a match since the seed commit. Editing a DIFFERENT line of it
+        # must land. This is the case that decides whether people leave the
+        # hook installed.
+        at = commits()
+        write("notes.md",
+              f"seed line one EDITED AGAIN\nan older line naming {DENY_TOKEN}\nseed line three\n")
+        g("add", "-A")
+        r = hook_commit("edit a line next to an old match")
+        expect("commit hook: an edit beside a pre-existing match lands",
+               r.returncode, 0, r.stdout + r.stderr)
+        expect("commit hook: ...and HEAD moved for it too",
+               0 if commits() == at + 1 else 1, 0, f"{at} -> {commits()}")
+
+
+def _report() -> int:
+    if failures:
+        print(f"\n{len(failures)} self-test failure(s): {', '.join(failures)}")
+        print("The leak gate is not doing what it claims. Do not trust a clean push.")
+        return 1
+    print("\nall good — the gate can see.")
+    return 0
+
+
+def _write_sources(tmp: str) -> tuple[str, str]:
+    registry = os.path.join(tmp, "registry.yaml")
+    denylist = os.path.join(tmp, "denylist.txt")
+    with open(registry, "w") as f:
+        f.write(REGISTRY)
+    with open(denylist, "w") as f:
+        f.write(DENYLIST)
+    return registry, denylist
+
+
 def main() -> int:
+    # `--only commit` runs just the commit-path group. `.githooks/pre-commit`
+    # uses it: the full suite is ~3s, which is a real tax per commit, and the
+    # commit gate's own blindness is what that hook needs proved before it
+    # trusts a clean result.
+    argv = sys.argv[1:]
+    if "--only" in argv:
+        i = argv.index("--only")
+        group = argv[i + 1] if i + 1 < len(argv) else ""
+        if group not in ("commit", "all"):
+            print(f"usage: scrub-selftest.py [--only commit|all]  (got {group!r})")
+            return 2
+        if group == "commit":
+            with tempfile.TemporaryDirectory() as tmp:
+                registry, denylist = _write_sources(tmp)
+                print("scrub gate self-test — commit path")
+                check_commit_path(registry, denylist)
+            return _report()
+
     check_git_env_isolation()
     check_decision_table()
     check_push_rev_args()
@@ -783,16 +1044,13 @@ def main() -> int:
 
         check_push_range(registry, denylist)
         check_blob_source(registry, denylist)
+        check_commit_path(registry, denylist)
+        check_attribution(registry, denylist)
         check_never_allow(registry, denylist, fixture)
         check_never_push(registry, denylist, fixture)
         check_allow_token_position(registry, denylist, fixture)
 
-    if failures:
-        print(f"\n{len(failures)} self-test failure(s): {', '.join(failures)}")
-        print("The leak gate is not doing what it claims. Do not trust a clean push.")
-        return 1
-    print("\nall good — the gate can see.")
-    return 0
+    return _report()
 
 
 if __name__ == "__main__":
