@@ -43,7 +43,7 @@ flowchart TB
 
 | Package | What it is | Hard constraint |
 | --- | --- | --- |
-| `core` | Wire types, the Yjs⇄markdown document model, anchors, review-item rules, goal arithmetic, prompts. | Imports no other workspace package. No `node:` I/O beyond path math, no DOM. |
+| `core` | Wire types, the Yjs⇄markdown document model, anchors, review-item rules, goal arithmetic, schedule rules and their English, prompts. | Imports no other workspace package. No `node:` I/O beyond path math, no DOM. |
 | `server` | The one process: data dir, Yjs rooms, board, meetings, auth, sharing, deploys. | The only writer of durable state. Everything else asks it. |
 | `workspaces-app` | The browser client, five bundles from `scripts/build.ts`. | Ships as static assets the server publishes as a numbered release. |
 | `mcp` | The stdio MCP server agents talk to — a **client** of the server's REST and SSE. | No business logic the server does not also enforce. |
@@ -69,6 +69,15 @@ instead of waiting: the two board wakes in the Keep-moving group, and
 due ([scheduled-tasks](scheduled-tasks.md)). The scheduler joins the Board
 group under its `task-*.ts` glob rather than changing the picture — it reads
 and writes the same rows through the same store, and only its clock is new.
+
+**A schedule rule has one spelling.** `core` holds four modules for it and no
+other package holds any: `task-schedule.ts` (the rule type and the occurrence
+arithmetic), `schedule-timezone.ts` (instant ⇄ wall clock),
+`schedule-phrase.ts` (a rule written as canonical English) and
+`schedule-phrase-parse.ts` (English read back into a rule). The last two are a
+pair and are asserted to be inverses, which is what lets the editor show one
+rule as a phrase and as chips without either view being the source
+([scheduled-tasks](scheduled-tasks.md)).
 
 **Which channel carries what.** *Yjs*, one WebSocket per document, carries what
 two people watch change under each other's cursors: text, threads, replies,
