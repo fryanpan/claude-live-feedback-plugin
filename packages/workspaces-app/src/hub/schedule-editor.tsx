@@ -190,12 +190,16 @@ export function ScheduleEditor({ task, now, timezone, onSet }: ScheduleEditorPro
     setWhy(read.error);
   };
 
-  // On a phone the fixed nav sits over the panel's last rows, so a section
-  // that opens at rest can leave its buttons under the tab bar. Ask for the
-  // buttons once, when the section appears; jsdom has no scrollIntoView.
+  // On a phone the panel ends above the tab bar, and this section is near
+  // the panel's end: opening it, or a phrase that grows the chips, can leave
+  // the buttons below the fold — right where the tab bar is, so a tap meant
+  // for Schedule lands on a tab. Keep the buttons in view as the section
+  // changes shape; `nearest` moves nothing when they already are, and the
+  // phrase box stays put because the section is far shorter than the panel.
+  // jsdom has no scrollIntoView.
   useEffect(() => {
     if (open) actionsRef.current?.scrollIntoView?.({ block: 'nearest' });
-  }, [open]);
+  }, [open, phrase]);
 
   const save = async (): Promise<void> => {
     if (phrase === undefined) return;
