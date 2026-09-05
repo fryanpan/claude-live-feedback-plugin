@@ -51,7 +51,7 @@ export async function handleWorkspaceDelete(
       const taskIds = taskStore.listTasks(workspaceId, { includeArchived: true }).map((t) => t.id);
       if (!taskProjection.stageWorkspaceFiles(workspaceId, taskIds).ok) {
         taskProjection.unstageWorkspaceFiles(workspaceId, taskIds);
-        return j(500, { ok: false, error: 'docStore-cleanup-failed' });
+        return j(500, { ok: false, error: 'rooms-cleanup-failed' });
       }
       // force: the open-task guard was applied above.
       const hub = taskStore.deleteWorkspace(workspaceId, { force: true });

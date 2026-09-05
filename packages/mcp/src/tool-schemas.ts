@@ -531,7 +531,7 @@ export const TOOL_LIST: ListToolsResult = {
     {
       name: 'delete_review',
       description:
-        'Retire a whole review — a diff review or a folder bind — as one unit. It archives by default: docStore stop, the review drops off the workspace listing and any board, source files are untouched, and unarchive_review reverses it. Prefer archive_review, which takes a reason and needs no force. purge: true is the destructive path; it removes the records the activity analyses are rebuilt from. Refuses all-or-nothing while any member has open threads.',
+        'Retire a whole review — a diff review or a folder bind — as one unit. It archives by default: rooms stop, the review drops off the workspace listing and any board, source files are untouched, and unarchive_review reverses it. Prefer archive_review, which takes a reason and needs no force. purge: true is the destructive path; it removes the records the activity analyses are rebuilt from. Refuses all-or-nothing while any member has open threads.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -586,7 +586,7 @@ export const TOOL_LIST: ListToolsResult = {
     {
       name: 'archive_doc',
       description:
-        'Retire one finished doc — a bound markdown doc or a mockup — without deleting anything. It drops off the workspace listing and any board and stops costing a poll; the source file and the record are untouched, and unarchive_doc restores it. Prefer this over delete_doc, which purges. Use archive_review instead if the doc belongs to a review; task bodies and board docStore cannot be archived.',
+        'Retire one finished doc — a bound markdown doc or a mockup — without deleting anything. It drops off the workspace listing and any board and stops costing a poll; the source file and the record are untouched, and unarchive_doc restores it. Prefer this over delete_doc, which purges. Use archive_review instead if the doc belongs to a review; task bodies and board rooms cannot be archived.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -620,7 +620,7 @@ export const TOOL_LIST: ListToolsResult = {
     {
       name: 'delete_workspace',
       description:
-        'Permanently delete a board and all of its tasks, docStore and history. Reach for archive_workspace instead in almost every case — this one cannot be undone. Refuses while open tasks remain unless you pass force. Docs attached to the board survive: attaching is a link, not ownership.',
+        'Permanently delete a board and all of its tasks, rooms and history. Reach for archive_workspace instead in almost every case — this one cannot be undone. Refuses while open tasks remain unless you pass force. Docs attached to the board survive: attaching is a link, not ownership.',
       inputSchema: {
         type: 'object',
         properties: {

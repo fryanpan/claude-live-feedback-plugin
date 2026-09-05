@@ -378,7 +378,7 @@ describe('ydoc projection + workspace room', () => {
   });
 
   it('seeds the task body room from the snapshot and snapshots live edits back', async () => {
-    const wsId = await makeWorkspace('body-docStore');
+    const wsId = await makeWorkspace('body-rooms');
     const taskId = await makeTask(wsId, {
       title: 'Write the rollout note',
       body: '## Steps\n\nCheck the flow works end to end.\n',
