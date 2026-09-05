@@ -52,7 +52,13 @@ describe('security docs are wired together', () => {
     const doc = read(ARCHITECTURE_DOC);
     expect(doc).toContain('```mermaid');
     // Every gate the checklist asks about has to be findable from the map.
-    for (const gate of ['isGatedWrite', 'shareScopeAllows', 'isListedFile', 'classifyHost']) {
+    for (const gate of [
+      'isGatedWrite',
+      'shareScopeAllows',
+      'isListedFile',
+      'classifyHost',
+      'authorizeAgentCaller',
+    ]) {
       expect(doc).toContain(gate);
     }
     expect(doc).toContain(REVIEW_RULE.replace('.claude/rules/', ''));
@@ -92,6 +98,11 @@ describe('security docs are wired together', () => {
       'packages/server/src/middleware/host-guard.ts',
       'packages/server/src/auth/session.ts',
       'packages/server/src/auth/widget-token.ts',
+      // The proof that a caller IS the agent whose event feed it asks for.
+      // Two routes read one agent's whole subscription, and the id that
+      // addresses them is a hash of a name anyone on the board can read, so
+      // the gate is the only thing standing there.
+      'packages/server/src/auth/agent-token.ts',
       'packages/server/src/share/url-signing.ts',
       'packages/server/src/recall-webhook-auth.ts',
       'packages/server/src/fs-scan.ts',
