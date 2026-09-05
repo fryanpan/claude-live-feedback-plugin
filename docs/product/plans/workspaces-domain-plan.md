@@ -26,7 +26,7 @@ are steps for the parent session and for Bryan.
 |---|---|
 | `ProgramArguments` | `bun run scripts/serve.ts --no-watch` |
 | `WorkingDirectory` | the primary checkout (prod's deploy source) |
-| `CW_PUBLIC_BASE_URL` | `https://mac-mini.tailb53801.ts.net` |
+| `CW_PUBLIC_BASE_URL` | `https://mac-mini.<tailnet>.ts.net` |
 | other env | `HOME`, `PATH` — and nothing else |
 
 Two facts follow from that last row and they shape everything below.
@@ -36,7 +36,7 @@ and the only hostnames that reach the server are this machine's own names.
 HTTPS comes from `tailscale serve` in front of the process; the server itself
 does not terminate TLS and still will not after this.
 
-The tailnet hostname `mac-mini.tailb53801.ts.net` **stays** — Bryan cancelled
+The tailnet hostname `mac-mini.<tailnet>.ts.net` **stays** — Bryan cancelled
 the rename of the machine ("looks like I can't change mac-mini. That's fine.
 Keep it as mac-mini"). `workspaces.fryanpan.com` is an addition, not a
 replacement.
@@ -90,7 +90,7 @@ silently.
 | | how | works today? | what it costs |
 |---|---|---|---|
 | **A. Tunnel it as a share host** | cloudflared ingress → `:8787`, set `CF_SHARE_PUBLIC_HOSTNAME=workspaces.fryanpan.com` | yes, no code change | It is not the product. It is the external-reviewer surface: one workspace per redeemed link, no landing page, no doc list. Good for *sharing*, wrong for *being the address Bryan opens*. |
-| **B. DNS-only CNAME to the tailnet name** | grey-cloud `workspaces.fryanpan.com` → `mac-mini.tailb53801.ts.net`, plus `TRUSTED_HOSTS=workspaces.fryanpan.com` | no | No `cf-ray`, so it *would* classify local — but the tailnet cert is issued for `*.ts.net`, so `https://workspaces.fryanpan.com` presents a cert for the wrong name and every browser refuses. The name would also resolve only for devices already on the tailnet, which is the reachability the tailnet name already has. |
+| **B. DNS-only CNAME to the tailnet name** | grey-cloud `workspaces.fryanpan.com` → `mac-mini.<tailnet>.ts.net`, plus `TRUSTED_HOSTS=workspaces.fryanpan.com` | no | No `cf-ray`, so it *would* classify local — but the tailnet cert is issued for `*.ts.net`, so `https://workspaces.fryanpan.com` presents a cert for the wrong name and every browser refuses. The name would also resolve only for devices already on the tailnet, which is the reachability the tailnet name already has. |
 | **C. Tunnel + Cloudflare Access on the whole hostname + a small code change** | cloudflared ingress → `:8787`; an Access application covering `workspaces.fryanpan.com`; a new opt-in list of hostnames that may classify `local` **despite** being proxied | needs a ~30-line change | Real TLS on a real public name, reachable off the tailnet. The code change is a deliberate narrowing of a security property and must not ship without the Access application in front — see below. |
 
 **Recommendation: C, and do not start it until Bryan has answered one
@@ -143,7 +143,7 @@ Everything that would need to know about a new host, from a full sweep:
 | `.claude/live-feedback.json` → `trustedPreviewDomains` | gates which hosts an agent may `navigate` to via the Chrome hook | yes — add `fryanpan.com`, or agents cannot open the new URL |
 | `CF_SHARE_PUBLIC_HOSTNAME` / `CF_SHARE_BASE_HOSTNAME` | link-mode and Access-mode share hostnames | only if option A |
 | `publicHost()` / `lanHostnames()` / `tailscaleHost()` (`public-host.ts`) | discovers this machine's own names, 60s TTL | no — discovery, not configuration |
-| `packages/server/test/host-guard.test.ts` and friends | use `mac-mini.tailb53801.ts.net` as a fixture | no — fixtures, and the tailnet name is staying anyway |
+| `packages/server/test/host-guard.test.ts` and friends | use `mac-mini.<tailnet>.ts.net` as a fixture | no — fixtures, and the tailnet name is staying anyway |
 
 **No hostname is hardcoded in server or MCP source.** The tailnet name appears
 only in tests, docs, and `.claude/live-feedback.json`.
@@ -203,7 +203,7 @@ it. Steps 1–3 are reversible; step 6 is the one that changes what agents paste
    | check | expect |
    |---|---|
    | `https://workspaces.fryanpan.com/` after Access | 200, landing page |
-   | `https://mac-mini.tailb53801.ts.net/` | 200, unchanged — **this is the control** |
+   | `https://mac-mini.<tailnet>.ts.net/` | 200, unchanged — **this is the control** |
    | `http://localhost:8787/` | 200, unchanged |
    | a `reviewUrl` from a fresh `create_review_doc` | starts `https://workspaces.fryanpan.com` |
 7. **Add `fryanpan.com` to `trustedPreviewDomains`** in
