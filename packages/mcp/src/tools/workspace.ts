@@ -555,7 +555,12 @@ export async function handleWorkspaceTool(
       // fixed. Nothing a caller can send gets spawned.
       return ok(await http('POST', '/api/plugin/refresh'));
     }
-    case 'list_attachments': {
+    // COMPAT: `list_attachments` is the name this tool had before the agent
+    // roster moved off `attachments` — the noun the glossary spends on docs,
+    // mockups, previews and diffs. Same arm, and the log says so once
+    // (deprecated-aliases.ts); the tool LIST advertises `list_agents` only.
+    case 'list_attachments':
+    case 'list_agents': {
       const { workspaceId } = a as { workspaceId: string };
       const res = await http('GET', `/workspaces/${encodeURIComponent(workspaceId)}/agents`);
       return ok(res);

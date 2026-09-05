@@ -107,7 +107,7 @@ afterAll(async () => {
 
 describe('list_tasks wiring', () => {
   it('POSITIVE CONTROL: the running bundle serves a known tool', () => {
-    expect(mcp.tool('list_attachments')).toBeDefined();
+    expect(mcp.tool('list_agents')).toBeDefined();
     expect(mcp.tool('list_task_fields')).toBeUndefined();
   });
 
