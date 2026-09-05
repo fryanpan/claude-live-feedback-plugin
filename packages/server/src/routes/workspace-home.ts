@@ -15,7 +15,7 @@ export async function handleWorkspaceHome(
 ): Promise<Response | undefined> {
   const {
     taskStore,
-    rooms,
+    docStore,
     homeBriefs,
     j,
     safeJson,
@@ -87,7 +87,7 @@ export async function handleWorkspaceHome(
     const threadAddress = parseThreadReviewItemId(reviewItemId);
     if (threadAddress) {
       const { docId, threadId, commentId } = threadAddress;
-      const comment = rooms.getThread(docId, threadId)?.comments.find((c) => c.id === commentId);
+      const comment = docStore.getThread(docId, threadId)?.comments.find((c) => c.id === commentId);
       if (!comment?.review) return j(404, { error: 'unknown-review-item' });
       const workspaceId = resolveWorkspaceForDoc(docId);
       return j(200, {

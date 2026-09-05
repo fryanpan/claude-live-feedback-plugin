@@ -4,7 +4,7 @@
  * A websocket is authorized once, at its upgrade, so every way of ending
  * access has to be able to find the connections it already opened. The
  * editing socket carries the share and the membership that authorized it
- * (`WsCtx.shareId` / `shareMember`) and `Rooms`' sweeps match on those.
+ * (`WsCtx.shareId` / `shareMember`) and `DocStore`'s sweeps match on those.
  *
  * The meeting's `/audio/<docId>` socket carried neither, and it is not in any
  * room's `conns` either — it lives in `MeetingRelay`'s WeakMap, which cannot

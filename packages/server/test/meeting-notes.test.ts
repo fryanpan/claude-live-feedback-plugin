@@ -989,7 +989,7 @@ describe('notes through the audio socket', () => {
   });
 
   it('the composed notes are IN the doc, as a replaceable named section', () => {
-    const room = handle.rooms.get('planning');
+    const room = handle.docStore.get('planning');
     expect(room).toBeDefined();
     const md = prose.serializeFragmentToMarkdown(prose.getProseFragment(room!.ydoc));
     // The end tick's notes replaced the pause tick's — one section, current.
@@ -1562,7 +1562,9 @@ describe('a tagged meeting through the audio socket', () => {
       }
     };
     const docMarkdown = (): string =>
-      prose.serializeFragmentToMarkdown(prose.getProseFragment(handle.rooms.get('huddle')!.ydoc));
+      prose.serializeFragmentToMarkdown(
+        prose.getProseFragment(handle.docStore.get('huddle')!.ydoc),
+      );
 
     // A conversation, explicitly. Since #501 diarization is opt-in per
     // capture and solo is the default, so a capture that does not ask gets

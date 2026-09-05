@@ -152,7 +152,7 @@ const CONTROLS: Record<string, readonly AdvancedControl[]> = {
     },
     {
       key: 'vad_threshold',
-      label: 'Background-noise tolerance (raise in noisy rooms)',
+      label: 'Background-noise tolerance (raise in noisy docStore)',
       type: 'range',
       min: 0,
       max: 1,

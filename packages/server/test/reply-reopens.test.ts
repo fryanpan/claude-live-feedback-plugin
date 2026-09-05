@@ -111,7 +111,7 @@ async function reply(docId: string, threadId: string, author: User, text: string
  *  A reopen the REST response reports but the CRDT doesn't carry would leave
  *  the thread hidden in the drawer, which is the whole bug. */
 function syncedStatus(docId: string, threadId: string): unknown {
-  const room = handle.rooms.get(docId);
+  const room = handle.docStore.get(docId);
   const threads = room?.ydoc.getMap('threads') as Y.Map<Y.Map<unknown>> | undefined;
   return threads?.get(threadId)?.get('status');
 }

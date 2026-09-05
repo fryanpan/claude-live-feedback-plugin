@@ -115,7 +115,7 @@ describe('hydration doors the request prewarm does not cover', () => {
     const res = await rebind;
     expect(res.status).toBeLessThan(500);
     // The file is not bound, so nothing will write over bytes we never read.
-    expect(handle.rooms.boundPathOf(DOC_ID)).toBeUndefined();
+    expect(handle.docStore.boundPathOf(DOC_ID)).toBeUndefined();
   });
 
   it('a fan-out over board docIds parks its doc and leaves health answering', async () => {
@@ -126,12 +126,12 @@ describe('hydration doors the request prewarm does not cover', () => {
     // and the archive route make for EVERY docId on a board. None of those
     // ids reaches the URL, so none is prewarmed. Called directly here so the
     // assertion is about the door rather than about which route found it.
-    const fanOut = (async () => handle?.rooms.listThreads(DOC_ID, { status: 'open' }))();
+    const fanOut = (async () => handle?.docStore.listThreads(DOC_ID, { status: 'open' }))();
 
     expect(await healthAnswers(base)).toBe('answered:200');
 
     await fanOut;
-    expect(handle.rooms.boundPathOf(DOC_ID)).toBeUndefined();
+    expect(handle.docStore.boundPathOf(DOC_ID)).toBeUndefined();
   });
 
   it('a background hydrate never blocks the loop, so timers keep firing', async () => {
@@ -145,8 +145,8 @@ describe('hydration doors the request prewarm does not cover', () => {
       ticked = true;
     }, 20);
 
-    handle.rooms.listThreads(DOC_ID, { status: 'open' });
-    handle.rooms.readMarkdownBody(DOC_ID);
+    handle.docStore.listThreads(DOC_ID, { status: 'open' });
+    handle.docStore.readMarkdownBody(DOC_ID);
 
     // The poll IS the assertion. A blocked loop runs neither the timer above
     // nor this loop, so `waitFor` returning at all is the proof — and it
@@ -177,8 +177,8 @@ describe('hydration doors the request prewarm does not cover', () => {
 
     // The doc binds, and its body is the file's content — so the door did a
     // real read rather than merely declining to hang.
-    expect(handle.rooms.boundPathOf(DOC_ID)).toBe(boundPath);
-    expect(handle.rooms.readMarkdownBody(DOC_ID) ?? '').toContain('A readable first version.');
+    expect(handle.docStore.boundPathOf(DOC_ID)).toBe(boundPath);
+    expect(handle.docStore.readMarkdownBody(DOC_ID) ?? '').toContain('A readable first version.');
     expect(boundFiles.quarantined(boundPath)).toBe(false);
   });
 });

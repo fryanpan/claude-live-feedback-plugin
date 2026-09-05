@@ -10,7 +10,7 @@
  * See .claude/rules/testing-standards.md, standard 2.
  */
 
-import { ROOM_TIMINGS } from '../src/doc-store-timings.ts';
+import { DOC_STORE_TIMINGS } from '../src/doc-store-timings.ts';
 
 export type WaitOptions = {
   /** Give up after this long. Default 5000ms — generous, since it is only paid on failure. */
@@ -104,12 +104,15 @@ export async function waitForFileToBe(
  */
 
 /** Long enough that a doc → disk write-back would have fired. */
-export const pastWriteBack = (): number => Math.ceil(ROOM_TIMINGS.writeBackMs * 1.625);
+export const pastWriteBack = (): number => Math.ceil(DOC_STORE_TIMINGS.writeBackMs * 1.625);
 
 /** Long enough that an external edit would have been polled, read and applied. */
 export const pastExternalRead = (): number =>
   Math.ceil(
-    (ROOM_TIMINGS.filePollMs + ROOM_TIMINGS.readDebounceMs + ROOM_TIMINGS.writeBackMs) * 1.75,
+    (DOC_STORE_TIMINGS.filePollMs +
+      DOC_STORE_TIMINGS.readDebounceMs +
+      DOC_STORE_TIMINGS.writeBackMs) *
+      1.75,
   );
 
 /**
@@ -118,10 +121,10 @@ export const pastExternalRead = (): number =>
  * Midway between the two so neither side is close.
  */
 export const afterPersist = (): number =>
-  Math.round((ROOM_TIMINGS.persistMs + ROOM_TIMINGS.writeBackMs) / 2);
+  Math.round((DOC_STORE_TIMINGS.persistMs + DOC_STORE_TIMINGS.writeBackMs) / 2);
 
 /** Late in the write-back window but before it fires — where a racing write must land. */
-export const insideWriteBack = (): number => Math.round(ROOM_TIMINGS.writeBackMs * 0.875);
+export const insideWriteBack = (): number => Math.round(DOC_STORE_TIMINGS.writeBackMs * 0.875);
 
 /** Long enough that the thread re-anchor sweep would have run. */
-export const pastReanchor = (): number => Math.ceil(ROOM_TIMINGS.reanchorMs * 2);
+export const pastReanchor = (): number => Math.ceil(DOC_STORE_TIMINGS.reanchorMs * 2);

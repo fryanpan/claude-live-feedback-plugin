@@ -34,7 +34,7 @@ export async function handleDocResourceCore(
   rq: DocResourceRouteRequest,
 ): Promise<Response | undefined> {
   const {
-    rooms,
+    docStore,
     taskStore,
     taskProjection,
     webhooks,
@@ -132,7 +132,7 @@ export async function handleDocResourceCore(
   }
   if (rest === '' && req.method === 'DELETE') {
     const force = url.searchParams.get('force') === 'true';
-    const res = rooms.deleteDoc(docId, { force });
+    const res = docStore.deleteDoc(docId, { force });
     if (res.ok) {
       unlinkFromEveryHubWorkspace(docId);
       return j(200, res);
@@ -142,7 +142,7 @@ export async function handleDocResourceCore(
   if (rest === 'threads' && req.method === 'GET') {
     const status = url.searchParams.get('status') as 'open' | 'resolved' | null;
     const filter = status ? { status } : undefined;
-    const threads: Array<Thread & { docId?: string }> = rooms
+    const threads: Array<Thread & { docId?: string }> = docStore
       .listThreads(docId, filter)
       .map((t) => withTaskChips(docId, t));
     // A `.md` diff member's companion editor doc holds the threads
@@ -150,9 +150,9 @@ export async function handleDocResourceCore(
     // member because that is the id it was handed; answer for the
     // file, and tag each companion thread with the doc it lives on
     // so a reply lands there. Member threads keep their shape.
-    const companionId = rooms.companionOf(docId);
+    const companionId = docStore.companionOf(docId);
     if (companionId) {
-      for (const t of rooms.listThreads(companionId, filter)) {
+      for (const t of docStore.listThreads(companionId, filter)) {
         threads.push({ ...withTaskChips(companionId, t), docId: companionId });
       }
       threads.sort((a, b) => b.lastActivity - a.lastActivity);
@@ -180,7 +180,7 @@ export async function handleDocResourceCore(
     }
     const author = authorFor(body?.author);
     if (!author) return j(400, { error: 'author required' });
-    const set = rooms.setPlanState(docId, state, author.name);
+    const set = docStore.setPlanState(docId, state, author.name);
     if (!set.ok) return j(404, { error: 'doc not found' });
     let released: string[] = [];
     if (state === 'approved') {
@@ -215,7 +215,7 @@ export async function handleDocResourceCore(
     // person for the agent to answer, and the bare category "agent"
     // names nobody.
     if (isCategoryAuthor(author)) return refuseCategoryAuthor();
-    const thread = await rooms.postComment(
+    const thread = await docStore.postComment(
       docId,
       null,
       author,
@@ -224,7 +224,7 @@ export async function handleDocResourceCore(
       { generate: false },
     );
     if (!thread) return j(404, { error: 'doc not found' });
-    const stamped = rooms.setPlanRequested(docId, author.name);
+    const stamped = docStore.setPlanRequested(docId, author.name);
     return j(200, {
       docId,
       threadId: thread.id,
@@ -278,15 +278,22 @@ export async function handleDocResourceCore(
     }
     const anchorCheck = anchors.validateAnchor(anchor);
     if (!anchorCheck.ok) return j(400, { error: anchorCheck.error });
-    const thread = await rooms.postComment(docId, null, author, researchAskComment(topic), anchor, {
-      generate: false,
-    });
+    const thread = await docStore.postComment(
+      docId,
+      null,
+      author,
+      researchAskComment(topic),
+      anchor,
+      {
+        generate: false,
+      },
+    );
     if (!thread) return j(404, { error: 'doc not found' });
     // After the thread, so the section follows the selection — the
     // same insertion an agent's insert_blocks_after_thread makes.
     // Top-level: a selection inside a bullet must not nest a
     // heading inside that bullet; the section goes after the list.
-    const placed = rooms.insertBlocksAfterThread(
+    const placed = docStore.insertBlocksAfterThread(
       docId,
       thread.id,
       researchPlaceholderMarkdown(topic),
@@ -309,31 +316,31 @@ export async function handleDocResourceCore(
   if (rest === 'home') {
     if (visitor) return j(403, { error: 'not available on a share' });
     if (req.method === 'GET') {
-      const status = rooms.docHomeStatus(docId);
+      const status = docStore.docHomeStatus(docId);
       return status ? j(200, { docId, ...status }) : j(404, { error: 'no home pinned' });
     }
     if (req.method === 'PUT') {
       const body = await safeJson(req);
       // Accept `{ home: {...} }` or the three fields at top level.
-      const res = rooms.setDocHome(docId, body?.home ?? body);
+      const res = docStore.setDocHome(docId, body?.home ?? body);
       if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
       return j(200, { docId, home: res.home, placement: res.placement });
     }
     if (req.method === 'DELETE') {
-      const res = rooms.clearDocHome(docId);
+      const res = docStore.clearDocHome(docId);
       return res.ok ? j(200, { docId, ok: true }) : j(404, { error: 'no home pinned' });
     }
     return j(405, { error: 'method not allowed' });
   }
   if (rest === 'content' && req.method === 'GET') {
-    const doc = rooms.getDoc(docId);
+    const doc = docStore.getDoc(docId);
     if (!doc) return j(404, { error: 'doc not found' });
     // `reader` marks this caller's copy of the doc as current-as-of-
     // now, which is what lets the stale-write guard below judge their
     // next whole-doc rewrite by order instead of the blunt time
     // window. Sent by get_doc since 0.1.113; older bundles omit it.
     const reader = url.searchParams.get('reader');
-    if (reader) rooms.noteAgentRead(docId, reader);
+    if (reader) docStore.noteAgentRead(docId, reader);
     return j(200, doc);
   }
   // Cheap doc health check — metadata + counts, never the body.
@@ -341,7 +348,7 @@ export async function handleDocResourceCore(
   // that only needs "bound? wedged? how big?" must not have to pay
   // for (or overflow on) the content to find out.
   if (rest === 'status' && req.method === 'GET') {
-    const status = rooms.getDocStatus(docId);
+    const status = docStore.getDocStatus(docId);
     if (!status) return j(404, { error: 'doc not found' });
     if (visitor) {
       // Same rule as `sourceUrl` in PRIVATE_META_KEYS: host-machine
@@ -400,7 +407,7 @@ export async function handleDocResourceCore(
     // activity as his — the one identity on the server that carries
     // any weight. An unattributed read is now unattributed.
     const author = authorFor(body?.author) ?? ANONYMOUS_ACTOR;
-    const res = rooms.recordReadEvent(docId, type, payload, author);
+    const res = docStore.recordReadEvent(docId, type, payload, author);
     // Fold a successful task read_session onto the task record's
     // cumulative reading time. `recordReadEvent` clamps `payload`
     // in place (see `clampReadPayload`), so `durationMs` here is
@@ -418,7 +425,7 @@ export async function handleDocResourceCore(
   }
   if (rest === 'hooks/fire' && req.method === 'POST') {
     // debug-fires the last thread update again
-    const ts = rooms.listThreads(docId);
+    const ts = docStore.listThreads(docId);
     if (ts.length === 0) return j(404, { error: 'no threads' });
     const last = ts[ts.length - 1]!;
     if (room.webhookUrl) {

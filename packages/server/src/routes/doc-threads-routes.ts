@@ -108,7 +108,7 @@ export async function handleDocThreadRoutes(
   rq: DocResourceRouteRequest,
 ): Promise<Response | undefined> {
   const {
-    rooms,
+    docStore,
     taskStore,
     taskProjection,
     readyNudger,
@@ -131,7 +131,7 @@ export async function handleDocThreadRoutes(
     const threadId = decodeURIComponent(threadIdMatch[1] ?? '');
     const threadRest = threadIdMatch[2] ?? '';
     if (threadRest === '' && req.method === 'GET') {
-      const t = rooms.getThread(docId, threadId);
+      const t = docStore.getThread(docId, threadId);
       return t
         ? j(200, { thread: withTaskChips(docId, t) })
         : j(404, { error: 'thread not found' });
@@ -159,7 +159,7 @@ export async function handleDocThreadRoutes(
       // and what counts as an answer are decided in one place. A
       // reply that DECLARES its own ask is skipped: that is a new
       // question, not an answer to the old one.
-      const priorThread = declared.review ? null : rooms.getThread(docId, threadId);
+      const priorThread = declared.review ? null : docStore.getThread(docId, threadId);
       const pending = priorThread ? pendingDeclaration(priorThread) : null;
       const folded =
         pending?.review && classifyActor(user) === 'person'
@@ -171,7 +171,7 @@ export async function handleDocThreadRoutes(
         // it — the stamps, the displaced-answer history, the reply,
         // the events. A second writer here is how the two spellings
         // of "answered" would drift.
-        const res = await rooms.answerReviewItem(
+        const res = await docStore.answerReviewItem(
           docId,
           threadId,
           pending.id,
@@ -202,7 +202,7 @@ export async function handleDocThreadRoutes(
         // ordinary comment it always was.
       }
       if (!t) {
-        t = await rooms.postComment(docId, threadId, user, text, undefined, {
+        t = await docStore.postComment(docId, threadId, user, text, undefined, {
           // A share visitor must not be able to spend the API key.
           generate: !visitor,
           ...(declared.review ? { review: declared.review } : {}),
@@ -220,7 +220,7 @@ export async function handleDocThreadRoutes(
       const handoff = threadUrl(docId, Boolean(visitor));
       return t
         ? j(200, {
-            thread: rooms.getThread(docId, t.id) ?? t,
+            thread: docStore.getThread(docId, t.id) ?? t,
             ...(declared.advice ? { reviewAdvice: declared.advice } : {}),
             ...(handoff ? { threadUrl: handoff } : {}),
             ...heldFields(replyGate),
@@ -252,13 +252,13 @@ export async function handleDocThreadRoutes(
         classifyActor(user) === 'person' &&
         answerAsksBack(text)
       ) {
-        const asked = await rooms.postComment(docId, threadId, user, text, undefined, {
+        const asked = await docStore.postComment(docId, threadId, user, text, undefined, {
           generate: !visitor,
         });
         if (!asked) return j(404, { error: 'thread not found' });
-        return j(200, { asked: true, thread: rooms.getThread(docId, asked.id) ?? asked });
+        return j(200, { asked: true, thread: docStore.getThread(docId, asked.id) ?? asked });
       }
-      const res = await rooms.answerReviewItem(
+      const res = await docStore.answerReviewItem(
         docId,
         threadId,
         commentId,
@@ -299,7 +299,7 @@ export async function handleDocThreadRoutes(
       if (isCategoryAuthor(user)) return refuseCategoryAuthor();
       const parsed = parseRevisedRange(body?.revisedRange);
       if (!parsed.ok) return j(400, { error: parsed.error });
-      const res = rooms.reviseCommentReview(
+      const res = docStore.reviseCommentReview(
         docId,
         threadId,
         commentId,
@@ -331,7 +331,7 @@ export async function handleDocThreadRoutes(
       // may buzz a phone claiming it is.
       if (!gate.held) announceThreadReview(docId, threadId, gate.review, user);
       return j(200, {
-        thread: rooms.getThread(docId, threadId) ?? res.thread,
+        thread: docStore.getThread(docId, threadId) ?? res.thread,
         review: gate.review,
         ...heldFields(gate),
       });
@@ -359,7 +359,7 @@ export async function handleDocThreadRoutes(
       if (reason !== undefined && typeof reason !== 'string') {
         return j(400, { error: 'reason must be a string' });
       }
-      const res = rooms.withdrawCommentReview(docId, threadId, commentId, {
+      const res = docStore.withdrawCommentReview(docId, threadId, commentId, {
         actor: user,
         ...(reason !== undefined ? { reason } : {}),
         ...(threadRest === '/withdraw/undo' ? { undo: true } : {}),
@@ -396,7 +396,7 @@ export async function handleDocThreadRoutes(
       const user = authorFor(body?.author);
       const commentId = body?.commentId as string | undefined;
       if (!user || !commentId) return j(400, { error: 'author + commentId required' });
-      const res = rooms.undoReviewItemAnswer(docId, threadId, commentId, user, {
+      const res = docStore.undoReviewItemAnswer(docId, threadId, commentId, user, {
         generate: !visitor,
       });
       if (!res.ok) {
@@ -409,7 +409,7 @@ export async function handleDocThreadRoutes(
       // fire-and-forget; this one blocks and reports what happened,
       // because an agent asked for it and is waiting.
       if (visitor) return j(403, { error: 'not available to share visitors' });
-      const t = rooms.getThread(docId, threadId);
+      const t = docStore.getThread(docId, threadId);
       if (!t) return j(404, { error: 'thread not found' });
       if (!summarizer?.enabled) {
         return j(503, {
@@ -435,12 +435,12 @@ export async function handleDocThreadRoutes(
       // `threadLines` will ignore forever, and (b) overwrite a valid
       // summary the scheduled path may have just landed for the NEW
       // state — leaving nothing scheduled to repair it.
-      const now = rooms.getThread(docId, threadId);
+      const now = docStore.getThread(docId, threadId);
       if (!now) return j(404, { error: 'thread not found' });
       if (summaryHash(now) !== summary.hash) {
         return j(409, { error: 'thread changed during generation' });
       }
-      const updated = rooms.applyThreadSummary(docId, threadId, summary);
+      const updated = docStore.applyThreadSummary(docId, threadId, summary);
       return updated ? j(200, { thread: updated, summary }) : j(404, { error: 'thread not found' });
     }
     if (threadRest === '/resolve' && req.method === 'POST') {
@@ -449,14 +449,14 @@ export async function handleDocThreadRoutes(
       if (isCategoryAuthor(author)) return refuseCategoryAuthor();
       // Resolve is a thread change, so it schedules a summary — and a
       // visitor must not be able to spend the API key by clicking it.
-      const t = rooms.resolve(docId, threadId, author, { generate: !visitor });
+      const t = docStore.resolve(docId, threadId, author, { generate: !visitor });
       return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
     }
     if (threadRest === '/reopen' && req.method === 'POST') {
       const body = await safeJson(req);
       const author = authorFor(body?.author);
       if (isCategoryAuthor(author)) return refuseCategoryAuthor();
-      const t = rooms.reopen(docId, threadId, author, { generate: !visitor });
+      const t = docStore.reopen(docId, threadId, author, { generate: !visitor });
       return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
     }
     if (threadRest === '/reanchor' && req.method === 'POST') {
@@ -467,7 +467,7 @@ export async function handleDocThreadRoutes(
       // malformed anchor on an EXISTING thread just as easily.
       const reanchorCheck = anchors.validateAnchor(anchor);
       if (!reanchorCheck.ok) return j(400, { error: reanchorCheck.error });
-      const t = rooms.reanchor(docId, threadId, anchor);
+      const t = docStore.reanchor(docId, threadId, anchor);
       return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
     }
     if (threadRest === '/rewrite_region' && req.method === 'POST') {
@@ -477,23 +477,23 @@ export async function handleDocThreadRoutes(
       if (body?.suggest === true) {
         const author = parseSuggestionAuthor(visitor ? { author: authorFor(body?.author) } : body);
         if (!author) return j(400, { error: 'author required when suggest is true' });
-        const res = rooms.createSuggestionForThread(docId, threadId, {
+        const res = docStore.createSuggestionForThread(docId, threadId, {
           replacement,
           parseInlineMarks,
           author,
         });
         return res.ok ? j(200, res) : j(409, res);
       }
-      const res = rooms.rewriteThreadRegion(docId, threadId, replacement, {
+      const res = docStore.rewriteThreadRegion(docId, threadId, replacement, {
         parseInlineMarks,
       });
-      return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
+      return res.ok ? j(200, withSyncError(docStore, docId, res)) : j(409, res);
     }
     if (threadRest === '/insert_after' && req.method === 'POST') {
       const body = await safeJson(req);
       const text = String(body?.text ?? '');
-      const res = rooms.insertAfterThread(docId, threadId, text);
-      return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
+      const res = docStore.insertAfterThread(docId, threadId, text);
+      return res.ok ? j(200, withSyncError(docStore, docId, res)) : j(409, res);
     }
     if (threadRest === '/insert_blocks_after' && req.method === 'POST') {
       const body = await safeJson(req);
@@ -502,8 +502,8 @@ export async function handleDocThreadRoutes(
       if (placement === PLACEMENT_INVALID) {
         return j(400, { error: "placement must be 'after-block' or 'top-level'" });
       }
-      const res = rooms.insertBlocksAfterThread(docId, threadId, markdown, { placement });
-      return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
+      const res = docStore.insertBlocksAfterThread(docId, threadId, markdown, { placement });
+      return res.ok ? j(200, withSyncError(docStore, docId, res)) : j(409, res);
     }
   }
   if (rest === 'threads' && req.method === 'POST') {
@@ -559,7 +559,7 @@ export async function handleDocThreadRoutes(
       // A retry told nothing about the hold would treat its filing as
       // accepted and wait on a reader who cannot see the item (codex
       // review) — so the verdict is read back off the stored payload.
-      const settledPrior = t ? (rooms.getThread(docId, t.id) ?? t) : null;
+      const settledPrior = t ? (docStore.getThread(docId, t.id) ?? t) : null;
       return t && settledPrior
         ? j(200, {
             thread: settledPrior,
@@ -655,7 +655,7 @@ export async function handleDocThreadRoutes(
       text,
       identityKey,
       async () => {
-        const created = await rooms.postComment(docId, null, user, text, anchor, {
+        const created = await docStore.postComment(docId, null, user, text, anchor, {
           generate: !visitor,
           ...(declared.review ? { review: declared.review } : {}),
         });
@@ -679,7 +679,7 @@ export async function handleDocThreadRoutes(
       },
     );
     const handoff = threadUrl(docId, Boolean(visitor));
-    const settled = t ? (rooms.getThread(docId, t.id) ?? t) : null;
+    const settled = t ? (docStore.getThread(docId, t.id) ?? t) : null;
     return t && settled
       ? j(200, {
           thread: settled,
@@ -702,7 +702,7 @@ export async function handleDocThreadRoutes(
     }
     const declared = reviewFromBody(body?.review, text);
     if (!declared.ok) return j(400, { error: declared.error });
-    const res = await rooms.createThreadByFind(
+    const res = await docStore.createThreadByFind(
       docId,
       {
         find,
@@ -722,7 +722,7 @@ export async function handleDocThreadRoutes(
     const findHandoff = threadUrl(docId, Boolean(visitor));
     return res.ok
       ? j(200, {
-          thread: rooms.getThread(docId, res.thread.id) ?? res.thread,
+          thread: docStore.getThread(docId, res.thread.id) ?? res.thread,
           ...(declared.advice ? { reviewAdvice: declared.advice } : {}),
           ...(findHandoff ? { threadUrl: findHandoff } : {}),
           ...heldFields(findGate),

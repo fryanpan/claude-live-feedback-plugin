@@ -40,7 +40,7 @@ export async function handleWorkspaceContent(
   const {
     taskStore,
     taskProjection,
-    rooms,
+    docStore,
     dataDir,
     j,
     safeJson,
@@ -62,7 +62,7 @@ export async function handleWorkspaceContent(
     // diff review / folder bind, attached as one unit). Only the first
     // kind canonicalizes — a review id names no room, so there is
     // nothing to resolve it to.
-    const attachRoom = rooms.get(addressed);
+    const attachRoom = docStore.get(addressed);
     const docId = attachRoom?.docId ?? addressed;
     /**
      * A member may file onto their board something they can ALREADY see.
@@ -104,7 +104,7 @@ export async function handleWorkspaceContent(
     // which is the doc LIST one id at a time. A member now gets the same
     // out-of-board refusal either way, and the miss reaches only callers who
     // could have attached the doc had it been there.
-    const exists = attachRoom !== undefined || rooms.list().some((m) => reviewIdOf(m) === docId);
+    const exists = attachRoom !== undefined || docStore.list().some((m) => reviewIdOf(m) === docId);
     if (!exists) return j(404, { error: 'doc not found', docId });
     const res = taskStore.attachDoc(workspaceId, docId);
     if (!res.ok) return j(404, res);
@@ -177,7 +177,7 @@ export async function handleWorkspaceContent(
     // which no backlink query can see. A pending plan gate on the bound
     // doc holds the rows as drafts, same as the batch route.
     const resolved = resolve(path);
-    const bound = rooms
+    const bound = docStore
       .list()
       .find((m) => m.sourceUrl !== undefined && resolve(m.sourceUrl) === resolved);
     const res = applyImport(taskStore, workspaceId, mapping, {
@@ -202,7 +202,7 @@ export async function handleWorkspaceContent(
         ts: Date.now(),
       }) + markdown,
     );
-    if (bound) rooms.reparseFromDisk(bound.docId);
+    if (bound) docStore.reparseFromDisk(bound.docId);
     // Task/goal events already refreshed the projection; this covers a
     // mapping with zero new goals and zero tasks (nothing emitted).
     taskProjection.ensureWorkspace(workspaceId);
@@ -276,14 +276,14 @@ export async function handleWorkspaceContent(
     const startedAt = Date.now();
     // Minted, never re-used: `createForCaller` answers an existing doc
     // for a name that already resolves, and a huddle is always new.
-    let created = rooms.createForCaller(huddleAlias(startedAt), {
+    let created = docStore.createForCaller(huddleAlias(startedAt), {
       type: 'markdown',
       title: huddleTitle(startedAt, parsedKind.kind),
       huddle: true,
       huddleKind: parsedKind.kind,
     });
     if (created.ok && !created.minted) {
-      created = rooms.createForCaller(huddleAlias(startedAt), {
+      created = docStore.createForCaller(huddleAlias(startedAt), {
         type: 'markdown',
         title: huddleTitle(startedAt, parsedKind.kind),
         huddle: true,
@@ -309,7 +309,7 @@ export async function handleWorkspaceContent(
       console.error(`[huddle] could not write ${file}:`, err);
       return j(500, { error: 'huddle-file-failed' });
     }
-    const attached = await rooms.attachFileAsync(docId, file);
+    const attached = await docStore.attachFileAsync(docId, file);
     if (!attached.ok) return j(409, { error: 'attach_failed', attached });
     if (typeof huddleTaskId === 'string') {
       const linked = taskStore.linkRef(huddleTaskId, { kind: 'doc', docId });

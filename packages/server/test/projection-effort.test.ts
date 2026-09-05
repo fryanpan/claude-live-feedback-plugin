@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { workspaceRoomId } from '../src/task-projection.ts';
+import { workspaceDocId } from '../src/task-projection.ts';
 import { type TaskEffortEstimate, wordsRevisionOf } from '../src/tasks.ts';
 
 const AGENT = { id: 'agent-x', name: 'Estimator Test', kind: 'agent' };
@@ -38,7 +38,7 @@ describe('the board projection carries the effort model', () => {
   };
 
   const row = (taskId: string): Record<string, unknown> => {
-    const room = handle.rooms.get(workspaceRoomId(wsId));
+    const room = handle.docStore.get(workspaceDocId(wsId));
     if (!room) throw new Error('ws room was not created');
     return room.ydoc.getMap('tasks').get(taskId) as Record<string, unknown>;
   };

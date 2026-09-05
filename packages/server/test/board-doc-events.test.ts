@@ -23,7 +23,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { taskBodyDocId, workspaceRoomId } from '../src/task-projection.ts';
+import { taskBodyDocId, workspaceDocId } from '../src/task-projection.ts';
 
 const PERSON = { id: 'known-reviewer', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
 
@@ -178,7 +178,7 @@ describe('a doc thread reaches the boards holding the doc', () => {
     expect(boundJson.hubWorkspaceId).toBe(workspaceId);
     const memberDocId = boundJson.files[0]?.docId;
     if (!memberDocId) throw new Error('folder bind produced no entry doc');
-    expect(handle.rooms.get(memberDocId)?.meta.workspaceId).toBe(boundJson.workspaceId);
+    expect(handle.docStore.get(memberDocId)?.meta.workspaceId).toBe(boundJson.workspaceId);
 
     const before = heard.events.length;
     await settle(150);
@@ -204,7 +204,7 @@ describe('a doc thread reaches the boards holding the doc', () => {
     const { task } = (await t.json()) as { task: { id: string } };
     await settle();
 
-    const boardRoom = handle.rooms.get(workspaceRoomId(workspaceId));
+    const boardRoom = handle.docStore.get(workspaceDocId(workspaceId));
     if (!boardRoom) throw new Error('board room missing');
     const projected = () =>
       boardRoom.ydoc.getMap('tasks').get(task.id) as { commentCount?: number };

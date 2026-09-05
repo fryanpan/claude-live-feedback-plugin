@@ -15,11 +15,11 @@
  * type out of `routes/`.
  */
 import type { DocMeta, DocType, ReviewPayload, Thread, User, suggestOps } from '@feedback/core';
+import type { DocRoom, DocStore } from '../doc-store.ts';
 import type { createLeadPresenceMonitor } from '../lead-presence.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
 import type { ReadyWorkNudger } from '../ready-nudge.ts';
 import type { ThreadReviewGate } from '../review-gate-types.ts';
-import type { DocRoom, Rooms } from '../doc-store.ts';
 import type { ThreadSummarizer } from '../summarize.ts';
 import type { TaskProjection } from '../task-projection.ts';
 import type { Task, TaskStore } from '../tasks.ts';
@@ -33,8 +33,8 @@ export type { ThreadReviewGate };
  *  where a disk↔doc conflict actually reaches whoever can fix it. Used by
  *  both `doc-threads-routes.ts` and `doc-edit-routes.ts`, which is why it
  *  stays here rather than moving with either. */
-export function withSyncError(rooms: Rooms, docId: string, body: object): object {
-  const syncError = rooms.getSyncError(docId);
+export function withSyncError(docStore: DocStore, docId: string, body: object): object {
+  const syncError = docStore.getSyncError(docId);
   return syncError ? { ...body, syncError } : body;
 }
 
@@ -71,8 +71,8 @@ export function parseSuggestionAuthor(
 
 /** The long-lived collaborators these routes need, built once per server. */
 export interface DocRoutesContext {
-  /** Doc rooms — every route here is an operation on one. */
-  rooms: Rooms;
+  /** Doc store — every route here is an operation on one. */
+  docStore: DocStore;
   /** The hub task store — doc↔board membership, and the rows a doc carries. */
   taskStore: TaskStore;
   /** The ydoc projection of the store, refreshed after writes that emit no

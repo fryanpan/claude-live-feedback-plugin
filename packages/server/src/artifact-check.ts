@@ -57,7 +57,7 @@ export function classifyArtifactLink(ref: Ref): ClassifiedLink {
 }
 
 export interface ArtifactCheckDeps {
-  /** Is this docId a doc this server holds? Wired to the live rooms plus the
+  /** Is this docId a doc this server holds? Wired to the live docs plus the
    *  archive manifests; tests stub it. */
   docStatus: (docId: string) => DocPresence;
   fetchImpl?: typeof fetch;

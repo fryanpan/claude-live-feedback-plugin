@@ -32,7 +32,7 @@ import {
   toUtcIso,
 } from './activity.ts';
 import { memberDocId } from './binds.ts';
-import { isHubOwnedRoom } from './doc-ids.ts';
+import { isHubOwnedDoc } from './doc-ids.ts';
 import {
   type DocIndexEntry,
   deleteDocIndex,
@@ -40,6 +40,7 @@ import {
   moveDocIndex,
   readDocIndex,
 } from './doc-index.ts';
+import type { DocRoom, WorkspaceDirNode, WorkspaceFileNode, WorkspaceTree } from './doc-store.ts';
 import { isListedFile, scanFolderPaths } from './fs-scan.ts';
 import { privateMetaPath } from './private-meta.ts';
 import {
@@ -54,13 +55,12 @@ import {
   writeArchiveManifest,
   writeDocArchiveManifest,
 } from './review-archive.ts';
-import type { DocRoom, WorkspaceDirNode, WorkspaceFileNode, WorkspaceTree } from './doc-store.ts';
 import { isWithinRoot } from './safe-path.ts';
 import { boundFiles } from './slow-fs.ts';
 
 /**
  * What the workspace surface needs from the room lifecycle. Deliberately
- * verbs rather than the maps behind them: `residentRoom` is the `rooms` map,
+ * verbs rather than the maps behind them: `residentRoom` is the doc map,
  * `setIndexEntry` / `deleteIndexEntry` are the persisted doc index, and
  * nothing here gets to iterate either.
  *
@@ -69,7 +69,7 @@ import { boundFiles } from './slow-fs.ts';
  * that happens to be open, and must not page in the several hundred members
  * of a review nobody is looking at just to retire them.
  */
-export interface RoomsWorkspacePersistence {
+export interface DocStoreWorkspacePersistence {
   dataDir(): string;
   /** Fill in `reviewUrl` and friends — the URL machinery stays in the server layer. */
   decorate(meta: DocMeta): DocMeta;
@@ -109,8 +109,8 @@ export interface RoomsWorkspacePersistence {
   deleteIndexEntry(docId: string): void;
 }
 
-export class RoomsWorkspaces {
-  constructor(private readonly p: RoomsWorkspacePersistence) {}
+export class DocStoreWorkspaces {
+  constructor(private readonly p: DocStoreWorkspacePersistence) {}
 
   /**
    * All threads across a workspace's member docs in one call — so an agent
@@ -484,7 +484,7 @@ export class RoomsWorkspaces {
    * name asc — so the folders/files that need attention float up, matching
    * the landing page's "what needs my review?" ordering.
    *
-   * `reviewUrl` is filled in by the caller via the rooms decorator
+   * `reviewUrl` is filled in by the caller via the doc-store decorator
    * (`decorateDocMeta`) so the URL machinery stays in the server layer.
    */
   buildWorkspaceTree(setId: string): WorkspaceTree {
@@ -848,7 +848,7 @@ export class RoomsWorkspaces {
     | { ok: true; docId: string; manifest: ArchivedDoc }
     | { ok: false; error: 'not-found' | 'hub-owned' | 'archive-collision' | 'move-failed' }
     | { ok: false; error: 'review-member'; setId: string } {
-    if (isHubOwnedRoom(docId)) return { ok: false, error: 'hub-owned' };
+    if (isHubOwnedDoc(docId)) return { ok: false, error: 'hub-owned' };
     const room = this.p.room(docId);
     if (!room) return { ok: false, error: 'not-found' };
     // From here on the CANONICAL id: everything below names files, writes a
@@ -925,7 +925,7 @@ export class RoomsWorkspaces {
     try {
       if (existsSync(ydocFrom)) renameSync(ydocFrom, ydocTo);
     } catch (err) {
-      console.error(`[rooms] failed to move ${docId}.ydoc to ${toDir}:`, err);
+      console.error(`[doc-store] failed to move ${docId}.ydoc to ${toDir}:`, err);
       return false;
     }
     const sidecarFrom = privateMetaPath(fromDir, docId);
@@ -935,7 +935,7 @@ export class RoomsWorkspaces {
     } catch (err) {
       // The sidecar is recoverable state, so a failure here is logged and the
       // move stands — but put the .ydoc back first so the pair never splits.
-      console.error(`[rooms] failed to move sidecar for ${docId} to ${toDir}:`, err);
+      console.error(`[doc-store] failed to move sidecar for ${docId} to ${toDir}:`, err);
       try {
         if (existsSync(ydocTo)) renameSync(ydocTo, ydocFrom);
       } catch {}
@@ -960,11 +960,11 @@ export class RoomsWorkspaces {
       // fail quietly. Deleting it destroys nothing — it is derived state, and
       // the .ydoc it describes is safe in `toDir`.
       if (!carried) {
-        console.error(`[rooms] could not move index for ${docId} to ${toDir}; dropping it`);
+        console.error(`[doc-store] could not move index for ${docId} to ${toDir}; dropping it`);
         deleteDocIndex(fromDir, docId);
         if (existsSync(docIndexPath(fromDir, docId))) {
           console.error(
-            `[rooms] index for ${docId} is STILL in ${fromDir} — a restart will list it as live`,
+            `[doc-store] index for ${docId} is STILL in ${fromDir} — a restart will list it as live`,
           );
         }
       }
@@ -1026,7 +1026,7 @@ export class RoomsWorkspaces {
       };
       appendActivity(this.p.dataDir(), event);
     } catch (err) {
-      console.error('[rooms] recordArchiveLifecycle failed:', err);
+      console.error('[doc-store] recordArchiveLifecycle failed:', err);
     }
   }
 }

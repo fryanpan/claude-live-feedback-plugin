@@ -108,7 +108,7 @@ describe('stopping the server closes its open connections', () => {
     // only `onClose` empties.
     //
     // It is the property `socket-handlers.ts` would lose first if `close`
-    // ever became async — the promise would resolve after `rooms.flush()`,
+    // ever became async — the promise would resolve after `docStore.flush()`,
     // and nothing would be waiting for it.
     const handle = boot();
     const docId = 'stop-sockets-handler-mock';
@@ -121,7 +121,7 @@ describe('stopping the server closes its open connections', () => {
     // Control: the handler ran on the way IN, so the set it empties is a set
     // that had something in it. Without this the assert below passes on a
     // server that never tracked the connection at all.
-    const room = handle.rooms.get(docId);
+    const room = handle.docStore.get(docId);
     expect(room).toBeDefined();
     expect(await within(5_000, () => (room?.conns.size ?? 0) === 1)).toBe(true);
 

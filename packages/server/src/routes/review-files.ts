@@ -17,8 +17,8 @@
  */
 import { reviewIdOf } from '@feedback/core';
 import type { DocMeta } from '@feedback/core';
+import type { DocStore } from '../doc-store.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
-import type { Rooms } from '../doc-store.ts';
 import {
   redactWorkspaceFilesForVisitor,
   redactWorkspaceGroupedForVisitor,
@@ -58,9 +58,9 @@ const REVIEW_API = {
 
 /** The long-lived collaborators these routes need, built once per server. */
 export interface ReviewFileRoutesContext {
-  /** Doc rooms — every route here is a read or a re-read of one review's
+  /** Doc store — every route here is a read or a re-read of one review's
    *  member files. */
-  rooms: Rooms;
+  docStore: DocStore;
 
   /** JSON response helper — status plus body, no CORS (the per-request
    *  wrapper in createServer adds that, because it knows the Origin). */
@@ -93,23 +93,23 @@ export async function handleReviewFileRoutes(
   ctx: ReviewFileRoutesContext,
   rq: ReviewFileRouteRequest,
 ): Promise<Response | undefined> {
-  const { rooms, j, safeJson } = ctx;
+  const { docStore, j, safeJson } = ctx;
   const { req, url, pathname, visitor, metaFor, withTaskChips } = rq;
 
   // File-tree view for a bound workspace: nested directory tree with
   // per-file unresolved-comment counts + folder roll-ups. Files are
-  // decorated with reviewUrl by the rooms decorator (withReviewUrl).
+  // decorated with reviewUrl by the doc-store decorator (withReviewUrl).
   // All threads across a workspace (folder bind or diff review) in one
   // call — lets a watching agent poll a single endpoint per review
   // instead of one per member file. ?status=open|resolved filters.
   const wsThreadsMatch = pathname.match(REVIEW_API.threads);
   if (wsThreadsMatch && req.method === 'GET') {
     const setId = decodeURIComponent(wsThreadsMatch[1] ?? '');
-    if (!rooms.list().some((m) => reviewIdOf(m) === setId)) {
+    if (!docStore.list().some((m) => reviewIdOf(m) === setId)) {
       return j(404, { error: 'review not found', setId, workspaceId: setId });
     }
     const status = url.searchParams.get('status') as 'open' | 'resolved' | null;
-    const threads = rooms
+    const threads = docStore
       .listWorkspaceThreads(setId, status ? { status } : undefined)
       .map((t) => withTaskChips(t.docId, t));
     // `workspaceId` carries the SAME value and is deprecated for one
@@ -122,7 +122,7 @@ export async function handleReviewFileRoutes(
   const wsGroupedMatch = pathname.match(REVIEW_API.grouped);
   if (wsGroupedMatch && req.method === 'GET') {
     const setId = decodeURIComponent(wsGroupedMatch[1] ?? '');
-    const grouped = rooms.listGroupedDiff(setId);
+    const grouped = docStore.listGroupedDiff(setId);
     if (grouped.groups.length === 0) {
       return j(404, { error: 'no diff review found', setId, workspaceId: setId });
     }
@@ -140,7 +140,7 @@ export async function handleReviewFileRoutes(
   const wsRefreshMatch = pathname.match(REVIEW_API.refresh);
   if (wsRefreshMatch && req.method === 'POST') {
     const setId = decodeURIComponent(wsRefreshMatch[1] ?? '');
-    const res = await rooms.refreshWorkspace(setId);
+    const res = await docStore.refreshWorkspace(setId);
     if (res.ok) return j(200, res);
     return j(res.error === 'not-found' ? 404 : 400, res);
   }
@@ -153,7 +153,7 @@ export async function handleReviewFileRoutes(
     const body = await safeJson(req);
     const groups = body?.groups;
     if (!Array.isArray(groups)) return j(400, { error: 'groups array required' });
-    const res = rooms.setWorkspaceGroups(
+    const res = docStore.setWorkspaceGroups(
       setId,
       groups as Array<{ title: string; paths: string[]; details?: string }>,
     );
@@ -165,7 +165,7 @@ export async function handleReviewFileRoutes(
   const wsFilesMatch = pathname.match(REVIEW_API.files);
   if (wsFilesMatch && req.method === 'GET') {
     const setId = decodeURIComponent(wsFilesMatch[1] ?? '');
-    const res = rooms.listRepoFiles(setId);
+    const res = docStore.listRepoFiles(setId);
     if (!res.ok) return j(404, res);
     // `root` is an absolute host path and every reviewUrl carries the
     // tailnet hostname — neither belongs in a visitor's copy.
@@ -179,7 +179,7 @@ export async function handleReviewFileRoutes(
     const body = await safeJson(req);
     const relPath = body?.relPath as string | undefined;
     if (!relPath) return j(400, { error: 'relPath required' });
-    const res = await rooms.openContextFile(setId, relPath);
+    const res = await docStore.openContextFile(setId, relPath);
     // `not-listed` is a 404 on purpose: the tree does not show the
     // file, and whether it exists is exactly what must not be told.
     // `unavailable` is a 503: the file is there and did not answer, which is
@@ -197,7 +197,7 @@ export async function handleReviewFileRoutes(
     const body = await safeJson(req);
     const relPath = body?.relPath as string | undefined;
     if (!relPath) return j(400, { error: 'relPath required' });
-    const res = await rooms.openEditableFile(setId, relPath);
+    const res = await docStore.openEditableFile(setId, relPath);
     if (!res.ok) {
       const status =
         res.error === 'bad-path' || res.error === 'not-markdown'
@@ -214,7 +214,7 @@ export async function handleReviewFileRoutes(
   const wsTreeMatch = pathname.match(REVIEW_API.tree);
   if (wsTreeMatch && req.method === 'GET') {
     const setId = decodeURIComponent(wsTreeMatch[1] ?? '');
-    const tree = rooms.buildWorkspaceTree(setId);
+    const tree = docStore.buildWorkspaceTree(setId);
     if (tree.tree.children.length === 0) {
       return j(404, { error: 'review not found', setId, workspaceId: setId });
     }

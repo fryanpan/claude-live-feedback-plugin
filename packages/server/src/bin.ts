@@ -102,13 +102,13 @@ if (sentryDsn) {
 }
 
 // Declared before the deps because the deployer needs to ask this server's
-// Rooms which bound documents are mid-edit, and the server is constructed
+// DocStore which bound documents are mid-edit, and the server is constructed
 // below.
 let handle: ReturnType<typeof createServer> | null = null;
 
 const deps = createServerDeps(cfg, {
   deployEnabled: args.includes('--deploy'),
-  busyDocs: () => handle?.rooms.pendingFileWrites(repoRoot) ?? [],
+  busyDocs: () => handle?.docStore.pendingFileWrites(repoRoot) ?? [],
 });
 const {
   share,

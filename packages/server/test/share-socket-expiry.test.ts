@@ -180,20 +180,20 @@ describe('expired shares lose their sockets', () => {
     // every 500ms. Production sat at 2,549 of 2,549 bound docs active from
     // ~90s of uptime onward, with nobody connected.
     await setup();
-    const rooms = (handle as ServerHandle).rooms;
+    const docStore = (handle as ServerHandle).docStore;
 
     // Control: this fixture HAS a bound doc, and it can be activated. Without
     // it, "nothing active after the sweep" could just mean "nothing to
     // activate".
-    expect(rooms.stats().bindings).toBeGreaterThan(0);
-    rooms.resetDerivedCaches();
-    expect(rooms.get('shared')).toBeDefined();
-    expect(rooms.stats().activeBindings).toBe(1);
+    expect(docStore.stats().bindings).toBeGreaterThan(0);
+    docStore.resetDerivedCaches();
+    expect(docStore.get('shared')).toBeDefined();
+    expect(docStore.stats().activeBindings).toBe(1);
 
-    rooms.resetDerivedCaches();
-    expect(rooms.stats().activeBindings).toBe(0);
+    docStore.resetDerivedCaches();
+    expect(docStore.stats().activeBindings).toBe(0);
     sweep(handle as ServerHandle);
-    expect(rooms.stats().activeBindings).toBe(0);
+    expect(docStore.stats().activeBindings).toBe(0);
   });
 
   it('leaves the owner’s own socket alone — it carries no shareId', async () => {

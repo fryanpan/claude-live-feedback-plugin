@@ -173,7 +173,7 @@ export class WorkspaceStore {
   /**
    * Remove a hub workspace and everything this store holds for it.
    *
-   * Guarded by open tasks the way `Rooms.deleteWorkspace` is guarded by open
+   * Guarded by open tasks the way `DocStore.deleteWorkspace` is guarded by open
    * threads: the mistake to make hard is discarding a board somebody is
    * working, and a bare id with no confirmation is exactly the call an agent
    * makes by accident. `force` is the deliberate override, and the refusal

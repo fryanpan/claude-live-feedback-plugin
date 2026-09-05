@@ -22,7 +22,7 @@ export async function handleWorkspaceCreateRead(
   const {
     taskStore,
     taskProjection,
-    rooms,
+    docStore,
     j,
     safeJson,
     isValidDocId,
@@ -77,7 +77,7 @@ export async function handleWorkspaceCreateRead(
     if (!folderPath || typeof folderPath !== 'string') {
       return j(400, { error: 'folderPath (folder bind) or name (hub workspace) required' });
     }
-    const res = await rooms.bindFolder({
+    const res = await docStore.bindFolder({
       folderPath,
       // `workspaceId` is what this body key was called before a review
       // stopped being a workspace; both are read, neither is required.
@@ -154,7 +154,7 @@ export async function handleWorkspaceCreateRead(
     if (reviewId !== undefined && !isValidDocId(reviewId)) {
       return j(400, { error: 'bad reviewId' });
     }
-    const res = await rooms.bindDiff({
+    const res = await docStore.bindDiff({
       repoPath,
       base,
       target,
@@ -216,7 +216,7 @@ export async function handleWorkspaceCreateRead(
   // this to treat a folder bind as one cleanup unit.
   if (pathname === '/api/workspaces' && req.method === 'GET') {
     return j(200, {
-      workspaces: rooms.listWorkspaces(),
+      workspaces: docStore.listWorkspaces(),
       // Hub workspaces (the boards) are a different thing from the
       // reviews above and stay in their own key rather than
       // being mixed into one list. They belong on this route because a

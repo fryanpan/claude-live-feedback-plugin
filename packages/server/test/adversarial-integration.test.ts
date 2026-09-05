@@ -335,8 +335,8 @@ describe('ADVERSARIAL: landing project->artifacts + delete_workspace guardrail',
     expect(body.ok).toBe(false);
     expect(body.error).toBe('has-open-threads');
     // All-or-nothing: BOTH members survive.
-    expect(handle.rooms.get(mdDocId)).toBeTruthy();
-    expect(handle.rooms.get(files.get('src/index.ts')!.docId)).toBeTruthy();
+    expect(handle.docStore.get(mdDocId)).toBeTruthy();
+    expect(handle.docStore.get(files.get('src/index.ts')!.docId)).toBeTruthy();
   });
 
   it('DELETE /api/workspaces/:id?force=true retires ALL members', async () => {
@@ -348,6 +348,6 @@ describe('ADVERSARIAL: landing project->artifacts + delete_workspace guardrail',
     });
     const body = await j<{ ok: true; archived: number }>(r);
     expect(body.archived).toBe(2);
-    for (const f of files.values()) expect(handle.rooms.get(f.docId)).toBeUndefined();
+    for (const f of files.values()) expect(handle.docStore.get(f.docId)).toBeUndefined();
   });
 });

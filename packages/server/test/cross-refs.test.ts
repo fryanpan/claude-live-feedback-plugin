@@ -301,7 +301,7 @@ describe('cross-reference routes + payload surfacing', () => {
       const t = await mkTask({ title: 'projected links' });
       await post(`/api/tasks/${t.id}/links`, { ref: { kind: 'doc', docId: 'xref-notes' } });
 
-      const room = handle.rooms.get(`ws:${wsId}`);
+      const room = handle.docStore.get(`ws:${wsId}`);
       if (!room) throw new Error('ws room missing');
       const projected = room.ydoc.getMap('tasks').get(t.id) as { links?: Ref[] } | undefined;
       expect(projected?.links).toEqual([{ kind: 'doc', docId: 'xref-notes' }]);

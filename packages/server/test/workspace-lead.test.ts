@@ -26,7 +26,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Identities } from '../src/identities.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { workspaceRoomId } from '../src/task-projection.ts';
+import { workspaceDocId } from '../src/task-projection.ts';
 import {
   type HubWorkspace,
   TaskStore,
@@ -596,7 +596,7 @@ describe('lead agent routes + projection', () => {
       leadAgentId: 'agent-relay',
     });
     const wsId = ((await r.json()) as { workspace: HubWorkspace }).workspace.id;
-    const room = handle.rooms.get(workspaceRoomId(wsId));
+    const room = handle.docStore.get(workspaceDocId(wsId));
     if (!room) throw new Error('ws room missing');
     const wsMap = room.ydoc.getMap('workspace');
     // Positive control: the room really projects this workspace…
@@ -605,7 +605,7 @@ describe('lead agent routes + projection', () => {
 
     const leaderless = await post('/api/workspaces', { name: 'projected-empty', goal: 'Ship it.' });
     const emptyId = ((await leaderless.json()) as { workspace: HubWorkspace }).workspace.id;
-    const emptyRoom = handle.rooms.get(workspaceRoomId(emptyId));
+    const emptyRoom = handle.docStore.get(workspaceDocId(emptyId));
     if (!emptyRoom) throw new Error('ws room missing');
     expect(emptyRoom.ydoc.getMap('workspace').get('name')).toBe('projected-empty');
     expect(emptyRoom.ydoc.getMap('workspace').has('leadAgentId')).toBe(false);

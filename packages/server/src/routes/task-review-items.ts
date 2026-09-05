@@ -24,7 +24,7 @@ export async function handleTaskReviewItems(
   const {
     taskStore,
     taskProjection,
-    rooms,
+    docStore,
     j,
     safeJson,
     parseRevisedRange,
@@ -329,8 +329,8 @@ export async function handleTaskReviewItems(
     if (wasHeld && !gate.held) announceTaskReview(res.task, gate.item, author);
     let thread: Thread | null = null;
     if (reply !== undefined && res.threadId) {
-      const docId = taskProjection.ensureBodyRoom(res.task);
-      thread = await rooms.postComment(docId, res.threadId, author, reply, undefined, {
+      const docId = taskProjection.ensureBodyDoc(res.task);
+      thread = await docStore.postComment(docId, res.threadId, author, reply, undefined, {
         generate: !visitor,
       });
     }

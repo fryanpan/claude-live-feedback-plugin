@@ -18,7 +18,7 @@
  *
  * Composed the way A18 was: a factory of long-lived values, with the address
  * and the admitted visitor passed per call. Nothing the handlers read per
- * request is hoisted to factory time — `rooms`, the meeting sessions and the
+ * request is hoisted to factory time — `docStore`, the meeting sessions and the
  * SSE hub are all read through their stores on each call, and
  * `browserProvedNobody` arrives per request because it closes over the
  * request that is being decided.
@@ -50,13 +50,13 @@ import {
   isValidAgentId,
 } from '../agent-watches.ts';
 import { authorizeAgentCaller } from '../auth/agent-token.ts';
+import type { DocStore } from '../doc-store.ts';
 import type { OriginPolicy } from '../middleware/browser-origin.ts';
 import { isAllowedBrowserOrigin } from '../middleware/browser-origin.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
 import { signInRequiredBody } from '../middleware/write-gate.ts';
 import { parseMuxCursor } from '../mux-cursor.ts';
 import type { RecallMeetingRelay } from '../recall-meeting.ts';
-import type { Rooms } from '../doc-store.ts';
 import { redactHubEventForVisitor } from '../share/redact-hub-events.ts';
 import type { UpgradeData } from '../socket-handlers.ts';
 import { channelForWatchKey, openAgentMuxStream } from '../sse-mux.ts';
@@ -80,8 +80,8 @@ export interface UpgradeStreamContext {
    *  composed — and it is narrowed so this module can take a connection over
    *  and nothing else. */
   server: { upgrade: (req: Request, options: { data: UpgradeData }) => boolean };
-  /** Doc rooms: what an address resolves to, and whether it exists at all. */
-  rooms: Rooms;
+  /** Doc store: what an address resolves to, and whether it exists at all. */
+  docStore: DocStore;
   /** The boards, for whether a workspace-level stream has a channel. */
   taskStore: TaskStore;
   /** The event hub every SSE stream here subscribes against. */
@@ -161,7 +161,7 @@ export interface UpgradeStream {
 export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
   const {
     server,
-    rooms,
+    docStore,
     taskStore,
     sse,
     agentWatches,
@@ -228,11 +228,11 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
         }
         const addressed = decodeURIComponent(pathname.slice('/audio/'.length));
         if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-        const docId = rooms.get(addressed)?.docId ?? addressed;
+        const docId = docStore.get(addressed)?.docId ?? addressed;
         // Unlike `/y/`, this never conjures a room: a meeting belongs to a
         // doc that already exists, and auto-creating one here would let a
         // typo start a billed session against a doc nobody can find.
-        if (!rooms.get(docId)) return j(404, { error: 'doc not found' });
+        if (!docStore.get(docId)) return j(404, { error: 'doc not found' });
         // The SAME sign-in decision `/y/` makes two branches down, for a
         // surface that is write-only: a meeting opens a billed engine
         // session and writes transcript and notes into the doc, and the
@@ -253,7 +253,7 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
             // connections that grant opened. Without these two the sweeps
             // closed the editor and left an open microphone running a
             // billed transcription session against a doc the person may no
-            // longer read. `Rooms.trackShareSocket` is the other half: this
+            // longer read. `DocStore.trackShareSocket` is the other half: this
             // socket is in no room's `conns` for a sweep to walk.
             ...(visitorShareId ? { shareId: visitorShareId } : {}),
             ...(visitorMemberKey ? { shareMember: visitorMemberKey } : {}),
@@ -279,7 +279,7 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
         // `ws.data.docId` is re-resolved on every frame, so it must be the
         // canonical id — a socket opened by alias would otherwise sync a
         // room of its own.
-        const docId = rooms.get(addressed)?.docId ?? addressed;
+        const docId = docStore.get(addressed)?.docId ?? addressed;
         const type = url.searchParams.get('type') as DocType | null;
         const sourceUrl = url.searchParams.get('sourceUrl') ?? undefined;
         // Mockup docs auto-create on WS — the widget connects first with a
@@ -295,12 +295,12 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
         // doc and file it under the hub workspace, with the read-only carry
         // only stopping the ydoc edits that came afterwards.
         const readOnly = requireSignInToWrite && browserProvedNobody();
-        if (!rooms.get(docId)) {
+        if (!docStore.get(docId)) {
           if (type === 'mockup') {
             // Nothing to read yet, so refusing here gates no read: the doc
             // this socket would have created does not exist for anybody.
             if (readOnly) return j(401, signInRequiredBody());
-            rooms.getOrCreate(docId, { type, sourceUrl });
+            docStore.getOrCreate(docId, { type, sourceUrl });
             // The widget is the third creation path (next to POST /api/docs
             // and the MCP tools that front it), so it files its doc too —
             // otherwise a mockup that was only ever opened in a browser is
@@ -394,7 +394,7 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
         // reviews / folder binds) AND for hub workspaces — task.* events
         // broadcast on the same `ws~<id>` channel (§3.6).
         const exists =
-          rooms.list().some((m) => m.workspaceId === workspaceId) ||
+          docStore.list().some((m) => m.workspaceId === workspaceId) ||
           taskStore.getWorkspace(workspaceId) !== undefined;
         if (!exists) return j(404, { error: 'workspace not found' });
         // A share visitor's stream carries the §3.3 visitor-contract view
@@ -420,7 +420,7 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
       if (pathname.startsWith('/events/')) {
         const addressed = decodeURIComponent(pathname.slice('/events/'.length));
         if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-        const eventsRoom = rooms.get(addressed);
+        const eventsRoom = docStore.get(addressed);
         if (!eventsRoom) return j(404, { error: 'doc not found' });
         // The CHANNEL is the doc's own id: a watcher that opened the stream
         // by the readable name and a writer that fired on the canonical one

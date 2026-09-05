@@ -38,7 +38,7 @@
 import { readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, sep } from 'node:path';
-import { ROOM_TIMINGS } from './doc-store-timings.ts';
+import { DOC_STORE_TIMINGS } from './doc-store-timings.ts';
 
 /**
  * Home-relative folders whose full paths must not reach a log line. The files
@@ -75,8 +75,8 @@ export function redactBoundPath(path: string): string {
  * reconnects immediately: without a backoff, every reconnect starts another
  * doomed read and leaks another pool thread.
  */
-const DEADLINE_MS = ROOM_TIMINGS.boundReadDeadlineMs;
-const RETRY_MS = ROOM_TIMINGS.boundReadRetryMs;
+const DEADLINE_MS = DOC_STORE_TIMINGS.boundReadDeadlineMs;
+const RETRY_MS = DOC_STORE_TIMINGS.boundReadRetryMs;
 
 /**
  * How many calls may be OVERDUE — past the deadline and still unlanded —

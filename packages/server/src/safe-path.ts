@@ -5,8 +5,8 @@
  * comparison over `path.join` / `path.resolve` output. Both are purely
  * LEXICAL — they normalize `..` without touching the filesystem — so a
  * symlink that lives inside the root and points outside it passes cleanly.
- * `serveStaticUnder` was fixed for this; `rooms.openContextFile` and
- * `rooms.openEditableFile` were not, and those two are reachable by a share
+ * `serveStaticUnder` was fixed for this; `docStore.openContextFile` and
+ * `docStore.openEditableFile` were not, and those two are reachable by a share
  * visitor on a workspace share, where the root can be a whole repository.
  *
  * The lexical check is still worth doing first (it rejects `..` without a

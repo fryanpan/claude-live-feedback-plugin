@@ -40,6 +40,7 @@ import {
 } from '@feedback/core';
 import type { AgentWatches } from './agent-watches.ts';
 import type { DispatchRegistry } from './dispatch-registry.ts';
+import type { DocStore } from './doc-store.ts';
 import { createLeadPresenceMonitor } from './lead-presence.ts';
 import { NoteAskClassifier, type NoteAskJudge } from './note-ask.ts';
 import { evaluateReadyWork } from './ready-gate.ts';
@@ -51,7 +52,6 @@ import {
   isBoardActivity,
 } from './ready-nudge.ts';
 import type { ReviewGateAddress } from './review-gate.ts';
-import type { Rooms } from './doc-store.ts';
 import type { SseHub } from './sse.ts';
 import { StallEscalations } from './stall-escalation.ts';
 import {
@@ -100,8 +100,8 @@ export interface StallWiringContext {
   /** The ydoc projection: the roster reader both snapshots ask who owns a
    *  row, and the refresh a task comment needs to move its count. */
   taskProjection: TaskProjection;
-  /** Doc rooms — read for a row's discussion and for the docs it links. */
-  rooms: Rooms;
+  /** Doc store — read for a row's discussion and for the docs it links. */
+  docStore: DocStore;
   /** The stream hub: who can be reached, and where a wake is sent. */
   sse: SseHub;
   /** Open builder dispatches — the witness that keeps the loop from waking a
@@ -170,8 +170,8 @@ export interface StallWiring {
   readyNudger: ReadyWorkNudger;
   /** The stall wake. Started by `createServer`, not here. */
   stallNudger: StallNudger;
-  /** The comment-queue bridge, for the late-bound hook `Rooms` was built
-   *  with — `Rooms` is constructed before the stores this needs. */
+  /** The comment-queue bridge, for the late-bound hook `DocStore` was built
+   *  with — `DocStore` is constructed before the stores this needs. */
   onDocRoomEvent: (docId: string, payload: WebhookPayload) => void;
 }
 
@@ -179,7 +179,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
   const {
     taskStore,
     taskProjection,
-    rooms,
+    docStore,
     sse,
     dispatches,
     agentWatches,
@@ -568,7 +568,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
       askCounts?: (askedBy: string | undefined) => boolean,
     ): number => {
       let newest = 0;
-      for (const thread of rooms.listThreads(docId)) {
+      for (const thread of docStore.listThreads(docId)) {
         if (thread.lastActivity > newest) newest = thread.lastActivity;
         const declaring = pendingDeclaration(thread);
         // A HELD ask exonerates nothing. The whole point of a hold is that
@@ -627,7 +627,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
       const ownerId = task === undefined ? undefined : taskStore.ownerIdOf(task);
       for (const ref of task?.links ?? []) {
         if (ref.kind !== 'doc' && ref.kind !== 'thread') continue;
-        const editedAt = rooms.lastContentChangeFor(ref.docId);
+        const editedAt = docStore.lastContentChangeFor(ref.docId);
         if (editedAt !== undefined && editedAt > newest) newest = editedAt;
         // …and that doc's DISCUSSION, on the same opt-in gesture and by the
         // same rules as the row's own room. The prose fold above could never
@@ -699,7 +699,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
   function heldThreadReviewItems(workspace: HubWorkspace): HeldItemInput[] {
     const out: HeldItemInput[] = [];
     const scan = (docId: string, title: string, taskId?: string) => {
-      for (const thread of rooms.listThreads(docId, { status: 'open' })) {
+      for (const thread of docStore.listThreads(docId, { status: 'open' })) {
         for (const comment of thread.comments) {
           const review = comment.review;
           // `held`, not `gated`: a verdict still out is seconds old, and a
@@ -737,7 +737,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
       scan(taskBodyDocId(goal.id), goal.title);
     }
     for (const docId of workspace.docIds) {
-      const meta = rooms.peekMeta(docId);
+      const meta = docStore.peekMeta(docId);
       scan(docId, meta?.title || meta?.relPath?.split('/').pop() || docId);
     }
     return out;
@@ -870,7 +870,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
   // refresh (the store never changes, so no task.* event fires).
   //
   // EVERY other doc room needs the same bridge, for the same reason and with
-  // one extra hop. `rooms.broadcastToRoom` fans out on `ws~<meta.workspaceId>`
+  // one extra hop. `docStore.broadcastToRoom` fans out on `ws~<meta.workspaceId>`
   // — the GROUPING tag a diff review or folder bind sets — and a board link is
   // not that tag, so a plain review doc filed on a board reached that board's
   // agent never. Measured: a session with six docs under `watch_doc` and a
@@ -988,7 +988,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
     // Exactly one hop from review to board — the same non-transitive rule
     // `shareWorkspacesOf` spells out, so what an agent HEARS about a review
     // and what a share visitor may OPEN in it cannot drift apart.
-    const reviewId = reviewIdOf(rooms.peekMeta(docId) ?? {});
+    const reviewId = reviewIdOf(docStore.peekMeta(docId) ?? {});
     for (const board of hubBoardsForDoc(docId)) {
       const rows = queueCommentRows(board, docId, payload);
       // doc-store.ts already broadcast on the review's own channel; a second

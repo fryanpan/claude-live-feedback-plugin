@@ -35,15 +35,15 @@ import {
   eligibleForBot,
 } from '../recall-calendar.ts';
 
+import type { DocStore } from '../doc-store.ts';
 import type { RecallMeetingRelay } from '../recall-meeting.ts';
-import type { Rooms } from '../doc-store.ts';
 import type { ServerOptions } from '../server-options.ts';
 import type { TaskStore } from '../tasks.ts';
 
 /** The long-lived collaborators these routes need, built once per server. */
 export interface MeetingCalendarRoutesContext {
-  /** Doc rooms — a meeting is always a meeting ON a doc. */
-  rooms: Rooms;
+  /** Doc store — a meeting is always a meeting ON a doc. */
+  docStore: DocStore;
   /** The hub task store, for the board a newly created huddle is filed on. */
   taskStore: TaskStore;
   /** The append-only transcript store. A transcript outlives its room, so
@@ -93,7 +93,7 @@ export async function handleMeetingCalendarRoutes(
   rq: MeetingCalendarRouteRequest,
 ): Promise<Response | undefined> {
   const {
-    rooms,
+    docStore,
     taskStore,
     meetingStore,
     meetingRelay,
@@ -125,7 +125,7 @@ export async function handleMeetingCalendarRoutes(
     // Same canonicalization the `/audio/` upgrade does, and for the same
     // reason: a doc is reachable by a readable alias, and the meetings
     // are filed under its own id. Reading by alias must find them.
-    const docId = rooms.get(addressed)?.docId ?? addressed;
+    const docId = docStore.get(addressed)?.docId ?? addressed;
     const meetings = meetingStore.list(docId);
     const live = meetingStore.active(docId);
     return j(200, {
@@ -139,7 +139,7 @@ export async function handleMeetingCalendarRoutes(
     const addressed = decodeURIComponent(meetingMatch[1] ?? '');
     const meetingId = decodeURIComponent(meetingMatch[2] ?? '');
     if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-    const docId = rooms.get(addressed)?.docId ?? addressed;
+    const docId = docStore.get(addressed)?.docId ?? addressed;
     const record = meetingStore.list(docId).find((m) => m.meetingId === meetingId);
     if (!record) return j(404, { error: 'meeting not found' });
     // `turns` stays the COUNT the index recorded; the settled lines are
@@ -164,7 +164,7 @@ export async function handleMeetingCalendarRoutes(
     const addressed = decodeURIComponent(lateNameMatch[1] ?? '');
     const meetingId = decodeURIComponent(lateNameMatch[2] ?? '');
     if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-    const docId = rooms.get(addressed)?.docId ?? addressed;
+    const docId = docStore.get(addressed)?.docId ?? addressed;
     const body = (await req.json().catch(() => null)) as {
       speaker?: unknown;
       name?: unknown;
@@ -435,12 +435,12 @@ export async function handleMeetingCalendarRoutes(
     } else {
       const now = Date.now();
       const title = meetingDocTitle(event.title, now);
-      let created = rooms.createForCaller(meetingDocAlias(now), {
+      let created = docStore.createForCaller(meetingDocAlias(now), {
         type: 'markdown',
         title,
       });
       if (created.ok && !created.minted) {
-        created = rooms.createForCaller(meetingDocAlias(now), {
+        created = docStore.createForCaller(meetingDocAlias(now), {
           type: 'markdown',
           title,
         });
@@ -457,7 +457,7 @@ export async function handleMeetingCalendarRoutes(
         console.error(`[calendar] could not write ${file}:`, err);
         return j(500, { error: 'doc-file-failed' });
       }
-      const attached = await rooms.attachFileAsync(docId, file);
+      const attached = await docStore.attachFileAsync(docId, file);
       if (!attached.ok) return j(409, { error: 'attach_failed', attached });
       const requestedWs = typeof body?.workspaceId === 'string' ? body.workspaceId : undefined;
       fileUnderHubWorkspace(docId, requestedWs);
@@ -510,7 +510,7 @@ export async function handleMeetingCalendarRoutes(
   if (botMatch) {
     const addressed = decodeURIComponent(botMatch[1] ?? '');
     if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-    const docId = rooms.get(addressed)?.docId ?? addressed;
+    const docId = docStore.get(addressed)?.docId ?? addressed;
     if (req.method === 'GET') {
       // `configured` is why the UI can say "meeting bots are not set up
       // on this server" instead of offering a button that always fails.
@@ -523,7 +523,7 @@ export async function handleMeetingCalendarRoutes(
     if (req.method === 'POST') {
       // A bot costs money the moment it is created, so unlike the
       // read above this one insists the doc actually exists.
-      if (!rooms.get(docId)) return j(404, { error: 'doc not found' });
+      if (!docStore.get(docId)) return j(404, { error: 'doc not found' });
       const body = (await req.json().catch(() => null)) as {
         meetingUrl?: unknown;
         botName?: unknown;

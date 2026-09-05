@@ -27,10 +27,10 @@ export type DocIdAuthority =
 
 /** Prefixes whose rooms the server owns — never file-bound, content projected
  *  from the task store rather than typed into a doc. */
-export const HUB_ROOM_PREFIXES = ['ws:', 'task:'] as const;
+export const HUB_DOC_PREFIXES = ['ws:', 'task:'] as const;
 
 /**
- * Rooms the HUB owns rather than the filesystem: the `ws:<workspaceId>`
+ * Docs the HUB owns rather than the filesystem: the `ws:<workspaceId>`
  * board room and every `task:<taskId>` body room (§3.3). They are never
  * bound to a file, so a `sourceUrl` on one is by construction not ours —
  * and unlike a bound doc they have no private-meta sidecar to outvote a
@@ -43,8 +43,8 @@ export const HUB_ROOM_PREFIXES = ['ws:', 'task:'] as const;
  * `doc-store.ts` for that reason, and `doc-store.ts` re-exports the name it was
  * first published under.
  */
-export function isHubOwnedRoom(docId: string): boolean {
-  return HUB_ROOM_PREFIXES.some((p) => docId.startsWith(p));
+export function isHubOwnedDoc(docId: string): boolean {
+  return HUB_DOC_PREFIXES.some((p) => docId.startsWith(p));
 }
 
 /**
@@ -55,7 +55,7 @@ export function isHubOwnedRoom(docId: string): boolean {
  * the room is deliberate — a namespace is cheap to hold and expensive to
  * reclaim once callers have addresses inside it.
  */
-export const RESERVED_DOC_PREFIXES = [...HUB_ROOM_PREFIXES, 'goal:'] as const;
+export const RESERVED_DOC_PREFIXES = [...HUB_DOC_PREFIXES, 'goal:'] as const;
 
 /** Is this an address only the server may occupy? */
 export function isReservedDocId(docId: string): boolean {

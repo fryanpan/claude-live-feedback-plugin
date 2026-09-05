@@ -11,7 +11,7 @@ import { pastWriteBack, waitForFileToBe } from './wait-for.ts';
  * phase 2, commit 3): `suggest: true` on find_and_replace / rewrite_region,
  * plus list/accept/reject/resolve_all — exercised through the REAL routes,
  * not by calling doc-store.ts directly. Per the route-layer learnings ("groups"
- * silently dropped by the route that fronted it), a rooms-level unit test
+ * silently dropped by the route that fronted it), a doc-store-level unit test
  * proves nothing about whether the HTTP layer actually forwards a new param
  * — only a real fetch() through server.ts does.
  */

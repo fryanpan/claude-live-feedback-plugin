@@ -51,7 +51,7 @@ export async function handleTaskBatch(
   const {
     taskStore,
     taskProjection,
-    rooms,
+    docStore,
     j,
     safeJson,
     ANONYMOUS_ACTOR,
@@ -126,7 +126,7 @@ export async function handleTaskBatch(
       // Unlike a bare `links` ref, the source doc must EXIST: its plan
       // state decides whether these rows are drafts, and a gate read
       // off a doc that isn't there would answer with a shrug.
-      const sourceRoom = rooms.get(sdId);
+      const sourceRoom = docStore.get(sdId);
       if (!sourceRoom) {
         return j(404, { error: 'source-doc-not-found', docId: sdId });
       }
@@ -136,7 +136,7 @@ export async function handleTaskBatch(
       // one call, no separate "mark this a plan" step. An approved
       // plan stays approved: later rows ride in ungated.
       if (hold && sourceRoom.meta.planState === undefined) {
-        rooms.setPlanState(sourceRoom.docId, 'pending');
+        docStore.setPlanState(sourceRoom.docId, 'pending');
       }
       sourceDoc = { docId: sourceRoom.docId, mode, hold };
     }

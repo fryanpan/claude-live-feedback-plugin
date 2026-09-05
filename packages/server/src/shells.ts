@@ -12,7 +12,7 @@ import { extname, join } from 'node:path';
  * and REST.
  *
  * They sit outside `createServer` because they always did — none of them
- * reads the closure. What they need is passed in: a `Rooms` and a
+ * reads the closure. What they need is passed in: a `DocStore` and a
  * `TaskStore` for the landing page's inventory, an asset manifest so a shell
  * names the bundle that actually shipped, and the browser Sentry config so
  * the head tags exist or do not exist as one decision.
@@ -35,13 +35,13 @@ import {
 } from '@feedback/core/asset-manifest';
 import { type BrowserSentryConfig, sentryHeadTags } from './browser-sentry.ts';
 import { HUB_FEEDBACK_DOC_ID } from './doc-ids.ts';
+import type { DocStore, WorkspaceDirNode, WorkspaceFileNode } from './doc-store.ts';
 import type {
   LandingModel,
   LandingProjectLink,
   LandingWorkspaceInput,
   LandingWorkspaceRow,
 } from './landing.ts';
-import type { Rooms, WorkspaceDirNode, WorkspaceFileNode } from './doc-store.ts';
 import { isWithinRoot } from './safe-path.ts';
 import { type HubWorkspace, type TaskStore, isRetired } from './tasks.ts';
 
@@ -434,7 +434,7 @@ function flattenWorkspaceFiles(node: WorkspaceDirNode | WorkspaceFileNode): Land
  * label — see rule 1 in the header of `landing.ts`.
  */
 export function collectLandingWorkspaces(
-  rooms: Rooms,
+  docStore: DocStore,
   taskStore: TaskStore,
   // The landing route passes Home's own counter here (`reviewItemsFor` +
   // `homeQueueTotal`, both closure-bound in createServer), so the chip and
@@ -448,7 +448,7 @@ export function collectLandingWorkspaces(
     // backwards the moment somebody tidied up.
     for (const task of taskStore.listTasks(ws.id, { includeArchived: true })) {
       if (task.updatedAt > last) last = task.updatedAt;
-      for (const thread of rooms.listThreads(`task:${task.id}`)) {
+      for (const thread of docStore.listThreads(`task:${task.id}`)) {
         if (thread.lastActivity > last) last = thread.lastActivity;
       }
     }
@@ -472,9 +472,11 @@ export function collectLandingWorkspaces(
 
 /** Every project owner that has at least one review doc — the links behind
  *  the review-docs fold. Names only; the artifacts stay on the project page. */
-export function collectLandingProjects(rooms: Rooms): Array<{ owner: string; label: string }> {
+export function collectLandingProjects(
+  docStore: DocStore,
+): Array<{ owner: string; label: string }> {
   const owners = new Set<string>();
-  for (const meta of rooms.list()) {
+  for (const meta of docStore.list()) {
     // Infrastructure, not review content: the shared hub-feedback doc exists
     // on every install from startup, and `ws:`/`task:` rooms are surfaces the
     // server owns for the boards the page already lists.
@@ -495,7 +497,7 @@ export function collectLandingProjects(rooms: Rooms): Array<{ owner: string; lab
  * KB and the per-request work on a page that mostly nobody scrolled.
  */
 export function buildProjectArtifacts(
-  rooms: Rooms,
+  docStore: DocStore,
   decorate: <T extends { docId: string; type: DocType; sourceUrl?: string }>(
     meta: T,
   ) => T & { reviewUrl?: string },
@@ -504,23 +506,23 @@ export function buildProjectArtifacts(
   const workspaceArtifacts = new Map<string, LandingArtifact>();
   const artifacts: LandingArtifact[] = [];
 
-  for (const meta of rooms.list()) {
+  for (const meta of docStore.list()) {
     if (meta.docId === HUB_FEEDBACK_DOC_ID) continue;
     if (meta.docId.startsWith('ws:') || meta.docId.startsWith('task:')) continue;
     if ((meta.owner || 'ungrouped') !== owner) continue;
 
     // Both from the doc's index row rather than its thread map — same
     // numbers, without decoding every doc this owner has on every render.
-    const openCount = rooms.threadCounts(meta.docId).open;
+    const openCount = docStore.threadCounts(meta.docId).open;
     // Thread activity, never `meta.lastActivityAt` — see the header note in
     // landing.ts. That field is the `.ydoc` mtime and a snapshot rewrite
     // refreshes it, so it ranks by persistence noise.
-    const lastActivity = rooms.lastThreadActivity(meta.docId);
+    const lastActivity = docStore.lastThreadActivity(meta.docId);
 
     if (meta.workspaceId) {
       let art = workspaceArtifacts.get(meta.workspaceId);
       if (!art) {
-        const tree = rooms.buildWorkspaceTree(meta.workspaceId);
+        const tree = docStore.buildWorkspaceTree(meta.workspaceId);
         const files = flattenWorkspaceFiles(tree.tree);
         // Clicking the workspace opens its entry file directly (the biggest
         // change for a diff review, first file otherwise); expansion is a
@@ -550,7 +552,7 @@ export function buildProjectArtifacts(
       // A diff member marks the whole workspace as a diff review (members can
       // also include plain 'code' context docs — any diff doc wins).
       if (meta.type === 'diff') art.kind = 'diff';
-      art.threadCount += rooms.threadCounts(meta.docId).total;
+      art.threadCount += docStore.threadCounts(meta.docId).total;
       if (lastActivity > art.lastActivity) art.lastActivity = lastActivity;
       continue;
     }
@@ -562,7 +564,7 @@ export function buildProjectArtifacts(
       id: meta.docId,
       reviewUrl: decorated.reviewUrl,
       openCount,
-      threadCount: rooms.threadCounts(meta.docId).total,
+      threadCount: docStore.threadCounts(meta.docId).total,
       lastActivity,
     });
   }

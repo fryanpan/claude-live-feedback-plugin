@@ -82,7 +82,7 @@ describe('GET /api/metrics', () => {
 
     const after = await metrics();
     // The positive control: the numbers MOVE. A route hard-wired to zero, or
-    // reading a Rooms that is not the serving one, would pass every shape
+    // reading a DocStore that is not the serving one, would pass every shape
     // assertion below and fail this one.
     // Five docs plus the hub workspace room they get filed under, so the
     // room count moves by more than five — but the BINDING count is exact:
@@ -162,7 +162,7 @@ describe('GET /api/metrics', () => {
       method: 'POST',
       body: JSON.stringify({ docId: 'metrics-attributed', type: 'markdown', sourceUrl: path }),
     });
-    handle.rooms.resetDerivedCaches();
+    handle.docStore.resetDerivedCaches();
 
     const before = await metrics();
     // Reading a doc over HTTP is a genuine access, and the route that serves

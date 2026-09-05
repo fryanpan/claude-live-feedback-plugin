@@ -4,13 +4,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as Y from 'yjs';
+import { DocStore } from '../src/doc-store.ts';
 import { diffFiles, isSafeRef, resolveCommit, showFile } from '../src/git-diff.ts';
-import { Rooms } from '../src/doc-store.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 
-function makeRooms(dataDir: string): Rooms {
-  return new Rooms({
+function makeDocStore(dataDir: string): DocStore {
+  return new DocStore({
     dataDir,
     sse: new SseHub(),
     webhooks: createWebhookDispatcher({ onLog: () => {} }),
@@ -112,14 +112,14 @@ describe('git-diff helpers', () => {
   });
 });
 
-describe('Rooms.bindDiff', () => {
+describe('DocStore.bindDiff', () => {
   let dataDir: string;
-  let rooms: Rooms;
+  let docStore: DocStore;
   let fixture: { repo: string; base: string; target: string };
 
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'bd-data-'));
-    rooms = makeRooms(dataDir);
+    docStore = makeDocStore(dataDir);
     fixture = makeFixtureRepo();
   });
 
@@ -129,7 +129,7 @@ describe('Rooms.bindDiff', () => {
   });
 
   it('errors on a missing repo and on bad refs', async () => {
-    const miss = await rooms.bindDiff({
+    const miss = await docStore.bindDiff({
       repoPath: join(fixture.repo, 'nope'),
       base: 'a',
       target: 'b',
@@ -137,13 +137,17 @@ describe('Rooms.bindDiff', () => {
     expect(miss.ok).toBe(false);
     if (!miss.ok) expect(miss.error).toBe('not-found');
 
-    const badRef = await rooms.bindDiff({ repoPath: fixture.repo, base: 'nope', target: 'HEAD' });
+    const badRef = await docStore.bindDiff({
+      repoPath: fixture.repo,
+      base: 'nope',
+      target: 'HEAD',
+    });
     expect(badRef.ok).toBe(false);
     if (!badRef.ok) expect(badRef.error).toBe('bad-ref');
   });
 
   it('creates one diff doc per changed text file, seeded with target content', async () => {
-    const res = await rooms.bindDiff({
+    const res = await docStore.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       target: fixture.target,
@@ -166,7 +170,7 @@ describe('Rooms.bindDiff', () => {
 
     const kept = byRel.get('src/kept.ts');
     expect(kept?.status).toBe('modified');
-    const keptRoom = rooms.get(kept?.docId ?? '');
+    const keptRoom = docStore.get(kept?.docId ?? '');
     expect(keptRoom?.meta.type).toBe('diff');
     expect(keptRoom?.meta.diffBase).toBe(fixture.base);
     expect(keptRoom?.meta.diffTarget).toBe(fixture.target);
@@ -176,26 +180,26 @@ describe('Rooms.bindDiff', () => {
 
     // Renames carry the base-side path for baseText lookups.
     const renamed = byRel.get('src/renamed.ts');
-    const renamedRoom = rooms.get(renamed?.docId ?? '');
+    const renamedRoom = docStore.get(renamed?.docId ?? '');
     expect(renamedRoom?.meta.diffStatus).toBe('renamed');
     expect(renamedRoom?.meta.diffOldPath).toBe('src/moved.ts');
 
     // Deleted files exist in the tree but hold no target content.
     const gone = byRel.get('src/gone.ts');
-    const goneRoom = rooms.get(gone?.docId ?? '');
+    const goneRoom = docStore.get(gone?.docId ?? '');
     expect(goneRoom?.meta.diffStatus).toBe('deleted');
     expect(goneRoom?.ydoc.getText('content').toString()).toBe('');
   });
 
   it('is idempotent for the same range and rejects a different range', async () => {
-    const a = await rooms.bindDiff({
+    const a = await docStore.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       target: fixture.target,
     });
     expect(a.ok).toBe(true);
     if (!a.ok) return;
-    const b = await rooms.bindDiff({
+    const b = await docStore.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       target: fixture.target,
@@ -205,7 +209,7 @@ describe('Rooms.bindDiff', () => {
     expect(b.reviewId).toBe(a.reviewId);
     expect(b.files.map((f) => f.docId).sort()).toEqual(a.files.map((f) => f.docId).sort());
 
-    const conflict = await rooms.bindDiff({
+    const conflict = await docStore.bindDiff({
       repoPath: fixture.repo,
       base: fixture.target, // swapped — different range, same derived id? no:
       target: fixture.base, // derived id differs, so pin it explicitly:
@@ -216,7 +220,7 @@ describe('Rooms.bindDiff', () => {
   });
 
   it('threads survive a re-bind (deterministic docIds)', async () => {
-    const a = await rooms.bindDiff({
+    const a = await docStore.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       target: fixture.target,
@@ -224,7 +228,7 @@ describe('Rooms.bindDiff', () => {
     expect(a.ok).toBe(true);
     if (!a.ok) return;
     const docId = a.files.find((f) => f.relPath === 'src/kept.ts')?.docId ?? '';
-    const room = rooms.get(docId);
+    const room = docStore.get(docId);
     if (!room) throw new Error('room missing');
     // Anchor to the second line ("line2 CHANGED\n"), like the code surface's
     // snap-to-lines selection does.
@@ -237,26 +241,26 @@ describe('Rooms.bindDiff', () => {
       endRel: Y.encodeRelativePosition(Y.createRelativePositionFromTypeIndex(content, to)),
       snippet: { text: 'line2 CHANGED\n' },
     };
-    await rooms.postComment(
+    await docStore.postComment(
       docId,
       null,
       { id: 'u1', name: 'T', kind: 'known', color: '#000' },
       'hello',
       anchor,
     );
-    expect(rooms.listThreads(docId)).toHaveLength(1);
+    expect(docStore.listThreads(docId)).toHaveLength(1);
 
-    const b = await rooms.bindDiff({
+    const b = await docStore.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       target: fixture.target,
     });
     expect(b.ok).toBe(true);
-    expect(rooms.listThreads(docId)).toHaveLength(1);
+    expect(docStore.listThreads(docId)).toHaveLength(1);
   });
 
   it('create_thread by_find works on diff docs (flat content, line-snapped)', async () => {
-    const res = await rooms.bindDiff({
+    const res = await docStore.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       target: fixture.target,
@@ -264,7 +268,7 @@ describe('Rooms.bindDiff', () => {
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     const docId = res.files.find((f) => f.relPath === 'src/kept.ts')?.docId ?? '';
-    const created = await rooms.createThreadByFind(
+    const created = await docStore.createThreadByFind(
       docId,
       { find: 'line2 CHANGED' },
       { id: 'u1', name: 'T', kind: 'known', color: '#000' },
@@ -279,7 +283,7 @@ describe('Rooms.bindDiff', () => {
     expect(anchor.snippet.text).toBe('line2 CHANGED\n');
 
     // Ambiguous finds surface candidates instead of guessing.
-    const ambiguous = await rooms.createThreadByFind(
+    const ambiguous = await docStore.createThreadByFind(
       docId,
       { find: 'line' },
       { id: 'u1', name: 'T', kind: 'known', color: '#000' },
@@ -292,7 +296,7 @@ describe('Rooms.bindDiff', () => {
     }
 
     // Missing text → no-match.
-    const miss = await rooms.createThreadByFind(
+    const miss = await docStore.createThreadByFind(
       docId,
       { find: 'does-not-exist' },
       { id: 'u1', name: 'T', kind: 'known', color: '#000' },
@@ -303,7 +307,7 @@ describe('Rooms.bindDiff', () => {
   });
 
   it('applies exclude path prefixes', async () => {
-    const res = await rooms.bindDiff({
+    const res = await docStore.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       target: fixture.target,
@@ -316,7 +320,7 @@ describe('Rooms.bindDiff', () => {
   });
 
   it('enforces maxFiles', async () => {
-    const res = await rooms.bindDiff({
+    const res = await docStore.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       target: fixture.target,
@@ -330,7 +334,7 @@ describe('Rooms.bindDiff', () => {
   });
 
   it('rejects an empty diff', async () => {
-    const res = await rooms.bindDiff({
+    const res = await docStore.bindDiff({
       repoPath: fixture.repo,
       base: fixture.target,
       target: fixture.target,
@@ -344,7 +348,7 @@ describe('Rooms.bindDiff', () => {
     writeFileSync(join(fixture.repo, 'src', 'kept.ts'), 'line1\nline2 WORKTREE\nline3\n');
     writeFileSync(join(fixture.repo, 'src', 'untracked.ts'), 'not yet added\n');
 
-    const res = await rooms.bindDiff({ repoPath: fixture.repo, base: fixture.base });
+    const res = await docStore.bindDiff({ repoPath: fixture.repo, base: fixture.base });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.target).toBeNull();
@@ -355,7 +359,7 @@ describe('Rooms.bindDiff', () => {
     expect(byRel.get('src/untracked.ts')?.status).toBe('added');
     // Content is the WORKING TREE bytes, not the last commit.
     const keptDocId = byRel.get('src/kept.ts')?.docId ?? '';
-    const keptRoom = rooms.get(keptDocId);
+    const keptRoom = docStore.get(keptDocId);
     expect(keptRoom?.ydoc.getText('content').toString()).toBe('line1\nline2 WORKTREE\nline3\n');
     expect(keptRoom?.meta.diffTarget).toBeUndefined();
     // Live binding: sourceUrl set (poll armed), unlike pinned docs.
@@ -364,7 +368,7 @@ describe('Rooms.bindDiff', () => {
     // Agent edits the file → reparse (poll shortcut) → live doc updates and
     // the thread stack re-anchors by snippet.
     const anchorLine = 'line2 WORKTREE\n';
-    const created = await rooms.createThreadByFind(
+    const created = await docStore.createThreadByFind(
       keptDocId,
       { find: anchorLine.trim() },
       { id: 'u1', name: 'T', kind: 'known', color: '#000' },
@@ -375,26 +379,26 @@ describe('Rooms.bindDiff', () => {
       join(fixture.repo, 'src', 'kept.ts'),
       'line0 new\nline1\nline2 WORKTREE\nline3\n',
     );
-    expect(rooms.reparseFromDisk(keptDocId).ok).toBe(true);
+    expect(docStore.reparseFromDisk(keptDocId).ok).toBe(true);
     expect(keptRoom?.ydoc.getText('content').toString()).toContain('line0 new');
     // Thread still resolves to the (moved) line — snippet re-anchor keeps it.
-    const threads = rooms.listThreads(keptDocId);
+    const threads = docStore.listThreads(keptDocId);
     expect(threads).toHaveLength(1);
 
     // Re-bind refreshes derived counts idempotently.
-    const again = await rooms.bindDiff({ repoPath: fixture.repo, base: fixture.base });
+    const again = await docStore.bindDiff({ repoPath: fixture.repo, base: fixture.base });
     expect(again.ok).toBe(true);
     if (!again.ok) return;
     expect(again.reviewId).toBe(res.reviewId);
-    expect(rooms.listThreads(keptDocId)).toHaveLength(1);
+    expect(docStore.listThreads(keptDocId)).toHaveLength(1);
     const keptAgain = again.files.find((f) => f.relPath === 'src/kept.ts');
     // +2 now: "line2 WORKTREE" replaced line2 and "line0 new" was added.
     expect(keptAgain?.additions).toBe(2);
   });
 
   it('working-tree and pinned reviews of the same repo coexist under different ids', async () => {
-    const live = await rooms.bindDiff({ repoPath: fixture.repo, base: fixture.base });
-    const pinned = await rooms.bindDiff({
+    const live = await docStore.bindDiff({ repoPath: fixture.repo, base: fixture.base });
+    const pinned = await docStore.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       target: fixture.target,
@@ -406,7 +410,7 @@ describe('Rooms.bindDiff', () => {
   });
 
   it('listWorkspaceThreads aggregates threads across a review with doc context', async () => {
-    const res = await rooms.bindDiff({
+    const res = await docStore.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       target: fixture.target,
@@ -415,38 +419,38 @@ describe('Rooms.bindDiff', () => {
     if (!res.ok) return;
     const keptId = res.files.find((f) => f.relPath === 'src/kept.ts')?.docId ?? '';
     const newId = res.files.find((f) => f.relPath === 'src/new.ts')?.docId ?? '';
-    await rooms.createThreadByFind(
+    await docStore.createThreadByFind(
       keptId,
       { find: 'line2 CHANGED' },
       { id: 'u1', name: 'T', kind: 'known', color: '#000' },
       'a',
     );
-    await rooms.createThreadByFind(
+    await docStore.createThreadByFind(
       newId,
       { find: 'brand new' },
       { id: 'u1', name: 'T', kind: 'known', color: '#000' },
       'b',
     );
-    const all = rooms.listWorkspaceThreads(res.reviewId);
+    const all = docStore.listWorkspaceThreads(res.reviewId);
     expect(all).toHaveLength(2);
     expect(all.map((t) => t.relPath).sort()).toEqual(['src/kept.ts', 'src/new.ts']);
     expect(all.every((t) => t.docId.length > 0)).toBe(true);
 
-    const one = rooms.listWorkspaceThreads(res.reviewId, { status: 'open' });
+    const one = docStore.listWorkspaceThreads(res.reviewId, { status: 'open' });
     expect(one).toHaveLength(2);
     const kept = all.find((t) => t.relPath === 'src/kept.ts');
-    if (kept) rooms.resolve(kept.docId, kept.id);
-    expect(rooms.listWorkspaceThreads(res.reviewId, { status: 'open' })).toHaveLength(1);
+    if (kept) docStore.resolve(kept.docId, kept.id);
+    expect(docStore.listWorkspaceThreads(res.reviewId, { status: 'open' })).toHaveLength(1);
   });
 
   it('groups changed files: explicit groups win, heuristic falls back', async () => {
     // Heuristic: src files group by top segment; nothing test/doc-ish here.
-    const auto = await rooms.bindDiff({ repoPath: fixture.repo, base: fixture.base });
+    const auto = await docStore.bindDiff({ repoPath: fixture.repo, base: fixture.base });
     expect(auto.ok).toBe(true);
     if (!auto.ok) return;
     expect(new Set(auto.files.map((f) => f.group))).toEqual(new Set(['src']));
 
-    const grouped = rooms.listGroupedDiff(auto.reviewId);
+    const grouped = docStore.listGroupedDiff(auto.reviewId);
     expect(grouped.groups).toHaveLength(1);
     expect(grouped.groups[0]?.title).toBe('src');
     // Ordered alphabetically within the group.
@@ -454,7 +458,7 @@ describe('Rooms.bindDiff', () => {
     expect([...names].sort((a, b) => a.localeCompare(b))).toEqual(names);
 
     // Explicit groups: agent-supplied titles + ordering; unlisted → Other.
-    const explicit = await rooms.bindDiff({
+    const explicit = await docStore.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       reviewId: 'explicit-groups',
@@ -465,14 +469,14 @@ describe('Rooms.bindDiff', () => {
     });
     expect(explicit.ok).toBe(true);
     if (!explicit.ok) return;
-    const g2 = rooms.listGroupedDiff('explicit-groups');
+    const g2 = docStore.listGroupedDiff('explicit-groups');
     expect(g2.groups.map((g) => g.title)).toEqual(['Core change', 'Renames', 'Other']);
     expect(g2.groups[0]?.files[0]?.relPath).toBe('src/kept.ts');
   });
 
   it('group paths match directories as prefixes; re-binds preserve explicit groups', async () => {
     // Directory prefix claims everything under it.
-    const a = await rooms.bindDiff({
+    const a = await docStore.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       reviewId: 'prefix-groups',
@@ -483,29 +487,29 @@ describe('Rooms.bindDiff', () => {
     expect(new Set(a.files.map((f) => f.group))).toEqual(new Set(['All source']));
 
     // A group-less refresh re-bind must NOT clobber the explicit groups.
-    const b = await rooms.bindDiff({
+    const b = await docStore.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       reviewId: 'prefix-groups',
     });
     expect(b.ok).toBe(true);
-    const grouped = rooms.listGroupedDiff('prefix-groups');
+    const grouped = docStore.listGroupedDiff('prefix-groups');
     expect(grouped.groups.map((g) => g.title)).toEqual(['All source']);
 
     // Passing groups again DOES reassign (explicit wins).
-    const c = await rooms.bindDiff({
+    const c = await docStore.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       reviewId: 'prefix-groups',
       groups: [{ title: 'Renamed only', paths: ['src/renamed.ts'] }],
     });
     expect(c.ok).toBe(true);
-    const regrouped = rooms.listGroupedDiff('prefix-groups');
+    const regrouped = docStore.listGroupedDiff('prefix-groups');
     expect(regrouped.groups.map((g) => g.title)).toEqual(['Renamed only', 'Other']);
   });
 
   it('per-group details reach listGroupedDiff and survive a group-less refresh', async () => {
-    const res = await rooms.bindDiff({
+    const res = await docStore.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       reviewId: 'details-groups',
@@ -516,26 +520,26 @@ describe('Rooms.bindDiff', () => {
     });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    const grouped = rooms.listGroupedDiff('details-groups');
+    const grouped = docStore.listGroupedDiff('details-groups');
     const byTitle = new Map(grouped.groups.map((g) => [g.title, g]));
     expect(byTitle.get('Core change')?.details).toBe('Rewrote the kept path.');
     expect(byTitle.get('Everything else')?.details).toBe('The remaining source churn.');
 
     // A group-less refresh re-bind preserves the details (not clobbered).
-    const refresh = await rooms.bindDiff({
+    const refresh = await docStore.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       reviewId: 'details-groups',
     });
     expect(refresh.ok).toBe(true);
-    const after = rooms.listGroupedDiff('details-groups');
+    const after = docStore.listGroupedDiff('details-groups');
     expect(new Map(after.groups.map((g) => [g.title, g.details])).get('Core change')).toBe(
       'Rewrote the kept path.',
     );
   });
 
   it('rejects a bind whose group details exceed the 500-char cap (no truncation)', async () => {
-    const res = await rooms.bindDiff({
+    const res = await docStore.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       reviewId: 'details-too-long',
@@ -550,15 +554,15 @@ describe('Rooms.bindDiff', () => {
     // The message names the offending group so the caller can fix it.
     expect(res.detail).toContain('Way too long');
     // Nothing was bound — the review doesn't exist.
-    expect(rooms.listGroupedDiff('details-too-long').groups).toHaveLength(0);
+    expect(docStore.listGroupedDiff('details-too-long').groups).toHaveLength(0);
   });
 
   it('listRepoFiles marks changed files; openContextFile lazily binds the rest', async () => {
-    const res = await rooms.bindDiff({ repoPath: fixture.repo, base: fixture.base });
+    const res = await docStore.bindDiff({ repoPath: fixture.repo, base: fixture.base });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
 
-    const all = rooms.listRepoFiles(res.reviewId);
+    const all = docStore.listRepoFiles(res.reviewId);
     expect(all.ok).toBe(true);
     const files = all.files ?? [];
     // note.md is unchanged but present; kept.ts changed.
@@ -567,23 +571,23 @@ describe('Rooms.bindDiff', () => {
 
     // Open unchanged note.md for context → EDITABLE markdown doc in the
     // same workspace (md routes to the WYSIWYG surface; code stays flat).
-    const opened = await rooms.openContextFile(res.reviewId, 'note.md');
+    const opened = await docStore.openContextFile(res.reviewId, 'note.md');
     expect(opened.ok).toBe(true);
     if (!opened.ok) return;
-    const room = rooms.get(opened.docId);
+    const room = docStore.get(opened.docId);
     expect(room?.meta.type).toBe('markdown');
     expect(room?.meta.workspaceId).toBe(res.reviewId);
     // Markdown content lives in the prose fragment, not the flat Y.Text.
     expect(room?.ydoc.getXmlFragment('prose').length).toBeGreaterThan(0);
 
     // Context docs stay OUT of the grouped-diff view.
-    const grouped = rooms.listGroupedDiff(res.reviewId);
+    const grouped = docStore.listGroupedDiff(res.reviewId);
     expect(grouped.groups.flatMap((g) => g.files).some((f) => f.relPath === 'note.md')).toBe(false);
 
     // Idempotent re-open; traversal rejected.
-    const again = await rooms.openContextFile(res.reviewId, 'note.md');
+    const again = await docStore.openContextFile(res.reviewId, 'note.md');
     expect(again.ok && again.docId === opened.docId).toBe(true);
-    const evil = await rooms.openContextFile(res.reviewId, '../outside.txt');
+    const evil = await docStore.openContextFile(res.reviewId, '../outside.txt');
     expect(evil.ok).toBe(false);
     if (!evil.ok) expect(evil.error).toBe('bad-path');
   });
@@ -650,7 +654,7 @@ describe('Rooms.bindDiff', () => {
   });
 
   it('browse mode (no base): entry doc only, README preferred, no diff members', async () => {
-    const res = await rooms.bindDiff({ repoPath: fixture.repo });
+    const res = await docStore.bindDiff({ repoPath: fixture.repo });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.browse).toBe(true);
@@ -660,7 +664,7 @@ describe('Rooms.bindDiff', () => {
     expect(res.files[0]?.type).toBe('markdown');
     expect(res.fileCount).toBeGreaterThan(1); // scan count, not bound count
     // No diff members → grouped view is empty (sidebar falls to all-files).
-    expect(rooms.listGroupedDiff(res.reviewId).groups).toHaveLength(0);
+    expect(docStore.listGroupedDiff(res.reviewId).groups).toHaveLength(0);
   });
 
   it('workspace SSE stream delivers thread events from any member', async () => {
@@ -668,7 +672,7 @@ describe('Rooms.bindDiff', () => {
     const httpDataDir = mkdtempSync(join(tmpdir(), 'bd-ws-sse-'));
     const handle = createServer({ port: 0, dataDir: httpDataDir });
     try {
-      const bound = await handle.rooms.bindDiff({
+      const bound = await handle.docStore.bindDiff({
         repoPath: fixture.repo,
         base: fixture.base,
         reviewId: 'sse-ws',
@@ -682,7 +686,7 @@ describe('Rooms.bindDiff', () => {
       const reader = res.body?.getReader();
       if (!reader) throw new Error('no sse body');
 
-      await handle.rooms.createThreadByFind(
+      await handle.docStore.createThreadByFind(
         docId,
         { find: 'line2 CHANGED' },
         { id: 'u1', name: 'T', kind: 'known', color: '#000' },
@@ -707,14 +711,14 @@ describe('Rooms.bindDiff', () => {
   });
 
   it('builds a workspace tree with diff badges', async () => {
-    const res = await rooms.bindDiff({
+    const res = await docStore.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       target: fixture.target,
     });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    const tree = rooms.buildWorkspaceTree(res.reviewId);
+    const tree = docStore.buildWorkspaceTree(res.reviewId);
     expect(tree.totalOpen).toBe(0);
     const srcDir = tree.tree.children.find((c) => c.type === 'dir' && c.name === 'src');
     expect(srcDir).toBeDefined();
@@ -727,7 +731,7 @@ describe('Rooms.bindDiff', () => {
   });
 
   it('reparseFromDisk re-seeds diff content from the pinned commit', async () => {
-    const res = await rooms.bindDiff({
+    const res = await docStore.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       target: fixture.target,
@@ -735,13 +739,13 @@ describe('Rooms.bindDiff', () => {
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     const docId = res.files.find((f) => f.relPath === 'src/kept.ts')?.docId ?? '';
-    const room = rooms.get(docId);
+    const room = docStore.get(docId);
     if (!room) throw new Error('room missing');
     // Simulate content corruption/loss.
     const content = room.ydoc.getText('content');
     room.ydoc.transact(() => content.delete(0, content.length));
     expect(content.toString()).toBe('');
-    const rep = rooms.reparseFromDisk(docId);
+    const rep = docStore.reparseFromDisk(docId);
     expect(rep.ok).toBe(true);
     expect(content.toString()).toBe('line1\nline2 CHANGED\nline3\nline4 added\n');
   });

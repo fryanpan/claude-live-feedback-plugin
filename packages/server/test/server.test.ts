@@ -666,7 +666,7 @@ describe('server REST', () => {
     expect(existsSync(ydocPath)).toBe(true);
 
     // Spin up a second server pointed at the same dataDir — simulates a
-    // bun --watch reload. The new instance starts with an empty rooms map
+    // bun --watch reload. The new instance starts with an empty doc map
     // and must hydrate from disk so list_docs is accurate.
     const second = createServer({ port: 0, dataDir });
     try {

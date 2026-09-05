@@ -31,7 +31,7 @@ import * as Y from 'yjs';
  * The type says `Uint8Array`, but a Uint8Array nested in a plain object does
  * not survive Yjs's `encodeAny` (it JSON-stringifies to `{"0":2,…}`), so the
  * editor and `createThreadByFind` both send a `number[]` on purpose — see the
- * long note in `rooms.createThreadByFind`. Both are valid; anything else is
+ * long note in `docStore.createThreadByFind`. Both are valid; anything else is
  * not, including the stringified-Uint8Array object shape, which is exactly
  * what a caller reconstructs when it round-trips an anchor through JSON
  * carelessly.

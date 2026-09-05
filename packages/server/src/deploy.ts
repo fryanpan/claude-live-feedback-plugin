@@ -442,7 +442,7 @@ export async function runDeploy(deps: DeployDeps, req: DeployRequest = {}): Prom
     // busy-document refusal below does not apply here. That refusal exists
     // because a PULL overwrites files under a live editor; a restart writes
     // nothing, and `handle.stop()` flushes every pending write-back on the
-    // way down (`Rooms.flush`).
+    // way down (`DocStore.flush`).
     //
     // The install DOES apply: the checkout somebody pulled by hand may hold
     // a lockfile nobody installed, and this path is also how a deploy whose
