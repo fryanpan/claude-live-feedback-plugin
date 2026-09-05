@@ -33,11 +33,11 @@ flowchart LR
   trips.
 - **Nothing word-rate enters the SSE replay buffer.** Microphone transcript
   frames return on the audio socket; only `meeting.started`/`meeting.stopped`
-  broadcast to the doc channel. The SSE hub keeps 200 events for reconnect
+  broadcast to the doc channel. The SSE bus keeps 200 events for reconnect
   replay and a conversation emits that many words in about a minute —
   broadcasting partials would evict every real doc event. The bot path (below)
   has no socket to a browser, so its words DO ride the doc channel — as
-  `meeting.transcript` frames through `SseHub.broadcastTransient`, which fans
+  `meeting.transcript` frames through `SseBus.broadcastTransient`, which fans
   out live, buffers nothing and stamps no id, so the replay window and every
   reconnect cursor are untouched.
 - **The strip, not the doc.** Desktop: a bar along the bottom of the editor
@@ -534,7 +534,7 @@ socket that sent the audio — and the one channel every viewer of a doc already
 holds is `/events/<docId>`. Buffered, its words would evict every real doc
 event from the 200-event replay window within a minute; so the relay sends
 each vendor frame, partials included, as a `meeting.transcript` event through
-`SseHub.broadcastTransient`: fanned out to open streams, never appended to the
+`SseBus.broadcastTransient`: fanned out to open streams, never appended to the
 buffer, and carrying **no `id:` line** — per the SSE spec a frame without one
 leaves the client's `lastEventId` alone, so a reconnect can never present a
 word's id and be told it is a gap. Words missed during a blip are gone, exactly
@@ -1318,7 +1318,7 @@ route runs — with `origin: {kind: 'doc'}` and the transcript's own line as
 the row's quote. The first version hand-built its options and drifted from
 the pill (a different body, a different readiness rule), and "create a task"
 said aloud did nothing for a subtler reason: the pass scoped itself on the
-doc's `setId`, which a huddle doc never has — it is HELD by a hub workspace,
+doc's `setId`, which a huddle doc never has — it is HELD by a board workspace,
 not owned by one. `withServerNotesSinks` now takes `boardOf`, wired to the
 doc page's own back-target lookup, so the board a huddle's asks land on is
 the board its back arrow points at. New rows are attributed to the `Meeting
@@ -1799,7 +1799,7 @@ that predicate exists. The page asks once (`GET
 /api/docs/:docId/lead-presence`, which also registers the doc) and then
 hears changes on the doc's event stream as a `lead.presence` transient —
 change-only on the one bit the banner shows, pushed only to docs a page has
-asked about, on store attach/detach/heartbeat/seat events plus the hub's
+asked about, on store attach/detach/heartbeat/seat events plus the board's
 `onAgentStreams` hook (a stream opening emits no store event), with a 15s
 sweep for the window closing silently and for dropping docs nobody has open.
 
