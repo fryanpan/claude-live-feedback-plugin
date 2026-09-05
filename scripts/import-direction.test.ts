@@ -11,7 +11,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { audit, isRoute, relativeSpecifiers, resolveSpecifier, violationsIn } from './import-direction';
+import {
+  audit,
+  isRoute,
+  relativeSpecifiers,
+  resolveSpecifier,
+  violationsIn,
+} from './import-direction';
 
 const dirs: string[] = [];
 
