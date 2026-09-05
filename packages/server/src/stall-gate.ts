@@ -38,6 +38,11 @@
  * two incompatible actions in it. It runs on the same clock as `stalled`,
  * for the reason given where the gate is applied below: an ask that was
  * created a minute ago is one the lead may well be in the middle of filing.
+ * A row reaches it three ways — a person owns it, its band is the owner's own
+ * queue, or its own NOTES say the agent is waiting on a person and nothing
+ * was filed (`note-ask.ts`). The third is the one the board's fields cannot
+ * see, and the clock for it is the longer of the row's silence and the ask's
+ * own age, because posting the note is itself what moves the row.
  *
  * `undetermined` is the load-bearing one, and it is the same argument
  * `ready-gate.ts` makes: a row whose review items cannot be parsed answers
@@ -48,6 +53,7 @@
  */
 import {
   type EventRow,
+  type NoteAskSeam,
   type ReviewItemRow,
   type TaskRow,
   classifyOpenTasks,
@@ -216,6 +222,17 @@ export interface EvaluateStallsInput {
    */
   parallelismCap?: number;
   priorityOrder?: readonly string[];
+  /**
+   * Reads a row's own notes for an ask to a person that was never filed —
+   * `NoteAskClassifier` in `note-ask.ts`. Absent means notes are read only as
+   * activity, which is what every caller did before 2026-09-04 and what the
+   * CLI report still does unless it is given one.
+   *
+   * A row it flags is `blocked-on-owner-unfiled` like any other, so it needs
+   * no new list and no new bucket: the lead's action is the same one — file
+   * the ask where the person reads.
+   */
+  noteAsk?: NoteAskSeam;
 }
 
 /**
@@ -240,6 +257,7 @@ export function evaluateStalls(input: EvaluateStallsInput): StallVerdict {
     quietMs,
     input.bands,
     input.threadActivity,
+    input.noteAsk,
   );
 
   // Which runnable rows the cap leaves out of reach — see `parallelismCap` on
@@ -309,7 +327,15 @@ export function evaluateStalls(input: EvaluateStallsInput): StallVerdict {
     // is unchanged, so the keep-moving report still counts every unfiled ask
     // however fresh — there the question is whether the protocol is being
     // followed right now, and a young violation is still a violation.
-    else if (row.bucket === 'blocked-on-owner-unfiled' && row.sinceActivityMs > quietMs)
+    //
+    // For a row whose ask was found IN A NOTE the clock is the longer of the
+    // two ages (`unfiledQuietMs`), and that is the half of this fix the
+    // bucket alone would not have delivered. Posting a note bumps the row's
+    // `updatedAt`, so an agent that restates "waiting on Bryan" every turn
+    // keeps `sinceActivityMs` at zero forever and would never cross this
+    // gate — the note's own time rescuing the row from the very finding the
+    // note is evidence for.
+    else if (row.bucket === 'blocked-on-owner-unfiled' && unfiledQuietMs(row, input.now) > quietMs)
       unfiled.push(named);
   }
   // `classifyOpenTasks` already sorts by silence, longest first, and both
@@ -321,6 +347,22 @@ export function evaluateStalls(input: EvaluateStallsInput): StallVerdict {
     undetermined,
     beyondCapacity: beyond.size,
   };
+}
+
+/**
+ * How long this row has been waiting on a person with nothing filed.
+ *
+ * The row's ordinary silence, or the age of the unfiled ask its notes carry,
+ * whichever is LONGER. The grace window is preserved either way — a freshly
+ * posted ask is one the lead may be in the middle of filing — while a note
+ * that keeps being restated can no longer hold the clock at zero.
+ */
+function unfiledQuietMs(
+  row: { sinceActivityMs: number; askedInNoteAt?: number },
+  now: number,
+): number {
+  if (row.askedInNoteAt === undefined) return row.sinceActivityMs;
+  return Math.max(row.sinceActivityMs, now - row.askedInNoteAt);
 }
 
 /**

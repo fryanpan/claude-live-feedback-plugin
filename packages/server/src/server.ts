@@ -58,6 +58,7 @@ import {
 } from './mockup-capture.ts';
 import { injectWidget } from './mockup-widget.ts';
 import { parseMuxCursor } from './mux-cursor.ts';
+import type { NoteAskJudge } from './note-ask.ts';
 import {
   PARK_MIGRATION_ACTOR,
   type ParkMigrationResult,
@@ -423,6 +424,16 @@ export interface ServerOptions {
    * one (`haikuReviewJudge`); tests pass a stub.
    */
   reviewJudge?: ReviewJudge;
+  /**
+   * Confirms that a task note the deterministic prefilter flagged really does
+   * say the agent is waiting on a person, so the stall loop can call the row
+   * `blocked-on-owner-unfiled` on the strength of its own prose
+   * (`note-ask.ts`). **No default**, the same seam rule as the review judge:
+   * omitting it leaves the prefilter deciding alone and nothing that merely
+   * spins a server up reaches the network. `bin.ts` constructs the real one
+   * (`haikuNoteAskJudge`); tests pass a stub.
+   */
+  noteAskJudge?: NoteAskJudge;
   /**
    * The ticket-effort scorer (chunk 2 of the effort model). **No default**,
    * the same seam rule as the review judge and the summarizer: omitting it
@@ -1578,6 +1589,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       ? { stallNudgeRepeatMs: opts.stallNudgeRepeatMs }
       : {}),
     ...(opts.heldReviewItemMs !== undefined ? { heldReviewItemMs: opts.heldReviewItemMs } : {}),
+    ...(opts.noteAskJudge !== undefined ? { noteAskJudge: opts.noteAskJudge } : {}),
   });
   const { leadPresence, readyNudger, stallNudger } = stallWiring;
   // The late binding `Rooms` was constructed with: the bridge needs the task

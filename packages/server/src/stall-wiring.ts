@@ -41,6 +41,7 @@ import {
 import type { AgentWatches } from './agent-watches.ts';
 import type { DispatchRegistry } from './dispatch-registry.ts';
 import { createLeadPresenceMonitor } from './lead-presence.ts';
+import { NoteAskClassifier, type NoteAskJudge } from './note-ask.ts';
 import { evaluateReadyWork } from './ready-gate.ts';
 import {
   READY_IDLE_DEFAULT_MS,
@@ -146,6 +147,13 @@ export interface StallWiringContext {
   stallNudgeRepeatMs?: number;
   /** How long a held review item may stand before it is a finding (ms). */
   heldReviewItemMs?: number;
+  /**
+   * Confirms that a note flagged by the deterministic prefilter really does
+   * say the agent is waiting on a person (`note-ask-judge.ts`). **No
+   * default**, the summarizer's seam rule; absent leaves the prefilter
+   * running alone, which is the documented no-key state.
+   */
+  noteAskJudge?: NoteAskJudge;
 }
 
 /** What `createServer` keeps a handle on. The two snapshots and
@@ -343,6 +351,20 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
    * and the rows that would benefit are precisely the handful about to be
    * reported.
    */
+  /**
+   * Reads a row's own notes for an ask to a person nobody filed — the third
+   * way a row can be waiting on somebody, and the only one the board's own
+   * fields cannot show (`note-ask.ts` opens with the incident).
+   *
+   * Built ONCE, outside the per-board function, because the thing it holds is
+   * a cache: a note is confirmed by the judge once in its life, and a board
+   * whose notes have all been read schedules nothing on any later tick. Its
+   * person names are swapped per board below.
+   */
+  const noteAsk = new NoteAskClassifier(
+    ctx.noteAskJudge !== undefined ? { judge: ctx.noteAskJudge } : {},
+  );
+
   const stallVerdict = (workspace: HubWorkspace): StallVerdict => {
     const tasks = taskStore.listTasks(workspace.id);
     const ownerKindOf = taskProjection.ownerKindReader(workspace.id);
@@ -377,6 +399,24 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
         : new Set(
             goals.map((g) => g.id).filter((id) => !ownerBand.has(id) && !triageGoals.has(id)),
           );
+
+    // Who on this board is a PERSON, by name — the prefilter's other half:
+    // a waiting phrase is only an ask when it names somebody. Derived from the
+    // rows rather than from a roster call, because the owner-kind reader is
+    // already open here and there is no cheaper list of a board's people. The
+    // first token counts too, since a note says "Bryan" where the row says
+    // "Bryan Chan"; two characters or fewer is dropped as too common a word
+    // to mean a person.
+    const personNames = new Set<string>();
+    for (const t of tasks) {
+      if (ownerKindOf(t) !== 'person') continue;
+      const name = (t.assignee ?? '').trim();
+      if (name.length < 3) continue;
+      personNames.add(name);
+      const first = name.split(/\s+/)[0] ?? '';
+      if (first.length >= 3) personNames.add(first);
+    }
+    noteAsk.setPersonNames([...personNames]);
 
     const rows = tasks.map((t) => ({
       id: t.id,
@@ -459,6 +499,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
       ...(ctx.stallBuilderSilentMultiplier !== undefined
         ? { builderSilentMultiplier: ctx.stallBuilderSilentMultiplier }
         : {}),
+      noteAsk,
     };
     const first = evaluateStalls(input);
     const suspect = [...first.stalled, ...first.unfiled];
