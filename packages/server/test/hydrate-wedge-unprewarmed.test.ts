@@ -29,11 +29,10 @@ import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { boundFiles } from '../src/slow-fs.ts';
 import { makeFifo, releaseFifosIn } from './fifo.ts';
+import { waitFor } from './wait-for.ts';
 
 const DOC_ID = 'unprewarmed-source-doc';
 
-/** How long a call gets before we call the event loop wedged. */
-const WEDGE_MS = 1_000;
 /**
  * The health probe's budget while a bound read is parked.
  *
@@ -140,17 +139,22 @@ describe('hydration doors the request prewarm does not cover', () => {
 
     // The stall scan has no request behind it and nothing prewarms it. What
     // it must not do is stop the event loop: a timer armed before the scan
-    // has to fire on time even though the scan touched a wedged file.
+    // has to fire even though the scan touched a wedged file.
     let ticked = false;
-    const timer = setTimeout(() => {
+    setTimeout(() => {
       ticked = true;
-    }, 50);
+    }, 20);
 
     handle.rooms.listThreads(DOC_ID, { status: 'open' });
     handle.rooms.readMarkdownBody(DOC_ID);
 
-    await new Promise((resolve) => setTimeout(resolve, WEDGE_MS));
-    clearTimeout(timer);
+    // The poll IS the assertion. A blocked loop runs neither the timer above
+    // nor this loop, so `waitFor` returning at all is the proof — and it
+    // fails by name instead of hanging the runner the way the pre-fix code
+    // did.
+    await waitFor(() => (ticked ? 'the timer fired' : false), {
+      describe: 'a timer armed before a background hydrate to fire',
+    });
     expect(ticked).toBe(true);
   });
 
