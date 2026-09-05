@@ -667,7 +667,7 @@ export class StallNudger {
       // Silent, but RECORDED. A shrink that left the old stamp standing would
       // keep naming rows that are no longer on the list, so the board's
       // escalation bucket would be read against a set it no longer has.
-      this.armed.set(key, stamp);
+      this.armed.set(key, this.holdBucket(this.armed.get(key), stamp));
       return;
     }
     // Checked LAST, and deliberately not recorded when it says no: a wake that
@@ -713,7 +713,7 @@ export class StallNudger {
       ...(to.escalatedFrom !== undefined ? { escalatedFrom: to.escalatedFrom } : {}),
       ts: now,
     });
-    this.armed.set(key, stamp);
+    this.armed.set(key, this.holdBucket(this.armed.get(key), stamp));
     // Recorded only now, after a delivered wake — a row named while the lead
     // held no stream must stay news, or the lead comes back to a board that
     // has decided it told them.
@@ -741,6 +741,40 @@ export class StallNudger {
       for (const row of [...board.stalled, ...board.unfiled]) dark.delete(row.id);
       if (dark.size === 0) this.undeliverable.delete(key);
     }
+  }
+
+  /**
+   * Re-arm without letting the board's escalation bucket FALL.
+   *
+   * The bucket is read off the findings THIS tick can see, and both re-arm
+   * sites above write it — so a remembered row that drops off the list for a
+   * single pass takes the bucket down with it, and the tick that sees the row
+   * again reads `after.bucket > before.bucket` as the board crossing another
+   * repeat window. That is a wake naming a row the lead was already told
+   * about, and it repeats as often as the row flickers.
+   *
+   * The flicker is not the row moving. An escalation item masks its anchor
+   * row from the gate for as long as it is open (`stall-escalation.ts`), and
+   * a row on the parallelism-cap boundary leaves the judged set whenever
+   * another row starts or stops being runnable (`stall-gate.ts`) — both
+   * measured on the live board, two wakes three minutes apart over one row
+   * quiet for twelve hours.
+   *
+   * Held, not frozen: the bucket still RISES with the board's worst row, and
+   * a board with nothing to say deletes its arming outright, so the next
+   * stall starts from a clean slate. The cost is one direction only — a board
+   * whose worst row genuinely recovers keeps the higher bucket until it goes
+   * clean, which can only ever make it QUIETER, never noisier.
+   *
+   * The ids and the unreadable-row list always come from the new stamp: this
+   * governs the escalation bucket and nothing else.
+   */
+  private holdBucket(prior: string | undefined, next: string): string {
+    if (prior === undefined) return next;
+    const held = parseStamp(prior).bucket;
+    if (held <= parseStamp(next).bucket) return next;
+    const rest = next.slice(next.indexOf('|'));
+    return `${held}${rest}`;
   }
 
   /**
