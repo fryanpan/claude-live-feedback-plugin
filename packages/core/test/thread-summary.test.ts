@@ -353,14 +353,17 @@ describe('threadSummary', () => {
 describe('summaryKey', () => {
   const base = {
     docText: DOC,
-    range: [4, 14] as [number, number],
+    // Phrase-length: a snippet under TOPIC_MIN_SNIPPET_WORDS never reaches
+    // the topic line, so two short ranges would both fall back to `first`
+    // and the key below would hold still for a reason that is not the bug.
+    range: [0, 22] as [number, number],
     author: alex,
     first: 'The error is swallowed here.',
   };
 
   it('moves when the topic does', () => {
     const a = summaryKey(makeThread(base));
-    const b = summaryKey(makeThread({ ...base, range: [30, 45] }));
+    const b = summaryKey(makeThread({ ...base, range: [15, 44] }));
     expect(b).not.toBe(a);
   });
 

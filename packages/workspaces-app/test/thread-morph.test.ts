@@ -737,6 +737,24 @@ describe('a slot whose showing face is genuinely EMPTY collapses to zero', () =>
     expect(slotB.style.height).toBe('0px');
   });
 
+  it('refuses even the empty face\u2019s zero while the whole card measures nothing', () => {
+    // The other control. A closed desktop drawer is `display: none` and its
+    // cards are rendered inside it anyway, so EVERY face there measures 0 —
+    // the empty one truthfully and the rest meaninglessly. Believing the
+    // empty one would pin the slot before it had ever been measured for real.
+    const { card, container } = mountCard(loneThread());
+    fakeLayout(card, {
+      '.slot-a > .face-summary': 0,
+      '.slot-a > .face-detail': 0,
+      '.slot-b > .face-summary': 0,
+      '.slot-b > .face-detail': 0,
+    });
+    const slotB = card.querySelector<HTMLElement>('.slot-b') as HTMLElement;
+    slotB.style.height = '';
+    sizeThreadSlots(container);
+    expect(slotB.style.height).toBe('');
+  });
+
   it('still refuses a zero from a face that HAS content — the drawer case holds', () => {
     // The control for the exception above: the guard it narrows must still
     // catch the failure it was written for.
