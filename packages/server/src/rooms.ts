@@ -1307,11 +1307,7 @@ export class Rooms {
    * are already parked in the pool with their threads unreturned, which is
    * the signature of a folder that has stopped answering.
    */
-  private prereadFor(
-    docId: string,
-    path: string,
-    defer: boolean,
-  ): PrereadFile | 'unavailable' {
+  private prereadFor(docId: string, path: string, defer: boolean): PrereadFile | 'unavailable' {
     const fresh = boundFiles.takeFresh(path);
     if (fresh) {
       return fresh.exists
