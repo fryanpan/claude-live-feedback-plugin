@@ -21,7 +21,7 @@ first — a split that lands in the wrong layer is worse than no split.
 ## Where the pieces land
 
 Split output is created **next to its parent**, or in an existing sibling
-directory where one already exists (`routes/`, `hub/`, `redline/`). New
+directory where one already exists (`routes/`, `board/`, `redline/`). New
 directories are not created by a split, with one exception noted in B6.
 
 That is deliberate. A split is judgement work and a directory move is a
@@ -40,8 +40,8 @@ Within Lane A the PRs are sequential. A1 moves roughly 4,400 lines out of
 `server.ts`, so anything else editing that file conflicts. After A1 lands,
 later Lane A PRs may touch `server.ts` **only** to update an import path.
 
-Ordered by 90-day churn: `server.ts` 233 commits, `hub-app.ts` 102,
-`hub-render.ts` 95, `hub-model.ts` 89, `tasks.ts` 88, `rooms.ts` 72,
+Ordered by 90-day churn: `server.ts` 233 commits, `board-app.ts` 102,
+`board-render.ts` 95, `board-model.ts` 89, `tasks.ts` 88, `rooms.ts` 72,
 `styles.css` 158. The highest-churn work is first in each lane, because every
 week it waits is another week of merge conflicts against it.
 
@@ -65,7 +65,7 @@ rather than ~1,300. The total moved is what the plan predicted.
 | 2 | `routes/docs.ts` (1972) | the doc, thread and bind routes | none |
 | 3 | `routes/meetings-calendar.ts` (562) | the meeting, transcript and calendar routes | none |
 | 4 | `routes/ops.ts` (281) | metrics, plugin-refresh, push and deploy routes | none |
-| 5 | `shells.ts` (930) | `renderHubShell`, `renderSigninShell`, `renderLanding`, `renderProjectPage`, `serveStatic` | none — `server.ts` re-exports the four names the tests and `bin.ts` address it by |
+| 5 | `shells.ts` (930) | `renderBoardShell`, `renderSigninShell`, `renderLanding`, `renderProjectPage`, `serveStatic` | none — `server.ts` re-exports the four names the tests and `bin.ts` address it by |
 
 Each handler takes an explicit context object, following
 `routes/task-routes-context.ts` — do not capture the `createServer` closure.
@@ -155,8 +155,8 @@ concern. `bindFolder` stayed in `binds.ts` because it is now a translation of
 `bindDiff` in browse mode, and moving it would have left the file as nothing
 but re-exports.
 
-`isHubOwnedRoom` moved to `doc-ids.ts` rather than into any of the new files:
-it reads `HUB_ROOM_PREFIXES` and both `rooms.ts` and the workspace surface ask
+`isBoardOwnedRoom` moved to `doc-ids.ts` rather than into any of the new files:
+it reads `BOARD_ROOM_PREFIXES` and both `rooms.ts` and the workspace surface ask
 it, so the alternative was a value cycle. It sits one line from
 `isReservedDocId`, which answers the neighbouring question off the same list.
 
@@ -368,72 +368,72 @@ and the model half imports it from that file.
 
 # Lane B — everything else
 
-## B1 · the hub — **DONE**
+## B1 · the board — **DONE**
 
 Highest churn in the repo after `server.ts`. Nine commits, one per extracted
 file, in this order. **Effort M, M, L.**
 
 Landed as ten commits in one PR. What differed from the plan below:
 
-- `hub-model.ts` is gone rather than reduced — the presence half was the
+- `board-model.ts` is gone rather than reduced — the presence half was the
   remainder, so the third cut is a rename. Line counts came out 1397 / 1262 /
   1019 against the estimated 1200 / 1100 / 1200.
-- `hub-detail-render.ts` is ~1120 rather than ~900. `assigneePicker` and the
+- `board-detail-render.ts` is ~1120 rather than ~900. `assigneePicker` and the
   doc-title hydration helpers had no caller left outside the panel, and
-  leaving them behind would have pointed `hub-render.ts` back at the file it
+  leaving them behind would have pointed `board-render.ts` back at the file it
   had just handed work to.
-- `hub-live-wiring.ts` is ~280 rather than ~600. The plan counted the loaders
+- `board-live-wiring.ts` is ~280 rather than ~600. The plan counted the loaders
   the listeners call; those stayed in the entry, because the review controller
   and the boot sequence call them too.
-- The three `hub-app.ts` files each export a `create*` / `wire*` function
+- The three `board-app.ts` files each export a `create*` / `wire*` function
   taking one deps object. The entry destructures the result at the point the
   declarations used to sit, so evaluation order is unchanged and every call
   site — including the ones that pass a verb as a handler value — reads as it
   did.
 
-| File | Becomes (in `hub/`) | Moves |
+| File | Becomes (in `board/`) | Moves |
 |---|---|---|
-| `hub/hub-model.ts` (3,645) | `hub-board-model.ts` (~1200) | `boardSections`, `boardEffort`, `dropTarget` |
-| | `hub-review-model.ts` (~1100) | `reviewQueue`, `decisionQueue`, `advanceWalk` |
-| | `hub-presence-model.ts` (~1200) | `presenceChips`, `pluginDriftNotice`, `describeEvent` |
-| `hub/hub-render.ts` (2,707) | `hub-detail-render.ts` (~900) | `detailFields`, `effortFields`, `renderRelatedLinks` |
-| | `hub-discussion-render.ts` (~650) | `flattenComments`, `discussionStream`, `commentRow` |
-| | `hub-review-render.ts` (~500) | `panelReviewQueue`, `panelAnswerRequest`, `reviewItemRow` |
-| `hub/hub-app.ts` (3,594) | `hub-actions.ts` (~600) | `transitionTask`, `assignTask`, `placeTask`, `addGoal` |
-| | `hub-review-controller.ts` (~700) | `openReviewItem`, `startWalkthrough`, `answerDecision` |
-| | `hub-live-wiring.ts` (~600) | the ydoc observers, SSE listeners and catch-up |
+| `board/board-model.ts` (3,645) | `board-model.ts` (~1200) | `boardSections`, `boardEffort`, `dropTarget` |
+| | `board-review-model.ts` (~1100) | `reviewQueue`, `decisionQueue`, `advanceWalk` |
+| | `board-presence-model.ts` (~1200) | `presenceChips`, `pluginDriftNotice`, `describeEvent` |
+| `board/board-render.ts` (2,707) | `board-detail-render.ts` (~900) | `detailFields`, `effortFields`, `renderRelatedLinks` |
+| | `board-discussion-render.ts` (~650) | `flattenComments`, `discussionStream`, `commentRow` |
+| | `board-review-render.ts` (~500) | `panelReviewQueue`, `panelAnswerRequest`, `reviewItemRow` |
+| `board/board-app.ts` (3,594) | `board-actions.ts` (~600) | `transitionTask`, `assignTask`, `placeTask`, `addGoal` |
+| | `board-review-controller.ts` (~700) | `openReviewItem`, `startWalkthrough`, `answerDecision` |
+| | `board-live-wiring.ts` (~600) | the ydoc observers, SSE listeners and catch-up |
 
 The model and render splits are mechanical: those symbols are already
-top-level exports with unit tests, and the importers are `hub-app.ts` and the
-two hub test files. `hub-app.ts` is not mechanical — `main()` is a ~3,000-line
-closure over one `HubState`, and lifting a function out means naming what it
+top-level exports with unit tests, and the importers are `board-app.ts` and the
+two board test files. `board-app.ts` is not mechanical — `main()` is a ~3,000-line
+closure over one `BoardState`, and lifting a function out means naming what it
 captured. Pass an explicit deps object; that is the work.
 
 Add a tenth commit for the test split: move the last six describes of
-`test/hub-render.test.ts` (4,078 lines) — the ones that `readFileSync`
-`styles.css` and `hub-app.ts` and assert on source text — into
-`test/hub-source-contract.test.ts`. **Effort S.** Those describes are the
+`test/board-render.test.ts` (4,078 lines) — the ones that `readFileSync`
+`styles.css` and `board-app.ts` and assert on source text — into
+`test/board-source-contract.test.ts`. **Effort S.** Those describes are the
 reason the file cannot be read as one harness, and they are also the ones
 whose paths B2 breaks.
 
-Layers: models, renderers, controllers, in that order. Final directory: `hub/`
+Layers: models, renderers, controllers, in that order. Final directory: `board/`
 throughout — no move needed.
 
 ## B2 · `styles.css` — **DONE**
 
 12,042 lines, 158 commits in 90 days. **Effort M.** One PR, two commits.
 
-Landed as planned: `hub.css` (5,364) and `signin.css` (185), leaving
+Landed as planned: `board.css` (5,364) and `signin.css` (185), leaving
 `styles.css` at 6,545. What differed, and what the work found:
 
-- **Link order is load-bearing, and it is not the obvious one.** The hub
+- **Link order is load-bearing, and it is not the obvious one.** The board
   block sat about a twelfth of the way into styles.css, so nearly all of that
   file followed it and won every tie between two rules of equal specificity.
-  The board shell therefore loads `hub.css` FIRST. Loading it last flips
+  The board shell therefore loads `board.css` FIRST. Loading it last flips
   about thirty of those ties — `.acti-pill` starts beating `.comment-pill` at
   430px, a dozen composer surfaces take the board's padding instead of the
   editor's. Loading it first flips exactly one, the back arrow's hover
-  colour, which a new `.hub-topbar .back-link:hover` rule now pins so no file
+  colour, which a new `.board-topbar .back-link:hover` rule now pins so no file
   order decides it. `signin.css` was already at the end, so it loads last.
 - **The read-only bar is not sign-in UI.** `.signin-bar`,
   `.signin-bar--floating` and `.signin-required-go` live under the sign-in
@@ -449,8 +449,8 @@ Landed as planned: `hub.css` (5,364) and `signin.css` (185), leaving
   none — so it stayed in `styles.css`. That is why the file is 256 rather
   than the estimated ~316.
 - **Only two pages get lighter, not three.** The plan's premise was that
-  splitting the hub block stops a hub visitor downloading the editor's CSS.
-  It does not: the hub block is hub-only, but the hub also reaches design
+  splitting the board block stops a board visitor downloading the editor's CSS.
+  It does not: the board block is board-only, but the board also reaches design
   tokens, the top bar, voice, the comment pill, the markdown composer, the
   toast, the connection banner, the identity prompt and the utilities — all
   of which stay shared. The editor and sign-in stop downloading the board;
@@ -490,7 +490,7 @@ lesson:
   time.** `.thread-line` is the line-number chip on a comment, authored
   beside the diff nav that mints it — and rendered by the board on a task
   discussion. Checking every moved selector's class and id tokens against
-  `hub.js` and `signin.js` found it; it stayed in the base. It is also the
+  `board.js` and `signin.js` found it; it stayed in the base. It is also the
   only rule in either file whose POSITION changed: parse both files into
   rules and `doc.css` is an exact in-order subsequence of the pre-split
   `styles.css`, and so is the base apart from this one rule, which had to
@@ -505,7 +505,7 @@ lesson:
 
 | Becomes | Moves | Importers to update |
 |---|---|---|
-| `hub.css` (~5330) | the contiguous hub block, 25 `HUB ·` sub-banners from line 1056, including its own `≤1100px` and `≤720px` breakpoints | `scripts/build.ts` (hashed asset list and the copy step), `core`'s `SHELL_ASSETS`, `renderHubShell` |
+| `board.css` (~5330) | the contiguous board block, 25 `BOARD ·` sub-banners from line 1056, including its own `≤1100px` and `≤720px` breakpoints | `scripts/build.ts` (hashed asset list and the copy step), `core`'s `SHELL_ASSETS`, `renderBoardShell` |
 | `signin.css` (~316) | the sign-in block from line 11727 to end of file | `scripts/build.ts`, `renderSigninShell` |
 
 **Must land after A1.** The shell renderers that emit the `<link>` tags live
@@ -513,9 +513,9 @@ inside `server.ts` today and move to `shells.ts` in A1; landing B2 first would
 put a Lane B change into `server.ts`.
 
 Preserve cascade order per page. This is not a line-count split: three pages
-with three separate JS bundles all load this one stylesheet, so every hub
+with three separate JS bundles all load this one stylesheet, so every board
 visitor currently downloads the editor and diff CSS. It also strengthens the
-no-append-at-EOF rule rather than breaking it, because hub and editor branches
+no-append-at-EOF rule rather than breaking it, because board and editor branches
 stop sharing a file.
 
 Verify at 1180x820 and 430px per `docs/product/design-mobile.md`, and check
@@ -851,7 +851,7 @@ in `src` and `test` that name a file in the set.
 Take them one directory per PR, smallest first, and run all four gates on each
 — an import rewrite is exactly the change that type-checks clean in one
 package and breaks another. `review-items/`, `routes/`, `share/`, `auth/`,
-`middleware/`, `hub/`, `redline/`, `code/` and `signin/` already sit where
+`middleware/`, `board/`, `redline/`, `code/` and `signin/` already sit where
 they belong and are not in this group.
 
 ---
