@@ -59,6 +59,15 @@ export interface MuxLoopDeps {
    *  when a cursor had to be dropped for size. */
   resetDedup: () => void;
   log: (...args: unknown[]) => void;
+  /** This session's agent bearer, resolved per attempt (see agent-token.ts).
+   *  Per attempt rather than once, so a stream that reconnects after the
+   *  token was forgotten redials with a fresh one. Defaults to no header,
+   *  which is what a server in its deprecation window still accepts. */
+  authHeaders?: () => Promise<Record<string, string>>;
+  /** Drop the cached bearer. Called on the server's "this token does not
+   *  speak for you" refusal, which is what a key rotation looks like from
+   *  here — without it the loop would redial a dead token forever. */
+  forgetToken?: () => void;
   /** Injectable so a test does not wait out a real backoff. */
   sleep: (ms: number) => Promise<void>;
   timers: LoopTimers;
@@ -223,10 +232,18 @@ async function runMuxLoop(
         );
         deps.resetDedup();
       }
+      const auth = deps.authHeaders ? await deps.authHeaders() : {};
       const res = await deps.fetch(`${deps.resolveBaseUrl()}${path}`, {
         signal,
-        ...(value ? { headers: { 'Last-Event-ID': value } } : {}),
+        headers: { ...(value ? { 'Last-Event-ID': value } : {}), ...auth },
       });
+      if (res.status === 403) {
+        // The server has a key we cannot sign under any more — a rotation,
+        // or a token minted against a different data dir. Drop it and let
+        // the backoff redial; the next attempt mints again. Falling through
+        // to the generic throw would retry the same dead value forever.
+        deps.forgetToken?.();
+      }
       if (res.status === 404) {
         // This server predates the route. Not a transient failure and not
         // worth a retry loop: say so once and let the registry fall back.
