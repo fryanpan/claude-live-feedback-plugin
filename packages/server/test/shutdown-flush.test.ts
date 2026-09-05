@@ -32,7 +32,7 @@ function makeRooms(dataDir: string): Rooms {
 
 const dirs: string[] = [];
 function tempDir(): string {
-  const d = mkdtempSync(join(tmpdir(), 'lf-shutdown-'));
+  const d = mkdtempSync(join(tmpdir(), 'cw-shutdown-'));
   dirs.push(d);
   return d;
 }

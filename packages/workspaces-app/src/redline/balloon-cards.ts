@@ -26,7 +26,7 @@ function needsClamp(md: string): boolean {
  *  hex color is allowed through so an arbitrary string can't smuggle extra
  *  CSS declarations into the card. */
 function suggestColorStyle(color: string): string {
-  return /^#[0-9a-fA-F]{3,8}$/.test(color) ? `--lf-suggest-color: ${color}` : '';
+  return /^#[0-9a-fA-F]{3,8}$/.test(color) ? `--cw-suggest-color: ${color}` : '';
 }
 
 export interface BalloonCardDeps {
@@ -46,55 +46,55 @@ export interface BalloonCards {
 export function createBalloonCards({ resolveSuggestion }: BalloonCardDeps): BalloonCards {
   function buildSuggestionBalloon(s: suggestOps.SuggestionSummary): HTMLElement {
     const el = document.createElement('div');
-    el.className = 'lf-balloon lf-balloon-suggestion';
+    el.className = 'cw-balloon cw-balloon-suggestion';
     el.dataset.sid = s.sid;
     const style = suggestColorStyle(s.author.color);
     if (style) el.setAttribute('style', style);
 
     const header = document.createElement('div');
-    header.className = 'lf-suggest-header';
+    header.className = 'cw-suggest-header';
     const swatch = document.createElement('span');
-    swatch.className = 'lf-suggest-swatch';
+    swatch.className = 'cw-suggest-swatch';
     swatch.style.background = s.author.color;
     const authorEl = document.createElement('span');
-    authorEl.className = 'lf-suggest-author';
+    authorEl.className = 'cw-suggest-author';
     // Plain text, never HTML: an author name is untrusted (agent-supplied).
     authorEl.textContent = s.author.name;
     const ageEl = document.createElement('span');
-    ageEl.className = 'lf-suggest-age';
+    ageEl.className = 'cw-suggest-age';
     ageEl.textContent = formatTime(s.ts);
     header.append(swatch, authorEl, ageEl);
     el.appendChild(header);
 
     const preview = document.createElement('div');
-    preview.className = 'lf-balloon-text lf-suggest-preview';
+    preview.className = 'cw-balloon-text cw-suggest-preview';
     // Old struck / new underlined — plain textContent on each span, never
     // innerHTML interpolation (both are untrusted doc/agent content).
     if (s.kind === 'delete' || s.kind === 'replace') {
       const oldEl = document.createElement('span');
-      oldEl.className = 'lf-suggest-old';
+      oldEl.className = 'cw-suggest-old';
       oldEl.textContent = s.deletedText;
       preview.appendChild(oldEl);
     }
     if (s.kind === 'insert' || s.kind === 'replace') {
       if (s.kind === 'replace') preview.appendChild(document.createTextNode(' → '));
       const newEl = document.createElement('span');
-      newEl.className = 'lf-suggest-new';
+      newEl.className = 'cw-suggest-new';
       newEl.textContent = s.insertedText;
       preview.appendChild(newEl);
     }
     el.appendChild(preview);
 
     const actions = document.createElement('div');
-    actions.className = 'lf-suggest-actions';
+    actions.className = 'cw-suggest-actions';
     const acceptBtn = document.createElement('button');
     acceptBtn.type = 'button';
-    acceptBtn.className = 'lf-suggest-accept';
+    acceptBtn.className = 'cw-suggest-accept';
     acceptBtn.textContent = 'Accept';
     acceptBtn.addEventListener('click', () => void resolveSuggestion(s.sid, 'accept'));
     const rejectBtn = document.createElement('button');
     rejectBtn.type = 'button';
-    rejectBtn.className = 'lf-suggest-reject';
+    rejectBtn.className = 'cw-suggest-reject';
     rejectBtn.textContent = 'Reject';
     rejectBtn.addEventListener('click', () => void resolveSuggestion(s.sid, 'reject'));
     actions.append(acceptBtn, rejectBtn);
@@ -106,7 +106,7 @@ export function createBalloonCards({ resolveSuggestion }: BalloonCardDeps): Ball
   function addCollapseButton(el: HTMLElement): void {
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = 'lf-balloon-collapse';
+    b.className = 'cw-balloon-collapse';
     b.setAttribute('aria-label', 'Collapse');
     b.title = 'Collapse';
     b.textContent = '−';
@@ -116,10 +116,10 @@ export function createBalloonCards({ resolveSuggestion }: BalloonCardDeps): Ball
   /** Swatch + name prefix shared by every collapsed builder. */
   function collapsedIdentity(el: HTMLElement, name: string, color: string): void {
     const swatch = document.createElement('span');
-    swatch.className = 'lf-collapsed-swatch';
+    swatch.className = 'cw-collapsed-swatch';
     swatch.style.background = color;
     const nameEl = document.createElement('span');
-    nameEl.className = 'lf-collapsed-name';
+    nameEl.className = 'cw-collapsed-name';
     // Plain text, never HTML: names are untrusted (agent-supplied).
     nameEl.textContent = name;
     el.append(swatch, nameEl);
@@ -127,26 +127,26 @@ export function createBalloonCards({ resolveSuggestion }: BalloonCardDeps): Ball
 
   function buildCollapsedSuggestion(s: suggestOps.SuggestionSummary): HTMLElement {
     const el = document.createElement('div');
-    el.className = 'lf-balloon lf-balloon-suggestion lf-balloon-collapsed';
+    el.className = 'cw-balloon cw-balloon-suggestion cw-balloon-collapsed';
     el.dataset.expandKey = `s:${s.sid}`;
     el.dataset.sid = s.sid;
     const style = suggestColorStyle(s.author.color);
     if (style) el.setAttribute('style', style);
     collapsedIdentity(el, s.author.name, s.author.color);
     const preview = document.createElement('span');
-    preview.className = 'lf-collapsed-preview';
+    preview.className = 'cw-collapsed-preview';
     // Same old-struck / new-underlined classes as the full card — plain
     // textContent on each span, never innerHTML (untrusted content).
     if (s.kind === 'delete' || s.kind === 'replace') {
       const oldEl = document.createElement('span');
-      oldEl.className = 'lf-suggest-old';
+      oldEl.className = 'cw-suggest-old';
       oldEl.textContent = s.deletedText;
       preview.appendChild(oldEl);
     }
     if (s.kind === 'insert' || s.kind === 'replace') {
       if (s.kind === 'replace') preview.appendChild(document.createTextNode(' → '));
       const newEl = document.createElement('span');
-      newEl.className = 'lf-suggest-new';
+      newEl.className = 'cw-suggest-new';
       newEl.textContent = s.insertedText;
       preview.appendChild(newEl);
     }
@@ -154,17 +154,17 @@ export function createBalloonCards({ resolveSuggestion }: BalloonCardDeps): Ball
     // Accept/Reject stay one click away without expanding — the compact ✓/✕
     // wire to the SAME resolveSuggestion the full card uses.
     const actions = document.createElement('span');
-    actions.className = 'lf-collapsed-actions';
+    actions.className = 'cw-collapsed-actions';
     const acceptBtn = document.createElement('button');
     acceptBtn.type = 'button';
-    acceptBtn.className = 'lf-suggest-accept';
+    acceptBtn.className = 'cw-suggest-accept';
     acceptBtn.textContent = '✓';
     acceptBtn.setAttribute('aria-label', 'Accept suggestion');
     acceptBtn.title = 'Accept';
     acceptBtn.addEventListener('click', () => void resolveSuggestion(s.sid, 'accept'));
     const rejectBtn = document.createElement('button');
     rejectBtn.type = 'button';
-    rejectBtn.className = 'lf-suggest-reject';
+    rejectBtn.className = 'cw-suggest-reject';
     rejectBtn.textContent = '✕';
     rejectBtn.setAttribute('aria-label', 'Reject suggestion');
     rejectBtn.title = 'Reject';
@@ -176,13 +176,13 @@ export function createBalloonCards({ resolveSuggestion }: BalloonCardDeps): Ball
 
   function buildCollapsedDel(group: DeletionGroup): HTMLElement {
     const el = document.createElement('div');
-    el.className = 'lf-balloon lf-balloon-del lf-balloon-collapsed';
+    el.className = 'cw-balloon cw-balloon-del cw-balloon-collapsed';
     el.dataset.expandKey = `d:${group.blockKey}`;
     const label = document.createElement('span');
-    label.className = 'lf-balloon-label';
+    label.className = 'cw-balloon-label';
     label.textContent = 'Deleted';
     const preview = document.createElement('span');
-    preview.className = 'lf-collapsed-preview';
+    preview.className = 'cw-collapsed-preview';
     // First non-empty line only; plain text (untrusted doc content). A
     // multi-line deletion (a whole table, a section) shows how much more is
     // behind the click — without it, a clamped first row reads as though
@@ -192,7 +192,7 @@ export function createBalloonCards({ resolveSuggestion }: BalloonCardDeps): Ball
     el.append(label, preview);
     if (lines.length > 1) {
       const count = document.createElement('span');
-      count.className = 'lf-collapsed-count';
+      count.className = 'cw-collapsed-count';
       count.textContent = `+${lines.length - 1}`;
       count.title = `${lines.length - 1} more line${lines.length === 2 ? '' : 's'}`;
       el.appendChild(count);
@@ -202,13 +202,13 @@ export function createBalloonCards({ resolveSuggestion }: BalloonCardDeps): Ball
 
   function buildDelBalloon(group: DeletionGroup): HTMLElement {
     const el = document.createElement('div');
-    el.className = 'lf-balloon lf-balloon-del';
+    el.className = 'cw-balloon cw-balloon-del';
     const label = document.createElement('div');
-    label.className = 'lf-balloon-label';
+    label.className = 'cw-balloon-label';
     label.textContent = 'Deleted';
     el.appendChild(label);
     const text = document.createElement('div');
-    text.className = 'lf-balloon-text';
+    text.className = 'cw-balloon-text';
     // Plain text, never HTML: deleted markdown is untrusted doc content.
     text.textContent = group.deletedMarkdown;
     el.appendChild(text);
@@ -216,7 +216,7 @@ export function createBalloonCards({ resolveSuggestion }: BalloonCardDeps): Ball
       text.classList.add('is-clamped');
       const toggle = document.createElement('button');
       toggle.type = 'button';
-      toggle.className = 'lf-balloon-expand';
+      toggle.className = 'cw-balloon-expand';
       toggle.textContent = 'Show more';
       el.appendChild(toggle);
     }

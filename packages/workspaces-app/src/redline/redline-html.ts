@@ -44,7 +44,7 @@ const MARKER_RE = /^(\s*(?:#{1,6}\s+|[-*]\s+|\d+\.\s+|>\s?))/;
  *
  * `pairable()` already refuses to word-diff these, so such a block is always a
  * whole-block same/ins/del — the change signal belongs on the block
- * (data-lf-change + CSS), which is where the design put it anyway.
+ * (data-cw-change + CSS), which is where the design put it anyway.
  */
 const STRUCTURAL: readonly MarkdownBlockType[] = ['codeBlock', 'table', 'horizontalRule'];
 
@@ -111,13 +111,13 @@ function wrap(kind: RedlineSegment['kind'], text: string): string {
 function attrsFor(block: RedlineBlock): Record<string, string> {
   const attrs: Record<string, string> = {};
   if (block.from != null && block.to != null) {
-    attrs['data-lf-from'] = String(block.from);
-    attrs['data-lf-to'] = String(block.to);
+    attrs['data-cw-from'] = String(block.from);
+    attrs['data-cw-to'] = String(block.to);
   } else if (block.snapTo != null) {
     // Deleted blocks have no new-side span; a comment on one snaps here.
-    attrs['data-lf-snap'] = String(block.snapTo);
+    attrs['data-cw-snap'] = String(block.snapTo);
   }
-  if (block.kind !== 'same') attrs['data-lf-change'] = block.kind;
+  if (block.kind !== 'same') attrs['data-cw-change'] = block.kind;
   return attrs;
 }
 

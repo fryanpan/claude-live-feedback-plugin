@@ -126,7 +126,7 @@ function openThreadAt(
   });
 }
 
-const balloons = () => [...document.querySelectorAll('.markup-margin .lf-balloon')];
+const balloons = () => [...document.querySelectorAll('.markup-margin .cw-balloon')];
 const suggestionCount = () => document.getElementById('suggestions-count')?.textContent;
 
 /** An editor transaction — the one signal the whole margin loop rides. What it

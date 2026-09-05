@@ -14,7 +14,7 @@ import * as Y from 'yjs';
  * DECORATIONS (debounced on doc changes), so typing, remote edits, and agent
  * edits all land in the same doc while the redline re-paints around them.
  *
- * Insertions render inline (`<ins class="lf-ins">` decorations — same CSS as
+ * Insertions render inline (`<ins class="cw-ins">` decorations — same CSS as
  * the read-only surface). Deletions are NOT rendered inline on wide screens:
  * they're extracted as a list (`pos` in the live doc + the deleted markdown)
  * for the margin balloons (markup-margin.ts) to consume, AND rendered as a
@@ -263,10 +263,10 @@ interface LiveMarkupState {
   deletions: RedlineDeletion[];
 }
 
-export const liveMarkupKey = new PluginKey<LiveMarkupState>('lf-live-markup');
+export const liveMarkupKey = new PluginKey<LiveMarkupState>('cw-live-markup');
 
 /**
- * The mobile chip's DOM (doc.css: `.lf-del-chip`, shown only ≤1100px —
+ * The mobile chip's DOM (doc.css: `.cw-del-chip`, shown only ≤1100px —
  * the balloon margin shows the same content on wide screens). Always built
  * regardless of viewport, same as every other decoration here — CSS alone
  * decides which of the two (balloon vs chip) is visible, so there's no JS
@@ -283,7 +283,7 @@ export const liveMarkupKey = new PluginKey<LiveMarkupState>('lf-live-markup');
 function buildDeletionChip(group: DeletionGroup): HTMLElement {
   const chip = document.createElement('button');
   chip.type = 'button';
-  chip.className = 'lf-del-chip';
+  chip.className = 'cw-del-chip';
   chip.contentEditable = 'false';
   const lines = group.deletedMarkdown.split('\n').length;
   const label = lines === 1 ? '1 line' : `${lines} lines`;
@@ -296,7 +296,7 @@ function buildDeletionChip(group: DeletionGroup): HTMLElement {
 function toState(doc: ProseNode, result: LiveMarkupResult): LiveMarkupState {
   const insDecos = result.insRanges
     .filter((r) => r.to > r.from)
-    .map((r) => Decoration.inline(r.from, r.to, { nodeName: 'ins', class: 'lf-ins' }));
+    .map((r) => Decoration.inline(r.from, r.to, { nodeName: 'ins', class: 'cw-ins' }));
   const delGroups = groupDeletions(result.deletions, (pos) => blockIndexForPos(doc, pos));
   const chipDecos = delGroups.map((g) => Decoration.widget(g.pos, () => buildDeletionChip(g)));
   return {

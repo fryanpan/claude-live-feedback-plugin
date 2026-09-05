@@ -54,7 +54,7 @@ describe('hub UI routes (plan §3.12 commit 7)', () => {
   }
 
   beforeAll(() => {
-    dataDir = mkdtempSync(join(tmpdir(), 'lf-hub-ui-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-hub-ui-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
   });

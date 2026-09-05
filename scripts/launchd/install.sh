@@ -58,7 +58,7 @@ BUN_DIR="$(dirname "${BUN_BIN}")"
 # the intended rollback path — see docs/process/tailnet-https.md.
 # Dual-read so a shell or a runbook still holding the old spelling keeps
 # working; the new name wins when both are set.
-PUBLIC_BASE_URL="${CW_PUBLIC_BASE_URL:-${LF_PUBLIC_BASE_URL:-}}"
+PUBLIC_BASE_URL="${CW_PUBLIC_BASE_URL:-}"
 
 # Email sign-in and the operator's own address. Plain pass-throughs, same
 # contract as the base URL: baked into the plist because launchd inherits no
@@ -106,8 +106,7 @@ fi
 # list, separate from TRUSTED_HOSTS and from the collaboration list above,
 # because it grants the most. Same contract: baked into the plist, empty by
 # default, reverted by a reinstall without it, and the same all-or-none rule
-# with the team domain and the AUD. Dual-read like the base URL — the domain
-# plan spells it `LF_`; the new name wins when both are set.
+# with the team domain and the AUD.
 #
 #   CW_PROXIED_TRUSTED_HOSTS=workspaces.example.com \
 #   CF_ACCESS_TEAM_DOMAIN=<team>.cloudflareaccess.com \
@@ -122,7 +121,7 @@ fi
 # falls back to CW_OWNER_EMAIL (carried above), but the installer still
 # requires the list outright whenever the hosts are set: explicit beats
 # fallback for the one setting that opens the whole product from outside.
-PROXIED_TRUSTED_HOSTS="${CW_PROXIED_TRUSTED_HOSTS:-${LF_PROXIED_TRUSTED_HOSTS:-}}"
+PROXIED_TRUSTED_HOSTS="${CW_PROXIED_TRUSTED_HOSTS:-}"
 PROXIED_TRUSTED_EMAILS="${CW_PROXIED_TRUSTED_EMAILS:-}"
 if [ -n "${PROXIED_TRUSTED_HOSTS}" ] && { [ -z "${ACCESS_TEAM_DOMAIN}" ] || [ -z "${ACCESS_AUD}" ]; }; then
     echo "error: CW_PROXIED_TRUSTED_HOSTS needs CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD too." >&2

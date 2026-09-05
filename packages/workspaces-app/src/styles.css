@@ -30,7 +30,7 @@
    neither of them cared about. */
 /* ===== DESIGN TOKENS =====
    The single home for app-wide custom properties. Component-scoped variables
-   (--threads-w, --hub-bottom-bar, --lf-suggest-*) stay with their component —
+   (--threads-w, --hub-bottom-bar, --cw-suggest-*) stay with their component —
    only tokens that mean the same thing everywhere live here. New shared
    colors / spacing / radii get defined here, not as literals at the use
    site.
@@ -1214,7 +1214,7 @@ body.threads-resizing {
   --ic-question: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='7.5' fill='%23b25e09'/%3E%3Ctext x='8' y='11.6' text-anchor='middle' font-family='-apple-system,Helvetica,Arial,sans-serif' font-weight='700' font-size='10.5' fill='%23fff'%3E?%3C/text%3E%3C/svg%3E");
   --ic-done: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='7.5' fill='%232da44e'/%3E%3Cpath d='M4.6 8.3 7 10.6 11.4 5.8' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
-.lf-ic {
+.cw-ic {
   display: inline-block;
   width: 15px;
   height: 15px;
@@ -1223,18 +1223,18 @@ body.threads-resizing {
   vertical-align: -3px;
   background: center / contain no-repeat;
 }
-.lf-ic-comment {
+.cw-ic-comment {
   background-image: var(--ic-comment);
 }
-.lf-ic-question {
+.cw-ic-question {
   background-image: var(--ic-question);
 }
-.lf-ic-done {
+.cw-ic-done {
   background-image: var(--ic-done);
 }
 /* The red dot: something here changed since the reader last looked. On the
    glyph rather than beside it, so it costs no width in a 300px column. */
-.lf-ic.is-new::after,
+.cw-ic.is-new::after,
 .thread.is-new .thread-glyph::after {
   content: "";
   position: absolute;
@@ -2544,7 +2544,7 @@ body.composer-open #editor > .ProseMirror ::selection {
    and would leave the chip's `display: none` default off the board entirely.
    Asserted in doc-css.test.ts.
 
-   Each span carries its author's color as an inline `--lf-suggest-color`
+   Each span carries its author's color as an inline `--cw-suggest-color`
    custom property (set by suggest-marks.ts from the mark's authorColor attr).
    As with the redline marks, color never carries the meaning alone: the
    underline (proposed insert) and strikethrough (proposed delete) do.
@@ -2552,38 +2552,38 @@ body.composer-open #editor > .ProseMirror ::selection {
    ORDER INSIDE THIS SECTION IS THE ORDER THESE RULES HAD IN THE ONE FILE, and
    it stays that way: the ≤1100px block sits BEFORE the base rule it competes
    with, so at equal specificity the base wins and the chip is hidden at every
-   width. That is what shipped, and `.lf-del-chip` (doc.css) has the same
+   width. That is what shipped, and `.cw-del-chip` (doc.css) has the same
    shape. Reordering the two would reveal a chip the product has never shown —
    a change to make deliberately, not as a side effect of moving a file.
    =========================================================================== */
 
-.ProseMirror .lf-suggest-ins {
-  --lf-suggest-tint: color-mix(in srgb, var(--lf-suggest-color, var(--accent)) 14%, transparent);
-  background: var(--lf-suggest-tint);
+.ProseMirror .cw-suggest-ins {
+  --cw-suggest-tint: color-mix(in srgb, var(--cw-suggest-color, var(--accent)) 14%, transparent);
+  background: var(--cw-suggest-tint);
   color: inherit;
   text-decoration: underline;
   text-decoration-thickness: 2px;
   text-underline-offset: 2px;
-  text-decoration-color: var(--lf-suggest-color, var(--accent));
+  text-decoration-color: var(--cw-suggest-color, var(--accent));
   border-radius: 2px;
   padding: 0 1px;
   overflow-wrap: anywhere;
 }
 
-.ProseMirror .lf-suggest-del {
-  --lf-suggest-tint: color-mix(in srgb, var(--lf-suggest-color, var(--accent)) 10%, transparent);
-  background: var(--lf-suggest-tint);
+.ProseMirror .cw-suggest-del {
+  --cw-suggest-tint: color-mix(in srgb, var(--cw-suggest-color, var(--accent)) 10%, transparent);
+  background: var(--cw-suggest-tint);
   color: inherit;
   text-decoration: line-through;
   text-decoration-thickness: 2px;
-  text-decoration-color: var(--lf-suggest-color, var(--accent));
+  text-decoration-color: var(--cw-suggest-color, var(--accent));
   border-radius: 2px;
   padding: 0 1px;
   overflow-wrap: anywhere;
 }
 
 /* The reveal for this chip is NOT here. It lives in doc.css beside
-   `.lf-del-chip`'s, keyed on `body[data-cards]` rather than on a width: the
+   `.cw-del-chip`'s, keyed on `body[data-cards]` rather than on a width: the
    board mints this chip too (SuggestionChips is a base extension) and writes
    no `data-cards`, so a placement-keyed reveal in this file would fire on the
    board at every width and show a chip the product has never shown. PR 669
@@ -2592,13 +2592,13 @@ body.composer-open #editor > .ProseMirror ::selection {
    it. The shape below stays here because the board still has to style the
    chip it mints. */
 
-/* Mobile suggestion chip (`.lf-suggest-chip`, suggestion-chips.ts widget
-   decoration) — same shape and sizing as doc.css's `.lf-del-chip`,
+/* Mobile suggestion chip (`.cw-suggest-chip`, suggestion-chips.ts widget
+   decoration) — same shape and sizing as doc.css's `.cw-del-chip`,
    accent-colored instead of red (a suggestion is a proposal, not necessarily
    a removal). The chip is always in the DOM and CSS alone decides whether it
    shows, so this default is the load-bearing half: without it an unstyled
    "✎ suggestion" button sits in the prose at every width. */
-.lf-suggest-chip {
+.cw-suggest-chip {
   display: none;
   align-items: center;
   gap: 3px;
@@ -2614,18 +2614,18 @@ body.composer-open #editor > .ProseMirror ::selection {
   white-space: nowrap;
 }
 
-.lf-suggest-chip:hover {
+.cw-suggest-chip:hover {
   background: var(--bg-hover);
   border-color: var(--border-strong);
 }
-.lf-suggest-chip:focus-visible {
+.cw-suggest-chip:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
 /* The print half of doc.css's block, split for the same reason. */
 @media print {
-  .lf-suggest-chip {
+  .cw-suggest-chip {
     display: none !important;
   }
 }

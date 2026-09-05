@@ -8,9 +8,9 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view';
  * Mobile fallback marker for pending suggestions (redline-suggestions Phase
  * 2, commit 5): a small, tappable "✎ suggestion" widget rendered right
  * after each proposal's furthest marked position — mirrors live-markup.ts's
- * `.lf-del-chip` (same "always in the DOM, CSS decides visibility ≤1100px"
+ * `.cw-del-chip` (same "always in the DOM, CSS decides visibility ≤1100px"
  * contract). The rules are in styles.css, not doc.css, at a ≤1100px
- * breakpoint matching the one doc.css uses for `.lf-del-chip`: this
+ * breakpoint matching the one doc.css uses for `.cw-del-chip`: this
  * extension is base-schema, so the board's task-body editor mints the chip
  * too and the board never loads doc.css. markup-margin.ts owns what happens
  * when one is tapped (opens a bottom sheet with the same card the desktop
@@ -30,7 +30,7 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view';
 function buildSuggestionChip(sid: string): HTMLElement {
   const chip = document.createElement('button');
   chip.type = 'button';
-  chip.className = 'lf-suggest-chip';
+  chip.className = 'cw-suggest-chip';
   chip.contentEditable = 'false';
   chip.textContent = '✎ suggestion';
   chip.setAttribute('aria-label', 'View suggested edit');
@@ -68,7 +68,7 @@ function computeDecorations(doc: ProseNode): DecorationSet {
   return DecorationSet.create(doc, decos);
 }
 
-const suggestionChipsKey = new PluginKey<DecorationSet>('lf-suggestion-chips');
+const suggestionChipsKey = new PluginKey<DecorationSet>('cw-suggestion-chips');
 
 export const SuggestionChips = Extension.create({
   name: 'suggestionChips',

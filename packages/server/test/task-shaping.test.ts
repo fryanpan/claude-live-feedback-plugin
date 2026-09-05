@@ -74,7 +74,7 @@ describe('triage shaping', () => {
 
   /** A board with one goal band and nobody attached to it. */
   async function seedWorkspace(): Promise<string> {
-    dataDir = mkdtempSync(join(tmpdir(), 'lf-task-shaping-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-task-shaping-'));
     handle = await createServer({ port: 0, dataDir });
     base = `http://127.0.0.1:${handle.port}`;
     const { workspace } = await jj<{ workspace: { id: string } }>(

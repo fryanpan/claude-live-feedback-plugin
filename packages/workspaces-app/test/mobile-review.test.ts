@@ -626,7 +626,7 @@ describe('the 430px sheet', () => {
     expect(document.body.dataset.cards).toBe('sheet');
     const editor = attach('redline-layout', { attrs: { id: 'editor' } });
     const margin = attach('markup-margin', { parent: editor });
-    const inline = attach('lf-inline-card', { parent: editor });
+    const inline = attach('cw-inline-card', { parent: editor });
     expect(styleOf(margin).display).toBe('none');
     expect(styleOf(inline).display).toBe('none');
     // Single-column flow: the two-track grid is what put a 260px column
