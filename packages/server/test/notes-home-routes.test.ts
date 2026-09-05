@@ -66,7 +66,7 @@ describe('workspace notes home + doc home routes', () => {
   const del = (path: string) => fetch(`${base}${path}`, { method: 'DELETE' });
 
   beforeEach(() => {
-    tmp = realpathSync(mkdtempSync(join(tmpdir(), 'lf-noteshome-')));
+    tmp = realpathSync(mkdtempSync(join(tmpdir(), 'cw-noteshome-')));
     dataDir = join(tmp, 'data');
     mkdirSync(dataDir);
     repo = join(tmp, 'repo');

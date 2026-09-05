@@ -55,7 +55,7 @@ describe('rooms.backfillSummaries', () => {
   let dataDir: string;
   let base: string;
   let summarizer: ThreadSummarizer;
-  const priorEnv = process.env.LF_SUMMARIES;
+  const priorEnv = process.env.CW_SUMMARIES;
 
   beforeAll(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'feedback-summary-backfill-'));
@@ -74,15 +74,15 @@ describe('rooms.backfillSummaries', () => {
     summarizer.dispose();
     await handle.stop();
     rmSync(dataDir, { recursive: true, force: true });
-    if (priorEnv === undefined) Reflect.deleteProperty(process.env, 'LF_SUMMARIES');
-    else process.env.LF_SUMMARIES = priorEnv;
+    if (priorEnv === undefined) Reflect.deleteProperty(process.env, 'CW_SUMMARIES');
+    else process.env.CW_SUMMARIES = priorEnv;
   });
 
   beforeEach(() => {
     calls = [];
     // Seeding must not generate anything — every summary in this file has to
     // come from the sweep, or the assertions are about the wrong code path.
-    process.env.LF_SUMMARIES = '0';
+    process.env.CW_SUMMARIES = '0';
   });
 
   async function j<T>(res: Response): Promise<T> {
@@ -145,7 +145,7 @@ describe('rooms.backfillSummaries', () => {
     expect((await getThread(docA, tA)).summary).toBeUndefined();
     expect((await getThread(docB, tB)).summary).toBeUndefined();
 
-    process.env.LF_SUMMARIES = '1';
+    process.env.CW_SUMMARIES = '1';
     const { queued } = handle.rooms.backfillSummaries({ windowMs: 0 });
     // Other docs from other tests in this file may be resident; what matters
     // is that these two are in the sweep.
@@ -167,7 +167,7 @@ describe('rooms.backfillSummaries', () => {
   it('costs nothing on a second run — an interrupted sweep can just be re-run', async () => {
     const docId = 'bf-repeat';
     const threadId = await seed(docId, ['agreed, real bug']);
-    process.env.LF_SUMMARIES = '1';
+    process.env.CW_SUMMARIES = '1';
 
     const first = handle.rooms.backfillSummaries({ windowMs: 0 });
     await settle(first.queued);
@@ -200,7 +200,7 @@ describe('rooms.backfillSummaries', () => {
     expect(before.status).toBe('resolved');
     expect(before.summary).toBeUndefined();
 
-    process.env.LF_SUMMARIES = '1';
+    process.env.CW_SUMMARIES = '1';
     const { queued, open, resolved } = handle.rooms.backfillSummaries({ windowMs: 0 });
     expect(resolved).toBeGreaterThanOrEqual(1);
     expect(open + resolved).toBe(queued);
@@ -224,7 +224,7 @@ describe('rooms.backfillSummaries', () => {
 
     // POSITIVE CONTROL: the very same thread IS queued once generation is on,
     // so the zero above is the switch and not an empty room map.
-    process.env.LF_SUMMARIES = '1';
+    process.env.CW_SUMMARIES = '1';
     const { queued } = handle.rooms.backfillSummaries({ windowMs: 0 });
     expect(queued).toBeGreaterThanOrEqual(1);
     await settle(queued);
@@ -253,7 +253,7 @@ describe('rooms.backfillSummaries', () => {
     ).json();
     expect(off).toMatchObject({ ok: true, queued: 0 });
 
-    process.env.LF_SUMMARIES = '1';
+    process.env.CW_SUMMARIES = '1';
     const res = await fetch(`${base}/api/summaries/backfill`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

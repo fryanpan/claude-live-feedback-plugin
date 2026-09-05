@@ -54,7 +54,7 @@ describe('suggestions vs disk and hydration', () => {
   let rooms: Rooms;
 
   beforeEach(() => {
-    dataDir = mkdtempSync(join(tmpdir(), 'lf-suggest-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-suggest-'));
     path = join(dataDir, 'doc.md');
     writeFileSync(path, MD);
     rooms = makeRooms(dataDir);

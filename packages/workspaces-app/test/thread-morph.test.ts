@@ -647,7 +647,7 @@ describe('installSlotRemeasure', () => {
     // POSITIVE CONTROL: nothing has re-measured yet, so the height is stale.
     expect(slotA.style.height).toBe('22px');
 
-    card.dispatchEvent(new CustomEvent('lf-composer-mounted', { bubbles: true }));
+    card.dispatchEvent(new CustomEvent('cw-composer-mounted', { bubbles: true }));
     expect(slotA.style.height).toBe('55px');
   });
 });

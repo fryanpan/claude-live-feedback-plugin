@@ -45,7 +45,7 @@ const realFetch = globalThis.fetch;
 describe('createServer builds no summarizer of its own', () => {
   let dataDir: string;
   const priorKey = process.env.LIVE_FEEDBACK_SUMMARY_API_KEY;
-  const priorFlag = process.env.LF_SUMMARIES;
+  const priorFlag = process.env.CW_SUMMARIES;
 
   beforeAll(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'summary-no-default-'));
@@ -53,7 +53,7 @@ describe('createServer builds no summarizer of its own', () => {
     // on a box (or a CI runner) that happens to have no Keychain entry — which
     // is exactly the state that hid the original bug from CI.
     process.env.LIVE_FEEDBACK_SUMMARY_API_KEY = 'test-key-never-sent-anywhere';
-    process.env.LF_SUMMARIES = '1';
+    process.env.CW_SUMMARIES = '1';
     globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
       const url = String(typeof input === 'string' ? input : ((input as Request)?.url ?? input));
       if (url.includes('api.anthropic.com')) {
@@ -73,8 +73,8 @@ describe('createServer builds no summarizer of its own', () => {
     if (priorKey === undefined)
       Reflect.deleteProperty(process.env, 'LIVE_FEEDBACK_SUMMARY_API_KEY');
     else process.env.LIVE_FEEDBACK_SUMMARY_API_KEY = priorKey;
-    if (priorFlag === undefined) Reflect.deleteProperty(process.env, 'LF_SUMMARIES');
-    else process.env.LF_SUMMARIES = priorFlag;
+    if (priorFlag === undefined) Reflect.deleteProperty(process.env, 'CW_SUMMARIES');
+    else process.env.CW_SUMMARIES = priorFlag;
   });
 
   /** Create a doc + one thread on a running server. */

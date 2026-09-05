@@ -33,7 +33,7 @@ describe('wireNavCollapse', () => {
   });
 
   it('restores a collapsed rail from the stored preference', () => {
-    wireNavCollapse(document, storage({ 'lf-hub-nav-collapsed': '1' }));
+    wireNavCollapse(document, storage({ 'cw-hub-nav-collapsed': '1' }));
     expect(el('hub-nav').classList.contains('hub-nav--collapsed')).toBe(true);
     expect(el('hub-nav-collapse').title).toBe('Expand');
     expect(el('hub-nav-collapse').querySelector('.hub-nav-label')?.textContent).toBe('Expand');
@@ -44,11 +44,11 @@ describe('wireNavCollapse', () => {
     wireNavCollapse(document, store);
     el('hub-nav-collapse').click();
     expect(el('hub-nav').classList.contains('hub-nav--collapsed')).toBe(true);
-    expect(store.map.get('lf-hub-nav-collapsed')).toBe('1');
+    expect(store.map.get('cw-hub-nav-collapsed')).toBe('1');
 
     el('hub-nav-collapse').click();
     expect(el('hub-nav').classList.contains('hub-nav--collapsed')).toBe(false);
-    expect(store.map.get('lf-hub-nav-collapsed')).toBe('0');
+    expect(store.map.get('cw-hub-nav-collapsed')).toBe('0');
   });
 
   it('swaps the button’s glyph, so the control says which way it goes', () => {
@@ -64,6 +64,6 @@ describe('wireNavCollapse', () => {
     // The button only renders on wide screens; on a phone this must be a
     // no-op rather than a boot-time throw.
     document.body.replaceChildren();
-    expect(() => wireNavCollapse(document, storage({ 'lf-hub-nav-collapsed': '1' }))).not.toThrow();
+    expect(() => wireNavCollapse(document, storage({ 'cw-hub-nav-collapsed': '1' }))).not.toThrow();
   });
 });

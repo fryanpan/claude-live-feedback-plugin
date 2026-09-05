@@ -58,7 +58,7 @@ describe('share visitors never spend the summary API key', () => {
   let summarizer: ThreadSummarizer;
   let visitorHeaders: Record<string, string>;
   let access: AccessHarness;
-  const priorEnv = process.env.LF_SUMMARIES;
+  const priorEnv = process.env.CW_SUMMARIES;
   const DOC = 'gate-doc';
   const WS = 'ws-gate';
 
@@ -134,19 +134,19 @@ describe('share visitors never spend the summary API key', () => {
     summarizer.dispose();
     await handle.stop();
     rmSync(dataDir, { recursive: true, force: true });
-    if (priorEnv === undefined) Reflect.deleteProperty(process.env, 'LF_SUMMARIES');
-    else process.env.LF_SUMMARIES = priorEnv;
+    if (priorEnv === undefined) Reflect.deleteProperty(process.env, 'CW_SUMMARIES');
+    else process.env.CW_SUMMARIES = priorEnv;
   });
 
   beforeEach(() => {
     calls = [];
-    process.env.LF_SUMMARIES = '1';
+    process.env.CW_SUMMARIES = '1';
   });
 
   /** A fresh thread, created LOCALLY with generation off, so each test starts
    *  from "no summary stored, no call spent". */
   async function seedThread(text: string): Promise<string> {
-    process.env.LF_SUMMARIES = '0';
+    process.env.CW_SUMMARIES = '0';
     const r = await local(`/api/docs/${DOC}/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -154,7 +154,7 @@ describe('share visitors never spend the summary API key', () => {
     });
     const { thread } = (await r.json()) as { thread: Thread };
     await settle();
-    process.env.LF_SUMMARIES = '1';
+    process.env.CW_SUMMARIES = '1';
     calls = [];
     return thread.id;
   }
@@ -191,14 +191,14 @@ describe('share visitors never spend the summary API key', () => {
     // `needsCall` would be false for a reason that has nothing to do with the
     // gate. That is exactly how a vacuous version of this test passes.)
     const threadId = await seedThread('visitor will reopen this one');
-    process.env.LF_SUMMARIES = '0';
+    process.env.CW_SUMMARIES = '0';
     await local(`/api/docs/${DOC}/threads/${threadId}/resolve`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{}',
     });
     await settle();
-    process.env.LF_SUMMARIES = '1';
+    process.env.CW_SUMMARIES = '1';
     calls = [];
 
     const vr = await visitor(`/api/docs/${DOC}/threads/${threadId}/reopen`, {
@@ -212,14 +212,14 @@ describe('share visitors never spend the summary API key', () => {
 
     // POSITIVE CONTROL: the same route locally, from the same state, calls.
     const other = await seedThread('local user will reopen this one');
-    process.env.LF_SUMMARIES = '0';
+    process.env.CW_SUMMARIES = '0';
     await local(`/api/docs/${DOC}/threads/${other}/resolve`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{}',
     });
     await settle();
-    process.env.LF_SUMMARIES = '1';
+    process.env.CW_SUMMARIES = '1';
     calls = [];
     const lr = await local(`/api/docs/${DOC}/threads/${other}/reopen`, {
       method: 'POST',

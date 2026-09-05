@@ -280,7 +280,7 @@ class BoundFileReader {
       try {
         target = await realpath(path);
       } catch {}
-      const tmp = `${target}.lf-pool-write~`;
+      const tmp = `${target}.cw-pool-write~`;
       await writeFile(tmp, text);
       await rename(tmp, target);
       return stat(target);

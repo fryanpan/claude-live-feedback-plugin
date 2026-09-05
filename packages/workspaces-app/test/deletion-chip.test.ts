@@ -48,7 +48,7 @@ describe('live markup — mobile deletion chip decoration', () => {
   it('renders one chip at the deletion position with a line-count label', async () => {
     const { parent } = mount('Alpha.\n\nRemoved paragraph.\n\nBravo.\n', 'Alpha.\n\nBravo.\n');
     await tick();
-    const chip = parent.querySelector('.lf-del-chip');
+    const chip = parent.querySelector('.cw-del-chip');
     expect(chip).not.toBeNull();
     expect(chip?.textContent).toBe('⌫ 1 line');
     expect((chip as HTMLElement).dataset.lfDelText).toContain('Removed paragraph.');
@@ -57,7 +57,7 @@ describe('live markup — mobile deletion chip decoration', () => {
   it('pluralizes the label and joins consecutive deletions into one chip', async () => {
     const { parent } = mount('A.\n\nOne.\n\nTwo.\n\nB.\n', 'A.\n\nB.\n');
     await tick();
-    const chips = parent.querySelectorAll('.lf-del-chip');
+    const chips = parent.querySelectorAll('.cw-del-chip');
     expect(chips).toHaveLength(1);
     expect(chips[0].textContent).toBe('⌫ 2 lines');
   });
@@ -65,7 +65,7 @@ describe('live markup — mobile deletion chip decoration', () => {
   it('collapses two inline deletions in the same paragraph into one chip', async () => {
     const { parent } = mount('Alpha beta gamma delta epsilon.\n', 'Alpha gamma epsilon.\n');
     await tick();
-    expect(parent.querySelectorAll('.lf-del-chip')).toHaveLength(1);
+    expect(parent.querySelectorAll('.cw-del-chip')).toHaveLength(1);
   });
 
   it('renders separate chips for deletions anchored in different paragraphs', async () => {
@@ -74,26 +74,26 @@ describe('live markup — mobile deletion chip decoration', () => {
       'One.\n\nTwo.\n\nThree.\n',
     );
     await tick();
-    expect(parent.querySelectorAll('.lf-del-chip')).toHaveLength(2);
+    expect(parent.querySelectorAll('.cw-del-chip')).toHaveLength(2);
   });
 
   it('renders no chips for an added file (empty base)', async () => {
     const { parent } = mount('', '# New file\n\nBody.\n');
     await tick();
-    expect(parent.querySelectorAll('.lf-del-chip')).toHaveLength(0);
+    expect(parent.querySelectorAll('.cw-del-chip')).toHaveLength(0);
   });
 
   it('is excluded from the editable content model (contenteditable=false)', async () => {
     const { parent } = mount('Kept.\n\nGone.\n', 'Kept.\n');
     await tick();
-    const chip = parent.querySelector('.lf-del-chip') as HTMLElement;
+    const chip = parent.querySelector('.cw-del-chip') as HTMLElement;
     expect(chip.contentEditable).toBe('false');
   });
 
   it('never shows the deleted text as visible content (only in the data attribute)', async () => {
     const { parent } = mount('Kept.\n\nSecret gone text.\n', 'Kept.\n');
     await tick();
-    const chip = parent.querySelector('.lf-del-chip') as HTMLElement;
+    const chip = parent.querySelector('.cw-del-chip') as HTMLElement;
     expect(chip.textContent).not.toContain('Secret gone text.');
     expect(chip.dataset.lfDelText).toContain('Secret gone text.');
   });

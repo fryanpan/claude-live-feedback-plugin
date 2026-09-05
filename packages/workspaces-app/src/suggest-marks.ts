@@ -53,7 +53,7 @@ function tsAttr() {
 function authorColorStyle(attrs: Record<string, unknown>): Record<string, string> {
   const c = attrs.authorColor;
   return typeof c === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(c)
-    ? { style: `--lf-suggest-color: ${c}` }
+    ? { style: `--cw-suggest-color: ${c}` }
     : {};
 }
 
@@ -74,14 +74,14 @@ export const SuggestInsert = Mark.create({
   // Typing at the edge of a proposal must not silently extend it.
   inclusive: () => false,
   addAttributes: suggestionAttributes,
-  parseHTML: () => [{ tag: 'span[data-lf-suggest="ins"]' }],
+  parseHTML: () => [{ tag: 'span[data-cw-suggest="ins"]' }],
   renderHTML: ({ mark, HTMLAttributes }) => [
     'span',
     {
       ...HTMLAttributes,
       ...authorColorStyle(mark.attrs),
-      'data-lf-suggest': 'ins',
-      class: 'lf-suggest-ins',
+      'data-cw-suggest': 'ins',
+      class: 'cw-suggest-ins',
     },
     0,
   ],
@@ -93,14 +93,14 @@ export const SuggestDelete = Mark.create({
   name: SUGGEST_DELETE_MARK,
   inclusive: () => false,
   addAttributes: suggestionAttributes,
-  parseHTML: () => [{ tag: 'span[data-lf-suggest="del"]' }],
+  parseHTML: () => [{ tag: 'span[data-cw-suggest="del"]' }],
   renderHTML: ({ mark, HTMLAttributes }) => [
     'span',
     {
       ...HTMLAttributes,
       ...authorColorStyle(mark.attrs),
-      'data-lf-suggest': 'del',
-      class: 'lf-suggest-del',
+      'data-cw-suggest': 'del',
+      class: 'cw-suggest-del',
     },
     0,
   ],

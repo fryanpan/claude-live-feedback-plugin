@@ -42,7 +42,7 @@ The product and the code have drifted into two vocabularies: the UI says Home, T
 | `markdown-app/src/hub/` (and `hub-app`, `hub-render`, `hub-actions`, `HubNav`, `HubPane`) | The whole board application, including Home and Activity     | Decided: rename to board/; HubNav becomes BoardNav (Decision 1) |
 | `server/src/rooms.ts`, `Rooms`, `RoomsConfig`, `/rooms`, `room-timings.ts` | The document store: every bound doc, its CRDT, its threads   | `docs.ts` / `DocStore` — "room" is a Yjs implementation word, never a product one |
 | `markdown-app/src/redline/`                                  | The suggestion rendering surface                             | Keep as the Redline change view; move only suggestion-chips.ts and suggestions-summary.ts into a suggestions/ folder |
-| `LF_*` env prefix and `lf-` CSS class prefix (`lf-suggest-`, `lf-balloon-`, `lf-del-chip`) | Residue of the "live feedback" name                          | `cw-`. Env vars already migrated to `CW_` with an alias table in `core/src/env-names.ts`; the CSS prefix did not follow |
+| The old env and CSS class prefixes taken from the "live feedback" name | Residue of the "live feedback" name                          | **Done 2026-09-04.** Env names are `CW_*` and the alias table in `core/src/env-names.ts` is empty; CSS classes, `data-*` attributes, storage keys and test scratch prefixes all read `cw-`. One value was left alone: `HUB_FEEDBACK_DOC_ID` names a doc that already exists in the corpus, so it needs a migration rather than a rename |
 | `@feedback/core`, `@feedback/server`, `@feedback/markdown-app` | The npm scope of the workspace packages                      | `@claude-workspaces/*`, matching `@fryanpan/claude-workspaces-mcp` |
 | `packages/markdown-app`                                      | Four surfaces: markdown, code, diff, mockup                  | packages/workspaces-app (Decision 3, decided)                |
 | `server/src/shells.ts`                                       | The five server-rendered HTML pages                          | `pages.ts`                                                   |
@@ -76,7 +76,7 @@ The product and the code have drifted into two vocabularies: the UI says Home, T
 
 Renames run **after** the current file-split lanes land, so nothing here competes with a lane's diff.
 
-1. `lf-` CSS prefix → `cw-`, and the remaining `LF_` env aliases. Mechanical, no product meaning, and it is the last visible trace of the old product name. Ticket: "CSS and env prefix" ticket.
+1. **Done 2026-09-04.** The CSS class prefix, the `data-` attribute prefix, the browser storage keys and the test scratch-dir prefixes all read `cw-`, and the legacy env aliases are gone. The single exception is `HUB_FEEDBACK_DOC_ID`, whose value names a live doc in the corpus. Ticket: "CSS and env prefix" ticket.
 2. **Done 2026-09-04.** The MCP verbs read `attach_mockup`, `attach_folder`, `spin_off_task` and `archive_workspace`; each keeps the name it had as an alias for one release, which says so once per session in the MCP log. Ticket: "MCP verbs" ticket.
 3. park_task → block_task and a Blocked task state that replaces Triage (Decision 7, decided: blocked means waiting on a dependency or a date). One MCP verb and two server modules whose name outlived the state they described. Tickets: "Blocked state" ticket, then "MCP verbs" ticket.
 4. `rooms.ts` / `Rooms` → `DocStore`. Large but purely internal, and it removes the single most confusing word in the server. Ticket: "DocStore" ticket.

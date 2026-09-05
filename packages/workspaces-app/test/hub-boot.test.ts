@@ -273,7 +273,7 @@ describe('a deep-linked task opens on boot', () => {
 });
 
 describe('what the boot restores from storage', () => {
-  const NAV_KEY = 'lf-hub-nav-collapsed';
+  const NAV_KEY = 'cw-hub-nav-collapsed';
 
   it('reads the collapsed rail once and applies it', async () => {
     const { storage } = await boot(`https://board.test/workspaces/${WS}/tasks`, {
@@ -355,6 +355,30 @@ describe('a browser that may not write is told before it tries', () => {
   it('shows no bar when the server says this browser may write', async () => {
     await boot(`https://board.test/workspaces/${WS}/tasks`);
     expect(document.querySelector('.signin-bar')).toBeNull();
+  });
+
+  it('offers a ticket no Plan or Review ask when this browser may not write', async () => {
+    // The panel draws the two asks only when the board hands it `onAsk`, and
+    // the board must withhold that from a reader who cannot write — the same
+    // way the plan and review floats hide themselves on `!canWrite`. Pressed
+    // by a signed-out reader or a share visitor the ask comes back 403, and
+    // all they get is a failure toast: no sign-in path, no way to make it.
+    server.on('/api/auth/session', { authenticated: false, canWrite: false });
+    await boot(`https://board.test/workspaces/${WS}/tasks?task=t-2`);
+    const panel = document.getElementById('hub-detail');
+    expect(panel?.classList.contains('hidden')).toBe(false);
+    expect(panel?.querySelectorAll('button.hub-task-ask')).toHaveLength(0);
+  });
+
+  it('offers both asks on the same ticket when this browser may write', async () => {
+    // The positive control for the case above: with the ONLY difference the
+    // session's `canWrite`, the same deep-linked ticket draws both buttons.
+    // Without it the assertion above passes on a panel that never renders
+    // the row at all, and the gate it is meant to pin could be deleted.
+    await boot(`https://board.test/workspaces/${WS}/tasks?task=t-2`);
+    const panel = document.getElementById('hub-detail');
+    const asks = [...(panel?.querySelectorAll('button.hub-task-ask') ?? [])];
+    expect(asks.map((b) => b.textContent)).toEqual(['Plan', 'Review']);
   });
 
   it('wraps fetch for the sign-in notice before it opens the board room', async () => {

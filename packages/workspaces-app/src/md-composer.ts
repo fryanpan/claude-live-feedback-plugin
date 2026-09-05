@@ -74,7 +74,7 @@ export interface ComposerEditorModule {
  * number WE wrote against the bare textarea; without this announcement the
  * mounted surface grows under it and `overflow: hidden` clips the reply box.
  */
-export const COMPOSER_MOUNTED_EVENT = 'lf-composer-mounted';
+export const COMPOSER_MOUNTED_EVENT = 'cw-composer-mounted';
 
 type Loader = () => ComposerEditorModule | Promise<ComposerEditorModule>;
 

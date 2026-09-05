@@ -115,7 +115,7 @@ describe('UptimeMonitor (liveness markers)', () => {
   let store: TaskStore;
 
   beforeAll(() => {
-    dataDir = mkdtempSync(join(tmpdir(), 'lf-uptime-mon-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-uptime-mon-'));
     store = new TaskStore({ dataDir, debounceMs: 1 });
   });
 
@@ -166,7 +166,7 @@ describe('GET /api/workspaces/:id/events — uptime rendered into the activity p
   let base: string;
 
   beforeAll(() => {
-    dataDir = mkdtempSync(join(tmpdir(), 'lf-uptime-route-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-uptime-route-'));
     handle = createServer({ port: 0, dataDir, uptimeTickMs: 25 });
     base = `http://localhost:${handle.port}`;
   });
@@ -231,7 +231,7 @@ describe('GET /api/workspaces/:id/events — uptime rendered into the activity p
     // A second server with the DEFAULT 5-minute tick: its live loop cannot
     // fire inside this test, so the hand-written log below is the only
     // measurement substrate and the numbers are deterministic.
-    const dir2 = mkdtempSync(join(tmpdir(), 'lf-uptime-route2-'));
+    const dir2 = mkdtempSync(join(tmpdir(), 'cw-uptime-route2-'));
     const handle2 = createServer({ port: 0, dataDir: dir2 });
     try {
       const base2 = `http://localhost:${handle2.port}`;

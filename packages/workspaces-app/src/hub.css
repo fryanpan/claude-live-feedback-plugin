@@ -3384,6 +3384,48 @@ body.hub-body {
 .hub-detail-field--full {
   grid-column: 1 / -1;
 }
+/* --- the ticket's two one-tap asks: Plan and Review --- */
+/* Right-aligned, like every other chip on this surface, and directly under
+   the key fields. Two states, and the difference between them is the whole
+   point of the row: an OFFER is a button, and a RECEIPT is not. The panel
+   used to render "Plan requested" as a disabled button — button-shaped, so
+   readers kept pressing it — which is why the receipt below is an <output>
+   with no border, no background and no pointer. It is an <output> rather
+   than a span so a screen reader announces the swap: the element's implicit
+   ARIA role is `status`. */
+.hub-task-asks {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 0;
+}
+/* Empty on a board with nothing to ask (no handler): the flex box would
+   still spend its top margin, so collapse it rather than leaving a gap
+   nobody can explain. */
+.hub-task-asks:empty {
+  display: none;
+}
+.hub-btn.hub-task-ask {
+  /* 44px is the phone tap floor (design-mobile.md); it costs nothing on a
+     tablet, where the row has one line to itself either way. */
+  min-height: 44px;
+  padding: 4px 16px;
+  font-weight: 600;
+}
+.hub-task-ask-receipt {
+  font-size: 13px;
+  color: var(--fg-muted);
+  /* Vertically centred against a 44px sibling — one control can be a receipt
+     while the other is still an offer, and a baseline-aligned <output> beside
+     a button sits visibly high. */
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  overflow-wrap: anywhere;
+}
+
 /* --- the blocked note: a blocker is task state, and this is its one surface
    (design point 5). Amber like the mock's `.hub-blocked-note` — the warn
    tokens the decision badge already uses, so "needs a person" reads as one

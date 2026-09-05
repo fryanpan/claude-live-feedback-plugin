@@ -22,7 +22,7 @@ import { type ServerHandle, createServer } from '../src/server.ts';
 import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
 
 function fakeBuild(marker: string): { dir: string; widget: string; markdownApp: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'lf-build-'));
+  const dir = mkdtempSync(join(tmpdir(), 'cw-build-'));
   const widget = join(dir, 'widget');
   const markdownApp = join(dir, 'workspaces-app');
   mkdirSync(widget, { recursive: true });
@@ -73,7 +73,7 @@ async function startWith(
   const access = opts.share ? await accessHarness() : null;
   const server = createServer({
     port: 0,
-    dataDir: tmp('lf-crr-data-'),
+    dataDir: tmp('cw-crr-data-'),
     ...(opts.clientReleaseRootDir !== undefined
       ? { clientReleaseRootDir: opts.clientReleaseRootDir }
       : {}),
@@ -96,7 +96,7 @@ function owner(base: string, port: number, path: string): Promise<Response> {
 
 describe('client release over the attachments route', () => {
   it('reports a stale client, its age, and why the build failed', async () => {
-    const root = tmp('lf-crr-releases-');
+    const root = tmp('cw-crr-releases-');
     const good = fakeBuild('gen-1');
     trash.push(good.dir);
     const broken = fakeBuild('gen-2');
@@ -130,7 +130,7 @@ describe('client release over the attachments route', () => {
   });
 
   it('reports a healthy deployment as not stale', async () => {
-    const root = tmp('lf-crr-releases-');
+    const root = tmp('cw-crr-releases-');
     const good = fakeBuild('gen-1');
     trash.push(good.dir);
     prepareClientRelease({ root, sources: good });
@@ -152,7 +152,7 @@ describe('client release over the attachments route', () => {
     // server that is not serving prod's client at all. Only the process that
     // published passes the root, which is the same seam the plugin refresher
     // uses.
-    const root = tmp('lf-crr-releases-');
+    const root = tmp('cw-crr-releases-');
     const good = fakeBuild('gen-1');
     trash.push(good.dir);
     const broken = fakeBuild('gen-2');
@@ -183,7 +183,7 @@ describe('client release over the attachments route', () => {
     // paths of the host filesystem — and the release id is a fact about the
     // host's deploy rather than workspace content. Same line the endpoint
     // redaction already draws.
-    const root = tmp('lf-crr-releases-');
+    const root = tmp('cw-crr-releases-');
     const good = fakeBuild('gen-1');
     trash.push(good.dir);
     const broken = fakeBuild('gen-2');
