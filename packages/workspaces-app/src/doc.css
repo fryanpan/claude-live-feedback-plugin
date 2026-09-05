@@ -1012,14 +1012,15 @@ body.has-set .doc-switcher-caret {
    Sized to the 24px the surrounding prose can spare rather than to the 44px
    a primary control takes: it sits inside a sentence, and a tap target that
    pushed the line apart would cost every reader something to serve the few
-   who need it. The name a screen reader announces is on the element. */
+   who need it — the negative vertical margin keeps the 24px box from
+   growing the line. The name a screen reader announces is on the element. */
 .note-unlink {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
-  margin-left: 4px;
+  width: 24px;
+  height: 24px;
+  margin: -2px 0 -2px 2px;
   padding: 0;
   border: 0;
   border-radius: 50%;
