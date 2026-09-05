@@ -21,7 +21,7 @@
     "rules": {
       "recommended": true,
       "suspicious": {
-        "noExplicitAny": "warn",
+        "noExplicitAny": "error",
         "noConsoleLog": "off",
         "noShadowRestrictedNames": "off",
         "noEmptyBlockStatements": "off",
@@ -42,7 +42,7 @@
       },
       "correctness": {
         "useExhaustiveDependencies": "off",
-        "noUnusedImports": "warn"
+        "noUnusedImports": "error"
       }
     }
   },

@@ -1,31 +1,26 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { basename, extname, join } from 'node:path';
+import { join } from 'node:path';
 import {
-  type DocMeta,
   type DocType,
   type Thread,
   type User,
   type WebhookPayload,
-  agentIdCandidates,
   agentIdForName,
   contentKind,
-  isEmailLike,
-  isReviewPayloadGated,
-  isReviewPayloadHeld,
-  normalizeEmail,
-  pendingDeclaration,
   reviewIdOf,
-  reviewItemState,
 } from '@feedback/core';
-import type { Server as BunServer } from 'bun';
 import { createAccessDeps } from './access-deps.ts';
 import { releaseActivityLock } from './activity-lock.ts';
 import { AgentNoteRing } from './agent-notes.ts';
 import { AgentWatches } from './agent-watches.ts';
 import { AllowRuleProposals } from './allow-rules.ts';
 import { ARTIFACT_CHECK_ACTOR, ArtifactChecker } from './artifact-check.ts';
+import {
+  createLegacyAgentWarner,
+  agentTokenKey as deriveAgentTokenKey,
+} from './auth/agent-token.ts';
 import type { CodeSender } from './auth/code-sender.ts';
-import { type BrowserSentryConfig, type PageType, injectSentryHead } from './browser-sentry.ts';
+import { DEFAULT_HUB_WORKSPACE_NAME, createBoardMembership } from './board-membership.ts';
+import { type BrowserSentryConfig } from './browser-sentry.ts';
 import { ChatAudit, isSharedAgentName, localDay } from './chat-audit.ts';
 import { maybeCompress, maybeNotModified } from './compress.ts';
 import type { Deployer } from './deploy.ts';
@@ -33,56 +28,22 @@ import { DispatchRegistry, type WatchFactory } from './dispatch-registry.ts';
 import { type EffortEstimator } from './effort-estimator.ts';
 import { createEffortScoring } from './effort-scoring.ts';
 import { type GoogleOauthApp, type RefreshTokenVault } from './google-oauth.ts';
-import {
-  type BriefCoverage,
-  type BriefInput,
-  HomeBriefStore,
-  acceptBrief,
-  briefCoverage,
-  briefEvents,
-  briefIsFresh,
-  buildBriefPrompt,
-  deterministicBrief,
-  effectiveSince,
-  readEventRows,
-  readerKey,
-  taskDeepLink,
-} from './home-brief.ts';
+import { taskDeepLink } from './home-brief.ts';
+import { createHomePane } from './home-pane.ts';
 import { spokenReviewComment } from './huddle.ts';
-import { Identities, type IdentityRecord, userForIdentity } from './identities.ts';
+import { Identities } from './identities.ts';
 import { createIdentitySetup } from './identity-setup.ts';
-import { buildLandingModel } from './landing.ts';
-import { createLeadPresenceMonitor } from './lead-presence.ts';
 import { type LookupDoc, boardLookupDocs } from './meeting-lookup.ts';
 import { withServerNotesSinks } from './meeting-notes-doc.ts';
 import type { MeetingNotesOptions } from './meeting-notes.ts';
 import { MeetingRelay } from './meeting-protocol.ts';
 import { MEETING_CAPTURE_ACTOR } from './meeting-task-capture.ts';
 import { MeetingStore } from './meetings.ts';
-import {
-  LOOPBACK_HOSTS,
-  corsHeadersFor,
-  isAllowedBrowserOrigin,
-} from './middleware/browser-origin.ts';
+import { isAllowedBrowserOrigin } from './middleware/browser-origin.ts';
 import type { CfAccessOptions } from './middleware/cf-access.ts';
-import {
-  type ShareTarget,
-  classifyHost,
-  collabScope,
-  isLoopbackAddress,
-  isProxiedTrustedHost,
-  isTrustedLocalHost,
-  shareScopeAllows,
-} from './middleware/host-guard.ts';
-import { RECALL_STATUS_PATH, recallCallbackAllows } from './middleware/recall-callback-gate.ts';
-import { isBrowserRequest, isGatedWrite, signInRequiredBody } from './middleware/write-gate.ts';
-import {
-  captureMockup,
-  isHtmlMockupSource,
-  readMockupCapture,
-  readMockupHtml,
-} from './mockup-capture.ts';
-import { injectWidget } from './mockup-widget.ts';
+import { RECALL_STATUS_PATH } from './middleware/recall-callback-gate.ts';
+import { isGatedWrite, signInRequiredBody } from './middleware/write-gate.ts';
+import type { NoteAskJudge } from './note-ask.ts';
 import {
   PARK_MIGRATION_ACTOR,
   type ParkMigrationResult,
@@ -90,18 +51,10 @@ import {
 } from './park-migration.ts';
 import { parkNoteText } from './park-note.ts';
 import type { PluginRefresher } from './plugin-refresh.ts';
-import { localHostnames, publicBaseUrl } from './public-host.ts';
+import { publicBaseUrl } from './public-host.ts';
 import { createPushAnnounce } from './push-announce.ts';
 import type { PushFetch } from './push-notify.ts';
-import { evaluateReadyWork } from './ready-gate.ts';
-import {
-  type NudgeTally,
-  READY_IDLE_DEFAULT_MS,
-  READY_NUDGE_STAMP_FILENAME,
-  ReadyWorkNudger,
-  type ReadyWorkSnapshot,
-  isBoardActivity,
-} from './ready-nudge.ts';
+import type { NudgeTally } from './ready-nudge.ts';
 import {
   CalendarConnectionStore,
   CalendarSyncConsumer,
@@ -113,12 +66,14 @@ import { parseBotStatusWebhook } from './recall-status.ts';
 import { svixHeadersFrom, verifySvixSignature } from './recall-webhook-auth.ts';
 import { type RecallClient, unreachableCallbackReason } from './recall.ts';
 import { scanSettledDocRefs } from './refs-backfill.ts';
+import { createOriginPolicy, createRequestAdmission } from './request-admission.ts';
+import { createRequestAttribution } from './request-attribution.ts';
 import { listArchivedReviews, readDocArchiveManifest } from './review-archive.ts';
 import { backfillReviewFiling } from './review-backfill.ts';
 import { createReviewGate } from './review-gate.ts';
 import { type ReviewJudge } from './review-judge.ts';
-import { type ReviewItemRow, type ReviewThreadItem, reviewItemRows } from './review-queue.ts';
-import { type FeedbackWs, Rooms } from './rooms.ts';
+import type { ReviewThreadItem } from './review-queue.ts';
+import { Rooms } from './rooms.ts';
 import {
   type AgentIdentityRoutesContext,
   handleAgentIdentityRoutes,
@@ -150,50 +105,33 @@ import {
 } from './routes/workspaces.ts';
 import { captureServerError, routePatternForSpan, withRouteSpan } from './sentry.ts';
 import { CfApi } from './share/cf-api.ts';
-import { redactHubEventForVisitor } from './share/redact-hub-events.ts';
 import {
-  redactMetaForVisitor,
   redactWorkspaceFilesForVisitor,
   redactWorkspaceGroupedForVisitor,
   redactWorkspaceTreeForVisitor,
-  relativeReviewUrl,
 } from './share/redact-meta.ts';
-import { renderShareLinkUnavailable } from './share/share-link-page.ts';
-import { shareMemberKey } from './share/share-links.ts';
-import { Shares, audienceEntryAdmits } from './share/shares.ts';
+import { Shares } from './share/shares.ts';
 import { SharingGate } from './share/sharing-gate.ts';
 import type { ShareConfig } from './share/types.ts';
-import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
+import { createShellStatic } from './shell-static.ts';
+import { createSocketHandlers } from './socket-handlers.ts';
 import { claimReplayMarks, saveReplayMarks } from './sse-marks.ts';
-import { HTTP_IDLE_TIMEOUT_SEC, SseHub, openSseStream } from './sse.ts';
-import {
-  HELD_ITEM_DEFAULT_MS,
-  type HeldItemInput,
-  type StallVerdict,
-  evaluateStalls,
-  overdueHeldItems,
-} from './stall-gate.ts';
-import { STALL_NUDGE_STAMP_FILENAME, StallNudger, type StallSnapshot } from './stall-nudge.ts';
+import { HTTP_IDLE_TIMEOUT_SEC, SseHub } from './sse.ts';
+import { createStallWiring } from './stall-wiring.ts';
 import { ThreadSummarizer } from './summarize.ts';
-import { AUTHOR_REQUIRED_ERROR, AUTHOR_REQUIRED_MESSAGE } from './task-owner.ts';
-import { TaskProjection, taskBodyDocId, taskIdOfBodyDoc } from './task-projection.ts';
-import { buildQueue } from './task-queue.ts';
+import { TaskProjection, taskBodyDocId } from './task-projection.ts';
 import {
   DEFAULT_PARALLELISM_CAP,
-  type HubWorkspace,
-  LEGACY_REVIEW_ITEM_ID,
   type ParallelismCapChange,
   type Task,
   TaskStore,
-  legacyDecisionItem,
-  taskChip,
 } from './tasks.ts';
 import { ThreadRequestDedup } from './thread-request-dedup.ts';
 import type { TranscriptionEngine } from './transcribe.ts';
+import { type UpgradeData, createUpgradeStream } from './upgrade-stream.ts';
 import { UptimeMonitor } from './uptime.ts';
 import { type VoiceComplete, VoiceRouter } from './voice.ts';
 import { type WebhookLogEntry, createWebhookDispatcher } from './webhooks.ts';
-import { onClose, onMessage, onOpen } from './yjs-protocol.ts';
 
 const DEFAULT_PORT = Number(process.env.PORT ?? 8787);
 
@@ -212,19 +150,9 @@ import { HUB_FEEDBACK_DOC_ID } from './doc-ids.ts';
 import {
   HTML_SHELL_HEADERS,
   appCacheControl,
-  buildProjectArtifacts,
-  collectLandingProjects,
-  collectLandingWorkspaces,
   readAppAssetManifest,
-  renderDeviceFrame,
-  renderHubNotFound,
   renderHubShell,
-  renderLanding,
-  renderMockupNotFound,
-  renderProjectPage,
-  renderReviewNotFound,
   renderSigninShell,
-  serveStatic,
   serveStaticUnder,
 } from './shells.ts';
 
@@ -306,6 +234,20 @@ export interface ServerOptions {
    * agents are outside the gate and what that boundary is worth.
    */
   requireSignInToWrite?: boolean;
+  /**
+   * Whether the two agent-id-keyed routes refuse a caller that presents no
+   * `at1` agent token: `GET /api/agents/<id>/watches` and
+   * `GET /events/agent/<id>`.
+   *
+   * Defaults to FALSE — the deprecation window, not an opinion about the
+   * gate. Presenting the token needs the MCP child to change, and that ships
+   * in a plugin bundle each peer updates on their own schedule; refusing an
+   * un-updated child would take its watch restore and its whole event stream
+   * away mid-session. The shape gate (loopback, not a browser, not through
+   * the edge) is enforced on both routes regardless of this flag. The
+   * deployment switch is `CW_REQUIRE_AGENT_TOKEN`; see auth/agent-token.ts.
+   */
+  requireAgentToken?: boolean;
   /**
    * ACCESS-ONLY browser hosts. Defaults to TRUE — every hostname that is not
    * loopback is browser-facing and must carry a verified Cloudflare Access
@@ -470,6 +412,16 @@ export interface ServerOptions {
    */
   reviewJudge?: ReviewJudge;
   /**
+   * Confirms that a task note the deterministic prefilter flagged really does
+   * say the agent is waiting on a person, so the stall loop can call the row
+   * `blocked-on-owner-unfiled` on the strength of its own prose
+   * (`note-ask.ts`). **No default**, the same seam rule as the review judge:
+   * omitting it leaves the prefilter deciding alone and nothing that merely
+   * spins a server up reaches the network. `bin.ts` constructs the real one
+   * (`haikuNoteAskJudge`); tests pass a stub.
+   */
+  noteAskJudge?: NoteAskJudge;
+  /**
    * The ticket-effort scorer (chunk 2 of the effort model). **No default**,
    * the same seam rule as the review judge and the summarizer: omitting it
    * leaves every ticket unscored — `Task.effortEstimate` stays absent
@@ -503,6 +455,17 @@ export interface ServerOptions {
    * after a change and do not read it as a rate.
    */
   stallNudgeRepeatMs?: number;
+  /**
+   * How long a row the lead was already told about may stay a finding before
+   * the board files a review item over the lead's head (default
+   * `STALL_ESCALATE_DEFAULT_MS`, one hour; `CW_STALL_ESCALATE_MINUTES` sets it
+   * on the box).
+   *
+   * Deployment-tunable for the same reason `stallNudgeRepeatMs` is, one step
+   * more expensive: what this number spends is a PERSON's attention, and the
+   * right interval is a thing an owner discovers by living with it.
+   */
+  stallEscalateMs?: number;
   /** Stands in for the done-artifact check's GitHub lookup. Tests only —
    *  production asks api.github.com, unauthenticated. */
   artifactCheckFetch?: typeof fetch;
@@ -796,102 +759,6 @@ export interface ServerOptions {
    * different bugs, and the line has to tell them apart. Tests set 0.
    */
   slowRequestMs?: number;
-}
-
-/** Files the workspaces-app build emits that must ALSO answer at the root
- *  path. See the route for why each one is here rather than under /app/. */
-const ROOT_ALIASED_ASSETS = new Set([
-  '/sw.js',
-  '/sw.js.map',
-  '/manifest.webmanifest',
-  '/icon.svg',
-  '/icon-192.png',
-  '/icon-512.png',
-  '/apple-touch-icon.png',
-]);
-
-/**
- * ── Watch coverage: the answer to "what am I MISSING?" ──────────────────────
- *
- * `list_watched_docs` answers "what am I watching", and the measured incident
- * is that the true answer to that question — six docs, all live — reads as an
- * all-clear while a voice note queues silently for a board the agent never
- * attached to. An agent cannot tell deafness from
- * silence, so it never thinks to ask.
- *
- * These types are what the watches route reports back so it can. Additive:
- * every field is new, so a bundle that predates them ignores an unknown key
- * and keeps working exactly as before.
- */
-export interface CoverageQueue {
-  queuedVoice: number;
-}
-
-/** One `ws:<id>` key in the agent's watch set, resolved. */
-export interface CoverageWorkspaceRow {
-  key: string;
-  workspaceId: string;
-  /** `board` — a workspace: tasks, a lead seat, attachments.
-   *  `review` — a diff review / folder bind, which has none of those. */
-  kind: 'board' | 'review';
-  /** Board only. Attachment / lead / heartbeat are board facts; printing
-   *  `attached: false` for a review would read as a gap that cannot exist. */
-  name?: string;
-  attached?: boolean;
-  /** The displayed active/away label: a heartbeat inside the heartbeat
-   *  window. NOT the delivery gate — see `live`. */
-  heartbeatFresh?: boolean;
-  /** Whether work actually reaches this agent here: recent observed work
-   *  (heartbeat or tool call, whichever is later) plus an open channel. This
-   *  is the one that answers "am I covered". */
-  live?: boolean;
-  lead?: boolean;
-  queued?: CoverageQueue;
-  queuedTotal?: number;
-}
-
-/**
- * A board this agent covers on paper but not in fact — the incident,
- * rendered as a row.
- *
- * "Not in fact" is deliberately wider than "has no attachment record". Every
- * delivery gate asks `hasLiveAttachment` / `hasLiveLeadAttachment`, i.e. is
- * there a heartbeat inside the freshness window — so an hour-old attachment
- * satisfies "attached" while the board's whole queue routes to nobody. The
- * first version of this readout tested for the record and was therefore
- * confidently wrong in the one state that matters: a declared lead whose
- * session went quiet, with work visibly piling up.
- */
-export interface CoverageUnattachedBoard {
-  workspaceId: string;
-  name: string;
-  /** The watched docs that put this board on the list. Empty when the agent
-   *  reached it by holding the board's own `ws:<id>` key — which is what a
-   *  declared lead holds, and holds instead of any doc key. */
-  watchedDocs: string[];
-  queued: CoverageQueue;
-  queuedTotal: number;
-  /** An attachment RECORD exists for this agent. Not the same as covered. */
-  attached: boolean;
-  /** …and its heartbeat is inside the heartbeat window, i.e. the board does
-   *  not show it as away. Reported because it names which of the two things
-   *  lapsed; it is NOT what admitted this row — rows are selected on the
-   *  delivery gate, so `attached: true, heartbeatFresh: false` here means
-   *  BOTH clocks ran out, not merely the heartbeat one. */
-  heartbeatFresh: boolean;
-  /** Who holds the lead seat, when anyone does. */
-  leadAgentId?: string;
-  /** Whether THAT agent is live by the same predicate `setLeadAgent`'s guard
-   *  uses. False means the queue has no live addressee; true means somebody
-   *  else is already draining it and taking the seat would evict a working
-   *  peer — and would be refused. */
-  leadLive: boolean;
-}
-
-export interface WatchCoverage {
-  agentId: string;
-  workspaces: CoverageWorkspaceRow[];
-  unattachedBoards: CoverageUnattachedBoard[];
 }
 
 /**
@@ -1634,891 +1501,99 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     log: (line) => console.error(line),
   });
   artifactChecker.install(taskStore);
-
-  /**
-   * One board as the nudger reads it: who to wake, whether to wake them at
-   * all, what is ready, WHAT THE PASS EXAMINED TO SAY SO, and when the board
-   * last moved.
-   *
-   * The candidate set is the SAME computation `next_tasks` serves —
-   * `buildQueue` — rather than a second reading of the same rules, and it is
-   * now asked with `includeBlocked` so the gate sees every open row it is
-   * deciding about. That is what makes `considered` a real denominator: a
-   * pre-filtered list can only ever report the rows that survived it, so an
-   * empty `ready` would read as an empty board rather than as a board whose
-   * rows are all waiting on somebody.
-   *
-   * Which rows survive is `evaluateReadyWork`'s call — see `ready-gate.ts` for
-   * why every one of those conditions is dependency state and none of them is
-   * a clock. Two things stay here because they need the store:
-   *
-   *  - `ownerKind`, from the projection's roster reader, so the answer is the
-   *    one the board draws rather than a guess from the assignee's name.
-   *  - `reviewState`, which reports open questions AND unparseable ones
-   *    separately. `listReviewItems` drops a corrupt row rather than throwing,
-   *    so without the second number a ticket nobody can read is indistinguish-
-   *    able from a ticket with nothing outstanding — and this is the one
-   *    caller that ACTS on the difference.
-   *
-   * Nothing here has to filter out deliberately-deferred rows. Parking moves
-   * a row to `triage` and `buildQueue` never lists triage, so a park is
-   * invisible to this wake by construction rather than by a second rule that
-   * could drift from the one `next_tasks` follows.
-   */
-  const readyWorkSnapshot = (workspace: HubWorkspace): ReadyWorkSnapshot => {
-    const tasks = taskStore.listTasks(workspace.id);
-    const byId = new Map(tasks.map((t) => [t.id, t]));
-    const ownerKindOf = taskProjection.ownerKindReader(workspace.id);
-    const verdict = evaluateReadyWork(
-      // `goalRows` is what tells the gate which BANDS have been agreed to; a
-      // row under a band still in triage is held (`goal-triage`) rather than
-      // dropped, so the pass can report it instead of going quiet about it.
-      buildQueue(tasks, workspace.goals, {
-        includeBlocked: true,
-        goalRows: taskStore.listGoalRows(workspace.id),
-      }),
-      {
-        ownerKind: (id) => {
-          const task = byId.get(id);
-          // Impossible as long as the rows come from the list above, and it
-          // throws rather than defaulting anyway: a default here would be a
-          // guess about who owns a row, which is the one thing the gate must
-          // never make up. The gate turns the throw into an undetermined row.
-          if (!task) throw new Error(`no such task: ${id}`);
-          return ownerKindOf(task);
-        },
-        reviewState: (id) => {
-          const state = taskStore.reviewState(id);
-          if (!state) throw new Error(`no such task: ${id}`);
-          return state;
-        },
-      },
-    );
-    // The parallelism cap trims the READY set on top of the dependency
-    // gate's own verdict, never inside it: `evaluateReadyWork` reasons about
-    // one row at a time, and how many builders the board may run at once is
-    // a fact about the WHOLE BOARD, not something any row carries (see the
-    // module doc on `HoldReason` in ready-gate.ts). Priority order is
-    // `verdict.ready`'s own, so trimming to `available` slots keeps exactly
-    // the top-ranked rows a lead would actually be told to dispatch.
-    const capView = parallelismCapView(workspace.id);
-    const available = capView?.free ?? DEFAULT_PARALLELISM_CAP;
-    const ready = verdict.ready.slice(0, available);
-    const capacityHeld = verdict.ready.length - ready.length;
-    return {
-      workspaceId: workspace.id,
-      ...(workspace.leadAgentId !== undefined ? { leadAgentId: workspace.leadAgentId } : {}),
-      retired: workspace.retiredAt !== undefined,
-      ready,
-      considered: verdict.considered,
-      held: verdict.held,
-      ...(capacityHeld > 0 ? { capacityHeld } : {}),
-      ...(capView ? { parallelismCap: capSummary(capView) } : {}),
-      undetermined: verdict.undetermined,
-      // The store's durable half of the idle clock. Survives a restart, which
-      // the in-process observations cannot — see ready-nudge.ts.
-      lastActivityAt: tasks.reduce((max, t) => Math.max(max, t.updatedAt, t.createdAt), 0),
-    };
-  };
-  /**
-   * The meeting doc's "is anybody listening" — see lead-presence.ts. Reads
-   * the same seat health the board's presence strip reads, scoped to the
-   * board holding the doc, and pushes a change to the doc's open pages as a
-   * transient (no replay: a page that reconnects asks again).
-   */
-  const leadPresence = createLeadPresenceMonitor({
-    source: {
-      boardOf: (docId) => backTargetFor(docId)?.id,
-      seat: (workspaceId) => taskStore.leadSeatHealth(workspaceId),
-    },
-    broadcast: (docId, presence) => {
-      sse.broadcastTransient(docId, presence);
-    },
-    onEvent: (listener) => taskStore.onEvent(listener),
-    hasListeners: (docId) => sse.count(docId) > 0,
-  });
-  // The lead's own stream opening is what makes it deliverable, and it
-  // emits no store event — so the hub says so directly.
-  sse.onAgentStreams = (channel) => {
-    if (channel.startsWith('ws~')) leadPresence.notify(channel.slice('ws~'.length));
-  };
-
-  const readyNudger = new ReadyWorkNudger({
-    snapshot: () => taskStore.listWorkspaces().map(readyWorkSnapshot),
-    lookup: (workspaceId) => {
-      const ws = taskStore.getWorkspace(workspaceId);
-      return ws ? readyWorkSnapshot(ws) : undefined;
-    },
-    // Addressed, never broadcast: a board-wide wake fanned out to every peer
-    // is the cost `sendToAgent` exists to remove. `agentsOn` is the stronger
-    // probe — it can tell an agent from a browser tab, which `count` cannot.
-    canReach: (workspaceId, agentId) => sse.agentsOn(`ws~${workspaceId}`).has(agentId),
-    send: (workspaceId, agentId, frame) =>
-      sse.sendToAgent(`ws~${workspaceId}`, agentId, { ...frame }),
-    idleMs: opts.readyNudgeIdleMs ?? READY_IDLE_DEFAULT_MS,
-    // Prod restarts at every merge, so without this each deploy re-fired one
-    // wake per idle board over facts their leads had already been told.
-    stampFile: join(dataDir, READY_NUDGE_STAMP_FILENAME),
-  });
-
-  /**
-   * One board as the stall loop reads it: which rows have stopped moving, which
-   * are waiting on a person nobody has actually asked, and which could not be
-   * read at all.
-   *
-   * The classification is `evaluateStalls` → `classifyOpenTasks`, the same
-   * function the keep-moving report runs. That sharing is the point rather
-   * than a convenience: the report is how this project decides whether the
-   * keep-moving protocol is working, and a loop that judged "stalled"
-   * differently would be measured by an instrument that disagreed with it.
-   *
-   * Four things have to be assembled here because they need the store:
-   *
-   *  - **Activity per row.** The classifier takes an event list and derives
-   *    each row's last movement from it. The board's own `/events` feed has
-   *    measurably MISSED row edits, so what is fed in is the rows' own
-   *    timestamps — `updatedAt`, `bodyWrittenAt`, `titleWrittenAt` — which are
-   *    written by every path that changes a row. That is a superset of what
-   *    the feed would have carried, and it needs no file read per tick.
-   *  - **Open questions.** `reviewState` reports open items AND unparseable
-   *    ones separately, and this is a caller that ACTS on the difference: a
-   *    ticket whose questions cannot be read is exactly the ticket whose
-   *    unreadable question might have explained its silence, so it goes to the
-   *    gate as unreadable rather than as clear.
-   *  - **Who owns the row**, from the projection's roster reader, so the
-   *    answer is the one the board draws rather than a guess from a name.
-   *  - **Which goals dispatch.** The decisions band is the owner's own queue
-   *    by its own description; everything else in the ranked list dispatches,
-   *    and a goal outside the list is formal backlog that the dispatch rule
-   *    would never start.
-   *
-   * Comments are resolved in a SECOND pass, and only over rows the first pass
-   * called stuck. A comment is the row moving — a ticket whose whole decision
-   * conversation is live on its thread is not quiet — but reading every board's
-   * every thread once a minute would be the one expensive thing in this loop,
-   * and the rows that would benefit are precisely the handful about to be
-   * reported.
-   */
-  const stallVerdict = (workspace: HubWorkspace): StallVerdict => {
-    const tasks = taskStore.listTasks(workspace.id);
-    const ownerKindOf = taskProjection.ownerKindReader(workspace.id);
-    const goals = workspace.goals;
-    // Matching on the owner's NAME would be wrong — it appears in ordinary
-    // goal titles. Only the decisions band is his queue.
-    const ownerBand = new Set(
-      goals.filter((g) => /decision/i.test(`${g.id} ${g.title}`)).map((g) => g.id),
-    );
-    // A band nobody has agreed to yet dispatches nothing under it — the
-    // verdict the ready gate reads as `goal-triage` — so a row sitting there
-    // is not judged by this loop at all: it is handed to the classifier as its
-    // own set (`bands.triage`) and skipped before any bucket, and it is also
-    // kept out of `dispatchable` below so a caller that never learned the
-    // set still reads the row as backlog rather than as ready. The status
-    // lives on the goal ROWS; the ordered goal list does not carry one.
-    const triageGoals = new Set(
-      taskStore
-        .listGoalRows(workspace.id)
-        .filter((g) => g.status === 'triage')
-        .map((g) => g.id),
-    );
-    // A board that declares NO goals has no bands, so nothing on it is
-    // backlog — `inGoalBand` in task-queue.ts states the same rule, and the
-    // never-dispatch rule ranks rows against the goal list, so with no list
-    // there is nothing to be outside of. Without this every row on a
-    // goal-less board reads as unranked backlog and the loop goes silent over
-    // exactly the boards that have no ranking to hide behind.
-    const dispatchable =
-      goals.length === 0
-        ? new Set(tasks.map((t) => t.goal))
-        : new Set(
-            goals.map((g) => g.id).filter((id) => !ownerBand.has(id) && !triageGoals.has(id)),
-          );
-
-    const rows = tasks.map((t) => ({
-      id: t.id,
-      title: t.title,
-      status: t.status as string,
-      goal: t.goal,
-      after: t.after,
-      createdAt: t.createdAt,
-      transitions: t.transitions,
-      ownerKind: ownerKindOf(t) as string,
-      updatedAt: t.updatedAt,
-      ...(t.bodyWrittenAt !== undefined ? { bodyWrittenAt: t.bodyWrittenAt } : {}),
-      ...(t.titleWrittenAt !== undefined ? { titleWrittenAt: t.titleWrittenAt } : {}),
-      // A note's own clock, not just the `updatedAt` bump it causes: the
-      // hook's `at` is the turn's end, which can sit minutes before the
-      // server's receipt on a slow flush, and the classifier reads notes
-      // directly so the CLI report and this loop agree.
-      ...(t.notes !== undefined ? { notes: t.notes } : {}),
-    }));
-    // Every row timestamp as an activity tick. Deliberately unfiltered by
-    // actor: the question this feeds is "did anything touch this row", and an
-    // unattributed tick beats a false silence.
-    const events: Array<{ taskId: string; ts: number }> = [];
-    for (const t of tasks) {
-      for (const ts of [t.updatedAt, t.bodyWrittenAt, t.titleWrittenAt]) {
-        if (typeof ts === 'number' && ts > 0) events.push({ taskId: t.id, ts });
-      }
-    }
-    const reviewItems: Array<{ taskId: string; askedAt?: number }> = [];
-    const unreadableReviewTaskIds = new Set<string>();
-    for (const t of tasks) {
-      const state = taskStore.reviewState(t.id);
-      // Absent means the row vanished between the list and this read. Treated
-      // as unreadable rather than as clear, for the same reason a throw is:
-      // the one thing that could exonerate the row is the thing we do not have.
-      if (!state) {
-        unreadableReviewTaskIds.add(t.id);
-        continue;
-      }
-      if (state.unreadable > 0) unreadableReviewTaskIds.add(t.id);
-      if (state.open > 0) reviewItems.push({ taskId: t.id });
-    }
-
-    const now = Date.now();
-    // Which rows have a builder whose worktree is actually being WATCHED —
-    // those the gate judges on the builder-silence clock (stall-gate.ts). A
-    // dispatch whose watcher failed to arm or died is deliberately left out:
-    // its activity cannot be seen, so its row keeps the ordinary clock — a
-    // degraded signal must not loosen detection. The registry is fleet-wide
-    // rather than per-board; task ids are opaque and unique, so a foreign
-    // board's ids simply never match.
-    const watchingDispatchTaskIds = new Set(
-      dispatches
-        .list()
-        .filter((d) => d.watching)
-        .map((d) => d.taskId),
-    );
-    // The cap and the board's own priority order, so the gate judges only
-    // the rows the board may have in flight (stall-gate.ts, `parallelismCap`).
-    // The order is `buildQueue`'s — the SAME computation `next_tasks` and the
-    // ready-work nudge rank by — asked with `includeBlocked` so a blocked row
-    // keeps its place in the order rather than vanishing and promoting the
-    // row behind it; the gate itself decides which rows spend a slot.
-    const parallelismCap = taskStore.parallelismCap(workspace.id)?.value ?? DEFAULT_PARALLELISM_CAP;
-    const priorityOrder = buildQueue(tasks, goals, {
-      includeBlocked: true,
-      goalRows: taskStore.listGoalRows(workspace.id),
-    }).map((row) => row.id);
-    const input = {
-      tasks: rows,
-      events,
-      reviewItems,
-      bands: { dispatchable, ownerBand, triage: triageGoals },
-      unreadableReviewTaskIds,
-      now,
-      parallelismCap,
-      priorityOrder,
-      ...(opts.stallNudgeQuietMs !== undefined ? { quietMs: opts.stallNudgeQuietMs } : {}),
-      ...(watchingDispatchTaskIds.size > 0 ? { watchingDispatchTaskIds } : {}),
-      ...(opts.stallBuilderSilentMultiplier !== undefined
-        ? { builderSilentMultiplier: opts.stallBuilderSilentMultiplier }
-        : {}),
-    };
-    const first = evaluateStalls(input);
-    const suspect = [...first.stalled, ...first.unfiled];
-    if (suspect.length === 0) return first;
-    // Second pass over the handful the first pass named. A room that was never
-    // opened holds no threads and answers nothing, which is the right answer:
-    // a row with no discussion has no comment activity to find.
-    //
-    // The same walk also collects the asks `reviewState` cannot see: a review
-    // item filed as a payload ON A COMMENT lives in the room, not on the
-    // ticket, yet it sits on the reader's Home queue exactly like a
-    // ticket-borne one — so a row behind one is legitimately waiting, and the
-    // loop woke a live lead over exactly this shape. Openness is
-    // `pendingDeclaration`, the rule the queue itself reads: an answered
-    // declaration or a resolved thread is nobody being waited on, and excuses
-    // nothing.
-    const threadActivity = new Map<string, number>();
-    const commentAsks: Array<{ taskId: string; askedAt: number }> = [];
-    for (const row of suspect) {
-      let newest = 0;
-      for (const thread of rooms.listThreads(taskBodyDocId(row.id))) {
-        if (thread.lastActivity > newest) newest = thread.lastActivity;
-        const declaring = pendingDeclaration(thread);
-        // A HELD ask exonerates nothing. The whole point of a hold is that
-        // the reader cannot see the item, so a row sitting behind one is not
-        // legitimately waiting on a person — it is waiting on its own filer
-        // to revise, which is exactly what the loop should keep saying.
-        if (declaring?.review && !isReviewPayloadGated(declaring.review)) {
-          commentAsks.push({ taskId: row.id, askedAt: declaring.ts });
-        }
-      }
-      // A registered builder's worktree churn is the row moving, exactly as
-      // a comment is — the builder works in a checkout the board cannot see,
-      // and without this the loop woke leads over its silence (8 of 9 wakes
-      // one night). Merged as max into the same exoneration seam; a closed,
-      // dead, or silent dispatch contributes nothing here, and which clock
-      // then stands is `watchingDispatchTaskIds` above: the builder-silence
-      // one for a dispatch still watching, the ordinary one otherwise.
-      const dispatchTs = dispatches.activityFor(row.id);
-      if (dispatchTs !== undefined && dispatchTs > newest) newest = dispatchTs;
-      // Somebody rewriting the doc the row is ABOUT is the row moving, for
-      // the same reason a comment and a builder's worktree churn are: the
-      // work is happening somewhere the board's own timestamps cannot see.
-      // Measured on the live board — a row whose agent edited its linked doc
-      // continuously woke the lead three times in one hour.
-      //
-      // Merged into `threadActivity` rather than passed as a fifth argument,
-      // because that map is already this loop's ONE exoneration seam:
-      // stall-gate.ts says so where it defines `watchingDispatchTaskIds`
-      // ("worktree activity itself arrives merged into `threadActivity` by
-      // the caller; this set only says whose silence is a builder's"). A
-      // third parallel notion of activity would have to be taught to
-      // `evaluateStalls`, the CLI report, and every future caller.
-      //
-      // Scope is the row's OWN links — a doc it cites and any doc it holds a
-      // thread ref into. Deliberately not the row's `task:<id>` body room:
-      // that room is written by the projection on any row change, so
-      // counting it would exonerate a row for changing its own status.
-      //
-      // KNOWN LIMIT, and the reason a row can still wake falsely while
-      // somebody edits its doc: linking the doc is the OPT-IN GESTURE. A row
-      // with empty `links` gets nothing from this — the row that filed this
-      // very fix had none, so its own false wake was the worktree shape
-      // (`watchingDispatchTaskIds` above), not this one. There is no
-      // automatic association to fall back on: the only candidate is matching
-      // the editing agent against the row's assignee, and that over-exonerates
-      // the moment one agent holds two rows, which is the direction that
-      // turns the watchdog off rather than merely making it noisy. Removing
-      // the link requirement is a ranked decision, not a cleanup.
-      for (const ref of taskStore.getTask(row.id)?.links ?? []) {
-        if (ref.kind !== 'doc' && ref.kind !== 'thread') continue;
-        const editedAt = rooms.lastContentChangeFor(ref.docId);
-        if (editedAt !== undefined && editedAt > newest) newest = editedAt;
-      }
-      if (newest > 0) threadActivity.set(row.id, newest);
-    }
-    if (threadActivity.size === 0 && commentAsks.length === 0) return first;
-    return evaluateStalls({
-      ...input,
-      reviewItems: [...input.reviewItems, ...commentAsks],
-      ...(threadActivity.size > 0 ? { threadActivity } : {}),
-    });
-  };
-  const heldReviewItemMs = opts.heldReviewItemMs ?? HELD_ITEM_DEFAULT_MS;
-  /**
-   * Every COMMENT-borne review item the gate is holding on a board, in the
-   * shape the stall monitor reads.
-   *
-   * The ticket-borne twin (`taskStore.heldReviewItems`) reads one array off
-   * each row; there is no such array here — a comment-borne item lives in its
-   * doc's CRDT — so this walks the same three doc families the queue itself
-   * walks: task bodies, goal bodies, and the workspace's own docs. Bounded by
-   * the board's size and run on the stall tick, the same cadence
-   * `stallVerdict` already pays for.
-   *
-   * Without it a hold on this surface would be silent to the lead: the filer
-   * gets its wake at filing time and nothing would ever complain again, which
-   * is the "held for hours, nobody told" shape the five-minute window exists
-   * to prevent.
-   */
-  function heldThreadReviewItems(workspace: HubWorkspace): HeldItemInput[] {
-    const out: HeldItemInput[] = [];
-    const scan = (docId: string, title: string, taskId?: string) => {
-      for (const thread of rooms.listThreads(docId, { status: 'open' })) {
-        for (const comment of thread.comments) {
-          const review = comment.review;
-          // `held`, not `gated`: a verdict still out is seconds old, and a
-          // complaint about it would fire on every fresh filing.
-          if (!review || !isReviewPayloadHeld(review) || review.judge === undefined) continue;
-          out.push({
-            title,
-            ...(taskId !== undefined ? { taskId } : {}),
-            docId,
-            threadId: thread.id,
-            commentId: comment.id,
-            // The comment IS the item on this surface — see `HeldItemRow`.
-            reviewItemId: comment.id,
-            headline: review.headline,
-            reason: review.judge.reason,
-            heldAt: review.judge.at,
-            filedBy: comment.author.name,
-            ...(comment.author.id ? { filerAgentId: comment.author.id } : {}),
-            revise: reviseCallFor({
-              kind: 'thread',
-              docId,
-              threadId: thread.id,
-              commentId: comment.id,
-            }),
-          });
-        }
-      }
-    };
-    for (const task of taskStore.listTasks(workspace.id)) {
-      if (task.status === 'done') continue;
-      scan(taskBodyDocId(task.id), task.title, task.id);
-    }
-    for (const goal of taskStore.listGoalRows(workspace.id)) {
-      if (goal.status === 'done') continue;
-      scan(taskBodyDocId(goal.id), goal.title);
-    }
-    for (const docId of workspace.docIds) {
-      const meta = rooms.peekMeta(docId);
-      scan(docId, meta?.title || meta?.relPath?.split('/').pop() || docId);
-    }
-    return out;
-  }
-  const stallSnapshot = (workspace: HubWorkspace): StallSnapshot => {
-    const verdict = stallVerdict(workspace);
-    const capRead = taskStore.parallelismCap(workspace.id);
-    // Review items the quality gate is holding past the window — a fourth
-    // finding beside the three the gate computes. Read off the store rather
-    // than through the classifier, because a held item is not a row's state:
-    // it is an ask that exists on a ticket and on nobody's queue, and the
-    // remedy (get the filer to revise) is the filer's, not the row's owner's.
-    //
-    // BOTH surfaces, one list. A hold the lead never hears about is the same
-    // silence whichever verb filed it.
-    const held = overdueHeldItems(
-      [
-        // The ticket-borne holds, each carrying the call that ends it —
-        // spelled by `reviseCallFor`, the same function the filer's wake and
-        // the tool result use, so the lead's report cannot name a different
-        // verb from the one the filer was told to call. A ticket's OWN
-        // decision is reported under the derived id and addressed at the
-        // ticket alone, because that row has no item id.
-        ...taskStore.heldReviewItems(workspace.id).map((item) => ({
-          ...item,
-          revise: reviseCallFor(
-            item.reviewItemId === LEGACY_REVIEW_ITEM_ID
-              ? { kind: 'decision', taskId: item.taskId }
-              : { kind: 'task', taskId: item.taskId, reviewItemId: item.reviewItemId },
-          ),
-        })),
-        ...heldThreadReviewItems(workspace),
-      ],
-      Date.now(),
-      heldReviewItemMs,
-    );
-    return {
-      workspaceId: workspace.id,
-      ...(workspace.leadAgentId !== undefined ? { leadAgentId: workspace.leadAgentId } : {}),
-      retired: workspace.retiredAt !== undefined,
-      stalled: verdict.stalled,
-      unfiled: verdict.unfiled,
-      considered: verdict.considered,
-      undetermined: verdict.undetermined,
-      ...(verdict.beyondCapacity > 0 ? { beyondCapacity: verdict.beyondCapacity } : {}),
-      ...(capRead ? { parallelismCap: capSummary(capRead) } : {}),
-      ...(held.length > 0 ? { held } : {}),
-    };
-  };
-  const stallNudger = new StallNudger({
-    snapshot: () => taskStore.listWorkspaces().map(stallSnapshot),
-    // Addressed, never broadcast, and `agentsOn` rather than `count` for the
-    // same reason the ready-work wake uses it: `count` cannot tell an agent
-    // from an open browser tab, and a wake fanned out to every peer is the
-    // cost addressed delivery exists to remove.
-    canReach: (workspaceId, agentId) => sse.agentsOn(`ws~${workspaceId}`).has(agentId),
-    // The fallback addressees, read off the SAME set `canReach` answers from
-    // — so the monitor cannot enumerate a session it would then decline to
-    // send to. A board whose lead has stopped listening still reaches whoever
-    // is actually on it.
-    attachedAgents: (workspaceId) => [...sse.agentsOn(`ws~${workspaceId}`)],
-    send: (workspaceId, agentId, frame) =>
-      sse.sendToAgent(`ws~${workspaceId}`, agentId, { ...frame }),
-    // The held item's FILER, addressed the same way. The lead learns of it in
-    // the stall frame; the filer is the one who can end it in a call.
-    sendToFiler: (workspaceId, agentId, frame) =>
-      sse.sendToAgent(`ws~${workspaceId}`, agentId, { ...frame }),
-    ...(opts.stallNudgeRepeatMs !== undefined ? { repeatMs: opts.stallNudgeRepeatMs } : {}),
-    // Prod restarts at every merge; without this each deploy would re-fire one
-    // wake per board over rows their leads had already been told about.
-    stampFile: join(dataDir, STALL_NUDGE_STAMP_FILENAME),
-  });
-  // Its own subscription rather than a branch inside the SSE bridge above,
-  // and the ordering is the reason: the bridge is installed before this
-  // object exists, so reaching back at it from there would be a reference
-  // into a variable that is not initialized yet on any event the store
-  // manages to emit in between.
-  taskStore.onEvent((ev) => {
-    // The board moved, so its idle clock restarts. Read from the SAME choke
-    // point every other subscriber reads, rather than from a second list of
-    // "events that count as activity" — one that would silently fall behind
-    // the store the first time a mutator is added.
-    //
-    // The exclusions live in `isBoardActivity`, for the same reason: `agent.*`
-    // is liveness (attached / detached / heartbeat), and liveness is not the
-    // board moving. Counting it made the wake self-cancelling, because the
-    // only lead a nudge can be DELIVERED to is one holding a live stream —
-    // which is precisely the session attaching and heartbeating. So the
-    // pings that proved the lead was there also proved, to this clock, that
-    // the board did not need it. `task.noted` — a turn ending — is the same
-    // class.
-    if (isBoardActivity(ev.type)) readyNudger.noteActivity(ev.workspaceId, ev.ts);
-    // …and an answer is not merely activity. The lead is the party who acts
-    // on answers, and making it wait out an idle window would deliver the
-    // point of the feature fifteen minutes late.
-    if (ev.type === 'decision.answered') {
-      // Resolved HERE rather than inside the nudger: the nudger's snapshot
-      // carries the ready set, and an answered row is usually not in it —
-      // being blocked on that very answer is why it was asked. The title is
-      // what makes the wake readable without a lookup on the far end, and the
-      // links are what decide whether the line may offer a propagation
-      // checklist — sent as they stand, empty included, because the renderer
-      // has to tell an empty list from a frame that carries no row at all.
-      const answered = ev.taskId ? taskStore.getTask(ev.taskId) : undefined;
-      readyNudger.reviewAnswered({
-        workspaceId: ev.workspaceId,
-        taskId: ev.taskId,
-        ...(answered?.title !== undefined ? { taskTitle: answered.title } : {}),
-        ...(answered?.links !== undefined ? { taskLinks: answered.links } : {}),
-        actorId: ev.actor?.id,
-      });
-    }
-  });
-  // A task's discussion lives in its body room, but an agent working a board
-  // watches the WORKSPACE channel, not each task's doc — so a comment that
-  // only fans out on the doc's own stream reaches nobody who is working. The
-  // same event also moves the row's comment count, which nothing else would
-  // refresh (the store never changes, so no task.* event fires).
+  // The doc<->board membership map: which boards hold a doc, who may reach it
+  // through one, and whether an agent's watch set actually covers them. One
+  // subject, one module (`board-membership.ts`); `createServer` composes it
+  // and does not derive any of it.
   //
-  // EVERY other doc room needs the same bridge, for the same reason and with
-  // one extra hop. `rooms.broadcastToRoom` fans out on `ws~<meta.workspaceId>`
-  // — the GROUPING tag a diff review or folder bind sets — and a board link is
-  // not that tag, so a plain review doc filed on a board reached that board's
-  // agent never. Measured: a session with six docs under `watch_doc` and a
-  // seat on the board heard nothing from any of them on the board channel, and
-  // silence from a subscription you never made is indistinguishable from
-  // nobody having commented.
+  // Composed HERE, above the stall wiring, because everything it reads is
+  // already built — `rooms`, both stores, and the access deps at the top of
+  // this function. That is what lets `hubBoardsForDoc` and `backTargetFor` go
+  // into the wiring below as VALUES rather than as thunks over a block
+  // declared later in the file.
+  const {
+    shareWorkspacesOf,
+    collabMemberOf,
+    shareLinkMemberOf,
+    redeemShareLink,
+    hubBoardsForDoc,
+    boardIndexForListing,
+    hubBoardsForDocIndexed,
+    homeForDocIndexed,
+    watchCoverageFor,
+    backTargetFor,
+    fileUnderHubWorkspace,
+    unfileFromDefault,
+    unlinkFromEveryHubWorkspace,
+  } = createBoardMembership({
+    rooms,
+    taskStore,
+    taskProjection,
+    shares,
+    shareLinks,
+    boardShareTarget,
+    proxiedTrustedEmails,
+  });
+
+  // The stall / ready-work wiring — both per-board snapshots, the two
+  // nudgers, the lead-presence monitor, the ready clock's store subscription
+  // and the comment-queue bridge. One documented subsystem
+  // (docs/architecture/stall-detection.md), so it is one module:
+  // `stall-wiring.ts`. `createServer` composes it and arms the nudgers below;
+  // it does not derive any of it.
   //
-  // Resolution happens HERE, at BROADCAST time, against `workspace.docIds` —
-  // nothing is registered when a doc is created. That is what makes "and
-  // anything created later" true with no new call, no new field and no
-  // migration: `fileUnderHubWorkspace` already files every doc onto some
-  // board, defaulting to Unfiled, so a doc that exists is a doc some board
-  // holds.
-  /** Does this comment author name this agent? Candidate-matched both ways,
-   *  because the event's actor id and the attachment key demonstrably
-   *  disagree in the field (see noteObservedWork in tasks.ts). */
-  const commentAuthorIs = (agentId: string, author?: { id?: string; name?: string }): boolean => {
-    if (!author) return false;
-    const candidates = new Set<string>();
-    for (const raw of [author.id, author.name]) {
-      if (typeof raw !== 'string') continue;
-      candidates.add(raw.trim().toLowerCase());
-      for (const c of agentIdCandidates(raw)) candidates.add(c);
-    }
-    return candidates.has(agentId.trim().toLowerCase());
-  };
-
-  /**
-   * The durable half of a comment's delivery (§ comment queue, mirrored from
-   * voice): write one ADDRESSED row per owning agent before any frame goes
-   * out, so a stream being down costs latency rather than the comment.
-   *
-   * Who owns a comment — the addressing decision, made here in one place:
-   * the board's LEAD (declare-lead's contract is "everything on this board
-   * reaches you") plus every agent whose DURABLE watch set holds
-   * `ws:<workspaceId>` (the standing subscription that survives the stream
-   * carrying it). Deliberately NOT per-doc watchers or "whoever attaches
-   * first": attach and heartbeat — the only per-agent drains — are
-   * board-scoped, and queuedVoice's missing lead-guard is the measured cost
-   * of leaving a queue unaddressed. The author is excluded: an agent is not
-   * owed a receipt for its own words.
-   *
-   * Only events that ARE a comment queue (thread.created / thread.replied,
-   * which carry `comment`); resolve/reopen/suggestion verdicts are state
-   * changes, not asks waiting on somebody.
-   */
-  const queueCommentRows = (
-    workspaceId: string,
-    docId: string,
-    payload: WebhookPayload,
-  ): Map<string, string> => {
-    const rows = new Map<string, string>();
-    if (payload.event !== 'thread.created' && payload.event !== 'thread.replied') return rows;
-    // thread.replied carries the comment on the payload; thread.created fires
-    // with `comment: undefined` and the opening comment inside the thread
-    // (rooms.ts fireEvent call sites), so fall back to the newest one there.
-    const comment =
-      payload.comment ??
-      (payload.event === 'thread.created'
-        ? payload.thread?.comments?.[payload.thread.comments.length - 1]
-        : undefined);
-    if (!comment) return rows;
-    const addressees = new Set<string>(agentWatches.agentsWatching(`ws:${workspaceId}`));
-    const lead = taskStore.getWorkspace(workspaceId)?.leadAgentId;
-    if (lead) addressees.add(lead);
-    for (const agentId of addressees) {
-      if (commentAuthorIs(agentId, comment.author)) continue;
-      const id = taskStore.queueComment(workspaceId, {
-        agentId,
-        docId,
-        threadId: payload.threadId,
-        event: payload.event,
-        author: { id: comment.author.id, name: comment.author.name },
-        text: comment.text,
-        payload,
-      });
-      if (id !== false) rows.set(agentId, id);
-    }
-    return rows;
-  };
-
-  /** An addressee holding the board stream just received (or is receiving)
-   *  the live frame: start its ack grace, so the next heartbeat does not
-   *  immediately re-send what is already in flight. */
-  const markCommentRowsEmitted = (workspaceId: string, rows: Map<string, string>): void => {
-    if (rows.size === 0) return;
-    const on = sse.agentsOn(`ws~${workspaceId}`);
-    for (const [agentId, rowId] of rows) {
-      if (on.has(agentId)) taskStore.markCommentEmitted(workspaceId, rowId);
-    }
-  };
-
-  onDocRoomEvent = (docId, payload) => {
-    const rowId = taskIdOfBodyDoc(docId);
-    if (rowId) {
-      // A `task:` room belongs to a task OR to a goal — one prefix, two kinds
-      // of row (see `ensureGoalBody`). Asking only `getTask` returned
-      // undefined for every goal and took the early return, so a comment on a
-      // goal reached nobody: no board broadcast, no agent watching the
-      // workspace, no projection refresh to update the count.
-      const workspaceId =
-        taskStore.getTask(rowId)?.workspaceId ?? taskStore.getGoalRow(rowId)?.workspaceId;
-      if (!workspaceId) return;
-      const rows = queueCommentRows(workspaceId, docId, payload);
-      sse.broadcast(`ws~${workspaceId}`, payload, (who) => {
-        const rowId = who.agentId ? rows.get(who.agentId) : undefined;
-        return rowId ? { ...payload, workspaceId, commentQueueId: rowId } : undefined;
-      });
-      markCommentRowsEmitted(workspaceId, rows);
-      // Task path only: a plain doc thread moves no row, so refreshing the
-      // projection for it would be a board-wide rewrite that changes nothing.
-      taskProjection.refresh(workspaceId);
-      return;
-    }
-    // Exactly one hop from review to board — the same non-transitive rule
-    // `shareWorkspacesOf` spells out, so what an agent HEARS about a review
-    // and what a share visitor may OPEN in it cannot drift apart.
-    const reviewId = reviewIdOf(rooms.peekMeta(docId) ?? {});
-    for (const board of hubBoardsForDoc(docId)) {
-      const rows = queueCommentRows(board, docId, payload);
-      // rooms.ts already broadcast on the review's own channel; a second
-      // send here would deliver the same comment twice to one listener. The
-      // review frames carried no row id, so those rows are acked off the
-      // grace-window redelivery instead — late receipt beats double frame.
-      if (board !== reviewId) {
-        sse.broadcast(`ws~${board}`, payload, (who) => {
-          const rowId = who.agentId ? rows.get(who.agentId) : undefined;
-          return rowId ? { ...payload, workspaceId: board, commentQueueId: rowId } : undefined;
-        });
-      }
-      markCommentRowsEmitted(board, rows);
-    }
-  };
+  // ONE member of the context is a FUNCTION rather than a value —
+  // `reviseCallFor` — because the review gate is built further down this file
+  // than this line, and it is only ever reached from a request or an event.
+  // Passing it deferred is what lets this stay here: the gate is built where
+  // it is because it needs `resolveWorkspaceForDoc` and the task projection,
+  // and hoisting it to satisfy a declaration order would trade one ordering
+  // constraint for a worse one.
+  //
+  // `hubBoardsForDoc` and `backTargetFor` used to be thunks for the same
+  // reason and are now values: the membership map they come from is composed
+  // above this line, so there is nothing left to defer.
+  const stallWiring = createStallWiring({
+    taskStore,
+    taskProjection,
+    rooms,
+    sse,
+    dispatches,
+    agentWatches,
+    dataDir,
+    parallelismCapView,
+    capSummary,
+    hubBoardsForDoc,
+    backTargetFor,
+    reviseCallFor: (address) => reviseCallFor(address),
+    ...(opts.readyNudgeIdleMs !== undefined ? { readyNudgeIdleMs: opts.readyNudgeIdleMs } : {}),
+    ...(opts.stallNudgeQuietMs !== undefined ? { stallNudgeQuietMs: opts.stallNudgeQuietMs } : {}),
+    ...(opts.stallBuilderSilentMultiplier !== undefined
+      ? { stallBuilderSilentMultiplier: opts.stallBuilderSilentMultiplier }
+      : {}),
+    ...(opts.stallNudgeRepeatMs !== undefined
+      ? { stallNudgeRepeatMs: opts.stallNudgeRepeatMs }
+      : {}),
+    ...(opts.stallEscalateMs !== undefined ? { stallEscalateMs: opts.stallEscalateMs } : {}),
+    ...(opts.heldReviewItemMs !== undefined ? { heldReviewItemMs: opts.heldReviewItemMs } : {}),
+    ...(opts.noteAskJudge !== undefined ? { noteAskJudge: opts.noteAskJudge } : {}),
+  });
+  const { leadPresence, readyNudger, stallNudger } = stallWiring;
+  // The late binding `Rooms` was constructed with: the bridge needs the task
+  // store and the projection, which are built after `Rooms` is.
+  onDocRoomEvent = stallWiring.onDocRoomEvent;
 
   // ── Home pane: per-person read markers + the "What's New?" brief ─────────
-  // (Approved design: docs/product/mockups/home-pane. Summaries cover
-  // everything since the reader last marked caught up; instructions are
-  // workspace-wide and editable; generation is the summarizer seam or
-  // nothing — a server with no summarizer serves the deterministic brief.)
-  const homeBriefs = new HomeBriefStore(dataDir);
-  /** One generation in flight per workspace+reader: the client polls while
-   *  `generating`, and N polls must cost one call, not N. */
-  const homeBriefInflight = new Set<string>();
-
-  /** The review items exactly as GET /review-items ships them.
-   *  ONE builder for that route and for the brief's queue count, so the
-   *  number the brief prints cannot drift from the queue rendered under it. */
-  const reviewItemsFor = (workspace: HubWorkspace): ReviewItemRow[] =>
-    reviewItemRows({
-      tasks: taskStore.listTasks(workspace.id).map((t) => ({
-        id: t.id,
-        title: t.title,
-        bodyDocId: taskBodyDocId(t.id),
-        done: t.status === 'done',
-        // The ticket's OWN review items — 0..n, and for a legacy decision task
-        // the one row `listReviewItems` derives from `needs`/`options`/`answer`
-        // without writing anything back. This is what lets a decision reach the
-        // one route that answers "what is waiting on me"; before it, a board of
-        // nothing but open decisions answered with an empty list.
-        reviews: taskStore.listReviewItems(t.id),
-      })),
-      // Goals queue their discussions the same way. Without this a review
-      // item declared on a goal — "does 'ten teams' mean ten that renew?" —
-      // sits in a thread nothing tells the reader about, which is the whole
-      // failure the queue exists to prevent, on the row that matters most.
-      // No `reviews`: that array is a task field and a goal row has none.
-      goals: taskStore.listGoalRows(workspace.id).map((g) => ({
-        id: g.id,
-        title: g.title,
-        bodyDocId: taskBodyDocId(g.id),
-        done: g.status === 'done',
-      })),
-      docs: workspace.docIds.map((docId) => {
-        const meta = rooms.peekMeta(docId);
-        // Title, else the file's BASENAME — never `relPath` whole and
-        // never `sourceUrl`. Those describe the host machine, and a
-        // share visitor reads this route (§3.3): a label is workspace
-        // content, a path is not.
-        const base = meta?.relPath?.split('/').pop();
-        return { docId, title: meta?.title || base || docId };
-      }),
-      source: {
-        threadsOf: (docId) => rooms.listThreads(docId, { status: 'open' }),
-        // Unfiltered, and only for the roster: who counts as a person
-        // here must not depend on whether their thread is still open.
-        allThreadsOf: (docId) => rooms.listThreads(docId),
-      },
-    });
-
-  /**
-   * How many items the Home queue holds right now. Feeds only the brief's
-   * closing "is anything waiting" line.
-   *
-   * The number is a promise about the LIST rendered under it, so it counts
-   * exactly what the browser's `reviewQueue` places and nothing else:
-   *
-   *  - comment-borne review rows (`task-thread` / `doc-thread`) — ALL of
-   *    them, which is true again since 2026-08-21: membership moved into
-   *    `reviewThreadItems` (a row is a declared item or a surviving direct
-   *    ask), and the browser retired its undeclared shelf and places every
-   *    row this route ships. Between those two changes this count briefly
-   *    included inferred rows Home never drew — "something needs you" over a
-   *    list that showed nothing,
-   *  - open decisions, which Home draws from the board projection as its own
-   *    `decision` rows.
-   *
-   * Person-owned blockers are deliberately NOT a term. A blocker is task
-   * state, not a review item — the browser's `reviewQueue` stopped placing
-   * blocker rows when the task panel's blocked note took them over, so a
-   * count that still included them pointed the brief ("queued below") at a
-   * queue that renders nothing.
-   *
-   * TICKET-borne rows (`kind: 'task-review'`) count too — Home places them
-   * now (`reviewQueue` in hub-review-model.ts), which closed the measured gap where
-   * a review item filed with `create_tasks` / `add_review_item` was shipped
-   * by the route and rendered by nothing. The one exception is the DERIVED
-   * `r-legacy` row: its legacy decision is already counted from the tasks
-   * below, and the browser skips that row for the same reason, so counting
-   * it here would say one question twice.
-   *
-   * The open-decision term is counted from the TASKS rather than from `items`,
-   * even though `items` also carries a derived `r-legacy` row per open
-   * decision. Same reason: `decisionQueue` in the browser is what draws those
-   * rows, and it reads `needs`/`answer` off the projection. Counting the
-   * derived rows instead would tie this number to a row Home does not read.
-   * A decision is therefore counted once, never twice.
-   */
-  const homeQueueTotal = (workspace: HubWorkspace, items: ReviewItemRow[]): number => {
-    const open = taskStore.listTasks(workspace.id).filter((t) => t.status !== 'done');
-    // A decision the reader has asked on is the OWNER's turn and off the
-    // browser's queue (`decisionRows` reads `decisionState`), so it is not
-    // counted here either — the same derivation, on the same row.
-    const decisions = open.filter((t) => {
-      if (t.needs !== 'decision' || t.answer) return false;
-      const item = legacyDecisionItem(t);
-      return item === undefined || reviewItemState(item) !== 'waiting';
-    });
-    const rendered = items.filter(
-      (i) => i.kind !== 'task-review' || i.reviewItemId !== LEGACY_REVIEW_ITEM_ID,
-    );
-    return rendered.length + decisions.length;
-  };
-
-  const homeBriefInput = (workspace: HubWorkspace, since: number): BriefInput => {
-    const events = briefEvents(readEventRows(dataDir, workspace.id), since);
-    const items = reviewItemsFor(workspace);
-    return {
-      workspaceId: workspace.id,
-      events,
-      queue: { total: homeQueueTotal(workspace, items) },
-      titleOf: (taskId) => taskStore.getTask(taskId)?.title,
-    };
-  };
-
-  /** Fire-and-forget one generation; the client re-reads when it lands. */
-  const generateHomeBriefFor = (
-    workspace: HubWorkspace,
-    person: string,
-    marker: number,
-    input: BriefInput,
-    coverage: BriefCoverage,
-  ): void => {
-    const key = `${workspace.id}\u0000${readerKey(person)}`;
-    if (homeBriefInflight.has(key)) return;
-    homeBriefInflight.add(key);
-    // The window the model is told about, the window the reader is shown, and
-    // the rows the model is handed all come from ONE coverage value. They used
-    // to be derived separately and disagreed: this said "the last 7 days"
-    // while the digest cap had already cut what the model could see to hours.
-    const prompt = buildBriefPrompt(input, homeBriefs.instructions(workspace.id), coverage);
-    void (async () => {
-      try {
-        const accepted = acceptBrief((await summarizer?.generateHomeBrief(prompt)) ?? null);
-        // A refused reply stores nothing: the deterministic brief stands, and
-        // the next read simply tries again. Never store an empty brief over
-        // a rendered one.
-        if (accepted !== null) {
-          homeBriefs.storeBrief(workspace.id, person, {
-            markdown: accepted,
-            since: marker,
-            coversFrom: coverage.from,
-            eventCount: input.events.length,
-            generatedAt: Date.now(),
-          });
-        }
-      } finally {
-        homeBriefInflight.delete(key);
-      }
-    })();
-  };
-
-  /**
-   * Everything GET /home answers, also returned by the instructions PUT so
-   * the client repaints from one shape. Freshness keys on the MARKER (not
-   * the derived window start, which for a never-read reader slides with the
-   * clock and would re-queue a generation on every read) plus the count of
-   * brief-relevant events — see BRIEF_EVENT_TYPES for why heartbeats are
-   * excluded from that count.
-   */
-  const homePayload = (workspace: HubWorkspace, person: string, now: number) => {
-    const marker = homeBriefs.lastReadAt(workspace.id, person);
-    const since = effectiveSince(marker, now);
-    const input = homeBriefInput(workspace, since);
-    const stored = homeBriefs.brief(workspace.id, person);
-    const coverage = briefCoverage(input.events, since);
-    const fresh = briefIsFresh(stored, marker, input.events.length);
-    // `generating` is grounded in work actually queued — it is true exactly
-    // when a call is (or is being put) in flight, never inferred.
-    let generating = false;
-    if (!fresh && summarizer?.enabled) {
-      generating = true;
-      generateHomeBriefFor(workspace, person, marker, input, coverage);
-    }
-    // `coversFrom` is per BRIEF, not per payload, because the two briefs
-    // genuinely cover different windows: the deterministic one counts every
-    // event in the window, the generated one only the rows that survived the
-    // digest cap. A stored brief carries the coverage it was written under —
-    // one written before the field existed has no answer, and the window
-    // start is the closest honest thing to say.
-    const brief = fresh
-      ? {
-          markdown: stored.markdown,
-          generatedAt: stored.generatedAt,
-          coversFrom: stored.coversFrom ?? since,
-          source: 'generated' as const,
-        }
-      : {
-          markdown: deterministicBrief(input),
-          generatedAt: now,
-          coversFrom: since,
-          source: 'deterministic' as const,
-        };
-    return {
-      workspaceId: workspace.id,
-      lastReadAt: marker,
-      since,
-      instructions: homeBriefs.instructions(workspace.id),
-      brief,
-      generating,
-    };
-  };
+  // One subject, one module (`home-pane.ts`); `createServer` composes it here
+  // because everything the pane reads — the stores, the rooms and the
+  // summarizer seam — is in hand by this line, and the routes below take the
+  // same four names off it that they used to take off this closure.
+  const { homeBriefs, reviewItemsFor, homeQueueTotal, homePayload } = createHomePane({
+    dataDir,
+    taskStore,
+    rooms,
+    summarizer,
+  });
   /**
    * Rewrite a task's description through its live `task:<id>` body room, with
    * everything the act owes: the room exists, the snapshot the board and
@@ -2671,165 +1746,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     },
   });
 
-  /**
-   * Which workspaces an id belongs to, for SHARE SCOPING (§3.12 commit 8).
-   * The id may be a doc room OR a review (folder bind / diff review), and
-   * the answer is a SET because those two senses of "workspace" nest:
-   *
-   *   1. a member doc's own GROUPING     (`meta.workspaceId`)
-   *   2. the HUB board the id is filed on directly — docs linked via
-   *      attachDoc, each task's `task:<id>` body room, and a review id,
-   *      which is how a review goes on a board as one row
-   *   3. the HUB board that member's GROUPING is filed on — the hop that
-   *      makes a review row on a shared board actually open. Without it a
-   *      hub-scoped share saw the row and 403'd on everything behind it,
-   *      because every member answers with the review id and the share
-   *      carries the hub id.
-   *
-   * ONE rule for both halves of the guard, on purpose: the same function
-   * tells the allowlist that a review belongs to a hub and tells it that
-   * the review's members do. Two rules would agree today and diverge
-   * later, and the one that diverges open is the breach.
-   *
-   * Exactly one hop from review to board — not a transitive closure.
-   * Deliberately NOT the ws:<id> board room: its share allowance is spelled
-   * out in host-guard, never a resolver side effect.
-   */
-  const shareWorkspacesOf = (rawId: string): string[] => {
-    // Canonicalize FIRST. Boards hold a doc's own id, so an alias asked here
-    // resolved to nothing and the share refused a document it covers — a
-    // readable URL handed to an outside reviewer would simply not open. This
-    // is the one resolver every share-scope predicate reads, which is why the
-    // fix belongs here and not in each of them.
-    const id = rooms.resolveDocId(rawId);
-    const out = new Set<string>();
-    const reviewId = reviewIdOf(rooms.peekMeta(id) ?? {});
-    if (reviewId) out.add(reviewId);
-    for (const board of hubWorkspacesHolding(id)) out.add(board);
-    if (reviewId) for (const board of hubWorkspacesHolding(reviewId)) out.add(board);
-    return Array.from(out);
-  };
-
-  /**
-   * EVERY hub board an attachment is linked to — not the first one.
-   *
-   * `attachDoc` links, it does not move: only the default holding pen is
-   * unfiled on the way (see `unfileFromDefault`), so a review deliberately
-   * put on two real boards is on both. `taskStore.workspaceOfDoc` answers
-   * with whichever the store iterates first, which for share scoping means
-   * the visitors of every OTHER board holding it are refused the row their
-   * own board shows them — the exact 403-on-your-own-share failure
-   * `unfileFromDefault` records, surviving in the case it cannot fix,
-   * because there both links are legitimate and neither may be dropped.
-   *
-   * `task:<id>` keeps the store's own resolution: a task body belongs to its
-   * task's workspace, which is a field rather than a link, so it has one
-   * answer by construction.
-   */
-  function hubWorkspacesHolding(attachmentId: string): string[] {
-    if (attachmentId.startsWith('task:')) {
-      const w = taskStore.workspaceOfDoc(attachmentId);
-      return w ? [w] : [];
-    }
-    return taskStore
-      .listWorkspaces()
-      .filter((w) => w.docIds.includes(attachmentId))
-      .map((w) => w.id);
-  }
-
-  /**
-   * Is this Access-verified email a MEMBER of this workspace — the question
-   * the collaboration hostname asks after Cloudflare Access has answered
-   * "is this someone Bryan admitted to the hostname at all?".
-   *
-   * The two are not the same question, and treating them as one was the
-   * weakness this closes: every email the Access application admitted could
-   * open every workspace on the server by id, because the only thing checked
-   * after the token was whether the PATH was in scope for the workspace it
-   * named. A share hostname never had that problem — it is minted for one
-   * workspace with one allow list — so the fix is to give the collaboration
-   * hostname the same record rather than a new one.
-   *
-   * THE MEMBERSHIP SET, exactly: the allow lists of the workspace's LIVE
-   * shares, plus the owner allowlist. A share is the only place an email is
-   * ever written down against a workspace, so a workspace with no live share
-   * admits nobody here — which is the correct answer, not a gap: nobody has
-   * been given it.
-   *
-   * Three details, each of which would otherwise be a hole:
-   *
-   *   - The candidate set is the workspace itself PLUS every workspace that
-   *     covers it (`shareWorkspacesOf`). A doc's path resolves to its REVIEW,
-   *     while the share that admits people is minted on the BOARD the review
-   *     is filed on, so checking the path's workspace alone would refuse
-   *     every legitimately shared diff review and folder bind. This is the
-   *     same set `shareScopeAllows` reaches through, so it grants exactly
-   *     what a share on one of those boards already grants — no wider.
-   *   - `boardShareTarget` is applied to each share, so a record whose
-   *     workspace is no longer a board is as dead here as it is on its own
-   *     hostname. One rule for what a share is worth.
-   *   - A token with NO email claim is nobody, and nobody is a member. It
-   *     reaches the app shell and nothing else.
-   */
-  const collabMemberOf = (workspaceId: string, email: string | null): boolean => {
-    const who = email ? normalizeEmail(email) : '';
-    if (who === '' || !workspaceId) return false;
-    // The owner half. Same list the operator hostname checks and the same
-    // list a `share_link` with no audience falls back to, so "who is this
-    // deployment's own people" has one answer.
-    if (proxiedTrustedEmails.has(who)) return true;
-    if (!shares) return false;
-    const candidates = new Set<string>([workspaceId, ...shareWorkspacesOf(workspaceId)]);
-    for (const wsId of candidates) {
-      for (const share of shares.liveForWorkspace(wsId)) {
-        if (!boardShareTarget(share)) continue;
-        if ((share.allowDomains ?? []).some((entry) => audienceEntryAdmits(entry, who))) {
-          return true;
-        }
-      }
-    }
-    return false;
-  };
-
-  /**
-   * Is this Access-verified email a member of this workspace, on the SHARE
-   * hostname — the question asked after Cloudflare has confirmed an address
-   * that its "everyone" policy admitted without knowing anything about them.
-   *
-   * Deliberately NOT `collabMemberOf`, and the separation is the whole
-   * security property of the share hostname. That function's membership set
-   * is the allow lists of a workspace's live shares plus the owner allowlist
-   * — records that say "the operator named this person". The share hostname's
-   * application names nobody, so reusing it would answer the question with a
-   * record that was written about a different door: every address the
-   * operator ever allow-listed anywhere would reach the share host, and every
-   * redeemed reviewer would reach the collaboration host. Two doors, two
-   * records, and a redemption grants exactly one of them.
-   *
-   * The candidate set is the workspace itself PLUS every workspace that
-   * covers it, for the reason `collabMemberOf` gives at the same line: a
-   * doc's path resolves to its REVIEW, while the link that admitted people
-   * was minted on the BOARD the review is filed on. Same set
-   * `shareScopeAllows` reaches through, so it grants exactly what the board's
-   * own link already grants — no wider.
-   *
-   * `boardShareTarget`'s rule applies here too, spelled as the lookup it is:
-   * a workspace that is no longer a board grants nothing, so a link minted
-   * before a board was retired stops admitting people the moment it stops
-   * being a board.
-   *
-   * A token with NO email claim is nobody, and nobody is a member.
-   */
-  const shareLinkMemberOf = (workspaceId: string, email: string | null): boolean => {
-    if (!email || !workspaceId) return false;
-    const candidates = new Set<string>([workspaceId, ...shareWorkspacesOf(workspaceId)]);
-    for (const wsId of candidates) {
-      if (!taskStore.getWorkspace(wsId)) continue;
-      if (shareLinks.isMember(wsId, email)) return true;
-    }
-    return false;
-  };
-
   /** A path segment, decoded, answering itself rather than throwing on `%`. */
   const safeDecodeSegment = (s: string): string => {
     try {
@@ -2837,371 +1753,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     } catch {
       return s;
     }
-  };
-
-  /**
-   * `GET /s/<id>` on the share hostname: turn a verified email into a member.
-   *
-   * The ONLY write a non-member can make here, and its whole content is the
-   * caller's own Access-verified address against the workspace the link
-   * already names. Nothing in the request body or the path can change WHICH
-   * workspace — that came from the record.
-   *
-   * Everything that is not a live link on a live board renders the one
-   * unavailable page and records nothing: revoked, expired, unknown,
-   * malformed, and a workspace that is no longer a board. Four answers would
-   * let anyone with the route learn which ids exist by the difference between
-   * them, so there is one.
-   *
-   * The board check runs BEFORE the redeem, so a link whose board was retired
-   * writes no membership row on its way to being refused.
-   *
-   * Success is a redirect to the board on this same hostname, which is where
-   * a returning member's next visit goes directly.
-   */
-  const redeemShareLink = (linkId: string, email: string | null): Response => {
-    const unavailable = () =>
-      new Response(renderShareLinkUnavailable(), {
-        status: 404,
-        headers: {
-          'content-type': 'text/html; charset=utf-8',
-          // Keeps the link id out of any downstream Referer, the same reason
-          // the retired link routes set it.
-          'referrer-policy': 'no-referrer',
-          'cache-control': 'no-store',
-        },
-      });
-    const link = shareLinks.get(linkId);
-    if (!link || !taskStore.getWorkspace(link.workspaceId)) return unavailable();
-    const outcome = shareLinks.redeem(linkId, email ?? '');
-    if (!outcome.ok) return unavailable();
-    return new Response(null, {
-      status: 302,
-      headers: {
-        location: `/workspaces/${encodeURIComponent(outcome.workspaceId)}`,
-        'referrer-policy': 'no-referrer',
-        'cache-control': 'no-store',
-      },
-    });
-  };
-
-  /**
-   * Every hub board a DOC's discussion actually reaches — the boards holding
-   * the doc itself, plus the one review→board hop a diff review / folder
-   * bind needs (its members carry the review tag, and the review is what
-   * sits on the board as one row).
-   *
-   * Written once and used twice on purpose: `onDocRoomEvent` fans events out
-   * over exactly this set, and the coverage readout reports gaps against
-   * exactly this set. Two copies would agree today and drift later, and the
-   * drift would be invisible in the worst direction — a probe that says
-   * "covered" about a board the events never reach is the failure this
-   * ticket exists to end, restated as a reassuring answer.
-   */
-  function hubBoardsForDoc(docId: string): Set<string> {
-    const boards = new Set(hubWorkspacesHolding(docId));
-    const reviewId = reviewIdOf(rooms.peekMeta(docId) ?? {});
-    if (reviewId) for (const board of hubWorkspacesHolding(reviewId)) boards.add(board);
-    return boards;
-  }
-
-  /**
-   * The same three questions as `hubWorkspacesHolding` / `hubBoardsForDoc` /
-   * `resolveWorkspaceForDoc`, answered for a WHOLE LISTING from one pass over
-   * the workspaces instead of one pass per row.
-   *
-   * The per-id versions above allocate a fresh array of every board and scan
-   * each one's `docIds`. That is the right shape for a single lookup and the
-   * wrong shape for a listing. `GET /api/docs` asked twice per row — once for
-   * the doc, once for the review-id fallback — so the work grew with the
-   * SQUARE of the doc count, and docs no board holds paid for both halves —
-   * which, once a server accumulates diff-review members, is most of them.
-   *
-   * That matters more than a slow response suggests, because Bun runs JS on
-   * one thread: a listing that takes tens of seconds is tens of seconds in
-   * which the server answers nothing else — no page, no board, no MCP call.
-   * Nor does anything report it, since the process stays alive and stays
-   * BOUND the whole time. A supervisor that asks whether the port is
-   * listening, as the bind-health watchdog in `scripts/serve.ts` does, sees
-   * a healthy server; it never asks whether the server answers.
-   *
-   * These read the same `taskStore` state the per-id versions read and are
-   * kept beside them deliberately — two answers to one question drift, and
-   * the drift here would be a wrong URL rather than a slow one.
-   */
-  function boardIndexForListing(): Map<string, string[]> {
-    const index = new Map<string, string[]>();
-    for (const w of taskStore.listWorkspaces()) {
-      for (const id of w.docIds) {
-        const boards = index.get(id);
-        if (boards) boards.push(w.id);
-        else index.set(id, [w.id]);
-      }
-    }
-    return index;
-  }
-
-  /**
-   * `hubWorkspacesHolding` against a prebuilt index.
-   *
-   * `task:` ids are deliberately absent from the index and fall through to
-   * `workspaceOfDoc`, exactly as the per-id version routes them: a task room
-   * is looked up by id rather than scanned for, and is never in any board's
-   * `docIds` to begin with.
-   */
-  function heldByIndexed(index: Map<string, string[]>, attachmentId: string): string[] {
-    if (attachmentId.startsWith('task:')) {
-      const w = taskStore.workspaceOfDoc(attachmentId);
-      return w ? [w] : [];
-    }
-    return index.get(attachmentId) ?? [];
-  }
-
-  /** `hubBoardsForDoc` against a prebuilt index. The caller already holds the
-   *  row's meta, so the review id is read from it rather than re-fetched. */
-  function hubBoardsForDocIndexed(index: Map<string, string[]>, meta: DocMeta): Set<string> {
-    const boards = new Set(heldByIndexed(index, meta.docId));
-    const reviewId = reviewIdOf(meta);
-    if (reviewId) for (const board of heldByIndexed(index, reviewId)) boards.add(board);
-    return boards;
-  }
-
-  /**
-   * `resolveWorkspaceForDoc` against a prebuilt index.
-   *
-   * Mirrors `backTargetFor`'s `pick(a) ?? pick(b)` exactly, including that a
-   * first board which fails the `getWorkspace` check does NOT fall through to
-   * a second board holding the same id — it falls through to the review-id
-   * lookup. (In practice the check cannot fail: `getWorkspace` reads the very
-   * map `listWorkspaces` was built from. It is kept so this stays a
-   * transcription of the original rather than a judgement about it.)
-   */
-  function homeForDocIndexed(index: Map<string, string[]>, meta: DocMeta): string | null {
-    const pick = (id: string | undefined): string | null =>
-      id && taskStore.getWorkspace(id) ? id : null;
-    return (
-      pick(heldByIndexed(index, meta.docId)[0]) ??
-      pick(heldByIndexed(index, reviewIdOf(meta) ?? '')[0])
-    );
-  }
-
-  /**
-   * What is waiting for this board's lead, COUNTED WITHOUT DRAINING.
-   *
-   * The reader here is the non-destructive one: `listQueuedVoice`, not
-   * `drainVoiceQueue`. That is not incidental. A probe that delivered while
-   * reporting would be right exactly once and would then have consumed the
-   * items the attach it was warning about was supposed to receive — this
-   * ticket's own silent-loss bug, wearing the costume of the fix.
-   */
-  const queuedForLead = (workspaceId: string): CoverageQueue => ({
-    queuedVoice: taskStore.listQueuedVoice(workspaceId).length,
-  });
-  const queueTotal = (q: CoverageQueue): number => q.queuedVoice;
-
-  /**
-   * The coverage readout for one agent's watch set.
-   *
-   * Two halves, answering two different questions:
-   *
-   *  - `workspaces` resolves each `ws:<id>` key the agent holds. A key can
-   *    name a hub BOARD or a review GROUPING, and today nothing tells the
-   *    agent which — so nothing tells it that a board key without an
-   *    attachment hears the events but is invisible to every delivery gate.
-   *  - `unattachedBoards` is the measured incident: boards this agent covers
-   *    on paper but not in fact, each with the count of items queued for that
-   *    board's lead. Six docs watched, zero attachments, four items waiting.
-   *
-   * TWO THINGS PUT A BOARD ON THAT LIST, and the second was missing while
-   * this feature's whole point was to create agents of exactly that shape:
-   *
-   *  - a DOC key the agent holds that resolves to the board, and
-   *  - the board's OWN `ws:<id>` key — which is all a declared lead holds. It
-   *    holds no doc keys at all, so building the list from doc keys alone
-   *    made the one agent this branch teaches the fleet to be the one agent
-   *    the probe could not see.
-   *
-   * A `ws:<setId>` key still raises nothing. It resolves to the board the
-   * review sits on, but the agent asked about the review, not about somebody
-   * else's seat — and an alarm that fires on the innocent case is how a real
-   * one stops being read.
-   *
-   * "Not in fact" means no LIVE attachment: no record, or a record whose
-   * heartbeat has aged out. The gates ask the second question, so this must
-   * too, or it reports covered about a board whose every gate answers away.
-   */
-  const watchCoverageFor = (agentId: string, keys: string[]): WatchCoverage => {
-    /**
-     * Attachment facts for one agent on one board.
-     *
-     * Two DIFFERENT questions, deliberately kept apart. `heartbeatFresh` is
-     * the displayed active/away label: did this agent SAY it was alive inside
-     * the heartbeat window. `live` is the delivery gate: has the server SEEN
-     * it recently — heartbeat or tool call, whichever is later — and is the
-     * channel open to carry anything.
-     *
-     * They were one field, and it read the label. The label's window is a
-     * third of the delivery one, so an agent that had simply not called
-     * `heartbeat` for a few minutes was reported as uncovered while every
-     * request was reaching it perfectly — and the remedy it was then handed
-     * is seat-claiming, whose entire hazard is evicting a working peer.
-     */
-    const liveness = (workspaceId: string, who: string) => {
-      const att = taskStore.listAttachments(workspaceId).find((a) => a.agentId === who);
-      return {
-        attached: att !== undefined,
-        heartbeatFresh: att !== undefined && att.state !== 'away',
-        live: taskStore.hasLiveAttachmentFor(workspaceId, who),
-      };
-    };
-
-    const workspaces: CoverageWorkspaceRow[] = [];
-    /** boardId → the watched doc keys that put it there (empty for a board
-     *  reached through its own `ws:` key). */
-    const boardsInScope = new Map<string, string[]>();
-    for (const key of keys) {
-      if (!key.startsWith('ws:')) continue;
-      const workspaceId = key.slice('ws:'.length);
-      const board = taskStore.getWorkspace(workspaceId);
-      if (!board) {
-        // Not a board. The key survived the liveness prune, so some doc room
-        // still carries this review id.
-        workspaces.push({ key, workspaceId, kind: 'review' });
-        continue;
-      }
-      const { attached, heartbeatFresh, live } = liveness(workspaceId, agentId);
-      const queued = queuedForLead(workspaceId);
-      workspaces.push({
-        key,
-        workspaceId,
-        kind: 'board',
-        name: board.name,
-        attached,
-        heartbeatFresh,
-        live,
-        lead: board.leadAgentId === agentId,
-        queued,
-        queuedTotal: queueTotal(queued),
-      });
-      if (!boardsInScope.has(workspaceId)) boardsInScope.set(workspaceId, []);
-    }
-
-    for (const key of keys) {
-      if (key.startsWith('ws:')) continue;
-      for (const boardId of hubBoardsForDoc(key)) {
-        boardsInScope.set(boardId, [...(boardsInScope.get(boardId) ?? []), key]);
-      }
-    }
-    const unattachedBoards: CoverageUnattachedBoard[] = [];
-    for (const [workspaceId, watchedDocs] of boardsInScope) {
-      const board = taskStore.getWorkspace(workspaceId);
-      if (!board) continue;
-      const mine = liveness(workspaceId, agentId);
-      // A LIVE attachment is coverage; a record alone is not. Read the
-      // DELIVERY predicate, not the displayed label — this row's whole claim
-      // is "work is queuing that will not reach you", and an agent inside the
-      // observed window is being reached.
-      if (mine.live) continue;
-      const queued = queuedForLead(workspaceId);
-      const lead = board.leadAgentId;
-      unattachedBoards.push({
-        workspaceId,
-        name: board.name,
-        watchedDocs: [...watchedDocs].sort(),
-        queued,
-        queuedTotal: queueTotal(queued),
-        attached: mine.attached,
-        heartbeatFresh: mine.heartbeatFresh,
-        ...(lead !== undefined ? { leadAgentId: lead } : {}),
-        // Naming the incumbent is what stops the remedy being "take the
-        // seat" on a board somebody else is actively working. This asks the
-        // same predicate `setLeadAgent`'s own lead-held guard asks, which is
-        // the point: read the heartbeat LABEL here and a working lead reports
-        // as gone, so the advice says "take the seat" while the server's
-        // guard refuses it — the reader is told to do a thing that then
-        // silently does not happen.
-        leadLive:
-          lead !== undefined && lead !== agentId && taskStore.hasLiveLeadAttachment(workspaceId),
-      });
-    }
-    // Loudest first: a board with items actually waiting is the one a reader
-    // must not scroll past.
-    unattachedBoards.sort((a, b) => b.queuedTotal - a.queuedTotal || a.name.localeCompare(b.name));
-    return { agentId, workspaces, unattachedBoards };
-  };
-
-  /**
-   * ── A WORKSPACE is a board. Everything else in it is content. ──
-   *
-   * A workspace (`taskStore`) has goals, tasks, a name, and a list of
-   * ATTACHMENT ids in `docIds`. An attachment is a doc room id or a REVIEW id
-   * — `POST /api/workspaces/:id/docs` has accepted both since it was written.
-   * So a review goes on its workspace as ONE row and its members stay off,
-   * because a hundred-file review is one unit of work, not a hundred.
-   *
-   * A REVIEW (`meta.setId`, returned as `reviewId` by `bindDiff`) is the tag
-   * binding the member docs of one folder bind or diff review together. It is
-   * content, not a container of tasks: it has no doc room of its own, and it
-   * is read through `/api/reviews/<setId>/tree|threads`. `reviewIdOf` in
-   * `@feedback/core` is the one place a member's review id is derived.
-   *
-   * Note the board page no longer LISTS attachments: the Docs and
-   * Open-threads rails came out (Bryan, 2026-08-18, "remove docs and live
-   * threads from the task list"), so `docIds` now feeds the review queue and
-   * voice lookup rather than a sidebar.
-   *
-   * Every doc and every review belongs to a workspace (Bryan, 2026-08-13) —
-   * and requiring one must not add a step. "Bind it, send Bryan the URL" is
-   * ONE agent call, so a caller with no board in hand does not get an error
-   * telling them to go create one first: what arrives unfiled lands on the
-   * default board, and the id comes back in the same response so the caller
-   * learns where it went.
-   */
-  const DEFAULT_HUB_WORKSPACE_NAME = 'Unfiled';
-
-  /**
-   * The default hub workspace, created on first need.
-   *
-   * Found by LOOKUP, never remembered in a variable: the store hydrates from
-   * disk on boot, so a cached id would fragment into one "Unfiled" per restart
-   * — which is the same as no workspace at all, one board per doc.
-   */
-  const defaultHubWorkspaceId = (): string => {
-    const existing = taskStore.listWorkspaces().find((w) => w.name === DEFAULT_HUB_WORKSPACE_NAME);
-    if (existing) return existing.id;
-    const created = taskStore.createWorkspace(DEFAULT_HUB_WORKSPACE_NAME);
-    // createWorkspace emits no event (nothing subscribes to a workspace that
-    // doesn't exist yet), so bring the board room up by hand — same as the
-    // POST /api/workspaces route.
-    taskProjection.ensureWorkspace(created.id);
-    return created.id;
-  };
-
-  /**
-   * The board a doc's "back" affordance should return to, or null.
-   *
-   * Deliberately NOT `taskStore.workspaceOfDoc`, and the difference is the
-   * whole reason this exists. That resolver answers a SHARE-SCOPE question and
-   * is documented as non-transitive: a diff review / folder browse is filed on
-   * a board as ONE row under its GROUPING id, so every member doc of every
-   * review answers null there. Reusing it would fix back for plain docs and
-   * leave it broken for exactly the surface Bryan reads most.
-   *
-   * Widening `workspaceOfDoc` itself would have widened share scoping with it,
-   * which is a security decision and not this one — so the fallback lives here
-   * and reaches only this field.
-   *
-   * A doc genuinely on two boards has two answers; the first is taken rather
-   * than none, because "back to one of this doc's boards" beats "back to the
-   * index of everything on the machine", which is what the arrow does today.
-   */
-  const backTargetFor = (docId: string, reviewId?: string): { id: string; name: string } | null => {
-    const pick = (id: string | undefined): { id: string; name: string } | null => {
-      if (!id) return null;
-      const ws = taskStore.getWorkspace(id);
-      return ws ? { id: ws.id, name: ws.name } : null;
-    };
-    return pick(hubWorkspacesHolding(docId)[0]) ?? pick(hubWorkspacesHolding(reviewId ?? '')[0]);
   };
 
   /**
@@ -3228,58 +1779,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     if (!thread) return null;
     const stamped = rooms.setReviewRequested(docId, author.name, thread.id);
     return { threadId: thread.id, ...(stamped.ok ? { requestedAt: stamped.requestedAt } : {}) };
-  };
-
-  /**
-   * Put an attachment — a doc room id OR a review id — on a hub workspace and
-   * answer which one. Idempotent: something already attached keeps the board it
-   * has (moving it is `attach_doc`'s job, not a side effect of re-binding, and
-   * re-running `create_diff_review` on a live review is documented as safe). A
-   * `requested` id that names no real board falls back to the default rather
-   * than failing the bind — the whole point is that it always lands somewhere.
-   */
-  const fileUnderHubWorkspace = (attachmentId: string, requested?: string): string => {
-    const existing = taskStore.workspaceOfDoc(attachmentId);
-    if (existing) return existing;
-    const target =
-      requested && taskStore.getWorkspace(requested) ? requested : defaultHubWorkspaceId();
-    taskStore.attachDoc(target, attachmentId);
-    // attachDoc emits no store event; refresh the projection's docIds.
-    taskProjection.ensureWorkspace(target);
-    return target;
-  };
-
-  /**
-   * Filing an attachment onto a real board takes it OUT of the default one.
-   *
-   * Without this, the usual agent flow — create it, then attach it — leaves it
-   * linked to two hub workspaces, and `workspaceOfDoc` answers with whichever
-   * the store iterates first. That is not cosmetic: it is what SHARE SCOPING
-   * resolves against, so a workspace visitor was refused (403) on the very doc
-   * the share was created for. The default board is a holding pen, not a second
-   * home.
-   */
-  const unfileFromDefault = (attachmentId: string, keptHubWorkspaceId: string): void => {
-    // `find`, never `defaultHubWorkspaceId()` — filing something must not
-    // conjure a holding pen on a server that has never needed one.
-    const holding = taskStore.listWorkspaces().find((w) => w.name === DEFAULT_HUB_WORKSPACE_NAME);
-    if (!holding || holding.id === keptHubWorkspaceId) return;
-    const res = taskStore.detachDoc(holding.id, attachmentId);
-    if (res.ok && res.removed) taskProjection.ensureWorkspace(holding.id);
-  };
-
-  /**
-   * A deleted doc — or a deleted REVIEW, which is deleted as one unit and is
-   * one row on the board — leaves no link behind. This mattered little while
-   * attaching was a deliberate act on a handful of docs; now that everything is
-   * filed, a board would otherwise silently accumulate one tombstone per
-   * deletion, invisible in the UI because a dangling id renders as nothing.
-   */
-  const unlinkFromEveryHubWorkspace = (attachmentId: string): void => {
-    for (const w of taskStore.listWorkspaces()) {
-      const res = taskStore.detachDoc(w.id, attachmentId);
-      if (res.ok && res.removed) taskProjection.ensureWorkspace(w.id);
-    }
   };
 
   /**
@@ -3370,170 +1869,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   });
 
   /**
-   * The workspace to send THIS caller to for a doc.
-   *
-   * For a share visitor it is always the workspace they were shared, never
-   * whichever workspace happens to hold the doc first. The guard has already
-   * established the doc is in their scope by the time they reach a redirect,
-   * and sending them anywhere else fails twice over: it names a workspace
-   * nobody shared with them, and the guard then refuses the very URL we just
-   * handed out — so an old `/review/<docId>` bookmark, which is the shape
-   * every link in every existing comment thread has, would 403 for exactly
-   * the people shares exist to serve.
-   */
-  const addressableWorkspaceFor = (docId: string, visitor: ShareTarget | null): string | null =>
-    visitor?.workspaceId ?? resolveWorkspaceForDoc(docId);
-
-  /**
-   * Which member a review opens on: the meatiest change, matching the entry
-   * `create_diff_review` returns. Alphabetical order would land the reviewer
-   * on dotfile and config noise on any large review.
-   */
-  const reviewEntryDocId = (reviewId: string): string | null => {
-    const members = rooms.list().filter((m) => reviewIdOf(m) === reviewId);
-    if (members.length === 0) return null;
-    const best = members.reduce((a, b) =>
-      (b.diffAdditions ?? 0) + (b.diffDeletions ?? 0) >
-      (a.diffAdditions ?? 0) + (a.diffDeletions ?? 0)
-        ? b
-        : a,
-    );
-    return best.docId;
-  };
-
-  /** The review app shell for a doc, or its 404. Null when no app is built. */
-  const serveDocShell = (docId: string, url: URL): Response | null => {
-    if (!markdownAppDist) return null;
-    // Docs are file-backed and created upfront via POST /api/docs. Arriving
-    // before an agent has done that gets a clean 404 — there is nothing the
-    // app could render for a doc that does not exist.
-    if (!rooms.get(docId)) {
-      return new Response(renderReviewNotFound(docId), {
-        status: 404,
-        headers: { 'content-type': 'text/html; charset=utf-8' },
-      });
-    }
-    // Device-frame simulation: `?mobile=<preset>` returns a shell hosting the
-    // real page in an iframe sized to the preset, so media queries inside it
-    // see the small width.
-    const mobilePreset = url.searchParams.get('mobile');
-    if (mobilePreset) {
-      return new Response(renderDeviceFrame(mobilePreset, url), {
-        headers: { 'content-type': 'text/html; charset=utf-8' },
-      });
-    }
-    // The doc editor's shell is a BUILT file, identical on every box, so the
-    // Sentry tags cannot be templated into it at build time — they are box
-    // config. Rewritten here on the way out instead, the same way a mockup's
-    // own HTML gets the widget. Unconfigured, `injectSentryHead` is skipped
-    // and the built bytes go out as they are. The bundle URLs inside are
-    // already content-addressed — the BUILD wrote them that way.
-    return serveShellHtml(join(markdownAppDist, 'index.html'), 'doc');
-  };
-
-  /**
-   * A built HTML shell, with the browser Sentry tags added for `pageType`.
-   *
-   * Read rather than delegated to `serveStatic` because the body can be
-   * rewritten on the way out and the response has to describe what was
-   * actually SENT. That used to mean re-hashing for an etag; it now means
-   * `no-store` and no etag at all, which is the same principle taken one step
-   * further — see `HTML_SHELL_HEADERS`.
-   */
-  const serveShellHtml = (path: string, pageType: PageType): Response | null => {
-    if (!existsSync(path)) return null;
-    // `no-store`, and no etag to go with it. This shell names the bundle URLs
-    // the page will load; a browser holding an old copy of it loads the
-    // bundles IT names, and there is no later request in which to notice.
-    // Since those URLs are content-addressed, the shell is the only thing
-    // that has to stay fresh — and it is about a kilobyte gzipped.
-    const raw = readFileSync(path, 'utf8');
-    const html = browserSentry
-      ? injectSentryHead(raw, browserSentry, pageType, readAppAssetManifest(markdownAppDist))
-      : raw;
-    return new Response(html, { headers: HTML_SHELL_HEADERS });
-  };
-
-  /**
-   * Whether a doc is a mockup, and so must never be sent to the doc route.
-   *
-   * The editor shell renders from LF-held content, and a mockup has none —
-   * its surface is a host page. Asked for one anyway, the shell loads, finds
-   * nothing to show, and paints an empty page under a 200. That is the worst
-   * failure shape available: the status says it worked, so nothing upstream
-   * reports it and the reviewer is left assuming the mockup itself is broken.
-   * Both doc routes therefore check this and redirect instead.
-   *
-   * Deliberately keyed on the doc's own type rather than `contentKind`: a
-   * `workspace` room also holds no content surface, but its route is the
-   * board, not a mockup.
-   */
-  const isMockupDoc = (docId: string): boolean => rooms.peekMeta(docId)?.type === 'mockup';
-
-  /**
-   * A mockup's own HTML, streamed from the file the room is bound to — with
-   * the comment widget added on the way out.
-   *
-   * The embed is attached HERE rather than written into the file, so a page
-   * that a build step generates, or that git tracks, never has to carry review
-   * scaffolding to be reviewable. See mockup-widget.ts for the incident that
-   * moved it. A page that embeds the widget itself is served untouched.
-   *
-   * The live file wins whenever it is readable, and serving refreshes the
-   * capture from it — so a mock that is still being edited behaves exactly as
-   * it always did, and the fallback holds the last thing anyone was shown
-   * rather than whatever round one looked like. Only when the file is gone
-   * does the capture answer, which is the case that used to be a 404 in front
-   * of the reviewer. See mockup-capture.ts.
-   */
-  const serveMockup = (docId: string): Response => {
-    const notFound = () =>
-      new Response(renderMockupNotFound(docId), {
-        status: 404,
-        headers: { 'content-type': 'text/html; charset=utf-8' },
-      });
-    const room = rooms.get(docId);
-    if (!room || room.meta.type !== 'mockup' || !room.meta.sourceUrl) return notFound();
-    const source = room.meta.sourceUrl;
-    // A mockup bound to something that isn't HTML is served as-is, as before:
-    // nothing is injected into it and nothing is captured from it.
-    if (!isHtmlMockupSource(source)) return serveStatic(source) ?? notFound();
-    const live = readMockupHtml(source);
-    if (live !== null) captureMockup(dataDir, room.docId, live);
-    const html = live ?? readMockupCapture(dataDir, room.docId);
-    if (html === null) return notFound();
-    // Sentry tags ride out with the widget embed, for the same reason and by
-    // the same route: a mockup is somebody's own file, and neither the review
-    // scaffolding nor the box's monitoring config belongs in it on disk.
-    const withWidget = injectWidget(html, room.meta.docId);
-    const body = injectSentryHead(
-      withWidget,
-      browserSentry,
-      'mockup',
-      readAppAssetManifest(markdownAppDist),
-    );
-    return new Response(body, {
-      headers: {
-        'content-type': 'text/html; charset=utf-8',
-        'cache-control': 'no-cache',
-        // Content-derived like serveStatic's, and for the same reason: a
-        // reload of an unchanged mock should cost a 304, and a deploy that
-        // changed nothing should not throw the cache away. Hashed from the
-        // BODY WE SEND rather than the file we read — the widget embed and
-        // the Sentry head are part of what the browser is holding, so a
-        // source-derived tag would revalidate a page whose injected half had
-        // changed underneath it. (`serveShellHtml` no longer carries a tag at
-        // all — it is `no-store`, so there is nothing stored to validate.)
-        etag: `"${Bun.hash(body).toString(16)}"`,
-        // Which copy answered. A page served from the capture is still the
-        // page — but "the source file is gone" is a fact somebody may want to
-        // act on, and it must not be inferred from the absence of an error.
-        'x-mockup-source': live !== null ? 'live' : 'captured',
-      },
-    });
-  };
-
-  /**
    * File every review that predates `fileUnderHubWorkspace` onto a workspace,
    * once per boot and never twice. See review-backfill.ts for why this is
    * needed and why it is safe to re-run; the short version is that 20 of the
@@ -3559,80 +1894,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   runReviewBackfill();
 
   /**
-   * CORS is decided once, here, for every response the handler produces,
-   * rather than by `j()` — which has no request context and used to stamp
-   * `Access-Control-Allow-Origin: *` on everything. See
-   * middleware/browser-origin.ts for why that wildcard was a hole.
+   * The origin policy every CORS decision and the cross-origin write gate
+   * read, plus the wrapper that stamps the headers — see
+   * request-admission.ts. Composed here because `createIdentitySetup` below
+   * takes `policyFor` as an input.
    */
-  /**
-   * The origin policy for a request. `localHostnames` mirrors the host gate's
-   * own notion of "this machine", so a dev server reached over the tailnet or
-   * the LAN — not just loopback — can still embed the widget.
-   */
-  const policyFor = (req: Request) => {
-    // Scheme matters (http://x and https://x are different browser origins),
-    // and behind cloudflared the socket is plain http while the browser is on
-    // https — so trust the forwarded scheme when the proxy sets one.
-    // ALLOWLISTED, not interpolated. This value is concatenated into a URL
-    // string, so an unvalidated one rewrites the origin we compare against:
-    // `x-forwarded-proto: https://evil.example.com#` makes
-    // `new URL('https://evil.example.com#://feedback.example.com').origin`
-    // the ATTACKER's origin, originMatch returns 'same-origin', and on the
-    // share host — where same-origin is the only rule left — that is the
-    // whole boundary gone. A proxy appending to an existing header
-    // (`https://evil.example.com#, https`) does it too.
-    //
-    // Note the asymmetry this fixes: host-guard requires `cf-ray` before it
-    // believes a proxy claim, while this trusted a bare header.
-    const forwarded = req.headers.get('x-forwarded-proto');
-    const scheme =
-      forwarded === 'http' || forwarded === 'https'
-        ? forwarded
-        : new URL(req.url).protocol.replace(':', '');
-    const host = req.headers.get('host') ?? '';
-    // The dev-server allowances belong to the LOCAL surface, where nothing is
-    // cookie-authenticated. A share host is not that: the visitor carries a
-    // SameSite=Lax session cookie, and websockets ignore CORS entirely — so an
-    // allowed origin that happened to be same-SITE with the share host would
-    // carry that cookie into /y/<docId> and act as a logged-in visitor. A
-    // share visitor loads the app FROM the share host, so same-origin is all
-    // they ever need, and it's all they get.
-    // Cached (60s TTL) — tailscaleHost() shells out, and this runs on every
-    // write and every websocket handshake.
-    const ourNames = localHostnames();
-    const viaProxy = req.headers.has('cf-ray');
-    const isLocalSurface = isTrustedLocalHost(host, {
-      lanHosts: ourNames,
-      extraHosts: opts.trustedHosts ?? [],
-      viaProxy,
-    });
-    // The operator's own proxied hostname serves the same product, but it is
-    // NOT the local surface for origin purposes. Through the tunnel the
-    // browser's `localhost` is the VISITOR'S machine, and a LAN name resolves
-    // on the visitor's network, so every allowance that makes sense for a
-    // TRUSTED_HOSTS name — loopback, LAN names, any port on our own names —
-    // would here trust a page the operator merely has open. Same-origin plus
-    // the origins the operator configured by name, nothing else. (The
-    // configured ones are the one deliberate cross-origin grant, and they
-    // are the operator's own call.)
-    const isProxiedLocal = isProxiedTrustedHost(host, {
-      viaProxy,
-      proxiedTrustedHosts,
-      accessFronted: proxiedTrustedVerifier !== null,
-    });
-    return {
-      // Canonicalized, not concatenated. A proxy may forward Host with an
-      // explicit default port (`feedback.example.com:443`) while the browser
-      // sends `Origin: https://feedback.example.com` — a raw string compare
-      // would then treat every legitimate request on the share host as
-      // foreign and 403 its websocket. URL.origin drops the default port.
-      requestOrigin: canonicalOrigin(scheme, host),
-      localHostnames: isLocalSurface
-        ? [...LOOPBACK_HOSTS, ...ourNames, ...(opts.trustedHosts ?? [])].filter((h) => h !== '')
-        : [],
-      allowedOrigins: isLocalSurface || isProxiedLocal ? (opts.allowedOrigins ?? []) : [],
-    };
-  };
+  const { policyFor, applyCors } = createOriginPolicy({
+    opts,
+    proxiedTrustedHosts,
+    proxiedTrustedVerifier,
+  });
 
   // --- Email-keyed identity --- see identity-setup.ts. The roster, the
   // sign-in stores and the four predicates that answer "who is this
@@ -3668,17 +1939,138 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     policyFor,
   });
 
-  const applyCors = (req: Request, res: Response): Response => {
-    const headers = corsHeadersFor(req.headers.get('origin'), policyFor(req));
-    if (!headers) return res;
-    const merged = new Headers(res.headers);
-    for (const [k, v] of Object.entries(headers)) merged.set(k, v);
-    return new Response(res.body, {
-      status: res.status,
-      statusText: res.statusText,
-      headers: merged,
-    });
+  /**
+   * Who may reach this server, over which hostname, and as whom — see
+   * request-admission.ts. Built HERE rather than beside the origin policy
+   * because `accessOnlyBrowserHosts` comes out of the identity setup just
+   * above, and that setup takes `policyFor` as an input: the two halves of
+   * this one subject sit on either side of it.
+   */
+  const { admit } = createRequestAdmission({
+    opts,
+    j,
+    shares,
+    sharingGate,
+    boardShareTarget,
+    cfAccessVerifier,
+    staticAccessVerifier,
+    collabAccessVerifier,
+    shareLinkVerifier,
+    proxiedTrustedVerifier,
+    accessTunnelHosts,
+    proxiedTrustedHosts,
+    shareLinkHosts,
+    recallCallbackHost,
+    accessOnlyBrowserHosts,
+    proxiedTrustedEmails,
+    shareWorkspacesOf,
+    collabMemberOf,
+    shareLinkMemberOf,
+    redeemShareLink,
+    safeDecodeSegment,
+    withReviewUrl,
+    recallRelay,
+    // Forward reference on purpose: `server` is bound below, and the peer
+    // address is only ever asked during a request. Same shape, and the same
+    // reason, as the identity setup's own `requestAddress` above.
+    requestAddress: (req) => server.requestIP(req)?.address,
+  });
+
+  /**
+   * What an open socket does — see socket-handlers.ts. The partner of the
+   * upgrade run: that decides a socket may open and what is stamped on it,
+   * this is the trio Bun calls afterwards. Composed with the other factories
+   * because all three stores it reads are built above; the stores themselves
+   * are passed, never anything read out of them, so every frame sees the
+   * state as it is when the frame arrives.
+   */
+  const socketHandlers = createSocketHandlers({ rooms, meetingRelay, recallRelay });
+
+  /**
+   * Whose name goes on a write — see request-attribution.ts. Composed
+   * directly below admission because that is the order the two RUN in: the
+   * gate proves who the boundary saw, and attribution ranks those proofs
+   * against what the body claims. It is the one member of this split that
+   * chains rather than composes — its per-request input is the admission
+   * result, so it cannot be called until the gate has answered.
+   */
+  const { attributeRequest } = createRequestAttribution({
+    identities,
+    taskStore,
+    sessionIdentityFor,
+    widgetBearerOf,
+    widgetTokenIdentityFor,
+    j,
+  });
+
+  /**
+   * Which page or asset an address gets — see shell-static.ts. Composed
+   * HERE rather than beside the other helpers because `emailCodeSignIn`
+   * comes out of the identity setup just above, and the landing page's
+   * counter comes out of the Home pane above that.
+   */
+  const { serveShellRoutes } = createShellStatic({
+    widgetDist,
+    markdownAppDist,
+    demosDir,
+    dataDir,
+    rooms,
+    taskStore,
+    browserSentry,
+    emailCodeSignIn,
+    j,
+    isValidDocId,
+    redirectTo,
+    resolveWorkspaceForDoc,
+    withReviewUrl,
+    reviewItemsFor,
+    homeQueueTotal,
+    defaultHubWorkspaceName: DEFAULT_HUB_WORKSPACE_NAME,
+  });
+
+  /**
+   * The requests that end in a connection rather than a body — see
+   * upgrade-stream.ts. Composed HERE because `requireSignInToWrite` comes out
+   * of the identity setup above and `policyFor` out of the origin policy
+   * above that; everything else it reads is a store built with the rest.
+   *
+   * `server` is a forward reference, the same shape `requestAddress` uses two
+   * blocks down: `Bun.serve` has not returned yet, and it is narrowed to
+   * `upgrade` so this module can take a connection over and nothing else.
+   */
+  /**
+   * The agent-stream proof, shared by the three routes that speak it: the
+   * mint, the durable watch set, and the multiplexed stream. Derived lazily
+   * from the one key file, cached like every other protocol key here.
+   */
+  let agentTokenKeyCache: string | null = null;
+  const agentTokenKeyFor = (): string => {
+    agentTokenKeyCache ??= deriveAgentTokenKey(cookieKey());
+    return agentTokenKeyCache;
   };
+  const requireAgentToken = opts.requireAgentToken ?? false;
+  /** One warning per agent id per route for the whole process life. */
+  const warnLegacyAgentCaller = createLegacyAgentWarner();
+
+  const { serveUpgradeAndStreamRoutes } = createUpgradeStream({
+    server: { upgrade: (req, options) => server.upgrade(req, options) },
+    rooms,
+    taskStore,
+    sse,
+    agentWatches,
+    watchKeyExists,
+    recallRelay,
+    policyFor,
+    requireSignInToWrite,
+    isValidDocId,
+    canonicalDocId,
+    fileUnderHubWorkspace,
+    j,
+    requestAddress: (req) => server.requestIP(req)?.address,
+    agentTokenKey: agentTokenKeyFor,
+    requireAgentToken,
+    warnLegacyAgentCaller,
+  });
   /**
    * What the operator routes read instead of this closure's scope. Built
    * once — every collaborator in it is long-lived.
@@ -3720,6 +2112,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     watchKeyExists,
     watchCoverageFor,
     canonicalDocId,
+    agentTokenKey: agentTokenKeyFor,
+    requireAgentToken,
+    warnLegacyAgentCaller,
   };
 
   /**
@@ -3778,6 +2173,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     heldFields,
     rewriteTaskBody,
     parseRevisedRange,
+    workspacesOfDoc: shareWorkspacesOf,
   };
 
   /**
@@ -3842,6 +2238,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     proposeAllowRule,
     regateDecisionWords,
     rewriteTaskBody,
+    workspacesOfDoc: shareWorkspacesOf,
   };
   /**
    * The same split for the workspace routes — see ./routes/workspaces.ts.
@@ -3874,29 +2271,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     watchKeyExists,
   };
 
-  /**
-   * What an upgrade attaches to a socket, for every socket this server opens.
-   *
-   * `kind` is what the ONE websocket handler below branches on: Bun routes
-   * every upgraded path into the same `open`/`message`/`close`, so the audio
-   * socket and the editing socket are told apart by what the upgrade
-   * attached. Absent means the editing socket, which is every upgrade that
-   * predates meetings.
-   *
-   * `shareId` and `readOnly` are named here rather than passed as excess
-   * properties, so the two upgrades that set them are type-checked against
-   * the fields the handlers read (`WsCtx` in rooms.ts, `MeetingClient` in
-   * meeting-protocol.ts).
-   */
-  type UpgradeData = {
-    docId: string;
-    kind?: 'yjs' | 'audio' | 'recall';
-    token?: string;
-    shareId?: string;
-    shareMember?: string;
-    readOnly?: boolean;
-  };
-
   const server = Bun.serve<UpgradeData>({
     port,
     // Unset means Bun's own default (every interface) — unchanged for every
@@ -3914,9 +2288,26 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // editing sockets were never affected — measured idle-surviving 30s on
     // the unfixed build, while SSE died at 9.7s.
     idleTimeout: HTTP_IDLE_TIMEOUT_SEC,
-    async fetch(req, server) {
+    // `server` is gone from this signature and from `route`'s: the three
+    // websocket upgrades were the only things in the route table that read
+    // it, and they now reach it through the narrowed forward reference the
+    // upgrade-stream factory holds. Bun still passes it; nothing here wants
+    // it.
+    async fetch(req) {
       const startedAt = performance.now();
       const pathname = new URL(req.url).pathname;
+      // A docId-addressed request may HYDRATE that doc, and hydration reads
+      // the doc's bound file. That read used to run on the main thread, where
+      // a cloud-sync folder that had stopped answering parked the whole
+      // server — every route, not just this one (see slow-fs.ts). Doing it
+      // here, on the thread pool and under a deadline, means the synchronous
+      // hydrate inside the route either finds the bytes already in hand or
+      // finds the path quarantined and parks the doc without touching it.
+      const prewarmUrl = new URL(req.url);
+      const prewarmIds = docIdsAddressedBy(prewarmUrl);
+      if (prewarmIds.length > 0) {
+        await Promise.all(prewarmIds.map((id) => rooms.prewarmHydration(id)));
+      }
       // Server-side Sentry (a no-op passthrough when unconfigured — see
       // sentry.ts): one span per request, named by route PATTERN never raw
       // path, continuing the browser's trace when it sent one so a page load
@@ -3925,7 +2316,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // observes, it does not change what a request returns.
       let routed: Response | undefined;
       try {
-        routed = await withRouteSpan(req, pathname, () => route(req, server));
+        routed = await withRouteSpan(req, pathname, () => route(req));
       } catch (err) {
         captureServerError(err, { route: routePatternForSpan(pathname), method: req.method });
         throw err;
@@ -3957,10 +2348,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
       // Hoisted, so the wrapper above can call it first. The whole route
       // table lives in here unchanged.
-      async function route(
-        req: Request,
-        server: BunServer<UpgradeData>,
-      ): Promise<Response | undefined> {
+      async function route(req: Request): Promise<Response | undefined> {
         const url = new URL(req.url);
         const { pathname } = url;
 
@@ -3997,501 +2385,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return j(403, { error: 'origin_not_allowed' });
         }
 
-        // --- Cloudflare Access gate ---
-        // When cfAccess is configured (server is reachable via a public
-        // tunnel), gate the request. Two modes:
-        //   - With shares wired: gate ONLY requests whose Host matches an
-        //     active share. Tailscale/LAN traffic to the canonical hostname
-        //     stays unauthenticated, so the agent's MCP tools can still
-        //     hit /api/share over loopback.
-        //   - Without shares: gate everything (legacy/test mode).
-        // DEFAULT-DENY BY HOST. The tunnel forwards every hostname under the
-        // share wildcard here, so "not a known share host" must mean REFUSE,
-        // never "skip the gate" (which is what it used to mean — an unknown
-        // tunnel hostname reached the whole API unauthenticated). Only our own
-        // local names bypass; a share host is gated AND scoped; anything else
-        // is denied even when Access isn't configured, so a half-configured
-        // deployment fails closed instead of publishing the API.
-        /**
-         * Doc metadata as this caller may see it. On the tailnet that's all of
-         * it; a share visitor gets an allowlisted subset — the full DocMeta
-         * carries absolute paths on Bryan's machine and a tailnet hostname,
-         * none of which is needed to render a review.
-         */
-        const metaFor = <T extends DocMeta>(meta: T): Record<string, unknown> => {
-          const decorated = withReviewUrl(meta);
-          if (!visitor) return decorated as unknown as Record<string, unknown>;
-          return {
-            ...redactMetaForVisitor(decorated, {
-              workspaceScoped: Boolean(visitor.workspaceId),
-            }),
-            // Same path, no host, and under the workspace THIS visitor was
-            // shared rather than whichever one holds the doc first.
-            ...(relativeReviewUrl(decorated.reviewUrl, visitor.workspaceId) !== undefined
-              ? { reviewUrl: relativeReviewUrl(decorated.reviewUrl, visitor.workspaceId) }
-              : {}),
-          };
-        };
-
-        /**
-         * The identity this request has PROVEN, resolved at most once.
-         *
-         * Lazy because most requests never ask, and memoized because a write
-         * route can call `authorFor` more than once and each call would
-         * otherwise re-verify an HMAC.
-         */
-        let provenIdentity: IdentityRecord | null | undefined;
-        const provenIdentityFor = (): IdentityRecord | null => {
-          if (provenIdentity !== undefined) return provenIdentity;
-          // Cloudflare Access first. It has already verified a signed claim
-          // from an identity provider, which is a STRONGER proof than a code
-          // we mailed — so an Access visitor skips the code entirely and
-          // mints the same `user-<hash>` the code path would have. Composing
-          // here rather than building a second verifier is the whole point:
-          // the email was already being extracted (cf-access.ts) and thrown
-          // away after authorizing, so the person stayed anonymous on a
-          // surface that knew exactly who they were.
-          if (accessEmail && isEmailLike(accessEmail)) {
-            const rec = identities.upsertByEmail(accessEmail);
-            provenIdentity = rec.status === 'active' ? rec : null;
-            return provenIdentity;
-          }
-          provenIdentity = sessionIdentityFor(req);
-          return provenIdentity;
-        };
-
-        /**
-         * The author to attribute a write to.
-         *
-         * Until this commit the tailnet body was simply trusted — the comment
-         * here said so — which meant `?as=bryan` on any URL minted
-         * `known-bryan`, and `kind: 'known'` only ever meant "typed a name".
-         * Now, when a request carries a VERIFIED session, the server's own
-         * verdict outranks whatever the body claims. A caller may still say
-         * who they are; they no longer get to say it about someone else.
-         *
-         * Order matters and each rung has a reason:
-         *
-         *  1. A proven identity. It outranks the body precisely because the
-         *     body is the thing it exists to stop being authoritative — and
-         *     it does so whether or not `CW_REQUIRE_EMAIL_AUTH` is on: the
-         *     flag governs whether a session is REQUIRED, never whether a
-         *     verified one is believed (Bryan, 2026-08-29 — a verified name
-         *     is never worse than a typed one).
-         *  2. A share visitor with nothing proven stays a `guest-` — that
-         *     path is the template this work copies, not a thing it replaces.
-         *     Since every share host sits behind Cloudflare Access, a visitor
-         *     reaching this rung is a deployment with no verifier wired, not a
-         *     normal anonymous reviewer.
-         *  3. Otherwise the claimed body, exactly as today. This is the rung
-         *     every agent, every MCP call and every un-authenticated browser
-         *     lands on, so a request with no session behaves identically
-         *     whichever way the flag is set.
-         *
-         * With no session presented, this function is byte-for-byte what it
-         * was whichever way the flag is set.
-         */
-        const authorFor = (claimed: unknown): User | undefined => {
-          // Rung 0: a verified widget popup-token. NOT behind the flag,
-          // unlike the cookie rung — no request carries this header by
-          // accident, so presenting the token is itself the opt-in, and the
-          // whole point of the handshake is attribution on a surface the
-          // cookie can never reach. An invalid token never lands here: the
-          // gate below 401s it before any route runs.
-          if (widgetIdentity) return userForIdentity(widgetIdentity);
-          const proven = provenIdentityFor();
-          if (proven) return userForIdentity(proven);
-          if (visitor) {
-            return sanitizeVisitorAuthor(claimed, {
-              // The SHARE, not the doc: two links to the same doc are two
-              // different audiences, and seeding from the doc id would give a
-              // returning browser the same guest identity on both — attributing
-              // comments on a freshly minted link to the old one's visitor.
-              // The `?? ''` is unreachable: the guard refuses a target with
-              // no workspaceId, so a visitor always has one. Typed optional
-              // there so an old doc-only shape is refused at runtime rather
-              // than only at compile time.
-              shareKey: visitorShareId ?? visitor.workspaceId ?? '',
-            });
-          }
-          return stampRosterAgent(claimed as User | undefined);
-        };
-
-        /**
-         * A write signed by a roster AGENT is stamped with the roster's
-         * name and canonical id — the board's record of who holds the seat
-         * names the lead, not the launch env of whichever process happened
-         * to sign. Mirrors `userForIdentity` for people. An author the
-         * roster does not know (a person's typed name, an old bundle's id
-         * nothing attached under) passes through exactly as claimed.
-         */
-        /** The 400 every comment route answers the shared category with.
-         *  One message, the same fix named, so a peer launched without a
-         *  name learns it from the first refusal rather than from silence. */
-        const refuseCategoryAuthor = (): Response =>
-          j(400, { error: AUTHOR_REQUIRED_ERROR, message: AUTHOR_REQUIRED_MESSAGE });
-
-        const stampRosterAgent = (claimed: User | undefined): User | undefined => {
-          if (!claimed || typeof claimed !== 'object' || typeof claimed.id !== 'string') {
-            return claimed;
-          }
-          const rec = identities.get(claimed.id);
-          if (!rec || rec.kind !== 'agent') return claimed;
-          // A row written by an older bundle's attach carries no name — its
-          // display name is its id. The claim on THIS write is the launch
-          // env's name, which is exactly the source the roster wants, so
-          // learn it here rather than overwrite a real name with an id.
-          const claimedName = typeof claimed.name === 'string' ? claimed.name.trim() : '';
-          if (rec.displayName === rec.id && claimedName && claimedName !== rec.id) {
-            const learned = identities.upsertAgent(rec.id, claimedName);
-            return { ...claimed, id: rec.id, name: learned?.displayName ?? claimedName };
-          }
-          return { ...claimed, id: rec.id, name: rec.displayName };
-        };
-
-        /**
-         * Thread→task surfacing (§3.12 commit 4): decorate a thread payload
-         * with chips for the tasks that reference it — via `links` or via a
-         * promotion `origin`. The chip is the §3.3 rule-2 visitor-safe shape,
-         * so visitors get the decoration too. Omitted when empty (trimmed
-         * results, §3.10) — every reader treats a missing `tasks` as none.
-         */
-        const withTaskChips = <T extends { id: string }>(docId: string, t: T): T => {
-          const chips = taskStore.tasksReferencingThread(docId, t.id).map(taskChip);
-          return chips.length > 0 ? { ...t, tasks: chips } : t;
-        };
-
-        /**
-         * The identity a widget popup-token proved, resolved once below the
-         * host gate and read by `authorFor` (rung 0). Stays null when no
-         * token was presented; a presented-but-invalid token never gets this
-         * far — the gate answers 401 for the whole request.
-         */
-        let widgetIdentity: IdentityRecord | null = null;
-        // Set when this request comes from a SHARE visitor (either mode).
-        // Everything below treats a non-null value as "untrusted outsider":
-        // their claimed identity is rewritten and doc metadata is redacted.
-        let visitor: ShareTarget | null = null;
-        /** The share that authorized this request, stamped onto any websocket
-         *  it upgrades so revocation can find and close it later. */
-        let visitorShareId: string | null = null;
-        /** The MEMBERSHIP that authorized this request, when it came in on the
-         *  share hostname. The same job as `visitorShareId` for the door that
-         *  has no Cloudflare share behind it: without it, ejecting a member or
-         *  shutting external access off left their open socket and stream
-         *  running, because both are authorized once and never re-checked. */
-        let visitorMemberKey: string | null = null;
-        /**
-         * The email Cloudflare Access verified for this request, if any.
-         *
-         * Every branch below that runs a verifier fills this in, and nothing
-         * reads it unless `CW_REQUIRE_EMAIL_AUTH` is on. A verified claim is
-         * an identity; ABSENT it, the visitor stays a `guest-` exactly as
-         * before — never unattributed, and never a fallback to whatever the
-         * body claimed, because a share visitor's body is the thing the guest
-         * namespace exists to distrust.
-         */
-        let accessEmail: string | null = null;
-        {
-          const decision = classifyHost(req.headers.get('host'), {
-            // Cached (60s TTL) — this used to spawn `tailscale status` on
-            // every single request.
-            lanHosts: localHostnames(),
-            extraHosts: opts.trustedHosts ?? [],
-            // cloudflared forwards the visitor's Host verbatim, so a tunnel
-            // visitor could otherwise claim `Host: localhost`. Cloudflare
-            // stamps cf-ray on everything it proxies (overwriting any the
-            // client sent), so its presence means "not from our LAN".
-            viaProxy: req.headers.has('cf-ray'),
-            // The opt-in collaboration hostnames, and the fact that Access
-            // really is configured for them. Both are required before a
-            // proxied host can classify anything but `deny` — see
-            // `isAccessTunnelHost`.
-            proxiedAccessHosts: accessTunnelHosts,
-            // The operator's own proxied address — listed, and honoured only
-            // with the same static-audience verifier behind it.
-            proxiedTrustedHosts,
-            accessFronted: staticAccessVerifier !== null,
-            // The share hostname, and the fact that its OWN Access
-            // application is configured. `shareLinkAccessFronted` is a
-            // separate flag from `accessFronted` because the two hostnames
-            // sit behind two applications with two audiences — see the field.
-            shareLinkHosts,
-            shareLinkAccessFronted: shareLinkVerifier !== null,
-            // Recall's own hostname. Neither `viaProxy` nor `accessFronted`
-            // applies to it — see the field on TrustedHostOpts for why both
-            // absences are deliberate.
-            recallCallbackHost,
-            // Access on every browser-facing hostname (rule 3 in host-guard).
-            // `loopbackPeer` is the half the Host header cannot fake: both of
-            // this deployment's proxies dial us over loopback, so it does not
-            // separate a tunnel visitor from the box on its own — the Host
-            // and the `cf-ray` veto do that — but it does stop a LAN or
-            // tailnet client typing `Host: localhost` and being served the
-            // product with no identity at all.
-            accessOnly: accessOnlyBrowserHosts,
-            loopbackPeer: isLoopbackAddress(server.requestIP(req)?.address),
-            lookupShare: (h) => {
-              // LIVE, not merely known: an expired share's hostname must stop
-              // being a share hostname, or expiry never takes effect for
-              // Access mode (see Shares.findLiveByHostname).
-              return boardShareTarget(shares?.findLiveByHostname(h));
-            },
-          });
-          if (decision.kind === 'deny') {
-            return j(403, { error: 'unknown_host' });
-          }
-          // --- External-access master switch ---
-          // AHEAD of both auth paths on purpose: while sharing is off, a live
-          // Access JWT, an unexpired session cookie and no credential at all
-          // must be indistinguishable. Gating after auth would leak which
-          // share links are real to anyone still holding one.
-          //
-          // Only external hosts pass through here — `local` returned above
-          // this point untouched, so the agent's MCP calls over loopback and
-          // Bryan's own browser keep working while the outside door is shut.
-          //
-          // `collab` is in here with the other two: it is external reach by
-          // the same definition, so the one switch that answers "is anything
-          // reachable from outside right now?" has to cover it. One honest
-          // limit — a collab request carries no shareId, so the hang-up sweep
-          // that runs when the switch is flipped off (`closeSocketsForShare`)
-          // cannot find its live sockets. Flipping the switch closes the door
-          // to new requests immediately; an already-open collab websocket
-          // survives until the process restarts.
-          //
-          // `proxied-local` is in here too, and it is the WIDEST of the four:
-          // the operator's own public hostname through the tunnel, with the
-          // whole product behind it. It arrives from outside the machine by
-          // exactly the definition the other three do, and leaving it out
-          // meant an operator who flipped this switch during a security
-          // review — believing the one sentence that describes it — had not
-          // closed the widest external door. Being the operator's own door is
-          // not an argument for exempting it; it is the argument for the
-          // Access token and the email allowlist below, which stay.
-          //
-          // Nothing local is affected, so the way back is the way in: flip it
-          // from the box or the tailnet (`POST /api/share/enabled`, or the
-          // `set_sharing_enabled` MCP tool). `CW_SHARING_DISABLED=1` is off
-          // AND LOCKED, and it now locks remote operator access with it —
-          // which is what "the outside door is shut" was always supposed to
-          // mean.
-          if (
-            (decision.kind === 'share' ||
-              decision.kind === 'share-link' ||
-              decision.kind === 'collab' ||
-              decision.kind === 'proxied-local') &&
-            !sharingGate.isEnabled()
-          ) {
-            return j(403, { error: 'sharing_disabled' });
-          }
-          if (decision.kind === 'share') {
-            if (!cfAccessVerifier) {
-              // A share exists but we cannot verify Access tokens — refuse
-              // rather than serve the doc to an unauthenticated visitor.
-              return j(503, { error: 'access_not_configured' });
-            }
-            const result = await cfAccessVerifier(req);
-            if (!result.ok) return j(result.status, { error: result.error });
-            accessEmail = result.email ?? null;
-            // Authenticated for THIS share — but Access only proves the
-            // visitor's email domain, not what they may touch. Scope them to
-            // the shared board: no doc enumeration, no workspace/diff
-            // creation, no share administration.
-            if (!shareScopeAllows(pathname, req.method, decision.target, shareWorkspacesOf)) {
-              return j(403, { error: 'out_of_share_scope' });
-            }
-            visitor = decision.target;
-            visitorShareId =
-              shares?.findLiveByHostname(req.headers.get('host') ?? '')?.shareId ?? null;
-          } else if (decision.kind === 'share-link') {
-            // THE SHARE HOSTNAME. One Cloudflare Access application covers
-            // the whole host with an "everyone" policy and a one-time PIN
-            // login, so what arrives here is a verified email address and
-            // nothing else — Cloudflare has said WHO, and said nothing about
-            // what they may open. Everything below is this server answering
-            // the second question.
-            //
-            // Non-null by construction (the host could not have classified
-            // share-link without it), re-checked because "I could not verify"
-            // must never mean "serve it".
-            if (!shareLinkVerifier) {
-              return j(503, { error: 'access_not_configured' });
-            }
-            const result = await shareLinkVerifier(req);
-            if (!result.ok) return j(result.status, { error: result.error });
-            accessEmail = result.email ?? null;
-
-            // The redeem route, ABOVE the scope check on purpose: `/s/<id>`
-            // names no workspace, so `collabScope` would refuse it as an
-            // out-of-scope path and nobody could ever become a member. It is
-            // the one path on this hostname a non-member may reach, and all
-            // it can do is write the caller's own verified address down
-            // against the workspace the link already names.
-            const redeemMatch = pathname.match(/^\/s\/([^/]+)$/);
-            if (redeemMatch && req.method === 'GET') {
-              return redeemShareLink(safeDecodeSegment(redeemMatch[1] ?? ''), accessEmail);
-            }
-
-            // Every other request on this hostname is judged on MEMBERSHIP,
-            // not on the link. `collabScope` is `shareScopeAllows` with the
-            // path's own workspace as the target, so every operator verb a
-            // share visitor is refused — the doc list, share administration,
-            // folder binds, diff creation, DELETE, wholesale rewrite — is
-            // refused here by the same lines, and a route added to one is
-            // added to both.
-            //
-            // A path that names no workspace (root, `/api/docs`, anything
-            // this deployment serves that is not a board's content) reaches
-            // only the static app shell, which is what makes "root answers
-            // nothing useful" true rather than asserted.
-            //
-            // The refusal is spelled exactly like the collaboration
-            // hostname's, on purpose: two different bodies would tell a
-            // signed-in stranger which guessed workspace ids are real.
-            const scope = collabScope(pathname, req.method, {
-              workspacesOf: shareWorkspacesOf,
-              isMember: (wsId) => shareLinkMemberOf(wsId, accessEmail),
-            });
-            if (!scope.allowed) return j(403, { error: 'out_of_share_scope' });
-            // An outsider like any other: identity rewritten to a guest, doc
-            // metadata redacted, `visitor`-gated routes closed. No
-            // `visitorShareId` — there is no Cloudflare share behind this.
-            visitor = scope.target;
-            // What there IS instead: the membership. Stamped on whatever this
-            // request upgrades so that removing the member, or throwing the
-            // master switch, can hang it up.
-            visitorMemberKey =
-              accessEmail && scope.target?.workspaceId
-                ? shareMemberKey(scope.target.workspaceId, accessEmail)
-                : null;
-          } else if (decision.kind === 'collab') {
-            // The collaboration hostname: one stable public address, an
-            // Access application in front of it, and the SHARE surface behind
-            // it — scoped per request to whichever workspace the path names.
-            //
-            // Non-null by construction (the host could not have classified
-            // collab otherwise), re-checked because "I could not verify"
-            // must never mean "serve it".
-            if (!collabAccessVerifier) {
-              return j(503, { error: 'access_not_configured' });
-            }
-            const result = await collabAccessVerifier(req);
-            if (!result.ok) return j(result.status, { error: result.error });
-            accessEmail = result.email ?? null;
-            // Access proves an identity Bryan admitted, not what they may
-            // touch. `collabScope` is `shareScopeAllows` with the path's own
-            // workspace as the target, so every operator verb a share visitor
-            // is refused — the doc list, share administration, folder binds,
-            // diff creation, delete, wholesale rewrite, the landing page — is
-            // refused here by the same lines.
-            // …and Access proves the visitor was admitted to the HOSTNAME,
-            // not to a board behind it. `isMember` is the second condition:
-            // the workspace the path names must list this email, through a
-            // live share's allow list or the owner allowlist.
-            //
-            // The refusal is spelled exactly like the out-of-scope one, on
-            // purpose. Two different bodies would tell an admitted
-            // collaborator which guessed workspace ids are real, which is an
-            // enumeration oracle over precisely the ids this check exists to
-            // stop them opening.
-            const scope = collabScope(pathname, req.method, {
-              workspacesOf: shareWorkspacesOf,
-              isMember: (wsId) => collabMemberOf(wsId, accessEmail),
-            });
-            if (!scope.allowed) return j(403, { error: 'out_of_share_scope' });
-            // An outsider like any other: identity rewritten to a guest, doc
-            // metadata redacted, `visitor`-gated routes closed. What it does
-            // NOT get is a `visitorShareId` — there is no share behind it.
-            visitor = scope.target;
-          } else if (decision.kind === 'recall-callback') {
-            // Recall's dedicated hostname. No Access token is demanded and
-            // none could be presented: this caller is a vendor's backend.
-            // What stands in for it is that the hostname serves TWO routes
-            // and each one carries its own credential — a 128-bit per-bot
-            // token in the websocket path, a Svix signature over the webhook
-            // body — verified by the routes themselves one layer in. So the
-            // gate's whole job here is to refuse everything else, and it is
-            // an allowlist rather than a denylist: a route added to this
-            // server tomorrow is closed on this hostname by default.
-            //
-            // 404 rather than 403, and rather than the 401 the operator
-            // hostname answers: this name is not an address the product is
-            // served on, so "there is nothing here" is both true and the
-            // least it can say about what this deployment runs.
-            //
-            // Deliberately NOT under the external-access master switch above.
-            // That switch answers "is anything reachable from outside right
-            // now?" about workspace CONTENT reached by people; these two
-            // routes read no doc and are reachable only by whoever holds a
-            // token this server minted for one bot. Turning sharing off in
-            // the middle of a meeting must not silently strand its bot.
-            if (
-              !recallCallbackAllows(pathname, req.method, {
-                relayConfigured: recallRelay.configured(),
-                webhookSecretSet: Boolean(opts.meetingBotWebhookSecret),
-              })
-            ) {
-              return j(404, { error: 'not_found' });
-            }
-            // Nothing else: no `visitor`, no scope, no accessEmail. The two
-            // routes below authenticate themselves.
-          } else if (decision.kind === 'proxied-local') {
-            // The operator's own hostname through the tunnel: an Access
-            // application in front of it, and the WHOLE product behind it.
-            // The token is the only thing between the tunnel and loopback
-            // privileges, so it is demanded here REGARDLESS of whether shares
-            // are wired — the legacy whole-server branch below stops running
-            // the moment link sharing is configured, and prod has it.
-            //
-            // Non-null by construction (the host could not have classified
-            // proxied-local otherwise), re-checked because "I could not
-            // verify" must never mean "serve it".
-            //
-            // NOTHING SKIPS THE TOKEN HERE. Two requests used to — Recall's
-            // bot callbacks, because the operator hostname was the only
-            // public address this deployment had. They now arrive on a
-            // hostname of their own (`recallCallbackHost`, handled above),
-            // which is a strictly better trade: what a vendor's backend can
-            // reach and what a person can reach are two names, and this one
-            // is back to having no holes in it at all.
-            if (!proxiedTrustedVerifier) {
-              return j(503, { error: 'access_not_configured' });
-            }
-            const result = await proxiedTrustedVerifier(req);
-            if (!result.ok) return j(result.status, { error: result.error });
-            // A token is admission, not identity. The Access policy this
-            // server cannot read may admit collaborators through the same
-            // application, and their tokens verify exactly as the operator's
-            // does. The verified email is the only thing that says WHO, so it
-            // must be on the allowlist — folded the way the roster folds — or
-            // the door stays shut. The body names nothing: not the email, not
-            // that an allowlist exists.
-            const who = result.email ? normalizeEmail(result.email) : '';
-            if (who === '' || !proxiedTrustedEmails.has(who)) {
-              return j(403, { error: 'forbidden' });
-            }
-            accessEmail = result.email ?? null;
-            // Nothing else: no `visitor`, no scope. From here on the request
-            // is what a loopback request is.
-          } else if (cfAccessVerifier && !shares && !shareLinkVerifier) {
-            // Legacy whole-server mode: cfAccess configured WITHOUT any
-            // sharing surface means the entire deployment sits behind Access,
-            // so even a local-looking Host must present a token. (With
-            // sharing wired, local traffic is the agent's own MCP calls over
-            // loopback and stays unauthenticated.)
-            //
-            // A share-link hostname counts as a sharing surface, and it has
-            // to. The per-share mode it replaces is retired: an operator who
-            // finishes draining those records and removes the old settings
-            // would otherwise fall into this branch by deletion, and every
-            // agent on the box would start being asked for an Access token it
-            // has no way to hold.
-            const result = await cfAccessVerifier(req);
-            if (!result.ok) return j(result.status, { error: result.error });
-            accessEmail = result.email ?? null;
-          }
-        }
+        // ── Request admission ── see request-admission.ts.
+        // The gate ANSWERS this request or hands back what it proved. A
+        // refused answer carries no per-request value with it, so nothing
+        // below can read a visitor off a request that never got in — the
+        // union is what makes that a compile error rather than a review note.
+        const gate = await admit(req, { pathname });
+        if (!gate.admitted) return gate.response;
+        const { visitor, visitorShareId, visitorMemberKey, metaFor } = gate;
 
         // --- REST: email login ---
         // Reachability (the host gate, Access, a share session) and identity
@@ -4503,34 +2404,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // reaches them only if `shareScopeAllows` lets them, and it does not:
         // a share visitor is already proven by Cloudflare Access, and this is
         // not a second way to claim an identity on a share host.
-        // --- Widget popup-token gate ---
-        // Resolve a presented token ONCE for the whole request, and fail
-        // loudly: an invalid token 401s rather than silently downgrading the
-        // write to anonymous — the widget hears "signed out" on the request
-        // that proved it, not never. Runs below the host gate so a share
-        // visitor's request is already scoped; runs above every route so no
-        // write path can forget the check.
-        {
-          const rawWidgetToken = widgetBearerOf(req);
-          if (rawWidgetToken !== null) {
-            widgetIdentity = widgetTokenIdentityFor(rawWidgetToken, req.headers.get('origin'));
-            if (widgetIdentity === null) return j(401, { error: 'widget_token_invalid' });
-          }
-        }
-
-        /**
-         * `true` when this request comes from a browser that has proven
-         * nobody. The three proofs, in the order `authorFor` ranks them: a
-         * widget popup-token, a Cloudflare Access claim, a session cookie —
-         * the last two both resolved by `provenIdentityFor`.
-         *
-         * Shared by the write gate below and by the `/y/` upgrade, which is
-         * the one write surface that is not an HTTP write: a markdown doc's
-         * prose is edited over the websocket, so a gate that only looked at
-         * methods would refuse the comment and wave the edit through.
-         */
-        const browserProvedNobody = (): boolean =>
-          isBrowserRequest(req.headers) && widgetIdentity === null && provenIdentityFor() === null;
+        // ── Request attribution ── see request-attribution.ts.
+        // Chained after admission rather than composed beside it, because its
+        // input is what the gate just proved. Called from the position the
+        // widget-token gate held — that gate lives inside, and its 401 has to
+        // land exactly here. `attributed: false` carries no helpers at all, so
+        // no route can name an author on a request whose token was refused.
+        const attribution = attributeRequest(req, gate);
+        if (!attribution.attributed) return attribution.response;
+        const {
+          widgetIdentity,
+          provenIdentityFor,
+          authorFor,
+          refuseCategoryAuthor,
+          withTaskChips,
+          browserProvedNobody,
+        } = attribution;
 
         // --- Sign-in write gate ---
         // Every ordinary write — a comment, a task edit, a review answer, a
@@ -4643,196 +2532,27 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return j(200, { ok: true });
         }
 
-        // --- WebSocket upgrade: Recall dialling US with a bot's words ---
-        //
-        // NO Origin check, unlike `/audio/` and `/y/` below. That guard exists
-        // because a browser will open a socket from any page the user visits
-        // and hand it the data regardless of CORS. This caller is a vendor's
-        // backend: there is no origin, and requiring one would refuse every
-        // real connection. The unguessable per-bot token in the path is the
-        // authentication — 128 CSPRNG bits, one bot, forgotten when that
-        // bot's meeting ends (see RecallMeetingRelay's mintToken).
-        if (pathname.startsWith('/recall/')) {
-          const token = decodeURIComponent(pathname.slice('/recall/'.length));
-          // Shape-checked before it is looked up so a lookup is never the
-          // thing that distinguishes a malformed token from an unknown one.
-          if (!/^[0-9a-f]{32}$/.test(token) || !recallRelay.acceptsToken(token)) {
-            return j(404, { error: 'unknown endpoint' });
-          }
-          const upgraded = server.upgrade(req, {
-            data: { docId: '', token, kind: 'recall' as const },
-          });
-          if (!upgraded) return new Response('upgrade required', { status: 426 });
-          return undefined;
-        }
-
-        // --- WebSocket upgrade: a doc's live meeting audio ---
-        //
-        // Same guard as `/y/` below and for the same reason: CORS does not
-        // apply to websockets, so without the Origin check any page the user
-        // visits could open a microphone relay against any doc — and this one
-        // spends money while it is open.
-        if (pathname.startsWith('/audio/')) {
-          if (!isAllowedBrowserOrigin(req.headers.get('origin'), policyFor(req))) {
-            return j(403, { error: 'origin_not_allowed' });
-          }
-          const addressed = decodeURIComponent(pathname.slice('/audio/'.length));
-          if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-          const docId = rooms.get(addressed)?.docId ?? addressed;
-          // Unlike `/y/`, this never conjures a room: a meeting belongs to a
-          // doc that already exists, and auto-creating one here would let a
-          // typo start a billed session against a doc nobody can find.
-          if (!rooms.get(docId)) return j(404, { error: 'doc not found' });
-          // The SAME sign-in decision `/y/` makes two branches down, for a
-          // surface that is write-only: a meeting opens a billed engine
-          // session and writes transcript and notes into the doc, and the
-          // method-keyed write gate cannot see it because a websocket
-          // upgrade is a GET. Carried rather than refused at the handshake
-          // so the strip can render the reason (meeting-protocol.ts refuses
-          // the `start` frame); an upgrade refused here reaches the page as
-          // a bare error event with no body to show.
-          const audioReadOnly = requireSignInToWrite && browserProvedNobody();
-          const upgraded = server.upgrade(req, {
-            data: {
-              docId,
-              kind: 'audio' as const,
-              // WHAT AUTHORIZED THIS SOCKET, carried for its life, exactly as
-              // `/y/` carries it below. A websocket is authorized once at its
-              // upgrade, so revoking a share, removing a member and throwing
-              // the sharing master switch all have to be able to find the
-              // connections that grant opened. Without these two the sweeps
-              // closed the editor and left an open microphone running a
-              // billed transcription session against a doc the person may no
-              // longer read. `Rooms.trackShareSocket` is the other half: this
-              // socket is in no room's `conns` for a sweep to walk.
-              ...(visitorShareId ? { shareId: visitorShareId } : {}),
-              ...(visitorMemberKey ? { shareMember: visitorMemberKey } : {}),
-              ...(audioReadOnly ? { readOnly: true } : {}),
-            },
-          });
-          if (!upgraded) return new Response('upgrade required', { status: 426 });
-          return undefined;
-        }
-
-        // --- WebSocket upgrade ---
-        if (pathname.startsWith('/y/')) {
-          // CORS does not apply to websockets — the browser opens the socket and
-          // hands the page the data regardless of what headers we set. So the
-          // Origin check has to happen HERE, or any page the user visits can
-          // sync (and mutate) any doc. Reproduced before this existed: a socket
-          // sent with `Origin: https://evil.example.com` synced a real document.
-          if (!isAllowedBrowserOrigin(req.headers.get('origin'), policyFor(req))) {
-            return j(403, { error: 'origin_not_allowed' });
-          }
-          const addressed = decodeURIComponent(pathname.slice(3));
-          if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-          // `ws.data.docId` is re-resolved on every frame, so it must be the
-          // canonical id — a socket opened by alias would otherwise sync a
-          // room of its own.
-          const docId = rooms.get(addressed)?.docId ?? addressed;
-          const type = url.searchParams.get('type') as DocType | null;
-          const sourceUrl = url.searchParams.get('sourceUrl') ?? undefined;
-          // Mockup docs auto-create on WS — the widget connects first with a
-          // known type + sourceUrl (this covers the dev-server surface too;
-          // the widget always identifies as 'mockup'). Markdown docs MUST be
-          // created upfront via POST /api/docs (which auto-attaches a file).
-          // The browser navigating to /review/<docId> before the agent has
-          // created the doc gets a clean 404 from /review's own handler.
-          // Decided BEFORE the creation below, not after it. Creating a room
-          // and filing a workspace row is a write like any other, and it used
-          // to run above this line: a browser that had proven nobody could
-          // open `/y/<any-new-id>?type=mockup` and make the server create a
-          // doc and file it under the hub workspace, with the read-only carry
-          // only stopping the ydoc edits that came afterwards.
-          const readOnly = requireSignInToWrite && browserProvedNobody();
-          if (!rooms.get(docId)) {
-            if (type === 'mockup') {
-              // Nothing to read yet, so refusing here gates no read: the doc
-              // this socket would have created does not exist for anybody.
-              if (readOnly) return j(401, signInRequiredBody());
-              rooms.getOrCreate(docId, { type, sourceUrl });
-              // The widget is the third creation path (next to POST /api/docs
-              // and the MCP tools that front it), so it files its doc too —
-              // otherwise a mockup that was only ever opened in a browser is
-              // an orphan the hub can't see.
-              fileUnderHubWorkspace(docId);
-            } else {
-              return j(404, { error: 'doc not found' });
-            }
-          }
-          // READ-ONLY, not refused. The editing socket is also the READING
-          // socket — a markdown doc's text arrives over it and nowhere else
-          // — so refusing the upgrade would gate reading, which this gate
-          // must never do. The socket opens, sync step 1 hands over the
-          // whole doc, and `onMessage` drops anything that would change it
-          // (see yjs-protocol.ts). Decided once here, at the handshake, and
-          // then carried for the life of the connection: the same shape the
-          // share authorization uses two lines up.
-          const upgraded = server.upgrade(req, {
-            data: {
-              docId,
-              ...(visitorShareId ? { shareId: visitorShareId } : {}),
-              ...(visitorMemberKey ? { shareMember: visitorMemberKey } : {}),
-              ...(readOnly ? { readOnly: true } : {}),
-            },
-          });
-          if (!upgraded) return new Response('upgrade required', { status: 426 });
-          return undefined;
-        }
-
-        // --- SSE (workspace-level): every thread event on any member doc of a
-        // workspace/diff review, one stream — agents watch this instead of one
-        // stream per file. ---
-        const wsEventsMatch = pathname.match(/^\/events\/workspace\/([^/]+)$/);
-        if (wsEventsMatch) {
-          const workspaceId = decodeURIComponent(wsEventsMatch[1] ?? '');
-          if (!isValidDocId(workspaceId)) return j(400, { error: 'bad workspaceId' });
-          // A workspace channel exists for reviews (diff
-          // reviews / folder binds) AND for hub workspaces — task.* events
-          // broadcast on the same `ws~<id>` channel (§3.6).
-          const exists =
-            rooms.list().some((m) => m.workspaceId === workspaceId) ||
-            taskStore.getWorkspace(workspaceId) !== undefined;
-          if (!exists) return j(404, { error: 'workspace not found' });
-          // A share visitor's stream carries the §3.3 visitor-contract view
-          // of every hub event (display names, projected tasks) — the SSE
-          // feed is the second door next to the ws room, and redacting one
-          // transport but not the other is how the DocMeta leak shipped.
-          // An agent's MCP child names itself here; a browser tab does not.
-          // A visitor never counts as one — their stream is authorized by a
-          // share, and letting a share-bearer claim an agentId would let an
-          // outside tab impersonate the agent whose work it can see.
-          const streamAgentId = visitor
-            ? undefined
-            : (url.searchParams.get('agentId') ?? undefined);
-          return openSseStream(
-            sse,
-            `ws~${workspaceId}`,
-            visitorShareId ?? undefined,
-            visitor ? redactHubEventForVisitor : undefined,
-            streamAgentId,
-            sseLastEventId(req, url),
-            visitorMemberKey ?? undefined,
-          );
-        }
-        // --- SSE ---
-        if (pathname.startsWith('/events/')) {
-          const addressed = decodeURIComponent(pathname.slice('/events/'.length));
-          if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-          const eventsRoom = rooms.get(addressed);
-          if (!eventsRoom) return j(404, { error: 'doc not found' });
-          // The CHANNEL is the doc's own id: a watcher that opened the stream
-          // by the readable name and a writer that fired on the canonical one
-          // have to meet, and they only do if both spellings collapse here.
-          return openSseStream(
-            sse,
-            eventsRoom.docId,
-            visitorShareId ?? undefined,
-            undefined,
-            undefined,
-            sseLastEventId(req, url),
-            visitorMemberKey ?? undefined,
-          );
+        // ── Upgrade and stream ── see upgrade-stream.ts.
+        // Six blocks that end in a long-lived connection rather than a body:
+        // the three websocket upgrades and the three SSE openers. Called from
+        // the position the run held, so the `/recall/` upgrade still sits
+        // IMMEDIATELY below the status webhook above it — that adjacency is
+        // load-bearing and the comment on the webhook says why. Null means no
+        // block there claimed this address, which is the same fall-through the
+        // run did in place; `upgraded` is the one outcome that must reach Bun
+        // as `undefined`, and this is the only place that spells it.
+        const streamed = serveUpgradeAndStreamRoutes({
+          req,
+          url,
+          pathname,
+          visitor,
+          visitorShareId,
+          visitorMemberKey,
+          browserProvedNobody,
+        });
+        if (streamed) {
+          if (streamed.kind === 'upgraded') return undefined;
+          return streamed.response;
         }
 
         // --- REST: what this process currently costs ---
@@ -5228,398 +2948,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return j(200, { log: webhookLog.slice(-100) });
         }
 
-        // --- Static: widget ---
-        if (widgetDist && pathname.startsWith('/widget/')) {
-          const p = join(widgetDist, pathname.slice('/widget/'.length));
-          // serveStaticUnder, like /app/ and /demos/ — this was the one static
-          // root built from the request path that skipped the containment
-          // check. Inert today (URL normalizes `..` before we see it, and we
-          // never decode the remainder), but /widget/ is on the SHARE
-          // visitor's allowlist, so it is the last of the three that should
-          // be relying on that.
-          const resp = serveStaticUnder(widgetDist, p);
-          if (resp) return resp;
-        }
-        if (
-          widgetDist &&
-          (pathname === '/widget.js' ||
-            pathname === '/widget.iife.js' ||
-            pathname === '/widget.esm.js')
-        ) {
-          const map: Record<string, string> = {
-            '/widget.js': 'widget.esm.js',
-            '/widget.esm.js': 'widget.esm.js',
-            '/widget.iife.js': 'widget.iife.js',
-          };
-          const file = map[pathname]!;
-          const p = join(widgetDist, file);
-          const resp = serveStatic(p);
-          if (resp) return resp;
-        }
-
-        // --- Web app files that must live at the ROOT path ---
-        //
-        // These are the same bytes served under /app/, aliased up a level
-        // because the path they are fetched from is load-bearing rather than
-        // cosmetic. A service worker's scope cannot exceed the directory it
-        // was served from, so a worker at /app/sw.js could never handle a
-        // notification click aimed at /workspaces/… . The manifest and icons
-        // ride along because a Home Screen install reads them by absolute
-        // path and one place for them is simpler than two.
-        //
-        // Deliberately NOT added to the share-host allowlist in
-        // host-guard.ts: enrolling a workspace visitor's phone for push is a
-        // scope decision nobody has made, and the allowlist is
-        // closed-by-default precisely so it stays a decision.
-        if (markdownAppDist && ROOT_ALIASED_ASSETS.has(pathname) && req.method === 'GET') {
-          const resp = serveStaticUnder(markdownAppDist, join(markdownAppDist, pathname.slice(1)));
-          if (resp) return resp;
-        }
-
-        // --- Workspace hub (plan §3.9/§3.10: /workspaces/:workspaceId) ---
-        // The shell is server-rendered (like the landing page) so the route
-        // works — and 404s crisply — whether or not the app bundle has been
-        // built; the page's behavior all lives in /app/hub.js.
-        // Every nav suffix serves the same shell: which destination renders is
-        // the client's routing (`navFromPath` in hub-presence-model), so all four are
-        // deep-linkable — the board banner's "Go to Home", a phone bookmark
-        // and a pasted link all land on the destination, not on the board with
-        // a hint.
-        //
-        // The list must stay in step with `HubNav`, and the cost of it not
-        // being is invisible from the client: `setNav` pushes these paths into
-        // history, so a suffix missing here costs nothing until somebody
-        // RELOADS or shares the URL, at which point they get a 404 on a link
-        // the product handed them. That is exactly what `/tasks`, `/mine` and
-        // `/activity` did between the nav landing and this line — measured on
-        // a staging build, 404 on all three while `/home` answered 200.
-        const hubPageMatch = pathname.match(
-          /^\/workspaces\/([^/]+?)(?:\/(?:home|tasks|mine|activity))?$/,
-        );
-        if (hubPageMatch && req.method === 'GET') {
-          const workspaceId = decodeURIComponent(hubPageMatch[1] ?? '');
-          const workspace = taskStore.getWorkspace(workspaceId);
-          if (!workspace) {
-            return new Response(renderHubNotFound(workspaceId), {
-              status: 404,
-              headers: { 'content-type': 'text/html; charset=utf-8' },
-            });
-          }
-          return new Response(
-            renderHubShell(workspace.id, workspace.name, {
-              feedback: !visitor,
-              // The board is the whole of what a visitor was given, so the
-              // shell leaves out the "all workspaces" arrow rather than
-              // painting a link to a 403.
-              visitor: Boolean(visitor),
-              sentry: browserSentry,
-              assets: readAppAssetManifest(markdownAppDist),
-            }),
-            { headers: HTML_SHELL_HEADERS },
-          );
-        }
-
-        /**
-         * --- Resources under the workspace they belong to ---
-         *
-         * `/workspaces/<workspaceId>/docs/<docId>`,
-         * `/workspaces/<workspaceId>/mockups/<docId>`,
-         * `/workspaces/<workspaceId>/reviews/<reviewId>`.
-         *
-         * The workspace segment is CONTEXT, not authorization. It tells the
-         * page (and the reader) which workspace they are in, and it is what
-         * the back arrow and the sidebar build their links from. It is
-         * deliberately not checked against the doc's own filing: a doc moved
-         * between workspaces would otherwise 404 every link already handed
-         * out, and the check that does matter — is this visitor allowed to
-         * see this resource — belongs to the share guard, which checks the
-         * workspace AND the resource and is the only thing that should.
-         */
-        const wsResourceMatch = pathname.match(
-          /^\/workspaces\/([^/]+)\/(docs|mockups|reviews)\/([^/]+)$/,
-        );
-        if (wsResourceMatch && req.method === 'GET') {
-          const wsSeg = decodeURIComponent(wsResourceMatch[1] ?? '');
-          const kind = wsResourceMatch[2] ?? '';
-          const id = decodeURIComponent(wsResourceMatch[3] ?? '');
-          if (kind === 'reviews') {
-            // A review is a set of docs, not a page. Send the reader to the
-            // member worth opening first — the same entry `create_diff_review`
-            // picks, so the URL and the tool agree on where a review starts.
-            const entry = reviewEntryDocId(id);
-            if (!entry) {
-              return new Response(renderReviewNotFound(id), {
-                status: 404,
-                headers: { 'content-type': 'text/html; charset=utf-8' },
-              });
-            }
-            return redirectTo(
-              `/workspaces/${encodeURIComponent(wsSeg)}/docs/${encodeURIComponent(entry)}`,
-              url.search,
-            );
-          }
-          if (!isValidDocId(id)) return j(400, { error: 'bad docId' });
-          const canonical = rooms.get(id)?.docId ?? id;
-          if (kind === 'mockups') return serveMockup(canonical);
-          if (isMockupDoc(canonical)) {
-            return redirectTo(
-              `/workspaces/${encodeURIComponent(wsSeg)}/mockups/${encodeURIComponent(canonical)}`,
-              url.search,
-            );
-          }
-          const served = serveDocShell(canonical, url);
-          if (served) return served;
-        }
-
-        // --- Markdown app (surface 1) ---
-        //
-        // COMPAT. `/review/<docId>` is where every doc used to live, and it
-        // still answers — it redirects to the workspace path when the doc's
-        // workspace can be resolved, and serves in place when it cannot. See
-        // the compat block note above `resolveWorkspaceForDoc`.
-        if (pathname.startsWith('/review/')) {
-          const addressed = decodeURIComponent(pathname.slice('/review/'.length));
-          if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-          // A captured review URL carries whatever id it was copied with: a
-          // pre-migration doc's own id, or the readable alias of one minted
-          // since. Both land on the same doc, and the redirect below rewrites
-          // either into the canonical address.
-          const docId = rooms.get(addressed)?.docId ?? addressed;
-          // A mockup has no editor, so the doc route is the wrong destination
-          // for one — see `isMockupDoc`. Hand it to the mockup route's own
-          // resolution, which is the behaviour `/mockup/<docId>` already has.
-          if (isMockupDoc(docId)) {
-            const mockHome = addressableWorkspaceFor(docId, visitor);
-            if (mockHome) {
-              return redirectTo(
-                `/workspaces/${encodeURIComponent(mockHome)}/mockups/${encodeURIComponent(docId)}`,
-                url.search,
-              );
-            }
-            return serveMockup(docId);
-          }
-          // The redirect is deliberately OUTSIDE the `markdownAppDist` guard
-          // that wraps the serve below. Where a doc lives is a fact about
-          // addressing; whether the browser app has been built is a fact
-          // about this deployment. Tying the two together would make an old
-          // URL 404 on a server that simply has no app bundle, which is a
-          // different failure wearing the same status code.
-          if (rooms.get(docId)) {
-            const home = addressableWorkspaceFor(docId, visitor);
-            if (home) {
-              return redirectTo(
-                `/workspaces/${encodeURIComponent(home)}/docs/${encodeURIComponent(docId)}`,
-                url.search,
-              );
-            }
-          }
-          const served = serveDocShell(docId, url);
-          if (served) return served;
-        }
-        if (markdownAppDist && pathname.startsWith('/app/')) {
-          const rel = pathname.slice('/app/'.length);
-          const p = join(markdownAppDist, rel);
-          const resp = serveStaticUnder(markdownAppDist, p, appCacheControl(basename(rel)));
-          if (resp) return resp;
-        }
-
-        // --- Mockup HTML — bound to a docId via bind_mock / POST /api/docs
-        //     with type='mockup'. Reads the file at the room's sourceUrl
-        //     (any absolute path on disk) and streams it as text/html. The
-        //     pre-bind_mock workflow required symlinking each new HTML
-        //     into <plugin-repo>/demos/ — `/mockup/<docId>` replaces that
-        //     dance and matches the contract of `/review/<docId>` for
-        //     markdown docs: one MCP call, one URL, no filesystem juggling.
-        //     Single-file mockups only — assets the HTML references via
-        //     relative paths won't resolve since we don't serve the source
-        //     directory. Use the existing /demos/ multi-page path for
-        //     mockups that ship with sibling files.
-        //     COMPAT, same rule as `/review/`: redirect to the workspace path
-        //     when the mockup's workspace resolves, serve in place when it
-        //     does not.
-        if (pathname.startsWith('/mockup/')) {
-          const slug = decodeURIComponent(pathname.slice('/mockup/'.length));
-          // Tolerate `/mockup/<docId>.html` AND `/mockup/<docId>` — agents
-          // share whichever URL feels natural.
-          const addressed = slug.replace(/\.html?$/i, '');
-          if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-          const docId = rooms.get(addressed)?.docId ?? addressed;
-          const home = rooms.get(docId) ? addressableWorkspaceFor(docId, visitor) : null;
-          if (home) {
-            return redirectTo(
-              `/workspaces/${encodeURIComponent(home)}/mockups/${encodeURIComponent(docId)}`,
-              url.search,
-            );
-          }
-          return serveMockup(docId);
-        }
-
-        // --- Demos ---
-        if (demosDir && pathname.startsWith('/demos/')) {
-          let p = join(demosDir, pathname.slice('/demos/'.length));
-          if (!extname(p)) p = join(p, 'index.html');
-          const resp = serveStaticUnder(demosDir, p);
-          if (resp) return resp;
-        }
-
-        // --- Sign-in page ---
-        // Server-rendered shell like the hub's, so the route works — and the
-        // page's behavior all lives in /app/signin.js. Identity, not access:
-        // the tailnet reaches everything signed out; this page only lets a
-        // person claim who they are (`/api/auth/*` above).
-        if (pathname === '/signin' && req.method === 'GET') {
-          // Turned off under access-only: the page's whole job is to prove an
-          // address, and Access proved one before the request arrived. 404
-          // rather than a redirect, so nothing links here and nothing lands
-          // here — a dead end is exactly what this removes.
-          if (!emailCodeSignIn) return j(404, { error: 'not_found' });
-          return new Response(
-            renderSigninShell(browserSentry, readAppAssetManifest(markdownAppDist)),
-            { headers: HTML_SHELL_HEADERS },
-          );
-        }
-
-        // --- Landing ---
-        if (pathname === '/') {
-          const model = buildLandingModel(
-            collectLandingWorkspaces(rooms, taskStore, (ws) =>
-              homeQueueTotal(ws, reviewItemsFor(ws)),
-            ),
-            collectLandingProjects(rooms),
-            Date.now(),
-          );
-          // The landing banner's join files its doc under the default board
-          // (the join POST carries no workspaceId from `/`), so the offer
-          // names that destination on its face.
-          // `no-store` like every other shell, and this one has a second
-          // reason of its own: the page IS the model — workspace rows,
-          // waiting counts, "active in the last N days". Served with no cache
-          // directives at all, as it was, a browser picks its own freshness
-          // lifetime and can show a queue that has since been worked.
-          return new Response(
-            renderLanding(
-              model,
-              browserSentry,
-              DEFAULT_HUB_WORKSPACE_NAME,
-              readAppAssetManifest(markdownAppDist),
-            ),
-            { headers: HTML_SHELL_HEADERS },
-          );
-        }
-
-        // --- One project's artifacts, on demand ---
-        // The landing page deliberately does not carry these. Work here is
-        // proportional to the project somebody actually opened, not to every
-        // room on the server.
-        if (pathname.startsWith('/projects/')) {
-          let owner: string;
-          try {
-            owner = decodeURIComponent(pathname.slice('/projects/'.length));
-          } catch {
-            return new Response('bad project', { status: 400 });
-          }
-          if (owner === '') return new Response('not found', { status: 404 });
-          const artifacts = buildProjectArtifacts(rooms, withReviewUrl, owner);
-          return new Response(
-            renderProjectPage(
-              owner,
-              artifacts,
-              browserSentry,
-              readAppAssetManifest(markdownAppDist),
-            ),
-            { status: artifacts.length === 0 ? 404 : 200, headers: HTML_SHELL_HEADERS },
-          );
-        }
+        // ── Shell and static serving ── see shell-static.ts.
+        // The tail of the router: an HTML shell, a built asset, a mockup's
+        // own file, or a redirect to the address that has one. Null means no
+        // block there claimed this address, which is the same fall-through
+        // the run did in place, and it lands on the 404 below.
+        const shell = serveShellRoutes({ req, url, pathname, visitor });
+        if (shell) return shell;
 
         return new Response('not found', { status: 404 });
       }
     },
-    websocket: {
-      // Yjs sync step 2 hands a fresh tab the WHOLE room state in one binary
-      // frame. Measured over the live hub board's persisted state on
-      // 2026-08-29: 1,264,566 bytes, deflating to 431,733 — 2.9×, or 813 KB
-      // this server stops sending on every board open, every tab, every
-      // reconnect. Every browser offers the extension already; the server
-      // only had to accept it and ask for compression per send.
-      //
-      // How much WALL TIME that buys is a property of the reader's link, and
-      // this repo has no trustworthy measurement of Bryan's — so the claim
-      // here is the byte count, which is measured, and not a number of
-      // seconds, which would not be. Audio frames are opaque and already
-      // codec-compressed; they do not shrink, and the cost is one deflate
-      // context per socket.
-      perMessageDeflate: true,
-      open(ws) {
-        if (ws.data.kind === 'recall') return;
-        if (ws.data.kind === 'audio') {
-          // Before the relay, because the relay's own bookkeeping is a
-          // WeakMap nothing can enumerate: this is what makes the socket
-          // reachable by the share sweeps in `rooms.ts`. A socket carrying
-          // neither stamp — the owner's — is not tracked at all.
-          rooms.trackShareSocket(ws);
-          meetingRelay.onOpen(ws);
-          return;
-        }
-        const typed = ws as unknown as FeedbackWs;
-        const room = rooms.get(typed.data.docId);
-        if (!room) {
-          ws.close(1008, 'no room');
-          return;
-        }
-        onOpen(room, typed);
-      },
-      message(ws, message) {
-        if (ws.data.kind === 'recall') {
-          // Text only. Recall's realtime transcript events are JSON frames;
-          // this endpoint subscribes no binary media, so a binary frame here
-          // is not ours to interpret.
-          if (typeof message === 'string' && ws.data.token) {
-            recallRelay.onSocketText(ws.data.token, message);
-          }
-          return;
-        }
-        if (ws.data.kind === 'audio') {
-          if (typeof message === 'string') {
-            meetingRelay.onText(ws, message);
-            return;
-          }
-          const buf = message as unknown as ArrayBufferView;
-          // COPIED, unlike the yjs path below: audio can be held in the
-          // relay's pending queue across the handshake, and Bun is free to
-          // reuse the receive buffer the moment this returns.
-          meetingRelay.onAudio(
-            ws,
-            new Uint8Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)),
-          );
-          return;
-        }
-        const typed = ws as unknown as FeedbackWs;
-        const room = rooms.get(typed.data.docId);
-        if (!room) return;
-        let data: Uint8Array;
-        if (typeof message === 'string') {
-          data = new TextEncoder().encode(message);
-        } else {
-          // Bun's Buffer extends Uint8Array; copy to plain Uint8Array for y-protocols
-          const buf = message as unknown as ArrayBufferView;
-          data = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-        }
-        onMessage(room, typed, data);
-      },
-      close(ws) {
-        if (ws.data.kind === 'recall') {
-          // NOT the end of the meeting — see RecallMeetingRelay.onSocketClose.
-          if (ws.data.token) recallRelay.onSocketClose(ws.data.token);
-          return;
-        }
-        if (ws.data.kind === 'audio') {
-          rooms.untrackShareSocket(ws);
-          meetingRelay.onClose(ws);
-          return;
-        }
-        onClose(ws as unknown as FeedbackWs);
-      },
-    },
+    // ── Socket handlers ── see socket-handlers.ts. A19 decided the socket
+    // may open and what is stamped on it; this is what Bun calls for the
+    // life of that connection. `close` is synchronous on purpose — the
+    // drain in `stop` below fires it inside `server.stop(true)`, while the
+    // stores its writes land in are still up.
+    websocket: socketHandlers,
   });
 
   // The effort re-scoring pass starts HERE, after the port is bound, not
@@ -5909,6 +3254,54 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   };
 }
 
+/**
+ * Every docId a request might address, from anywhere in its URL.
+ *
+ * This used to be a list of five path prefixes, and the list was the bug: it
+ * covered `/events/`, `/y/`, `/review/`, `/audio/` and `/mockup/` while the
+ * canonical `/workspaces/<ws>/docs/<docId>` address and every `/api` route
+ * that names a doc in its path went the unprewarmed way and hydrated on the
+ * main thread. A prefix list also has to be maintained: a route added later
+ * is silently uncovered, and nothing fails until a bound file stops
+ * answering.
+ *
+ * So this walks the path instead of matching the front of it. Every segment
+ * that could be a docId is offered to the prewarm, which looks each one up in
+ * the doc index and does nothing for the ones it does not know — so a
+ * workspace slug or a verb like `archive` costs a Map lookup and no syscall.
+ * Being liberal here is safe in exactly the way being conservative was not:
+ * an extra candidate reads a file the request was likely to read anyway, a
+ * missing one puts a blocking read back on the main thread.
+ *
+ * There is no body-reading companion to this, and there was briefly: a
+ * function that pulled `docId` out of a JSON body for the routes that address
+ * a doc there rather than in the URL. It could never run. `isValidDocId`
+ * accepts any ordinary URL-safe word, so `api` and `docs` are candidates and
+ * the list this returns is empty only for `/` itself. Those body-addressed
+ * routes are the bind and attach pair, and they are covered where it
+ * actually holds — they call `attachFileAsync`, which does its own pooled
+ * read before it touches the doc.
+ */
+function docIdsAddressedBy(url: URL): string[] {
+  const found: string[] = [];
+  const add = (raw: string | null | undefined): void => {
+    if (!raw) return;
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(raw);
+    } catch {
+      return;
+    }
+    // `/mockup/<docId>.html` is the one address that carries an extension.
+    const bare = decoded.replace(/\.html?$/i, '');
+    if (!isValidDocId(bare) || found.includes(bare)) return;
+    found.push(bare);
+  };
+  for (const segment of url.pathname.split('/')) add(segment);
+  add(url.searchParams.get('docId'));
+  return found;
+}
+
 function isValidDocId(s: string): boolean {
   // Allow a reasonable set of URL-safe chars. Disallow leading dot so IDs
   // can't masquerade as hidden files on disk. Length cap protects the
@@ -5920,25 +3313,6 @@ function isValidDocId(s: string): boolean {
   // valid filename char, matching the .ydoc-on-disk naming.
   if (!s || s.startsWith('.')) return false;
   return /^[a-zA-Z0-9_.:~\-]{1,100}$/.test(s);
-}
-
-/** `scheme://host` with the default port normalized away, or the raw
- *  concatenation when it doesn't parse (which then simply matches nothing). */
-/** The id a reconnecting SSE client last saw: the `Last-Event-ID` header a
- *  native EventSource sends back by itself once frames carry `id:` lines,
- *  else the `lastEventId` query param for hand-rolled fetch-stream consumers
- *  (the MCP watch loop). Absent/empty → a fresh subscription, no replay. */
-function sseLastEventId(req: Request, url: URL): string | undefined {
-  const v = req.headers.get('last-event-id') ?? url.searchParams.get('lastEventId');
-  return v ? v : undefined;
-}
-
-function canonicalOrigin(scheme: string, host: string): string {
-  try {
-    return new URL(`${scheme}://${host}`).origin;
-  } catch {
-    return `${scheme}://${host}`;
-  }
 }
 
 function j(status: number, body: unknown): Response {

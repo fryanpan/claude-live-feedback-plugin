@@ -277,7 +277,11 @@ export async function handleTaskTool(
         ...(res.sourceDoc !== undefined ? { sourceDoc: res.sourceDoc } : {}),
       });
     }
-    case 'promote_to_task': {
+    // COMPAT: `promote_to_task` is what this was called before the product
+    // settled on spinning a comment off into work. Same arm, same arguments;
+    // see deprecated-aliases.ts.
+    case 'promote_to_task':
+    case 'spin_off_task': {
       const {
         docId,
         threadId,

@@ -13669,6 +13669,65 @@ class StdioServerTransport {
   }
 }
 
+// packages/mcp/src/agent-token.ts
+function agentTokenPath(agentId) {
+  return `/api/agents/${encodeURIComponent(agentId)}/token`;
+}
+function pathNeedsAgentToken(path) {
+  return /^\/api\/agents\/[^/?]+\/watches(\?|$)/.test(path);
+}
+function createAgentTokenStore(deps) {
+  let token = null;
+  let minting = null;
+  let unsupported = false;
+  const mint = async () => {
+    try {
+      const res = await deps.fetch(`${deps.resolveBaseUrl()}${agentTokenPath(deps.agentId)}`, {
+        headers: { accept: "application/json" }
+      });
+      if (res.status === 404) {
+        unsupported = true;
+        await res.text().catch(() => "");
+        deps.log("[claude-workspaces-mcp] server has no agent-token route — continuing unauthenticated (it accepts that during the rollout)");
+        return null;
+      }
+      const text = await res.text();
+      if (!res.ok) {
+        deps.log(`[claude-workspaces-mcp] agent token → ${res.status}: ${text}`);
+        return null;
+      }
+      const parsed = JSON.parse(text);
+      return typeof parsed.token === "string" && parsed.token ? parsed.token : null;
+    } catch (e) {
+      deps.log("[claude-workspaces-mcp] agent token unavailable:", e);
+      return null;
+    }
+  };
+  const store = {
+    hasToken: () => token !== null,
+    forget: () => {
+      token = null;
+    },
+    headersFor: (path) => pathNeedsAgentToken(path) ? store.headers() : Promise.resolve({}),
+    async headers() {
+      if (deps.identityIsShared || unsupported)
+        return {};
+      if (token !== null)
+        return { authorization: `Bearer ${token}` };
+      minting ??= mint().then((minted2) => {
+        if (minted2 !== null)
+          token = minted2;
+        return minted2;
+      }).finally(() => {
+        minting = null;
+      });
+      const minted = await minting;
+      return minted === null ? {} : { authorization: `Bearer ${minted}` };
+    }
+  };
+  return store;
+}
+
 // packages/mcp/src/attachment-keepalive.ts
 var DEFAULT_INTERVAL_MS = 120000;
 function createAttachmentKeepalive(opts) {
@@ -13865,6 +13924,28 @@ function resolveAgentAuthor(env) {
   return { name, color: hashToColor(name), id: agentIdForName(name), kind: "known" };
 }
 
+// packages/mcp/src/deprecated-aliases.ts
+var DEPRECATED_TOOL_ALIASES = {
+  bind_folder: "attach_folder",
+  bind_mock: "attach_mockup",
+  promote_to_task: "spin_off_task",
+  retire_workspace: "archive_workspace"
+};
+function deprecationLine(alias, now2) {
+  return `[mcp] ${alias} is the old name for ${now2} — still answered this release, removed in the next. Call ${now2}.`;
+}
+function createAliasDeprecationWarner(log = (line) => console.error(line)) {
+  const warned = new Set;
+  return (name) => {
+    const now2 = DEPRECATED_TOOL_ALIASES[name];
+    if (now2 === undefined || warned.has(name))
+      return;
+    warned.add(name);
+    log(deprecationLine(name, now2));
+  };
+}
+var warnDeprecatedAlias = createAliasDeprecationWarner();
+
 // packages/mcp/src/call-tool.ts
 var NO_AUTO_WATCH_TOOLS = new Set([
   "unwatch_doc",
@@ -13892,6 +13973,7 @@ function createCallToolHandler(deps) {
       await deps.ensureWatchesRestored();
       deps.sendDueHeartbeats();
       await maybeAutoWatch(deps.watchDoc, name, a);
+      (deps.warnDeprecatedAlias ?? warnDeprecatedAlias)(name);
       const ctx = deps.toolContext();
       for (const handle of deps.handlers) {
         const answer = await handle(name, a, ctx);
@@ -14008,6 +14090,25 @@ function stalledRowsClause(rows) {
   const rest = rows.length - shown.length;
   return rest > 0 ? `${shown.join("; ")}; and ${rest} more` : shown.join("; ");
 }
+function changedClause(changed) {
+  if (!changed)
+    return "";
+  const bits = [];
+  const rows = changed.rows ?? [];
+  if (rows.length > 0)
+    bits.push(`${stalledRowsClause(rows)}`);
+  const unread = changed.undetermined ?? [];
+  if (unread.length > 0)
+    bits.push(`${unread.join(", ")} became unreadable`);
+  const held = changed.heldItems ?? [];
+  if (held.length > 0)
+    bits.push(`${held.length} review item(s) newly held`);
+  if (changed.escalated === true)
+    bits.push("the board’s quietest row crossed another repeat window");
+  if (bits.length === 0)
+    return "";
+  return `NEW since the last wake: ${bits.join("; ")}.`;
+}
 function stalledLine(p) {
   const parts = [];
   const rows = p.rows ?? [];
@@ -14034,6 +14135,9 @@ function stalledLine(p) {
     const noun = held.length === 1 ? "review item is" : "review items are";
     parts.push(`${held.length} ${noun} HELD by the quality gate and off the reader's queue — ` + `${heldRowsClause(held)}. Get each filer to revise_review_item; nobody can answer a held ask.`);
   }
+  const changed = changedClause(p.changed);
+  if (changed)
+    parts.unshift(changed);
   const body = parts.join(" ") || "the board reported a stall with no rows on it — treat this as a bug in the wake, not as a clear board.";
   if (p.escalatedFrom !== undefined && p.escalatedFrom !== "") {
     return `[workspace.stalled] You are not this board's lead — ${p.escalatedFrom} holds the seat and ` + "is not reachable, so this came to you instead. Nothing addressed to that seat is arriving: " + "take it (attach_agent) or hand it to a session that is here. Then, on the board itself: " + body;
@@ -14505,12 +14609,15 @@ function resolveBaseUrl(deps) {
   }
   throw new Error("claude-workspaces server not found — start it with `bun run dev` (or set CW_BASE_URL). " + `Looked for a discovery file at ${discoveryCandidates(deps.homedir()).join(" and ")}.`);
 }
-function createHttp(resolve, fetchFn = fetch) {
+function createHttp(resolve, fetchFn = fetch, authHeaders = async () => ({})) {
   return async (method, path, body) => {
     const baseUrl = resolve();
     const res = await fetchFn(`${baseUrl}${path}`, {
       method,
-      headers: body ? { "content-type": "application/json" } : {},
+      headers: {
+        ...body ? { "content-type": "application/json" } : {},
+        ...await authHeaders(path)
+      },
       body: body ? JSON.stringify(body) : undefined
     });
     const text = await res.text();
@@ -14528,6 +14635,44 @@ function err(message) {
   return {
     isError: true,
     content: [{ type: "text", text: message }]
+  };
+}
+
+// packages/mcp/src/backoff.ts
+var RECONNECT_BASE_MS = 1500;
+var RECONNECT_CAP_MS = 30000;
+function reconnectDelayMs(attempt, random = Math.random, base = RECONNECT_BASE_MS, cap = RECONNECT_CAP_MS) {
+  const window = reconnectWindowMs(attempt, base, cap);
+  return Math.floor(Math.max(0, Math.min(1, random())) * window);
+}
+function reconnectWindowMs(attempt, base = RECONNECT_BASE_MS, cap = RECONNECT_CAP_MS) {
+  if (!Number.isFinite(attempt) || attempt <= 1)
+    return Math.min(base, cap);
+  return Math.min(cap, base * 2 ** (attempt - 1));
+}
+
+// packages/mcp/src/mux-cursor.ts
+var MUX_CURSOR_PREFIX = "mux1:";
+var MUX_CURSOR_MAX_BYTES = 6000;
+function formatMuxCursor(cursors, maxBytes = MUX_CURSOR_MAX_BYTES) {
+  const parts = [];
+  const dropped = [];
+  let length = MUX_CURSOR_PREFIX.length;
+  for (const [key, id] of cursors) {
+    if (key.length === 0 || id.length === 0)
+      continue;
+    const pair = `${key}=${id}`;
+    const cost = pair.length + (parts.length > 0 ? 1 : 0);
+    if (length + cost > maxBytes) {
+      dropped.push(key);
+      continue;
+    }
+    parts.push(pair);
+    length += cost;
+  }
+  return {
+    value: parts.length > 0 ? `${MUX_CURSOR_PREFIX}${parts.join(",")}` : undefined,
+    dropped
   };
 }
 
@@ -14555,8 +14700,10 @@ async function deliverThenCommit(frame, deliver, cursor, onGap) {
 }
 
 // packages/mcp/src/sse-loop.ts
-var RECONNECT_BACKOFF_MS = 1500;
 var DEFAULT_CONNECT_CAP_MS = 3000;
+var ABSENT_STATUSES = new Set([403, 404, 410]);
+var ABSENT_RETRY_CAP_MS = 60000;
+var ABSENT_DROP_AFTER = 5;
 function createSseLoops(deps) {
   return {
     runSseLoop: (label, path, signal, onFirstAttempt) => runSseLoop(deps, label, path, signal, onFirstAttempt),
@@ -14574,10 +14721,23 @@ async function runSseLoop(deps, label, path, signal, onFirstAttempt) {
   };
   const setOpen = (open) => {
     const w = deps.watchers.get(label);
-    if (w)
-      w.open = open;
+    if (!w)
+      return;
+    w.open = open;
+    if (open)
+      w.inactiveReason = undefined;
+  };
+  const dropKey = (reason) => {
+    const w = deps.watchers.get(label);
+    if (w) {
+      w.open = false;
+      w.inactiveReason = reason;
+    }
+    deps.log(`[claude-workspaces-mcp] ${label}: ${reason}`);
   };
   const cursor = { lastEventId: undefined };
+  let attempt = 0;
+  let absent = 0;
   while (!signal.aborted) {
     try {
       const res = await deps.fetch(`${deps.resolveBaseUrl()}${path}`, {
@@ -14587,27 +14747,44 @@ async function runSseLoop(deps, label, path, signal, onFirstAttempt) {
       const live = res.ok && res.body !== null;
       setOpen(live);
       settleFirst(live);
-      if (!res.ok || !res.body)
+      if (!live) {
+        await releaseBody(res);
+        if (ABSENT_STATUSES.has(res.status)) {
+          absent += 1;
+          if (absent >= ABSENT_DROP_AFTER) {
+            dropKey(`server answered ${res.status} ${absent} times running — stopped watching this key`);
+            return;
+          }
+        } else {
+          absent = 0;
+        }
         throw new Error(`sse ${path} → ${res.status}`);
+      }
+      attempt = 0;
+      absent = 0;
       const reader = res.body.getReader();
       const decoder = new TextDecoder;
       let buf = "";
-      while (!signal.aborted) {
-        const { value, done } = await reader.read();
-        if (done)
-          break;
-        buf += decoder.decode(value, { stream: true });
-        let sep = buf.indexOf(`
+      try {
+        while (!signal.aborted) {
+          const { value, done } = await reader.read();
+          if (done)
+            break;
+          buf += decoder.decode(value, { stream: true });
+          let sep = buf.indexOf(`
 
 `);
-        while (sep >= 0) {
-          const frame = buf.slice(0, sep);
-          buf = buf.slice(sep + 2);
-          await deliverThenCommit(frame, deps.handleFrame, cursor, deps.resetDedup);
-          sep = buf.indexOf(`
+          while (sep >= 0) {
+            const frame = buf.slice(0, sep);
+            buf = buf.slice(sep + 2);
+            await deliverThenCommit(frame, deps.handleFrame, cursor, deps.resetDedup);
+            sep = buf.indexOf(`
 
 `);
+          }
         }
+      } finally {
+        await releaseReader(reader);
       }
     } catch (err2) {
       setOpen(false);
@@ -14617,7 +14794,9 @@ async function runSseLoop(deps, label, path, signal, onFirstAttempt) {
       deps.log(`[claude-workspaces-mcp] ${label} sse error, retrying:`, err2);
     }
     setOpen(false);
-    await deps.sleep(RECONNECT_BACKOFF_MS);
+    attempt += 1;
+    const cap = absent > 0 ? ABSENT_RETRY_CAP_MS : RECONNECT_CAP_MS;
+    await deps.sleep(reconnectDelayMs(attempt, deps.random, RECONNECT_BASE_MS, cap));
     deps.resetDedup();
   }
   setOpen(false);
@@ -14636,6 +14815,223 @@ function startSseLoop(deps, label, path, controller) {
       resolve(false);
     });
   });
+}
+async function releaseBody(res) {
+  try {
+    await res.body?.cancel();
+  } catch {}
+}
+async function releaseReader(reader) {
+  try {
+    await reader.cancel();
+  } catch {}
+  try {
+    reader.releaseLock();
+  } catch {}
+}
+function inactiveWatches(watchers) {
+  const out = [];
+  for (const [key, w] of watchers) {
+    const reason = w?.inactiveReason;
+    if (typeof reason === "string")
+      out.push({ key, reason });
+  }
+  return out;
+}
+
+// packages/mcp/src/mux-loop.ts
+var DEFAULT_CONNECT_CAP_MS2 = 3000;
+var MUX_CURSOR_MAX_KEYS = 512;
+function muxPath(agentId) {
+  return `/events/agent/${encodeURIComponent(agentId)}`;
+}
+function createMuxLoop(deps) {
+  const rt = {
+    controller: null,
+    running: false,
+    open: false,
+    unsupported: false,
+    cursors: new Map,
+    starting: null
+  };
+  return {
+    ensureOpen: () => ensureOpen(deps, rt),
+    stop: () => stop(deps, rt),
+    isOpen: () => rt.open,
+    unsupported: () => rt.unsupported,
+    loopCount: () => rt.running ? 1 : 0,
+    dropCursor: (key) => {
+      rt.cursors.delete(key);
+    },
+    cursorCount: () => rt.cursors.size
+  };
+}
+function stop(deps, rt) {
+  rt.controller?.abort();
+  rt.controller = null;
+  rt.running = false;
+  rt.starting = null;
+  setOpen(deps, rt, false);
+}
+function ensureOpen(deps, rt) {
+  if (rt.unsupported)
+    return Promise.resolve(false);
+  if (rt.running)
+    return rt.starting ?? Promise.resolve(rt.open);
+  rt.running = true;
+  const controller = new AbortController;
+  rt.controller = controller;
+  const started = new Promise((resolve) => {
+    let settled = false;
+    const settle = (open) => {
+      if (settled)
+        return;
+      settled = true;
+      deps.timers.clear(cap);
+      resolve(open);
+    };
+    const cap = deps.timers.set(() => {
+      if (settled)
+        return;
+      settled = true;
+      resolve(false);
+    }, deps.connectCapMs ?? DEFAULT_CONNECT_CAP_MS2);
+    runMuxLoop(deps, rt, controller.signal, settle).catch((err2) => {
+      deps.log("[claude-workspaces-mcp] mux loop crashed:", err2);
+      rt.running = false;
+      rt.open = false;
+      settle(false);
+    });
+  });
+  rt.starting = started;
+  started.then(() => {
+    if (rt.starting === started)
+      rt.starting = null;
+  });
+  return started;
+}
+function setOpen(deps, rt, open) {
+  rt.open = open;
+  for (const w of deps.watchers.values())
+    w.open = open;
+}
+async function runMuxLoop(deps, rt, signal, onFirstAttempt) {
+  const path = muxPath(deps.agentId);
+  let attempt = 0;
+  while (!signal.aborted) {
+    try {
+      const { value, dropped } = formatMuxCursor([...rt.cursors].reverse());
+      if (dropped.length > 0) {
+        deps.log(`[claude-workspaces-mcp] mux cursor over budget — ${dropped.length} key(s) reconnect without a position`);
+        deps.resetDedup();
+      }
+      const auth = deps.authHeaders ? await deps.authHeaders() : {};
+      const res = await deps.fetch(`${deps.resolveBaseUrl()}${path}`, {
+        signal,
+        headers: { ...value ? { "Last-Event-ID": value } : {}, ...auth }
+      });
+      if (res.status === 403) {
+        deps.forgetToken?.();
+      }
+      if (res.status === 404) {
+        await releaseBody(res);
+        rt.unsupported = true;
+        rt.running = false;
+        setOpen(deps, rt, false);
+        onFirstAttempt(false);
+        deps.log("[claude-workspaces-mcp] server has no multiplexed event route — falling back to one stream per watch");
+        return;
+      }
+      const live = res.ok && res.body !== null;
+      setOpen(deps, rt, live);
+      onFirstAttempt(live);
+      if (!live) {
+        await releaseBody(res);
+        throw new Error(`sse ${path} → ${res.status}`);
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder;
+      let buf = "";
+      let framesRead = 0;
+      try {
+        while (!signal.aborted) {
+          const { value: chunk, done } = await reader.read();
+          if (done)
+            break;
+          buf += decoder.decode(chunk, { stream: true });
+          let sep = buf.indexOf(`
+
+`);
+          while (sep >= 0) {
+            const frame = buf.slice(0, sep);
+            buf = buf.slice(sep + 2);
+            framesRead += 1;
+            if (framesRead > 1)
+              attempt = 0;
+            await deliverThenCommitMux(frame, deps.handleFrame, rt.cursors, deps.resetDedup);
+            sep = buf.indexOf(`
+
+`);
+          }
+        }
+      } finally {
+        await releaseReader(reader);
+      }
+    } catch (err2) {
+      setOpen(deps, rt, false);
+      onFirstAttempt(false);
+      if (signal.aborted)
+        break;
+      deps.log("[claude-workspaces-mcp] mux sse error, retrying:", err2);
+    }
+    if (signal.aborted)
+      break;
+    setOpen(deps, rt, false);
+    attempt += 1;
+    await deps.sleep(reconnectDelayMs(attempt, deps.random));
+    if (signal.aborted)
+      break;
+    deps.resetDedup();
+  }
+  rt.running = false;
+  setOpen(deps, rt, false);
+  onFirstAttempt(false);
+}
+function frameWatchKey(raw) {
+  for (const line of raw.split(`
+`)) {
+    if (!line.startsWith("data:"))
+      continue;
+    try {
+      const parsed = JSON.parse(line.slice(5).trim());
+      return typeof parsed.watchKey === "string" ? parsed.watchKey : undefined;
+    } catch {
+      return;
+    }
+  }
+  return;
+}
+async function deliverThenCommitMux(frame, deliver, cursors, onGap) {
+  await deliver(frame);
+  const meta2 = frameMeta(frame);
+  const key = frameWatchKey(frame);
+  if (key === undefined)
+    return;
+  if (meta2.event === "replay.gap") {
+    cursors.delete(key);
+    onGap();
+    return;
+  }
+  if (meta2.id === undefined)
+    return;
+  cursors.delete(key);
+  cursors.set(key, meta2.id);
+  while (cursors.size > MUX_CURSOR_MAX_KEYS) {
+    const oldest = cursors.keys().next();
+    if (oldest.done)
+      break;
+    cursors.delete(oldest.value);
+  }
 }
 
 // packages/core/src/task-wire.ts
@@ -14941,7 +15337,7 @@ var TOOL_LIST = {
       }
     },
     {
-      name: "bind_mock",
+      name: "attach_mockup",
       description: "Serve an HTML mockup at /mockup/<docId> and bind it for comments — the server reads the file at sourceHtmlPath on each request, so edits show up on reload, and captures what it read so the link keeps working after your scratch directory is cleaned up. An unreadable sourceHtmlPath fails HERE rather than 404ing later in front of the reviewer. Hand the returned meta.reviewUrl to a person. Single-file mockups only: relative CSS/JS siblings will not resolve. Idempotent.",
       inputSchema: {
         type: "object",
@@ -14962,8 +15358,8 @@ var TOOL_LIST = {
       }
     },
     {
-      name: "bind_folder",
-      description: "Bind a folder or worktree as a browsable workspace — an alias for create_diff_review with no base. The reviewer picks files from the menu under the filename in the topbar — they open lazily, and markdown opens editable. Prefer create_diff_review directly: passing a base gets you the changed-files diff on top of browsing.",
+      name: "attach_folder",
+      description: "Attach a folder or worktree as a browsable workspace — an alias for create_diff_review with no base. The reviewer picks files from the menu under the filename in the topbar — they open lazily, and markdown opens editable. Prefer create_diff_review directly: passing a base gets you the changed-files diff on top of browsing.",
       inputSchema: {
         type: "object",
         properties: {
@@ -15058,7 +15454,7 @@ var TOOL_LIST = {
         properties: {
           setId: {
             type: "string",
-            description: "reviewId from create_diff_review, or setId from bind_folder."
+            description: "reviewId from create_diff_review, or setId from attach_folder."
           },
           force: {
             type: "boolean",
@@ -15080,7 +15476,7 @@ var TOOL_LIST = {
         properties: {
           setId: {
             type: "string",
-            description: "reviewId from create_diff_review, or setId from bind_folder."
+            description: "reviewId from create_diff_review, or setId from attach_folder."
           },
           reason: {
             type: "string",
@@ -15134,7 +15530,7 @@ var TOOL_LIST = {
     },
     {
       name: "delete_workspace",
-      description: "Permanently delete a board and all of its tasks, rooms and history. Reach for retire_workspace instead in almost every case — this one cannot be undone. Refuses while open tasks remain unless you pass force. Docs attached to the board survive: attaching is a link, not ownership.",
+      description: "Permanently delete a board and all of its tasks, rooms and history. Reach for archive_workspace instead in almost every case — this one cannot be undone. Refuses while open tasks remain unless you pass force. Docs attached to the board survive: attaching is a link, not ownership.",
       inputSchema: {
         type: "object",
         properties: {
@@ -15159,7 +15555,7 @@ var TOOL_LIST = {
         properties: {
           setId: {
             type: "string",
-            description: "reviewId from create_diff_review, or setId from bind_folder."
+            description: "reviewId from create_diff_review, or setId from attach_folder."
           }
         },
         required: ["setId"]
@@ -15432,7 +15828,7 @@ var TOOL_LIST = {
     },
     {
       name: "watch_doc",
-      description: "Subscribe this session to a doc's comment events, delivered as channel messages. Usually unnecessary — create_review_doc, bind_mock and most docId-bearing tools subscribe you already, and set_workspace_lead covers every doc on your board. Reach for it for a doc you have not otherwise touched, such as a peer's review you only want to observe. persisted: false means a restart will drop it.",
+      description: "Subscribe this session to a doc's comment events, delivered as channel messages. Usually unnecessary — create_review_doc, attach_mockup and most docId-bearing tools subscribe you already, and set_workspace_lead covers every doc on your board. Reach for it for a doc you have not otherwise touched, such as a peer's review you only want to observe. persisted: false means a restart will drop it.",
       inputSchema: {
         type: "object",
         properties: { docId: { type: "string" } },
@@ -15461,7 +15857,7 @@ var TOOL_LIST = {
         properties: {
           workspaceId: {
             type: "string",
-            description: "The BOARD to share — the id create_workspace returned, or the hubWorkspaceId bind_folder / create_diff_review reported. NOT a review/review id."
+            description: "The BOARD to share — the id create_workspace returned, or the hubWorkspaceId attach_folder / create_diff_review reported. NOT a review/review id."
           },
           ttlSeconds: {
             type: "number",
@@ -15546,7 +15942,7 @@ var TOOL_LIST = {
     },
     {
       name: "rename_workspace",
-      description: "Change a board's name. Nothing else moves — same id, same URL, same tasks, so every existing link keeps working. Renaming into a name another live board holds is allowed; the response names the collision in sameName. Use retire_workspace when the answer is that one of the two is over.",
+      description: "Change a board's name. Nothing else moves — same id, same URL, same tasks, so every existing link keeps working. Renaming into a name another live board holds is allowed; the response names the collision in sameName. Use archive_workspace when the answer is that one of the two is over.",
       inputSchema: {
         type: "object",
         properties: {
@@ -15557,7 +15953,7 @@ var TOOL_LIST = {
       }
     },
     {
-      name: "retire_workspace",
+      name: "archive_workspace",
       description: "Stand a board down reversibly, when it is superseded, finished, or a duplicate. It stops ranking, refuses new tasks, and tells anyone who reads it why — but destroys nothing, and unretire_workspace reverses it. This is the one to reach for; delete_workspace is not reversible. Pass a reason; it is replayed in every refusal, and it is usually the board that replaced this one.",
       inputSchema: {
         type: "object",
@@ -15682,7 +16078,7 @@ var TOOL_LIST = {
                 },
                 quote: {
                   type: "string",
-                  description: "The human's VERBATIM words, for chat-born asks — kept forever on the task. (For thread-born asks use promote_to_task, which captures the quote itself.)"
+                  description: "The human's VERBATIM words, for chat-born asks — kept forever on the task. (For thread-born asks use spin_off_task, which captures the quote itself.)"
                 }
               },
               required: ["title"]
@@ -15703,7 +16099,7 @@ var TOOL_LIST = {
       }
     },
     {
-      name: "promote_to_task",
+      name: "spin_off_task",
       description: "Turn a comment thread into a task. Captures the backlink and the latest human comment as the verbatim quote, and drafts a title and body from it when you don't supply them. This is the verb for thread-born asks; create_tasks is for everything else.",
       inputSchema: {
         type: "object",
@@ -16301,7 +16697,7 @@ var TOOL_LIST = {
     },
     {
       name: "set_parallelism_cap",
-      description: "Set how many builders a board may have dispatched at once — the dispatch rule the lead skill describes. Every board starts on the default (4); lower it to keep this board from starving higher-priority projects, raise it when there is room. The change is recorded with you as the actor and takes effect on the next dispatch: nothing running is touched, register_dispatch simply refuses past the new number. Answers with the full view — the cap, the slots in use and who holds them, how many are free, and lastChange (who moved it, when, from what) — so you see in the same reply whether the board is already over it. The floor is one; pausing a board is retire_workspace, not a cap of zero.",
+      description: "Set how many builders a board may have dispatched at once — the dispatch rule the lead skill describes. Every board starts on the default (4); lower it to keep this board from starving higher-priority projects, raise it when there is room. The change is recorded with you as the actor and takes effect on the next dispatch: nothing running is touched, register_dispatch simply refuses past the new number. Answers with the full view — the cap, the slots in use and who holds them, how many are free, and lastChange (who moved it, when, from what) — so you see in the same reply whether the board is already over it. The floor is one; pausing a board is archive_workspace, not a cap of zero.",
       inputSchema: {
         type: "object",
         properties: {
@@ -16420,6 +16816,7 @@ async function handleDocsTool(name, a, ctx) {
     unwatchDoc,
     refreshCoverage,
     watchPersistenceMode,
+    streamMode,
     restoreState,
     lastPersistError,
     IDENTITY_IS_SHARED,
@@ -16549,7 +16946,8 @@ async function handleDocsTool(name, a, ctx) {
       const res = await http("DELETE", `/api/docs/${encodeURIComponent(docId)}${qs}`);
       return ok2(res);
     }
-    case "bind_mock": {
+    case "bind_mock":
+    case "attach_mockup": {
       const { docId, sourceHtmlPath, title, hubWorkspaceId } = a;
       const res = await http("POST", "/api/docs", {
         docId,
@@ -16561,7 +16959,8 @@ async function handleDocsTool(name, a, ctx) {
       });
       return ok2(res);
     }
-    case "bind_folder": {
+    case "bind_folder":
+    case "attach_folder": {
       const {
         folderPath,
         workspaceId,
@@ -16837,13 +17236,16 @@ async function handleDocsTool(name, a, ctx) {
     }
     case "list_watched_docs": {
       const coverage = await refreshCoverage();
+      const inactive = inactiveWatches(watchers);
       return ok2({
         watching: Array.from(watchers.keys()),
+        ...inactive.length > 0 ? { inactive } : {},
         persistence: {
           mode: watchPersistenceMode(),
           agentId: AUTHOR.id,
           ...IDENTITY_IS_SHARED ? { reason: SHARED_IDENTITY_REASON } : {}
         },
+        streamMode: streamMode(),
         restore: restoreState,
         ...coverage ? { coverage } : {},
         ...lastPersistError ? { lastPersistError } : {}
@@ -17040,7 +17442,8 @@ async function handleTaskTool(name, a, ctx) {
         ...res.sourceDoc !== undefined ? { sourceDoc: res.sourceDoc } : {}
       });
     }
-    case "promote_to_task": {
+    case "promote_to_task":
+    case "spin_off_task": {
       const {
         docId,
         threadId,
@@ -17637,7 +18040,8 @@ async function handleWorkspaceTool(name, a, ctx) {
         ...res.sameName ? { sameName: res.sameName } : {}
       });
     }
-    case "retire_workspace": {
+    case "retire_workspace":
+    case "archive_workspace": {
       const { workspaceId, reason } = a;
       return ok2(await setBoardRetired(ctx, workspaceId, true, reason));
     }
@@ -17910,7 +18314,8 @@ function createWatchRegistry(deps) {
     },
     watchPersistenceMode: () => watchPersistenceMode(deps),
     lastPersistError: () => state.lastPersistError,
-    watchesPath: () => watchesPath(deps)
+    watchesPath: () => watchesPath(deps),
+    streamMode: () => usesMux(deps) ? "multiplexed" : "per-key"
   };
 }
 function isSharedIdentity(authorId) {
@@ -17941,24 +18346,45 @@ async function persistWatchChange(deps, state, change) {
     return false;
   }
 }
+function usesMux(deps) {
+  return !deps.identityIsShared && !deps.mux.unsupported();
+}
+async function wireKey(deps, key, path) {
+  if (usesMux(deps)) {
+    const open = await deps.mux.ensureOpen();
+    if (!deps.mux.unsupported()) {
+      const rec = deps.watchers.get(key);
+      if (rec)
+        rec.open = open;
+      return open;
+    }
+  }
+  const w = deps.watchers.get(key);
+  if (!w)
+    return false;
+  return deps.startSseLoop(key, path, w.controller);
+}
 async function watchDoc(deps, state, docId, persist = true) {
+  const persisted = persist ? await persistWatchChange(deps, state, { add: [docId] }) : false;
   if (!deps.watchers.has(docId)) {
     const controller = new AbortController;
     deps.watchers.set(docId, { controller, docId, open: false });
-    await deps.startSseLoop(docId, `/events/${encodeURIComponent(docId)}`, controller);
+    await wireKey(deps, docId, `/events/${encodeURIComponent(docId)}`);
   }
-  return persist ? persistWatchChange(deps, state, { add: [docId] }) : false;
+  return persisted;
 }
 async function watchWorkspace(deps, state, workspaceId, persist = true) {
   const key = `ws:${workspaceId}`;
+  const persisted = persist ? await persistWatchChange(deps, state, { add: [key] }) : false;
   let open = deps.watchers.get(key)?.open === true;
   if (!deps.watchers.has(key)) {
     const controller = new AbortController;
     deps.watchers.set(key, { controller, docId: key, open: false });
-    open = await deps.startSseLoop(key, `/events/workspace/${encodeURIComponent(workspaceId)}?agentId=${encodeURIComponent(deps.author.id)}`, controller);
+    open = await wireKey(deps, key, `/events/workspace/${encodeURIComponent(workspaceId)}?agentId=${encodeURIComponent(deps.author.id)}`);
+  } else if (usesMux(deps)) {
+    open = deps.mux.isOpen();
   }
-  const persisted = persist ? await persistWatchChange(deps, state, { add: [key] }) : false;
-  return { open, persisted };
+  return { open: usesMux(deps) && persist ? open && persisted : open, persisted };
 }
 async function unwatchDoc(deps, state, docId) {
   const w = deps.watchers.get(docId);
@@ -17966,6 +18392,9 @@ async function unwatchDoc(deps, state, docId) {
     w.controller.abort();
     deps.watchers.delete(docId);
   }
+  deps.mux.dropCursor(docId);
+  if (usesMux(deps) && deps.watchers.size === 0)
+    deps.mux.stop();
   return persistWatchChange(deps, state, { remove: [docId] });
 }
 
@@ -18104,7 +18533,7 @@ async function ensureWatchesRestored(deps, rt) {
         error: err2 instanceof Error ? err2.message : String(err2),
         attempts
       };
-      rt.retryAt = now2(deps) + Math.min(30000, 1000 * 2 ** attempts);
+      rt.retryAt = now2(deps) + reconnectDelayMs(attempts + 1, deps.random, 1000, 30000);
     } finally {
       rt.inFlight = null;
     }
@@ -18144,7 +18573,7 @@ var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.157";
+var PLUGIN_VERSION = "0.1.164";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
@@ -18192,7 +18621,7 @@ var server = new Server({
     "PR-style unified diff with line comments. Omit base to BROWSE a folder",
     "instead (no diff): everything is navigable from the all-files sidebar,",
     "files open lazily, markdown editable — works on plain folders and",
-    "fresh repos too (bind_folder is an alias for this). Default mode diffs",
+    "fresh repos too (attach_folder is an alias for this). Default mode diffs",
     "base against the LIVE working tree: keep editing the code and the reviewer",
     "sees your changes re-render within ~1s, with their comments riding along",
     "(threads orphan into the outdated-comments flow if their line disappears).",
@@ -18239,7 +18668,7 @@ var server = new Server({
     "WORKSPACE HUB: a hub workspace is a goal + a task board + linked docs.",
     "create_workspace mints one; attach_doc links existing docs/reviews to it;",
     "create_tasks (ALWAYS a list — one idea is a one-row list) and",
-    "promote_to_task add work (omit `goal` and the task lands UNPLACED in",
+    "spin_off_task add work (omit `goal` and the task lands UNPLACED in",
     "Backlog awaiting triage — the create says so and hands you the goal",
     "bands, and placing it with set_task_goal IS the triage:",
     "pick the goal AND the exact position). task_transition is the",
@@ -18272,6 +18701,7 @@ function toolContext() {
     unwatchDoc: unwatchDoc2,
     refreshCoverage: refreshCoverage2,
     watchPersistenceMode: watchPersistenceMode2,
+    streamMode: registry2.streamMode,
     claimNoticeFor: claimNoticeFor2,
     restoreState: restore.state(),
     lastPersistError: registry2.lastPersistError(),
@@ -18290,6 +18720,13 @@ server.setRequestHandler(CallToolRequestSchema, createCallToolHandler({
 }));
 var watchers = new Map;
 var IDENTITY_IS_SHARED = isSharedIdentity(AUTHOR.id);
+var agentTokens = createAgentTokenStore({
+  agentId: AUTHOR.id,
+  resolveBaseUrl: resolveBaseUrl2,
+  fetch: (url, init) => fetch(url, init),
+  log: (...args) => console.error(...args),
+  identityIsShared: IDENTITY_IS_SHARED
+});
 var { markAttached: markAttached2, sendDueHeartbeats: sendDueHeartbeats2, claimNoticeFor: claimNoticeFor2 } = createAttachments({
   http: (method, path, body) => http(method, path, body),
   author: AUTHOR,
@@ -18307,6 +18744,10 @@ var handleFrame2 = createFrameHandler({
   http: (method, path, body) => http(method, path, body),
   shouldForward: (event, payload) => shouldForwardFrame.shouldForward(event, payload)
 });
+var loopTimers = {
+  set: (fn, ms) => setTimeout(fn, ms),
+  clear: (h) => clearTimeout(h)
+};
 var { startSseLoop: startSseLoop2 } = createSseLoops({
   watchers,
   resolveBaseUrl: resolveBaseUrl2,
@@ -18315,16 +18756,27 @@ var { startSseLoop: startSseLoop2 } = createSseLoops({
   resetDedup: () => shouldForwardFrame.reset(),
   log: (...args) => console.error(...args),
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-  timers: {
-    set: (fn, ms) => setTimeout(fn, ms),
-    clear: (h) => clearTimeout(h)
-  }
+  timers: loopTimers
+});
+var muxLoop = createMuxLoop({
+  watchers,
+  agentId: AUTHOR.id,
+  resolveBaseUrl: resolveBaseUrl2,
+  fetch: (url, init) => fetch(url, init),
+  handleFrame: (raw) => handleFrame2(raw),
+  resetDedup: () => shouldForwardFrame.reset(),
+  log: (...args) => console.error(...args),
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  timers: loopTimers,
+  authHeaders: () => agentTokens.headers(),
+  forgetToken: () => agentTokens.forget()
 });
 var registry2 = createWatchRegistry({
   watchers,
   http: (method, path, body) => http(method, path, body),
   author: AUTHOR,
   startSseLoop: startSseLoop2,
+  mux: muxLoop,
   identityIsShared: IDENTITY_IS_SHARED,
   log: (...args) => console.error(...args)
 });
@@ -18344,7 +18796,7 @@ var restore = createWatchRestore({
   identityIsShared: IDENTITY_IS_SHARED
 });
 var { ensureWatchesRestored: ensureWatchesRestored2 } = restore;
-var http = createHttp(resolveBaseUrl2);
+var http = createHttp(resolveBaseUrl2, (url, init) => fetch(url, init), (path) => agentTokens.headersFor(path));
 var transport = new StdioServerTransport;
 server.oninitialized = () => {
   ensureWatchesRestored2();

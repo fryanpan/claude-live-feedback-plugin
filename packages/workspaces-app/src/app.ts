@@ -1,86 +1,35 @@
-import {
-  type FeedbackClient,
-  type User,
-  escapeHtml,
-  readDocMeta,
-  suggestOps,
-} from '@feedback/core';
+import type { FeedbackClient, User } from '@feedback/core';
 import type { BootLocation, BootStorage, BootWindow } from './boot-env.ts';
-import { balloonMarginVisible } from './card-placement.ts';
 import { mountCode } from './code/code-app.ts';
-import { mountCommentHints } from './comment-hints.ts';
-import { saveStateView, settlePending, watchConnection } from './connection-state.ts';
-import { renderDiffNav, setActiveFile } from './diff-nav.ts';
 import { fetchDocMeta } from './doc-meta.ts';
-import { docHref, workspaceIdFromPath } from './doc-path.ts';
 import { el, showToast } from './doc/chrome-dom.ts';
 import { wireThreadRangeClicks } from './doc/chrome-panels.ts';
+import { type CommentPillHandle, mountCommentPill } from './doc/doc-comment-pill.ts';
+import { mountDocFloats } from './doc/doc-floats.ts';
+import { wireDocGates } from './doc/doc-gates.ts';
+import { mountDocMargin } from './doc/doc-margin.ts';
 import { mountDocMeeting } from './doc/doc-meeting-mount.ts';
-import { wireDocModes } from './doc/doc-modes.ts';
-import { applyWidthPref, wireFormatBar } from './doc/editor-toolbar.ts';
+import { mountPointerPillLayer } from './doc/doc-pointer-pill.ts';
+import { wireDocReady } from './doc/doc-ready.ts';
+import { mountDocSaveState } from './doc/doc-save-state.ts';
+import { mountDocSetNav } from './doc/doc-set-nav.ts';
 import { wireEditViewport } from './edit-viewport.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
-import { trackGesture } from './gesture.ts';
 import { wantsHuddleStart } from './huddle-entry.ts';
 import { ensureUserIdentity } from './identity-prompt.ts';
 import { wireKeyboardInset } from './keyboard-inset.ts';
 import type { LeadBanner } from './lead-banner.ts';
 import type { MeetingLiveZone } from './meeting-live-zone.ts';
 import type { MountContext } from './mount-context.ts';
-import { mountPlanGate } from './plan-gate.ts';
-import { mountPointerPill } from './pointer-pill.ts';
 import { startReadingTracker } from './reading-tracker.ts';
-import { mountMarkupMargin } from './redline/markup-margin.ts';
 import { mountRedline } from './redline/redline-app.ts';
-import { mountSuggestionsSummary } from './redline/suggestions-summary.ts';
-import {
-  type ChromeSelection,
-  type ReviewChrome,
-  anchorBody,
-  mountReviewChrome,
-} from './review-chrome.ts';
-import { mountReviewFloat } from './review-float.ts';
+import { type ReviewChrome, mountReviewChrome } from './review-chrome.ts';
 import { navigateTo, startRouter } from './router.ts';
-import { type SetDoc, selectSetSiblings, setDocsUrl } from './set-nav.ts';
-import {
-  beginSidebarRender,
-  commitSidebarColumn,
-  isCurrentSidebarRender,
-  resetSidebarSignature,
-  setSidebarSignature,
-  sidebarShowsSignature,
-} from './sidebar-nav-key.ts';
-import {
-  fetchWriteAccess,
-  installWriteGateNotice,
-  lockDocToReading,
-  showSignInBar,
-} from './signin/write-gate.ts';
+import { fetchWriteAccess, installWriteGateNotice, showSignInBar } from './signin/write-gate.ts';
 import { mountSpeakerReassign } from './speaker-reassign-menu.ts';
 import { loadDocVoices } from './speaker-voices.ts';
-import { linkSpinoffRange, unlinkSpinoffHref } from './spinoff-link.ts';
-import {
-  POINTER_PILL_ACTIONS,
-  type PointerPillActionId,
-  type SpinoffTaskId,
-  boardIdFor,
-  runSpinoff,
-} from './spinoff-menu.ts';
 import { installStaleClientNotice } from './stale-client.ts';
 import { registerMarkdownMount } from './surface-registry.ts';
-import { watchTaskLinkStatuses } from './task-link-chips.ts';
-import { threadCards } from './thread-morph.ts';
-import { renderWorkspaceTree } from './workspace-tree.ts';
-
-interface Selection {
-  start: Uint8Array;
-  end: Uint8Array;
-  snippet: string;
-}
-
-interface LegacyDocs {
-  docs: SetDoc[];
-}
 
 /**
  * Everything the document editor's boot reaches outside its own module.
@@ -202,9 +151,23 @@ export async function bootApp(env: AppBootEnv): Promise<void> {
   });
 }
 
-/** Per-document mount for the markdown (Tiptap) surface. Every listener is
- *  bound to `ctx.scope`; the router disposes the scope on navigation, which
- *  tears down the editor, chrome, listeners, and (via the router) the client. */
+/** Per-document mount for the markdown (Tiptap) surface.
+ *
+ *  What is left here is the ORDER, and only the order: connect, editor,
+ *  chrome, margin, floats, selection affordances, navigation, gates. Each
+ *  phase is a module under `doc/` that takes an explicit context, so this
+ *  function reads as the sequence a document boots in rather than as the
+ *  sum of everything a document does.
+ *
+ *  Two things stay here on purpose. The forward refs — `chrome`, `pill`,
+ *  `editViewport` — because the editor's callbacks can fire during the first
+ *  Yjs application, before the phase that owns them has run. And the reads of
+ *  the ADDRESS (`?huddle=`, `?thread=`), because the address is what this
+ *  mount was opened at; the modules act on what it says.
+ *
+ *  Every listener is bound to `ctx.scope`; the router disposes the scope on
+ *  navigation, which tears down the editor, chrome, listeners, and (via the
+ *  router) the client. */
 async function mountMarkdown(ctx: MountContext): Promise<void> {
   const { docId, client, user, scope } = ctx;
   // Which docId the sidebar marks active — differs from `docId` only for the
@@ -218,14 +181,13 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   const editorMount = el<HTMLElement>('editor');
   const composer = el<HTMLElement>('composer');
   const commentPill = el<HTMLButtonElement>('comment-pill');
-  // The pill's markup says "Add comment" because that is all it ever did. On
-  // a huddle doc a RANGE selection grows the pointer pill instead (below),
-  // and the round pill only survives in caret mode, where its job is to make
-  // the selection the pointer pill then hangs off. Named for where it leads.
-  if (ctx.huddle === true) {
-    commentPill.setAttribute('aria-label', 'Turn this line into work');
-    commentPill.title = 'Turn this line into work';
-  }
+  // The pill's markup says "Add comment" because that is all it ever did, and
+  // on a huddle doc that is now all it leads to as well. It was relabelled
+  // "Turn this line into work" here while a range selection grew a pill
+  // offering Research and Create Task (see doc/doc-pointer-pill.ts); those
+  // went on 2026-09-04, so the label goes with them rather than promising a
+  // menu of work that no longer opens.
+  const huddle = ctx.huddle === true;
   const formatBar = el<HTMLElement>('format-bar');
   const toggleFormat = el<HTMLButtonElement>('toggle-format');
   const toggleEditMode = el<HTMLButtonElement>('toggle-edit-mode');
@@ -253,7 +215,11 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   // biome-ignore lint/style/useConst: assigned after createEditor so its callbacks can close over it
   let chrome: ReviewChrome | undefined;
   // Same forward-ref shape as `chrome`: the editor's selection callback fires
-  // during the first Yjs application, before this is wired.
+  // during the first Yjs application, before the pill phase has run.
+  // biome-ignore lint/style/useConst: assigned in the selection-affordance phase below
+  let pill: CommentPillHandle | undefined;
+  // Same shape again: the chrome's selection callback can fire before the
+  // meeting strip has mounted and the viewport is wired.
   // biome-ignore lint/style/useConst: assigned after the meeting strip mounts
   let editViewport: ReturnType<typeof wireEditViewport> | undefined;
   // Forward ref, same shape as `chrome`: the zone is created down where the
@@ -264,7 +230,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     parent: editorMount,
     ydoc,
     awareness,
-    onSelectionChange: () => refreshSelectionState(),
+    onSelectionChange: () => pill?.refreshSelection(),
     onUpdate: () => chrome?.redrawThreads(),
     user: { name: user.name, color: user.color },
     // Workspace members (folder binds, diff File views — ctx spreads through
@@ -295,152 +261,59 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     labelHint: ctx.sourceUrl || ctx.relPath || undefined,
     selectHint: 'Select some text first to leave a comment.',
     reanchorHint: 'Select new text first, then click Re-anchor.',
-    // The cached `selection` covers iOS blurring the editor between the
-    // pill appearing and being tapped. `use` already encodes a resolved
-    // range (from PM in edit mode, or from the raw DOM selection in view
-    // mode) — don't also require a non-empty PM selection, which is always
-    // empty in view mode even with a live DOM selection and would wrongly
-    // block iOS long-press commenting.
-    getSelection: () => {
-      const use = editor.getSelectionRel() ?? selection;
-      if (!use) return null;
-      return use;
-    },
-    onComposerOpened: () => {
-      // Wait for the keyboard to finish sliding up (visualViewport
-      // resizes), THEN scroll the editor so the selection sits ~20% from
-      // the top of the visible-above-keyboard area. If vv doesn't resize
-      // within 500ms, assume the keyboard was already open.
-      const vv = window.visualViewport;
-      let done = false;
-      const run = () => {
-        if (done) return;
-        done = true;
-        vv?.removeEventListener('resize', run);
-        scrollSelectionAboveKeyboard();
-      };
-      vv?.addEventListener('resize', run);
-      setTimeout(run, 500);
-    },
+    // The pill controller's cached selection covers iOS blurring the editor
+    // between the pill appearing and being tapped. `currentSelection` already
+    // encodes a resolved range (from PM in edit mode, or from the raw DOM
+    // selection in view mode) — don't also require a non-empty PM selection,
+    // which is always empty in view mode even with a live DOM selection and
+    // would wrongly block iOS long-press commenting.
+    getSelection: () => pill?.currentSelection() ?? editor.getSelectionRel(),
+    onComposerOpened: () => pill?.onComposerOpened(),
     onPosted: () => {
       // Drop focus so no caret blinks in the doc after posting.
       editor.editor.commands.blur();
       (document.activeElement as HTMLElement | null)?.blur?.();
     },
-    hidePill: () => hidePill(),
+    hidePill: () => pill?.hide(),
     // The markdown surface mounts the balloon margin unconditionally below.
     hasBalloonMargin: true,
   });
   const reviewChrome = chrome;
 
-  // The balloon margin: plain markdown docs get comment balloons only (no
-  // git base, so no deletions) — reuses the same mount as the redline
-  // surface, which is why comment balloons behave identically everywhere.
-  // Mounted unconditionally; the `#editor.redline-layout` grid and the
-  // `.markup-margin` column both collapse via CSS below 1100px, so this
-  // never introduces horizontal scroll on mobile.
-  const margin = mountMarkupMargin({
-    editorEl: editorMount,
-    view: editor.editor.view,
-    getDeletions: () => [],
-    threads: () => reviewChrome.collectThreads(),
-    chrome: reviewChrome,
-    getSuggestions: () => suggestOps.listSuggestions(ydoc),
+  // Everything that reports on comments the reader is not looking at: the
+  // balloon margin, the doc-level suggestions badge, and the off-screen
+  // comment hints — one loop, redrawn together on every editor transaction.
+  const margin = mountDocMargin({
     docId,
+    ydoc,
     scope,
+    editor,
+    editorMount,
+    chrome: reviewChrome,
   });
-  // Doc-level "N pending suggestions" topbar badge (Accept all / Reject all
-  // across every author) — per-suggestion Accept/Reject lives on the
-  // balloon/chip card the margin just wired above.
-  const suggestionsSummary = mountSuggestionsSummary({ docId, ydoc, scope });
-  // Off-screen comment counts + the "N waiting on you" chip — the
-  // information scent for what the reader cannot see (comment-hints.ts).
-  // Jumping goes the same route a tap on the highlight takes: scroll, pulse,
-  // and open the card where it lives (balloon above 1100px, inline below).
-  const spanFor = (id: string): HTMLElement | null =>
-    editor.editor.view.dom.querySelector<HTMLElement>(
-      `.thread-range[data-thread-id="${CSS.escape(id)}"]`,
-    );
-  const jumpToThread = (id: string): void => {
-    reviewChrome.refreshThreadDecorations(id);
-    const range = reviewChrome.resolveThreadRange(id);
-    if (range) {
-      editor.scrollToPos(range.from);
-      editor.pulseRange(range.from, range.to);
-    }
-    // A jump from an off-screen hint lands the SENTENCE a third of the way
-    // down, not merely inside the edge: the editor's own scrollIntoView is
-    // minimal, and a sentence a few pixels above the fold stays hidden
-    // behind the hint that was tapped to reach it.
-    const span = spanFor(id);
-    if (span) {
-      const r = span.getBoundingClientRect();
-      const s = editorMount.getBoundingClientRect();
-      editorMount.scrollTop += r.top - s.top - s.height * 0.35;
-    }
-    if (reviewChrome.openInModal(id)) return;
-    if (margin.revealThreadBalloon(id)) return;
-    if (reviewChrome.isMobile() || reviewChrome.mobile.inlineThreads().some((t) => t.id === id)) {
-      reviewChrome.mobile.showThread(id);
-      return;
-    }
-    reviewChrome.revealThread(id);
-  };
-  const hints = mountCommentHints({
-    scroller: editorMount,
-    marginEl: margin.marginEl,
-    floatParent:
-      editorMount.closest<HTMLElement>('#editor-pane') ??
-      editorMount.parentElement ??
-      document.body,
-    chipEl: document.getElementById('doc-asks'),
-    threads: () => reviewChrome.collectThreads(),
-    spanFor,
-    cardsFor: (id) => threadCards(id),
-    isNew: (t) => reviewChrome.seen.isNew(t),
-    markSeen: (t) => reviewChrome.markSeen(t.id),
-    onSeen: () => margin.scheduleRelayout(),
-    onJump: jumpToThread,
-    dockEl: () => document.querySelector<HTMLElement>('#editor-pane .plan-float'),
-    marginVisible: balloonMarginVisible,
-    scope,
-  });
-  const onMarginTransaction = (): void => {
-    margin.scheduleRelayout();
-    suggestionsSummary.scheduleRefresh();
-    hints.refresh();
-  };
-  editor.editor.on('transaction', onMarginTransaction);
-  scope.onCleanup(() => editor.editor.off('transaction', onMarginTransaction));
 
   // Interaction-bounded reading-session capture (doc_open + read_session).
   // The #editor element is the scroll container on the markdown surface.
   scope.onCleanup(startReadingTracker({ docId, user, scrollEl: editorMount }));
 
-  // Live-meeting transcript strip along the bottom of the editor pane. Bound
-  // to this scope, so navigating away closes the audio socket and releases the
-  // microphone — a mic left open behind a doc nobody is looking at is the
-  // failure worth designing against.
-  //
-  // Ordinary markdown docs only. A `.md` diff member's File view mounts this
-  // same surface over a companion doc (that is what `navDocId` marks), and a
-  // review of somebody's branch is not a place a meeting is recorded.
-  //
-  // Opened by the Board's "Make a plan" / "Have a meeting": the address carries a
-  // flag, and the strip asks for the mic at once instead of waiting for a
-  // press. Read once and taken back out of the address, so a reload or a
-  // later Back into this entry does not open a mic nobody pressed for.
-  // Read ONCE, here, because the strip block below takes the flag back out of
-  // the address — and the edit-mode decision that also needs it runs much
-  // later, by which time `location.search` no longer says anything.
+  // Opened by the Board's "Make a plan" / "Have a meeting": the address carries
+  // a flag, and the strip asks for the mic at once instead of waiting for a
+  // press. Read ONCE, here, because the strip block below takes the flag back
+  // out of the address — and the edit-mode decision that also needs it runs
+  // much later, by which time `location.search` no longer says anything.
   const startedHuddleHere = wantsHuddleStart(location.search);
   // The lead banner's read and stream, handed to the floats below so their
   // receipts can say "no lead attached" off the same answer. Set only
   // on a huddle doc; the floats read as before without it.
   let watchLeadPresence: LeadBanner['watch'] | undefined;
-  // The whole live-meeting surface — strip, live zone, bot client, lead
-  // banner — mounts together in doc/doc-meeting-mount.ts under one condition,
-  // and hands back the two things the rest of this mount closes over.
+  // Live-meeting transcript strip along the bottom of the editor pane — the
+  // whole surface (strip, live zone, bot client, lead banner) mounts together
+  // in doc/doc-meeting-mount.ts. Bound to this scope, so navigating away
+  // closes the audio socket and releases the microphone.
+  //
+  // Ordinary markdown docs only. A `.md` diff member's File view mounts this
+  // same surface over a companion doc (that is what `navDocId` marks), and a
+  // review of somebody's branch is not a place a meeting is recorded.
   const meetingStripEl = document.getElementById('meeting-strip');
   if (meetingStripEl && ctx.docType === 'markdown' && ctx.navDocId === undefined) {
     const meeting = mountDocMeeting({
@@ -452,64 +325,26 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       user,
       awareness,
       huddleStart: startedHuddleHere,
-      huddle: ctx.huddle === true,
+      huddle,
     });
     liveZone = meeting.liveZone;
     watchLeadPresence = meeting.watchLeadPresence;
   }
 
-  // The plan gate's floating Approve button — rendered only while this doc
-  // is a plan whose drafts are held; nothing at all on ordinary docs. Same
-  // rule (and reason) as the meeting strip above: a review of somebody's
+  // The two always-in-view floats — Approve (the plan gate) and Review.
+  // Same rule (and reason) as the meeting strip above: a review of somebody's
   // branch, or a companion doc under `navDocId`, is not a plan a person
   // approves.
   if (ctx.docType === 'markdown' && ctx.navDocId === undefined) {
-    const planGate = mountPlanGate({
+    mountDocFloats({
       docId,
       root: editorMount,
+      ydoc,
       user,
       canWrite,
-      // `setPlanState` writes planState into this same map on the server, so
-      // observing it is how the float hears that the plan landed — no event
-      // stream carries that transition. Any meta change re-reads; the read is
-      // one small GET and the map changes rarely.
-      watchDocMeta: (onChange) => {
-        const meta = ydoc.getMap('meta');
-        meta.observe(onChange);
-        return () => meta.unobserve(onChange);
-      },
+      scope,
       ...(watchLeadPresence ? { watchLeadPresence } : {}),
     });
-    scope.onCleanup(() => planGate.destroy());
-
-    // The Review float docks beside Make Plan (mounted AFTER it, so the row
-    // reads plan, then review). Its receipt clears when the ask thread is
-    // resolved, and threads live in this doc's own Yjs map — so the map is
-    // what it watches, and a resolve from anywhere flips the face with no
-    // fetch.
-    const reviewFloat = mountReviewFloat({
-      docId,
-      root: editorMount,
-      user,
-      canWrite,
-      watchDocMeta: (onChange) => {
-        const meta = ydoc.getMap('meta');
-        meta.observe(onChange);
-        return () => meta.unobserve(onChange);
-      },
-      threadOpen: (threadId) => {
-        const t = ydoc.getMap('threads').get(threadId) as { get(key: string): unknown } | undefined;
-        if (!t) return undefined;
-        return t.get('status') !== 'resolved';
-      },
-      watchThreads: (onChange) => {
-        const threads = ydoc.getMap('threads');
-        threads.observeDeep(onChange);
-        return () => threads.unobserveDeep(onChange);
-      },
-      ...(watchLeadPresence ? { watchLeadPresence } : {}),
-    });
-    scope.onCleanup(() => reviewFloat.destroy());
   }
 
   // Tapping a speaker tag in the notes offers the voices this doc's meetings
@@ -550,588 +385,36 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     onCleanup: (fn) => scope.onCleanup(fn),
   });
 
-  // =========================================================================
-  // COMMENT PILL — small inline affordance
-  //   • Range selection → pill appears just past the end of the selection
-  //     (or below it if there's no room), so the user sees what they've
-  //     selected without the pill occluding the doc or competing with
-  //     iOS's native selection menu for screen space.
-  //   • Empty selection (caret after tap) → a lighter pill appears in the
-  //     right margin of the current line so the user can comment on a
-  //     paragraph by tap → pill → composer (Bryan: "tap then comment").
-  //     Tapping the pill expands selection to the tapped paragraph before
-  //     opening the composer.
-  // =========================================================================
-
-  let selection: Selection | null = null;
-  let selectionSettled = false;
-
-  // =========================================================================
-  // THE POINTER PILL (huddle docs only — src/pointer-pill.ts)
-  //   A range selection on a huddle doc grows three text buttons — Comment,
-  //   Research, Create Task — just to the right of the point where the
-  //   finger or mouse let go (above it when there is no room), never over
-  //   the selected words, clamped to the editor's visible box. The round
-  //   comment pill is hidden in range mode on these docs; in caret mode it
-  //   stays, and tapping it makes the sentence selection that brings the
-  //   pointer pill up. Everywhere else nothing here runs.
-  // =========================================================================
-
-  /** Where the last selection gesture let go, in viewport coordinates. A
-   *  release ON the pill is not recorded: it would walk the anchor up by one
-   *  gap every tap. Touch is remembered too, because a fingertip needs 44px
-   *  of clearance where a mouse cursor needs 12. */
-  let lastRelease: { x: number; y: number; touch: boolean; at: number } | null = null;
-  function recordRelease(x: number, y: number, touch: boolean, target: EventTarget | null): void {
-    if (pointerPill && target instanceof Node && pointerPill.el.contains(target)) return;
-    lastRelease = { x, y, touch, at: Date.now() };
-  }
-  scope.listen(
-    window,
-    'pointerup',
-    (ev) => {
-      const e = ev as PointerEvent;
-      recordRelease(e.clientX, e.clientY, e.pointerType !== 'mouse', e.target);
-    },
-    { capture: true, passive: true },
-  );
-  // iOS hands a long-press to its own selection UI and delivers a
-  // `pointercancel`, never a `pointerup`, so the release point has to come
-  // from the touch event underneath.
-  scope.listen(
-    window,
-    'touchend',
-    (ev) => {
-      const t = (ev as TouchEvent).changedTouches[0];
-      if (t) recordRelease(t.clientX, t.clientY, true, ev.target);
-    },
-    { capture: true, passive: true },
-  );
-
-  /** The selection the pill was shown for, captured when it appeared: on iOS
-   *  the tap on a button blurs the editor before the click lands, and by
-   *  then there is nothing left to write the task's link beside. */
-  let pointerPillCtx: {
-    sel: ChromeSelection;
-    range: { from: number; to: number } | null;
-  } | null = null;
-  const pointerPill =
-    ctx.huddle === true
-      ? mountPointerPill<PointerPillActionId>({
-          actions: POINTER_PILL_ACTIONS,
-          onPick: (action) => {
-            const captured = pointerPillCtx;
-            pointerPillCtx = null;
-            hidePill();
-            if (action === 'comment') {
-              // The composer anchors to the selection that is standing, so
-              // it stays: the same path the round pill takes everywhere else.
-              reviewChrome.openComposer();
-              return;
-            }
-            // The selection has done its job. Left standing, the next
-            // `positionPill` — the release of this very tap, or the edit
-            // that writes the link — would grow the pill straight back over
-            // words that have already become a row.
-            window.getSelection()?.removeAllRanges();
-            editor.editor.commands.blur();
-            if (captured) void takeSpinoff(action, captured.sel, captured.range);
-          },
-          onDismiss: () => hidePill(),
-        })
-      : null;
-  scope.onCleanup(() => pointerPill?.destroy());
-
-  /** The anchor as an OFFSET from the selection's box rather than a fixed
-   *  viewport point, so a scroll carries the pill along with the words it is
-   *  about instead of leaving it where the finger was. Re-derived whenever
-   *  the selection or the release changes, held steady otherwise. */
-  let pillAnchorKey = '';
-  let pillAnchorOffset = { dx: 0, dy: 0, touch: false };
-
-  function showPointerPill(from: number, to: number): void {
-    if (!pointerPill) return;
-    const winSel = window.getSelection();
-    const rects: { left: number; top: number; right: number; bottom: number }[] = [];
-    if (winSel && winSel.rangeCount > 0 && !winSel.isCollapsed) {
-      for (const r of Array.from(winSel.getRangeAt(0).getClientRects())) {
-        if (r.width > 0 && r.height > 0) {
-          rects.push({ left: r.left, top: r.top, right: r.right, bottom: r.bottom });
-        }
-      }
-    }
-    if (rects.length === 0) {
-      const c = editor.editor.view.coordsAtPos(to);
-      rects.push({ left: c.left, top: c.top, right: c.right + 1, bottom: c.bottom });
-    }
-    const box = {
-      left: Math.min(...rects.map((r) => r.left)),
-      top: Math.min(...rects.map((r) => r.top)),
-      right: Math.max(...rects.map((r) => r.right)),
-      bottom: Math.max(...rects.map((r) => r.bottom)),
-    };
-    const key = `${from}:${to}:${lastRelease?.at ?? 0}`;
-    if (key !== pillAnchorKey) {
-      pillAnchorKey = key;
-      // A release counts only when it is NEAR the selection. A keyboard
-      // selection (shift+arrow) has no release of its own, and the last one
-      // may be a click seconds ago somewhere else on the page; anchoring on
-      // that would put the pill over nothing.
-      const slack = 80;
-      const near =
-        lastRelease !== null &&
-        Date.now() - lastRelease.at < 10_000 &&
-        lastRelease.x >= box.left - slack &&
-        lastRelease.x <= box.right + slack &&
-        lastRelease.y >= box.top - slack &&
-        lastRelease.y <= box.bottom + slack;
-      if (near && lastRelease) {
-        pillAnchorOffset = {
-          dx: lastRelease.x - box.left,
-          dy: lastRelease.y - box.top,
-          touch: lastRelease.touch,
-        };
-      } else {
-        // No usable release: the end of the selection's last line stands in.
-        const last = rects[rects.length - 1] ?? box;
-        pillAnchorOffset = {
-          dx: last.right - box.left,
-          dy: last.bottom - box.top,
-          touch: window.matchMedia?.('(pointer: coarse)').matches ?? false,
-        };
-      }
-    }
-    const anchor = {
-      x: box.left + pillAnchorOffset.dx,
-      y: box.top + pillAnchorOffset.dy,
-      touch: pillAnchorOffset.touch,
-    };
-    // The editor's visible box, cut down by the on-screen keyboard the same
-    // way the comment pill's clamp is (see `positionPill`).
-    const er = editorMount.getBoundingClientRect();
-    const vv = window.visualViewport;
-    const vvTop = vv?.offsetTop ?? 0;
-    const vvHeight = vv?.height ?? window.innerHeight;
-    const bounds = {
-      left: Math.max(er.left, 0) + 6,
-      right: Math.min(er.right, window.innerWidth) - 6,
-      top: Math.max(er.top, vvTop) + 6,
-      bottom: Math.min(er.bottom, vvTop + vvHeight) - 6,
-    };
-    const sel = editor.getSelectionRel() ?? selection;
-    if (!sel) {
-      pointerPill.hide();
-      return;
-    }
-    pointerPillCtx = { sel, range: from < to ? { from, to } : null };
-    pointerPill.show(anchor, rects, bounds);
-  }
-  /** What the pill represents if clicked: a range selection, or expand
-   *  to the paragraph containing the caret. */
-  let pillMode: 'range' | 'caret' = 'range';
-  /** Cached paragraph range for caret mode — captured when the pill is
-   *  shown so the click handler doesn't depend on the editor still having
-   *  the same selection (iOS blurs the editor when the pill is tapped). */
-  let caretParaRange: { from: number; to: number } | null = null;
-
-  // A gesture on the document suppresses the pill until it ends, so the pill
-  // doesn't hop around under the finger mid-drag. Releasing is only ONE of
-  // the ways a touch ends — a cancelled one (scroll, iOS long-press takeover)
-  // delivers no pointerup at all, and treating that as "still dragging" left
-  // inline commenting dead for the rest of the page load. See gesture.ts.
-  let settleTimer: ReturnType<typeof setTimeout> | null = null;
-  const gesture = trackGesture({
-    dom: editor.editor.view.dom,
-    win: window,
-    onBegin: () => {
-      selectionSettled = false;
-      hidePill();
-    },
-    onEnd: () => {
-      if (settleTimer) clearTimeout(settleTimer);
-      settleTimer = setTimeout(() => {
-        settleTimer = null;
-        selectionSettled = true;
-        const sel = editor.getSelectionRel();
-        if (sel) selection = sel;
-        positionPill();
-      }, 50);
-    },
+  // ---- Selection affordances ----
+  // Two modules, wired in the order they depend on each other: the pointer
+  // pill a huddle doc grows over a range (doc-pointer-pill), and the round
+  // comment pill that owns the cached selection it reads (doc-comment-pill).
+  //
+  // There was a third — `createSpinoffRunner`, which turned a selection into
+  // a board row or a research section. Nothing calls it from here as of
+  // 2026-09-04: the pill offers only Comment, and the ask is made in the
+  // comment. `doc/doc-spinoff.ts` and the routes behind it are untouched.
+  const pointer = mountPointerPillLayer({
+    huddle,
+    editor,
+    editorMount,
+    scope,
+    getSelection: () => pill?.currentSelection() ?? null,
+    hideAll: () => pill?.hide(),
+    openComposer: () => reviewChrome.openComposer(),
   });
-  scope.onCleanup(() => {
-    gesture.dispose();
-    // Same reason the selectionchange timer is cleared below: this one would
-    // run positionPill() against the destroyed editor of the previous doc.
-    if (settleTimer) clearTimeout(settleTimer);
+  pill = mountCommentPill({
+    huddle,
+    editor,
+    editorMount,
+    composer,
+    commentPill,
+    scope,
+    pointer,
+    openComposer: () => reviewChrome.openComposer(),
+    follow: () => editViewport?.follow(),
   });
 
-  function refreshSelectionState(): void {
-    const sel = editor.getSelectionRel();
-    if (sel) selection = sel;
-    // Typing or arrowing towards the bottom of the window walks the caret
-    // under the on-screen keyboard; `follow` scrolls it back into the band
-    // the visual viewport says is visible. No-op with no keyboard up, and a
-    // no-op again once the caret is already clear.
-    editViewport?.follow();
-  }
-
-  /** Is there a non-collapsed native selection sitting inside the editor?
-   *  In VIEW mode (contenteditable=false) the editor is never focused and
-   *  ProseMirror's selection stays empty, so the pill must key off the raw
-   *  DOM selection instead — this is what makes iOS long-press commenting
-   *  work without making the doc editable. */
-  function hasDomSelection(): boolean {
-    const s = window.getSelection();
-    if (!s || s.rangeCount === 0 || s.isCollapsed) return false;
-    const r = s.getRangeAt(0);
-    const dom = editor.editor.view.dom;
-    return dom.contains(r.startContainer) && dom.contains(r.endContainer);
-  }
-
-  function positionPill(): void {
-    if (gesture.active) {
-      hidePill();
-      return;
-    }
-    // Don't reposition (and don't re-show) the pill while the composer
-    // is open. The visualViewport `resize` that fires when the keyboard
-    // slides up would otherwise repaint the pill mid-transition at a
-    // stale location.
-    if (!composer.classList.contains('hidden')) {
-      hidePill();
-      return;
-    }
-    // No focus = no active cursor = no pill — UNLESS there's a raw DOM
-    // selection inside the editor (view mode, where the editor never takes
-    // focus but the user can still long-press-select text to comment on).
-    if (!editor.editor.isFocused && !hasDomSelection()) {
-      hidePill();
-      return;
-    }
-    const state = editor.editor.state;
-    const view = editor.editor.view;
-    const { from, to, empty } = state.selection;
-    try {
-      const pillW = 36;
-      const pillH = 36;
-      const gap = 8;
-      const viewportW = window.innerWidth;
-      // On iOS, position:fixed and getBoundingClientRect are LAYOUT-viewport
-      // relative, but visualViewport.height already excludes the on-screen
-      // keyboard. We want the max-y the pill can use to stay above the
-      // keyboard, expressed in the same layout-viewport coords the browser
-      // gives us. That's vv.offsetTop + vv.height. Do NOT subtract
-      // --kb-bottom again here — that was the bug that pinned the pill
-      // to y=0 when the keyboard was open.
-      const vv = window.visualViewport;
-      const vvTop = vv?.offsetTop ?? 0;
-      const vvHeight = vv?.height ?? window.innerHeight;
-      const availableBottom = vvTop + vvHeight - pillH - 8;
-
-      // Range mode fires when PM has a selection (edit mode) OR there's a raw
-      // DOM selection (view mode). The positioning below already prefers the
-      // DOM selection's client rects, so it works the same either way.
-      if (!empty || hasDomSelection()) {
-        pillMode = 'range';
-        caretParaRange = null;
-        commentPill.classList.remove('caret');
-        if (ctx.huddle === true) {
-          commentPill.classList.add('hidden');
-          showPointerPill(from, to);
-          return;
-        }
-        // Prefer the DOM selection's LAST client rect — that's what the
-        // user actually sees highlighted on iOS (where native selection
-        // handles don't always stay in lockstep with ProseMirror's `to`).
-        // Fall back to coordsAtPos if DOM selection is empty.
-        let endRight = 0;
-        let endTop = 0;
-        let endBottom = 0;
-        const winSel = window.getSelection();
-        if (winSel && winSel.rangeCount > 0 && !winSel.isCollapsed) {
-          const rects = winSel.getRangeAt(0).getClientRects();
-          const last = rects.length > 0 ? rects[rects.length - 1] : null;
-          if (last) {
-            endRight = last.right;
-            endTop = last.top;
-            endBottom = last.bottom;
-          }
-        }
-        if (endRight === 0) {
-          const c = view.coordsAtPos(to);
-          endRight = c.right;
-          endTop = c.top;
-          endBottom = c.bottom;
-        }
-        let left = endRight + gap;
-        let top = Math.max(8, endTop - 2);
-        // If that runs past the right edge, tuck below the selection end.
-        if (left + pillW > viewportW - 8) {
-          left = Math.max(8, endRight - pillW);
-          top = endBottom + gap;
-        }
-        top = Math.min(top, availableBottom);
-        commentPill.style.left = `${Math.max(8, left)}px`;
-        commentPill.style.top = `${top}px`;
-        commentPill.classList.remove('hidden');
-      } else if (selectionSettled) {
-        // Caret mode — float the pill RIGHT next to the caret so the user
-        // sees it as attached to the spot they tapped. Cache the SENTENCE
-        // range (not the whole paragraph) so the click handler can commit
-        // even if iOS blurred the editor selection in the meantime.
-        pillMode = 'caret';
-        commentPill.classList.add('caret');
-        const caret = view.coordsAtPos(from);
-        let left = caret.right + gap;
-        let top = Math.max(8, caret.top - 2);
-        if (left + pillW > viewportW - 8) left = viewportW - pillW - 8;
-        top = Math.min(top, availableBottom);
-        commentPill.style.left = `${Math.max(8, left)}px`;
-        commentPill.style.top = `${Math.max(8, top)}px`;
-        commentPill.classList.remove('hidden');
-        caretParaRange = sentenceRangeAt(state, from);
-      } else {
-        hidePill();
-      }
-    } catch {
-      hidePill();
-    }
-  }
-
-  function hidePill(): void {
-    commentPill.classList.add('hidden');
-    pointerPill?.hide();
-    caretParaRange = null;
-  }
-
-  // Prevent the pill from stealing focus on DESKTOP (mousedown causes blur
-  // before click). On iOS, preventDefault on touchstart/pointerdown
-  // cancels the synthetic click entirely — so only hook mousedown.
-  scope.listen(commentPill, 'mousedown', (ev) => (ev as MouseEvent).preventDefault());
-  scope.listen(commentPill, 'click', () => {
-    if (pillMode === 'caret') {
-      // Use the cached paragraph range — the editor may have lost its
-      // selection when the pill was tapped (iOS blur), but we stashed
-      // the range when the pill appeared.
-      if (!caretParaRange) {
-        showToast('Tap again to place the caret, then the pill.');
-        return;
-      }
-      const { from, to } = caretParaRange;
-      if (from >= to) return;
-      editor.editor.commands.focus();
-      editor.editor.commands.setTextSelection({ from, to });
-      // setTextSelection is synchronous; read the rel positions now.
-      const sel = editor.getSelectionRel();
-      if (sel) selection = sel;
-    }
-    // On a HUDDLE doc the round pill only ever appears in caret mode, and its
-    // job ends with the sentence selection it just made: `positionPill` sees
-    // a range and brings up the pointer pill over it. Everywhere else it is
-    // the comment affordance it has always been, and opens the composer.
-    if (ctx.huddle === true) {
-      selectionSettled = true;
-      positionPill();
-      return;
-    }
-    reviewChrome.openComposer();
-  });
-
-  async function takeSpinoff(
-    action: SpinoffTaskId,
-    sel: ChromeSelection,
-    range: { from: number; to: number } | null,
-  ): Promise<void> {
-    // The BOARD this doc is filed on, which is `backTo` — not `workspaceId`.
-    //
-    // Those are two different ids and the difference is the whole bug this
-    // comment exists for: `meta.workspaceId` is the GROUPING id of a diff
-    // review or a folder browse, and a huddle doc has none at all. Reading it
-    // gave the empty string, which is not `undefined`, so the guard below
-    // passed and the create went to `/api/workspaces//tasks` — a 404 the
-    // person saw as a toast reading "404".
-    //
-    // `backTo` is what the server answers when it can name the board a doc
-    // was reached from, which for a huddle is the board that started it.
-    const workspaceId = boardIdFor(ctx);
-    // Empty, not undefined, is how "no board" actually arrives — `DocMeta`
-    // defaults both ids to `''`.
-    if (!workspaceId) {
-      showToast('This doc is not on a board yet.');
-      return;
-    }
-    try {
-      const made = await runSpinoff(action, {
-        docId,
-        workspaceId,
-        user,
-        quote: sel.snippet,
-        anchor: anchorBody(sel),
-        docTitle: readDocMeta(ydoc).title,
-        fetchJson: async (url, init) => {
-          const res = await fetch(url, init);
-          const body = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(String((body as { error?: string }).error ?? res.status));
-          return body;
-        },
-      });
-      if (!made) {
-        showToast("That didn't go through — try again.");
-        return;
-      }
-      if (made.action === 'research') {
-        // The doc is the receipt: a "Research: …" section now sits under
-        // the line, and the ask thread on the line is what the lead
-        // answers. Nothing to link and nothing to undo from here — the
-        // section is prose, and deleting prose is the editor's own verb.
-        showToast(
-          made.placeholder
-            ? `“${made.section}” added below — the lead fills it in.`
-            : 'Research asked for — the lead answers on the thread.',
-        );
-        return;
-      }
-      // The selected words BECOME the task's link — nothing is written into
-      // the doc. `task-link-chips.ts` hangs the row's live status beside
-      // them, so the line reads as itself with a status on the end.
-      if (made.href !== undefined && range) {
-        linkSpinoffRange(editor.editor, range, made.href);
-      }
-      const named = made.title ? `“${made.title}”` : 'Task';
-      const { taskId, href } = made;
-      // Name the column. The row's placement is now decided from what the
-      // row says rather than from which button was pressed, so "added to the
-      // board" would leave the person to go and find out which half of that
-      // decision they got.
-      const landed = made.status === 'triage' ? 'sent to Triage' : 'added to To do';
-      showToast(
-        `${named} — ${landed}.`,
-        taskId !== undefined
-          ? { label: 'Undo', onAction: () => void undoSpinoff(taskId, href) }
-          : undefined,
-      );
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : "That didn't go through.");
-    }
-  }
-
-  /**
-   * Take a spin-off back: archive the row, and un-link the words.
-   *
-   * Archive rather than delete — a spun-off row may already have been read,
-   * ranked or replied to in the seconds the toast was up, and this project
-   * does not destroy content to undo a tap. The board stops showing it, and
-   * it is still there to restore.
-   */
-  async function undoSpinoff(taskId: string, href: string | undefined): Promise<void> {
-    try {
-      const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/archive`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ author: user, reason: 'Undone from the doc it was spun off from' }),
-      });
-      if (!res.ok) throw new Error(String(res.status));
-    } catch {
-      showToast("Couldn't undo that — the task is still on the board.");
-      return;
-    }
-    if (href !== undefined) unlinkSpinoffHref(editor.editor, href);
-    showToast('Undone.');
-  }
-
-  // This lives on the editor's own DOM, which is removed by editor.destroy()
-  // on teardown, so its listener dies with it — no scope binding needed.
-  editor.editor.view.dom.addEventListener('keyup', (ev) => {
-    if (ev.shiftKey || ev.key.startsWith('Arrow') || ev.key === 'Home' || ev.key === 'End') {
-      selectionSettled = true;
-      refreshSelectionState();
-      positionPill();
-    }
-  });
-  editor.editor.on('selectionUpdate', () => {
-    if (!gesture.active && selectionSettled) positionPill();
-  });
-  // Typing into the editor hides the caret-mode pill — it's a commenting
-  // affordance, not something we want hovering mid-sentence. Range-mode
-  // pill auto-clears because a selection can't exist while typing.
-  editor.editor.on('update', () => {
-    if (pillMode === 'caret') hidePill();
-  });
-  // Editor loses focus (user tapped outside, keyboard dismissed, etc.)
-  // → no active cursor → no pill. Same for the underlying DOM element,
-  // since iOS can blur the input without firing Tiptap's blur event
-  // when the pill is tapped.
-  editor.editor.on('blur', () => {
-    selectionSettled = false;
-    hidePill();
-  });
-  editor.editor.view.dom.addEventListener('focusout', (ev) => {
-    // Ignore transient focus loss that immediately returns to the editor
-    // (e.g., toolbar button clicks that refocus).
-    setTimeout(() => {
-      if (!editor.editor.isFocused) {
-        selectionSettled = false;
-        hidePill();
-      }
-    }, 0);
-    void ev;
-  });
-  // Keep pill in sync if the keyboard appears/disappears (visualViewport
-  // resize changes --kb-bottom, which changes our clamp max).
-  if (window.visualViewport) scope.listen(window.visualViewport, 'resize', () => positionPill());
-  scope.listen(window, 'scroll', () => positionPill(), { passive: true });
-  scope.listen(editorMount, 'scroll', () => positionPill(), { passive: true });
-  // VIEW mode: ProseMirror fires no selectionUpdate (the editor isn't
-  // editable), and iOS selection-handle drags don't always produce a clean
-  // pointerup on the editor DOM. The document `selectionchange` event is the
-  // reliable signal there, so (debounced) drive the pill off it. In edit mode
-  // PM's own selectionUpdate already handles this, so skip to avoid double work.
-  let selChangeTimer: ReturnType<typeof setTimeout> | null = null;
-  scope.listen(document, 'selectionchange', () => {
-    if (!document.body.classList.contains('view-mode')) return;
-    if (gesture.active) return; // wait for the gesture to settle (see gesture.ts)
-    if (selChangeTimer) clearTimeout(selChangeTimer);
-    selChangeTimer = setTimeout(() => {
-      selectionSettled = true;
-      refreshSelectionState();
-      positionPill();
-    }, 120);
-  });
-  // A pending selectionchange timer must not fire after this mount is torn down
-  // — it would run positionPill() against a destroyed editor on the next doc.
-  scope.onCleanup(() => {
-    if (selChangeTimer) clearTimeout(selChangeTimer);
-  });
-
-  // =========================================================================
-  // COMPOSER (Notion-style slim sheet)
-  //   The doc stays behind a dim scrim with the selection still visible
-  //   (we do NOT re-quote the snippet inside the composer — the user sees
-  //   what they're commenting on in place). On open we scroll the editor
-  //   so the selection sits above the composer + keyboard.
-  // =========================================================================
-
-  function scrollSelectionAboveKeyboard(): void {
-    try {
-      const vv = window.visualViewport;
-      const vvTop = vv?.offsetTop ?? 0;
-      const vvHeight = vv?.height ?? window.innerHeight;
-      // 20% from the top of the visible-above-keyboard area
-      const desiredTop = vvTop + vvHeight * 0.2;
-      let selTop = 0;
-      const winSel = window.getSelection();
-      if (winSel && winSel.rangeCount > 0 && !winSel.isCollapsed) {
-        selTop = winSel.getRangeAt(0).getBoundingClientRect().top;
-      } else {
-        const { from } = editor.editor.state.selection;
-        selTop = editor.editor.view.coordsAtPos(from).top;
-      }
-      const deltaY = selTop - desiredTop;
-      if (Math.abs(deltaY) < 20) return;
-      const scroller = document.getElementById('editor');
-      if (scroller) scroller.scrollBy({ top: deltaY, behavior: 'smooth' });
-    } catch {}
-  }
   // Tap-on-highlight in the editor → focus the thread.
   //   • A visible balloon for it → scroll the balloon into view.
   //   • Mobile: full-screen thread view (Notion pattern — gives the
@@ -1145,164 +428,19 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     revealBalloon: (id) => margin.revealThreadBalloon(id),
   });
 
-  const meta = ydoc.getMap('meta');
-  const onMeta = () => {
-    reviewChrome.renderDocLabel();
-    void renderSetNav();
-  };
-  meta.observe(onMeta);
-  scope.onCleanup(() => meta.unobserve(onMeta));
-  // ---- Review-set navigation ----
-  // If the doc has a setId/workspaceId, render its siblings into the sidebar
-  // and topbar dropdown. The sidebar renderers are idempotent per nav key, so
-  // navigating between files in the same review keeps the sidebar (and its
-  // scroll) intact — only the active marker moves.
-  const setPaneList = document.getElementById('set-pane-list');
-  const docMenu = document.getElementById('doc-menu');
-  const docSwitcher = document.getElementById('doc-switcher') as HTMLButtonElement | null;
-
-  async function renderSetNav(): Promise<void> {
-    // Claim the sidebar so any concurrent/stale render (e.g. two legacy-set
-    // meta ticks resolving out of order, or a previous workspace's in-flight
-    // render) can detect it was superseded and bail before overwriting.
-    const token = beginSidebarRender();
-    const m = readDocMeta(ydoc);
-    const workspaceId = m.workspaceId ?? '';
-    const setId = m.setId ?? '';
-    // The sidebar grid shows whenever the doc is part of a workspace OR a
-    // legacy hand-grouped set. workspaceId implies a folder bind → tree;
-    // setId-only stays on the flat list.
-    const navKey = workspaceId || setId;
-    // Nothing reserves the column here. Knowing the doc names a set is not
-    // knowing the set has anything in it — each renderer below commits once it
-    // has a list, and `commitSidebarColumn` explains what that cost when this
-    // line toggled `has-set` from meta instead.
-    if (!navKey) {
-      commitSidebarColumn(false);
-      if (setPaneList) setPaneList.innerHTML = '';
-      if (docMenu) docMenu.innerHTML = '';
-      docSwitcher?.setAttribute('aria-expanded', 'false');
-      resetSidebarSignature();
-      return;
-    }
-    if (workspaceId) {
-      // Same chooser as the code/diff mount: diff reviews + browse workspaces
-      // get the diff-nav; only data-less workspaces fall back to the folder
-      // tree. `scope` lets a superseded navigation's late fetch bail instead of
-      // clobbering the current sidebar.
-      const ok = await renderDiffNav(navDocId, workspaceId, false, scope);
-      if (scope.disposed) return;
-      if (!ok) await renderWorkspaceTree(navDocId, workspaceId, false, scope);
-      return;
-    }
-    // ---- Legacy flat setId path ----
-    // Re-fetch /api/docs on every renderSetNav so the list self-heals: a
-    // transient failure or an incomplete initial-sync snapshot is corrected on
-    // the next meta tick, and a sibling added mid-review appears in place. The
-    // shared signature check below means an unchanged list costs only the small
-    // fetch, not a scroll-resetting DOM rebuild. (Do NOT memo this per mount —
-    // that froze a failed/partial snapshot for the whole mount.) `scope.disposed`
-    // guards the superseded-navigation race after the await.
-    try {
-      const res = await fetch(setDocsUrl(setId));
-      // Bail if the mount was torn down OR a newer sidebar render superseded us
-      // (e.g. a later meta tick's fetch already resolved) — an earlier,
-      // possibly smaller snapshot must not overwrite it.
-      if (scope.disposed || !isCurrentSidebarRender(token)) return;
-      if (!res.ok) return;
-      const data = (await res.json()) as LegacyDocs;
-      if (scope.disposed || !isCurrentSidebarRender(token)) return;
-      const siblings = selectSetSiblings(data.docs, setId);
-      // The list is known now, so the column can be decided. A set whose
-      // members are all non-markdown lands here with zero rows and gives the
-      // width back rather than rendering an empty labelled panel.
-      commitSidebarColumn(siblings.length > 0);
-      if (siblings.length === 0) {
-        if (setPaneList) setPaneList.innerHTML = '';
-        if (docMenu) docMenu.innerHTML = '';
-        docSwitcher?.setAttribute('aria-expanded', 'false');
-        resetSidebarSignature();
-        return;
-      }
-      const sig = `set:${setId}:${siblings.map((d) => d.docId).join(',')}`;
-      if (sidebarShowsSignature(sig)) {
-        setActiveFile(navDocId);
-        return;
-      }
-      const items = siblings
-        .map((d) => {
-          const isActive = d.docId === docId;
-          const label = d.title ?? basename(d.sourceUrl ?? d.docId);
-          const sub = d.sourceUrl && d.title ? d.sourceUrl : '';
-          const params = new URLSearchParams(location.search);
-          const href = docHref(d.docId, workspaceIdFromPath(location.pathname), params.toString());
-          return `<li><a href="${href}" class="${isActive ? 'active' : ''}"${
-            isActive ? ' aria-current="page"' : ''
-          }>${escapeHtml(label)}${sub ? `<small>${escapeHtml(sub)}</small>` : ''}</a></li>`;
-        })
-        .join('');
-      if (setPaneList) setPaneList.innerHTML = items;
-      if (docMenu) docMenu.innerHTML = `<ol>${items}</ol>`;
-      setSidebarSignature(sig);
-      // On mobile, the desktop sidebar is hidden — the dropdown is the ONLY
-      // surface that shows the review set. Open it on first render so the
-      // reviewer sees siblings without discovering the doc-switcher tap
-      // target. The scroll-to-close handler dismisses it once they engage.
-      const isMobile = window.matchMedia('(max-width: 1100px)').matches;
-      if (isMobile && docMenu && docSwitcher && !openedOnce) {
-        openedOnce = true;
-        docMenu.classList.remove('hidden');
-        docMenu.setAttribute('aria-hidden', 'false');
-        docSwitcher.setAttribute('aria-expanded', 'true');
-      }
-    } catch {
-      // Fetch failure — skip; not load-bearing for the editor itself.
-    }
-  }
-  let openedOnce = false;
-
-  // ---- Workspace (folder) file tree ----
-  // A doc bound via bind_folder carries a workspaceId. renderSetNav (above)
-  // renders it; here we wire the focus + ~30s heartbeat refresh so badges
-  // reflect newly-opened/resolved threads. Scoped so navigation drops it.
-  const workspaceId = readDocMeta(ydoc).workspaceId;
-  if (workspaceId) {
-    // The heartbeat/focus refresh MUST use the same renderer the navigation
-    // path (renderSetNav) picks — renderDiffNav first, the folder tree only as
-    // the fallback — otherwise it writes a `tree:` signature while navigation
-    // writes `diff:`, and the shared-signature mismatch forces a full
-    // scroll-resetting rebuild on the next navigation (finding #1).
-    const refresh = () => {
-      void (async () => {
-        const ok = await renderDiffNav(navDocId, workspaceId, true, scope);
-        if (scope.disposed) return;
-        if (!ok) await renderWorkspaceTree(navDocId, workspaceId, true, scope);
-      })();
-    };
-    window.addEventListener('focus', refresh);
-    const timer = setInterval(refresh, 30_000);
-    scope.onCleanup(() => {
-      window.removeEventListener('focus', refresh);
-      clearInterval(timer);
-    });
-  }
-
-  function basename(p: string): string {
-    const m = p.match(/[^/]+$/);
-    return m ? m[0] : p;
-  }
+  // The sidebar and topbar dropdown for the set this doc belongs to — a diff
+  // review, a bound folder, or a legacy hand-grouped set.
+  const setNav = mountDocSetNav({ docId, navDocId, ydoc, scope });
 
   // `?thread=<id>` — arrive AT the comment, not at the document that contains
   // it. The board's review queue links here, and "it drops me on the doc and I
-  // scroll looking for it" is the thing that link exists to remove. Fired once,
-  // on the first sync: threads don't exist before the ydoc arrives, and
-  // re-revealing on every later sync would yank the reader back mid-read.
-  let deepLinked = false;
+  // scroll looking for it" is the thing that link exists to remove. Read from
+  // the address here, like the huddle flag above, and run once on the first
+  // sync: threads don't exist before the ydoc arrives, and re-revealing on
+  // every later sync would yank the reader back mid-read.
   function revealLinkedThread(): void {
-    if (deepLinked) return;
     const wanted = new URLSearchParams(location.search).get('thread');
     if (!wanted) return;
-    deepLinked = true;
     // Only when it's really there — a stale link leaves the reader on the doc
     // rather than pulsing at nothing, and SAYS so: threads all ride the ydoc
     // that just synced, so absent now is gone (resolved away, or a stale
@@ -1314,138 +452,26 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     reviewChrome.revealThread(wanted);
   }
 
-  // Live task-link status chips: once the doc's meta has synced (onReady) we
-  // know its board, and the board's `task.transitioned` push keeps every chip
-  // honest — the "filed in the meeting, flips when dispatched" surface.
-  let chipsWatched = false;
-  function watchChips(): void {
-    if (chipsWatched || scope.disposed) return;
-    const chipWorkspaceId = ctx.workspaceId ?? readDocMeta(ydoc).workspaceId;
-    if (!chipWorkspaceId) return;
-    chipsWatched = true;
-    scope.onCleanup(watchTaskLinkStatuses(chipWorkspaceId, editor.editor.view));
-  }
-
-  client.onReady(() => {
-    if (scope.disposed) return;
-    reviewChrome.renderDocLabel();
-    void renderSetNav();
-    reviewChrome.redrawThreads();
-    revealLinkedThread();
-    watchChips();
+  // What every meta tick redraws, and what only the first sync may do.
+  wireDocReady({
+    client,
+    ydoc,
+    scope,
+    chrome: reviewChrome,
+    editor,
+    workspaceId: ctx.workspaceId,
+    renderSetNav: () => setNav.render(),
+    onFirstSync: revealLinkedThread,
   });
 
-  // ---- Save state indicator ----
-  //   dirty   = local change produced but not yet confirmed synced to server
-  //   saved   = WS is up AND no pending local updates after a short idle window
-  //   offline = WS connection closed or reconnecting
-  // The widget's canonical "saved" signal is a server ack of the most
-  // recent local update. y-websocket doesn't surface per-update acks,
-  // so we use the next best thing: WS status + a short "typing stopped
-  // and nothing went out for 500ms" debounce.
-  const saveStateEl = el<HTMLElement>('save-state');
-  let pendingLocalEdits = 0;
-  let saveTimer: ReturnType<typeof setTimeout> | null = null;
-  // TWO facts, deliberately not one. `wsOnline` is the raw socket, updated
-  // the instant it changes, and it decides whether an edit may be called
-  // saved. `reconnecting` is the graced VIEW, and it decides what the chip
-  // says — so a blip never repaints, while nothing is ever reported as saved
-  // to a server that isn't there.
-  let wsOnline = false;
-  let reconnecting = false;
-  function renderSaveState(): void {
-    saveStateEl.classList.remove('save-state--saved', 'save-state--dirty', 'save-state--offline');
-    // Nothing to report about saving on a surface that cannot save. "All
-    // changes saved" beside a locked editor is a true sentence describing a
-    // thing that is not happening, which is worse than silence.
-    if (!canWrite) {
-      saveStateEl.textContent = '';
-      return;
-    }
-    switch (saveStateView({ reconnecting, pendingEdits: pendingLocalEdits })) {
-      case 'reconnecting':
-        // Not "Offline": a restart is the usual cause and it is coming back.
-        saveStateEl.textContent = 'Reconnecting…';
-        saveStateEl.classList.add('save-state--offline');
-        return;
-      case 'dirty':
-        saveStateEl.textContent = 'Unsaved changes';
-        saveStateEl.classList.add('save-state--dirty');
-        return;
-      default:
-        saveStateEl.textContent = 'All changes saved';
-        saveStateEl.classList.add('save-state--saved');
-    }
-  }
-  // ydoc.on('update') is released when the client destroys the ydoc on close.
-  ydoc.on('update', (_update, origin) => {
-    // Remote updates come from the server with origin === client.ws.
-    // Everything else — typing, formatting, agent edits merged in — counts as
-    // a local change the server hasn't ack'd yet.
-    if (origin === client.ws) return;
-    pendingLocalEdits++;
-    renderSaveState();
-    if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
-      // "Typing stopped" only means "saved" if there was a server listening.
-      pendingLocalEdits = settlePending(pendingLocalEdits, wsOnline);
-      renderSaveState();
-    }, 500);
-  });
-  // Raw status: the truth half. Nothing visible hangs off it directly, so it
-  // can flip as often as the backoff does without any flicker.
-  client.onStatus((s) => {
-    if (scope.disposed) return;
-    const was = wsOnline;
-    wsOnline = s === 'open';
-    // Coming back is what the debounce was waiting for. Edits it refused to
-    // settle while offline settle now, without needing another keystroke.
-    if (wsOnline && !was && pendingLocalEdits > 0) {
-      if (saveTimer) clearTimeout(saveTimer);
-      saveTimer = setTimeout(() => {
-        pendingLocalEdits = settlePending(pendingLocalEdits, wsOnline);
-        renderSaveState();
-      }, 500);
-    }
-    renderSaveState();
-  });
-  // One reading of the connection, shared with the board: a drop is only
-  // worth SHOWING once it has outlasted the grace window, and it clears the
-  // moment the socket returns — no reload. The disposed guard matters because
-  // the grace timer can outlive the mount that armed it.
-  watchConnection({
-    onStatus: (cb) => client.onStatus(cb),
-    onView: (view) => {
-      if (scope.disposed) return;
-      reconnecting = view === 'reconnecting';
-      renderSaveState();
-    },
-  });
-  renderSaveState();
-  // On navigation, cancel the pending save-state debounce and blank the shared
-  // #save-state indicator — otherwise a stale timer rewrites it with THIS
-  // mount's closed-over wsOnline/pendingLocalEdits over the next document
-  // (findings #3, #9), and code/diff surfaces have no save state to show.
-  scope.onCleanup(() => {
-    if (saveTimer) clearTimeout(saveTimer);
-    saveStateEl.classList.remove('save-state--saved', 'save-state--dirty', 'save-state--offline');
-    saveStateEl.textContent = '';
-  });
+  // The #save-state chip: "All changes saved" / "Unsaved changes" /
+  // "Reconnecting…", and the teardown that blanks it for the next document.
+  mountDocSaveState({ client, ydoc, canWrite, scope });
 
-  // =========================================================================
-  // FORMATTING TOOLBAR — collapsed by default. Aa button toggles it.
-  // =========================================================================
-  scope.listen(toggleFormat, 'click', () => {
-    const collapsed = formatBar.classList.toggle('is-collapsed');
-    toggleFormat.setAttribute('aria-pressed', String(!collapsed));
-  });
-  applyWidthPref();
-  wireFormatBar(editor, scope);
-
-  // The two mode switches and the interlock between them live in
-  // doc/doc-modes.ts; what stays here is the read-only lock that speaks for
-  // the whole surface, and it drives them through the handle it gets back.
-  const modes = wireDocModes({
+  // Last, because it speaks for the whole surface: the format bar, the
+  // view/edit and Suggesting interlock, and the read-only lock that overrides
+  // both when the server will not accept writes.
+  wireDocGates({
     editor,
     scope,
     els: { toggleEditMode, toggleSuggestMode, formatBar, toggleFormat },
@@ -1454,82 +480,4 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     canWrite,
     justStarted: startedHuddleHere,
   });
-
-  /**
-   * A browser the server will not accept writes from does not get an edit
-   * toggle — or a Suggesting toggle, which is the same door. The socket is
-   * already read-only server-side; this is what stops a person typing into it
-   * and watching the text vanish on reload.
-   *
-   * Synchronous, and last in the mount because it speaks for the whole
-   * surface: `canWrite` came in on the MountContext, so nothing here waits on
-   * a network answer and nothing is editable in the meantime. It used to be a
-   * `.then()` on a second `/api/auth/session` call, and everything above ran
-   * — editable — while that was in flight.
-   */
-  if (!canWrite) {
-    // The crumb and the save-state chip are `lockDocToReading`'s now — they
-    // were here, and the redline and code surfaces went without them.
-    lockDocToReading(modes);
-  }
-
-  // =========================================================================
-  // HOTKEYS — ⌘M / Escape are wired by the shared chrome; only the
-  // markdown-specific format-bar hotkey lives here.
-  // =========================================================================
-  scope.listen(document, 'keydown', (ev) => {
-    const ke = ev as KeyboardEvent;
-    if ((ke.metaKey || ke.ctrlKey) && ke.shiftKey && ke.key.toLowerCase() === 'f') {
-      ke.preventDefault();
-      toggleFormat.click();
-    }
-  });
-}
-
-/**
- * Expand a caret position to the sentence it's inside (or the sentence
- * immediately before, if the caret sits in whitespace just after a
- * terminator). Operates on the paragraph-level textblock the caret is in
- * — multi-paragraph sentences aren't really a thing. Returns prosemirror
- * absolute positions.
- */
-function sentenceRangeAt(
-  state: import('@tiptap/pm/state').EditorState,
-  pos: number,
-): { from: number; to: number } {
-  const $pos = state.doc.resolve(pos);
-  const blockStart = $pos.start($pos.depth);
-  const blockEnd = $pos.end($pos.depth);
-  const text = $pos.parent.textContent;
-  const n = text.length;
-  if (n === 0) return { from: blockStart, to: blockEnd };
-
-  let i = Math.min($pos.parentOffset, n - 1);
-  if (i < 0) i = 0;
-  // If sitting on whitespace immediately after a terminator, step back
-  // so we land in the previous sentence instead of the next.
-  if (i > 0 && /\s/.test(text.charAt(i)) && /[.!?]/.test(text.charAt(i - 1))) {
-    i = i - 1;
-  }
-
-  // Find start of sentence — scan back for a terminator followed by
-  // whitespace, then skip past the whitespace to the next real char.
-  let start = 0;
-  for (let j = i; j > 0; j--) {
-    if (/[.!?]/.test(text.charAt(j - 1)) && /\s/.test(text.charAt(j))) {
-      start = j;
-      while (start < n && /\s/.test(text.charAt(start))) start++;
-      break;
-    }
-  }
-  // Find end of sentence — scan forward for the next terminator.
-  let end = n;
-  for (let j = Math.max(i, start); j < n; j++) {
-    if (/[.!?]/.test(text.charAt(j))) {
-      end = j + 1;
-      break;
-    }
-  }
-
-  return { from: blockStart + start, to: blockStart + end };
 }

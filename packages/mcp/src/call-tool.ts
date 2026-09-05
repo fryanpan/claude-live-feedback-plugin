@@ -9,6 +9,8 @@
  * its set has to be back. The heartbeat is fire-and-forget, because liveness
  * is not worth failing a call over. And the auto-watch fires before the
  * handler, so a doc named in a call is subscribed even if the caller forgot.
+ * A fifth is smaller and newer: a call that arrives under a tool's
+ * pre-rename name is answered normally and noted once in the log.
  *
  * Lifted out of `mcp.ts` unchanged. The three domain families arrive as a
  * list rather than three named imports: the chain is the shape here, and the
@@ -16,6 +18,7 @@
  * `default` became.
  */
 import type { CallToolRequest, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { warnDeprecatedAlias } from './deprecated-aliases.ts';
 import type { DocsToolContext } from './tools/docs.ts';
 import type { TaskToolContext } from './tools/tasks.ts';
 import type { WorkspaceToolContext } from './tools/workspace.ts';
@@ -43,6 +46,13 @@ export interface CallToolDeps {
   /** The domain families, in the order a name is offered to them. */
   handlers: DomainHandler[];
   err: (message: string) => CallToolResult;
+  /**
+   * Says once, per process, that a tool was reached by its pre-rename name.
+   * Injectable so a test can watch it; defaults to the module's own warner,
+   * which is the whole point of the "once per session" promise — a fresh set
+   * per handler would say it again after every reconnect.
+   */
+  warnDeprecatedAlias?: (name: string) => void;
 }
 
 /**
@@ -112,6 +122,12 @@ export function createCallToolHandler(deps: CallToolDeps): CallToolHandler {
       // timer.
       void deps.sendDueHeartbeats();
       await maybeAutoWatch(deps.watchDoc, name, a);
+      // A renamed tool still answers to its old name (see
+      // deprecated-aliases.ts). Nothing about the call changes — it reaches
+      // the same arm with the same arguments — but the log says so once, so
+      // the rename is discoverable by somebody reading it rather than only by
+      // re-reading the tool list.
+      (deps.warnDeprecatedAlias ?? warnDeprecatedAlias)(name);
       // Documents answer from tools/docs.ts, board rows from tools/tasks.ts,
       // and boards, agents and the operator verbs from tools/workspace.ts. A
       // domain handler returns `undefined` for a name that is not its own, so

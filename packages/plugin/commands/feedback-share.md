@@ -28,7 +28,7 @@ application that fronts the share hostname. Two mints meant two answers to
 `list_shares` lists them, `set_share_ttl` shortens one, `unshare` revokes one.
 
 So the id you share is always a hub board id: the one `create_workspace`
-returned, or the `hubWorkspaceId` that `bind_folder` / `create_diff_review`
+returned, or the `hubWorkspaceId` that `attach_folder` / `create_diff_review`
 reports. Everything on that board is available to everyone the share reaches
 — that is the default and the point (see `.claude/rules/workspace-board.md`)
 — so decide what belongs on the board before you share it, not afterwards.
@@ -42,7 +42,7 @@ reports. Everything on that board is available to everyone the share reaches
 
 2. **Find or create the BOARD.** If the thing to review is a loose doc bound
    via `create_review_doc`, file it on a board with `attach_doc`. A folder
-   bind or diff review is already filed on one — `bind_folder` and
+   bind or diff review is already filed on one — `attach_folder` and
    `create_diff_review` return it as `hubWorkspaceId`. `list_docs` shows
    which workspace a doc already belongs to.
 

@@ -215,11 +215,20 @@ describe('a set that shrinks is not news', () => {
   });
 
   /**
-   * A shrink is silent, but it is still RECORDED — otherwise the stamp would
-   * keep naming a row that is no longer on the list, and the row coming back
-   * would read as unchanged and never fire.
+   * The row that lapped, and the reason this rule changed.
+   *
+   * A shrink used to be RECORDED as the new stamp, which forgot the row —
+   * so the row lapping its quiet window again read as a brand-new stall and
+   * fired. On a board whose lead posts a status every turn that is a wake per
+   * window, forever: measured 2026-09-04, five wakes in sixty-five minutes
+   * over two rows that were being actively worked and reported on, one of
+   * them with an open question on the reader's queue the whole time.
+   *
+   * A row already named is now remembered across its own absence, so the
+   * clock lapping is not news. What IS news is the row coming back in a
+   * different STATE — see the pair below.
    */
-  it('fires again when a row that left comes back', () => {
+  it('says nothing when a row that lapped its window comes back unchanged', () => {
     const { world, sent, nudger } = harness();
     world.boards[0]!.stalled = [];
     world.boards[0]!.unfiled = [unfiled('t-a'), unfiled('t-b')];
@@ -231,9 +240,101 @@ describe('a set that shrinks is not news', () => {
     world.boards[0]!.unfiled = [unfiled('t-a'), unfiled('t-b')];
     nudger.tick();
 
+    expect(sent).toHaveLength(1);
+  });
+
+  it('POSITIVE CONTROL: a row nobody has ever been told about still fires', () => {
+    const { world, sent, nudger } = harness();
+    world.boards[0]!.stalled = [];
+    world.boards[0]!.unfiled = [unfiled('t-a')];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    world.boards[0]!.unfiled = [unfiled('t-a'), unfiled('t-c')];
+    nudger.tick();
+
     expect(sent).toHaveLength(2);
   });
 
+  /**
+   * The row that came back WORSE. A dispatched row leaves the list on its
+   * transition; if its builder then dies, the row returns under a different
+   * bucket and the lead's next move is different too — probe the builder
+   * rather than find someone to claim it. Remembering the row must not
+   * swallow that.
+   */
+  it('fires when a row comes back under a different bucket', () => {
+    const { world, sent, nudger } = harness();
+    world.boards[0]!.stalled = [
+      { id: 't-a', title: 'Rank results by recency', bucket: 'ready-unpicked', quietMs: 30 * MIN },
+    ];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    // Dispatched: the row moves and leaves the list.
+    world.boards[0]!.stalled = [];
+    nudger.tick();
+    // The builder stops reporting.
+    world.boards[0]!.stalled = [
+      { id: 't-a', title: 'Rank results by recency', bucket: 'builder-silent', quietMs: 45 * MIN },
+    ];
+    nudger.tick();
+
+    expect(sent).toHaveLength(2);
+    expect(sent[1]?.frame.changed?.rows?.map((r) => r.id)).toEqual(['t-a']);
+  });
+
+  /**
+   * The memory is not forever. A row that has not been a finding for a whole
+   * repeat window is one the lead has long since dealt with, and its stalling
+   * again is a new fact rather than the same one lapping — so the same knob
+   * that decides how often an unchanged bad board is re-said also decides how
+   * long a row stays remembered. That is also what bounds the map.
+   *
+   * Deliberately NOT cleared when the board goes wholly clean, which is where
+   * the obvious version of this puts it: on a one-row board every wake is
+   * followed by a clean board the moment the owner posts anything, so
+   * forgetting there would restore the exact loop this rule removes.
+   */
+  /**
+   * The row that never left. Forgetting is keyed on how long a row has been
+   * OFF the list, so a row that has been on it the whole time must never age
+   * out — otherwise the next tick reads it as brand new and the memory
+   * becomes a clock, firing one wake per row per window. That is the same
+   * amortisation `stampFor` refuses on the escalation bucket, arriving
+   * through a different door.
+   */
+  it('does not forget a row that has stayed on the list the whole window', () => {
+    const { world, sent, nudger } = harness({ repeatMs: 60 * MIN });
+    world.boards[0]!.stalled = [];
+    world.boards[0]!.unfiled = [unfiled('t-a')];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    world.now += 61 * MIN;
+    nudger.tick();
+    world.now += 61 * MIN;
+    nudger.tick();
+
+    expect(sent).toHaveLength(1);
+  });
+
+  it('forgets a row that has not been a finding for a whole repeat window', () => {
+    const { world, sent, nudger } = harness({ repeatMs: 60 * MIN });
+    world.boards[0]!.stalled = [];
+    world.boards[0]!.unfiled = [unfiled('t-a'), unfiled('t-b')];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    world.boards[0]!.unfiled = [unfiled('t-b')];
+    nudger.tick();
+    world.now += 61 * MIN;
+    nudger.tick();
+    world.boards[0]!.unfiled = [unfiled('t-a'), unfiled('t-b')];
+    nudger.tick();
+
+    expect(sent).toHaveLength(2);
+  });
   it('does not fire when the board simply gets quieter', () => {
     const { world, sent, nudger } = harness({ repeatMs: 60 * MIN });
     world.boards[0]!.stalled = [
@@ -282,6 +383,254 @@ describe('a set that shrinks is not news', () => {
     nudger.tick();
 
     expect(sent).toHaveLength(2);
+  });
+});
+
+/**
+ * What a repeat wake says it is about.
+ *
+ * A frame that re-lists every finding tells the lead nothing about which of
+ * them is the reason they were woken — and the list is deliberately uncapped,
+ * because driving the rows is the frame's job. So the news rides beside the
+ * list rather than instead of it: `rows` is still everything to drive,
+ * `changed` is what moved since the last wake this board was sent.
+ *
+ * Absent on a board's FIRST wake, where everything is new and a second copy
+ * of the same list would be noise.
+ */
+describe('a repeat wake names what changed since the last one', () => {
+  it('carries nothing on the first wake — everything in it is new', () => {
+    const { sent, nudger } = harness();
+    nudger.tick();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.frame.changed).toBeUndefined();
+  });
+
+  it('names only the row that joined, while rows still carries both', () => {
+    const { world, sent, nudger } = harness();
+    nudger.tick();
+
+    world.boards[0]!.stalled = [
+      ...world.boards[0]!.stalled,
+      { id: 't-2', title: 'Cache the tile index', bucket: 'ready-unpicked', quietMs: 31 * MIN },
+    ];
+    nudger.tick();
+
+    expect(sent).toHaveLength(2);
+    const frame = sent[1]?.frame as StallNudgeFrame;
+    expect(frame.rows?.map((r) => r.id).sort()).toEqual(['t-1', 't-2']);
+    expect(frame.changed?.rows?.map((r) => r.id)).toEqual(['t-2']);
+    expect(frame.changed?.escalated).toBeUndefined();
+  });
+
+  it('says so when the board escalated rather than gained a row', () => {
+    const { world, sent, nudger } = harness({ repeatMs: 60 * MIN });
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    // Same row, another repeat window deep. Nothing joined; the board simply
+    // got worse, and that is the whole news.
+    world.boards[0]!.stalled = [
+      { id: 't-1', title: 'Rank results by recency', bucket: 'in-progress', quietMs: 125 * MIN },
+    ];
+    nudger.tick();
+
+    expect(sent).toHaveLength(2);
+    expect(sent[1]?.frame.changed?.escalated).toBe(true);
+    expect(sent[1]?.frame.changed?.rows ?? []).toHaveLength(0);
+  });
+
+  it('names a row the pass newly could not read', () => {
+    const { world, sent, nudger } = harness();
+    nudger.tick();
+
+    world.boards[0]!.undetermined = [{ id: 't-9', reason: 'review-items-unreadable' }];
+    nudger.tick();
+
+    expect(sent).toHaveLength(2);
+    expect(sent[1]?.frame.changed?.undetermined).toEqual(['t-9']);
+  });
+});
+
+/**
+ * The finding that flickered.
+ *
+ * The board's escalation bucket is computed from the findings the CURRENT
+ * tick can see, and every tick re-arms the board with it — the silent ones
+ * as well as the ones that woke somebody. So a remembered row that drops off
+ * the list for a single pass takes the armed bucket down with it, and its
+ * return reads as the board crossing another repeat window: a wake naming a
+ * row nobody has been told anything new about, repeatable as often as the
+ * row flickers. Measured in prod on 2026-09-04, two wakes three minutes
+ * apart over one `ready-unpicked` row quiet for twelve hours, `stalled=1
+ * unfiled=0` in both.
+ *
+ * Two things make a row flicker, and neither is the row moving:
+ *
+ *  - the escalation filer (`stall-escalation.ts`) hangs its review item on
+ *    an anchor row, which masks that row from the gate until the item is
+ *    withdrawn or re-anchored;
+ *  - the parallelism cap (`stall-gate.ts`) judges only the runnable rows
+ *    that fit inside it, so a row on the cap boundary leaves the findings
+ *    whenever another row starts or stops being runnable.
+ *
+ * So the bucket is HELD: it may rise with the board's worst row and fall
+ * only when the board goes wholly clean, which drops the arming outright.
+ */
+describe('a finding that flickers off the list is not an escalation', () => {
+  const ROW = {
+    id: 't-ready',
+    title: 'Split the tile importer',
+    bucket: 'ready-unpicked',
+    quietMs: 12 * 60 * MIN,
+  };
+  const YOUNGER = {
+    id: 't-fresh',
+    title: 'Cache the facet counts',
+    bucket: 'ready-unpicked',
+    quietMs: 5 * MIN,
+  };
+
+  it('says nothing on a second tick three minutes later with the row unchanged', () => {
+    const { world, sent, nudger } = harness();
+    world.boards[0]!.stalled = [{ ...ROW }];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    world.now += 3 * MIN;
+    nudger.tick();
+
+    expect(sent).toHaveLength(1);
+  });
+
+  it('says nothing when the row returns from behind a younger finding', () => {
+    const { world, sent, nudger } = harness();
+    world.boards[0]!.stalled = [{ ...ROW }];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    // Masked — an escalation item filed on it, or the cap re-slotting — while
+    // a younger row is the board's only finding. That row IS news, and the
+    // wake it earns is the second one here.
+    world.now += MIN;
+    world.boards[0]!.stalled = [{ ...YOUNGER }];
+    nudger.tick();
+    expect(sent).toHaveLength(2);
+
+    // Unmasked, unchanged, and quiet for exactly as long as before. Nothing
+    // about the board is worse than the tick that woke the lead about it.
+    world.now += MIN;
+    world.boards[0]!.stalled = [{ ...ROW }];
+    nudger.tick();
+
+    expect(sent).toHaveLength(2);
+    expect(sent.some((s) => s.frame.changed?.escalated)).toBe(false);
+  });
+
+  it('drops the held bucket when the board goes wholly clean', () => {
+    const { world, sent, nudger } = harness();
+    world.boards[0]!.stalled = [{ ...ROW }];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    // Nothing to say at all: the arming goes, and with it the held bucket.
+    world.now += MIN;
+    world.boards[0]!.stalled = [];
+    nudger.tick();
+    expect(nudger.armedCount()).toBe(0);
+
+    world.now += MIN;
+    world.boards[0]!.stalled = [{ ...ROW }];
+    nudger.tick();
+
+    expect(sent).toHaveLength(1);
+  });
+
+  /**
+   * The hold expires WITH the row that earned it.
+   *
+   * Holding the board's high-water bucket until the board went wholly clean
+   * made it a ratchet: a board that always has at least one finding would keep
+   * a number some long-gone row set, and every later row's repeat window would
+   * be swallowed until it passed that number. The repeat window is the whole
+   * reason a bad board is ever said twice, so a hold that outlives its own row
+   * switches it off (found reviewing this fix, with this probe).
+   */
+  it('lets the NEXT row escalate on its own clock once the held row is forgotten', () => {
+    const { world, sent, nudger } = harness({ repeatMs: 60 * MIN });
+    world.boards[0]!.stalled = [{ ...ROW }];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    // The old row is picked up and worked; a different row goes quiet. News,
+    // because nobody has ever been told about it.
+    world.now += MIN;
+    world.boards[0]!.stalled = [{ ...YOUNGER, quietMs: 5 * MIN }];
+    nudger.tick();
+    expect(sent).toHaveLength(2);
+
+    // Past the old row's whole repeat window: it is forgotten, and with it the
+    // bucket it was speaking for. The new row has now crossed a window of its
+    // own, which is exactly what the repeat is for.
+    world.now += 61 * MIN;
+    world.boards[0]!.stalled = [{ ...YOUNGER, quietMs: 61 * MIN }];
+    nudger.tick();
+
+    expect(sent).toHaveLength(3);
+    expect(sent[2]?.frame.changed?.escalated).toBe(true);
+
+    // And again a window later, unchanged in every other way.
+    world.now += 61 * MIN;
+    world.boards[0]!.stalled = [{ ...YOUNGER, quietMs: 122 * MIN }];
+    nudger.tick();
+
+    expect(sent).toHaveLength(4);
+  });
+
+  /**
+   * The same flicker through the SILENT re-arm site. Nothing woke anybody on
+   * the middle tick — the remaining row was already known — and that path
+   * re-arms the board too, so it lowered the bucket just as the delivered one
+   * did.
+   */
+  it('says nothing when the row returns after a tick that woke nobody', () => {
+    const { world, sent, nudger } = harness({ repeatMs: 60 * MIN });
+    const older = { ...ROW };
+    const known = { ...YOUNGER, quietMs: 2 * 60 * MIN };
+    world.boards[0]!.stalled = [older, known];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    // The older row is masked. The row left behind is one the lead has already
+    // been told about, so this tick says nothing at all.
+    world.now += MIN;
+    world.boards[0]!.stalled = [known];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    world.now += MIN;
+    world.boards[0]!.stalled = [older, known];
+    nudger.tick();
+
+    expect(sent).toHaveLength(1);
+  });
+
+  it('POSITIVE CONTROL: a row nobody was ever told about still wakes the lead', () => {
+    const { world, sent, nudger } = harness();
+    world.boards[0]!.stalled = [{ ...ROW }];
+    nudger.tick();
+    world.now += MIN;
+    world.boards[0]!.stalled = [{ ...ROW }];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    world.now += MIN;
+    world.boards[0]!.stalled = [{ ...ROW }, { ...YOUNGER }];
+    nudger.tick();
+
+    expect(sent).toHaveLength(2);
+    expect(sent[1]?.frame.changed?.rows?.map((r) => r.id)).toEqual(['t-fresh']);
   });
 });
 
@@ -516,6 +865,61 @@ describe('the arming survives a restart', () => {
     const second = harness({ stampFile });
     second.nudger.tick();
     expect(second.sent).toHaveLength(0);
+  });
+
+  it('remembers which rows it has named, so a lapping row is still silent', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'stall-nudge-'));
+    dirs.push(dir);
+    const stampFile = join(dir, 'stall-nudge-stamps.json');
+
+    const first = harness({ stampFile });
+    first.nudger.tick();
+    expect(first.sent).toHaveLength(1);
+
+    // The row is worked, leaves the list, and laps its window again — across
+    // a restart, because prod restarts at every merge and a memory that does
+    // not survive one is a memory the lead never gets the benefit of.
+    const second = harness({ stampFile });
+    second.world.boards[0]!.stalled = [];
+    second.nudger.tick();
+    second.world.boards[0]!.stalled = [
+      { id: 't-1', title: 'Rank results by recency', bucket: 'in-progress', quietMs: 22 * MIN },
+    ];
+    second.nudger.tick();
+
+    expect(second.sent).toHaveLength(0);
+  });
+
+  it('remembers the BUCKET a row was named under, not merely the row', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'stall-nudge-'));
+    dirs.push(dir);
+    const stampFile = join(dir, 'stall-nudge-stamps.json');
+
+    const first = harness({ stampFile });
+    first.nudger.tick();
+    expect(first.sent).toHaveLength(1);
+    // Written down, and written down as the bucket. The test above passes on
+    // the seed-from-stamp fallback alone — every remembered row reads as
+    // UNKNOWN_BUCKET there, which matches nothing and so says nothing — so
+    // it cannot tell a file that carries the buckets from one that does not.
+    expect(JSON.parse(readFileSync(stampFile, 'utf8')).told['w-atlas']['t-1']).toBe('in-progress');
+
+    // Same row, different bucket, new process: the builder it was dispatched
+    // to has died, which is news whatever the last process was told. Only the
+    // file can say the row was last named under a bucket it has now left.
+    const second = harness({ stampFile });
+    second.world.boards[0]!.stalled = [
+      {
+        id: 't-1',
+        title: 'Rank results by recency',
+        bucket: 'builder-silent',
+        quietMs: 50 * MIN,
+      },
+    ];
+    second.nudger.tick();
+
+    expect(second.sent).toHaveLength(1);
+    expect(second.sent[0]?.frame.changed?.rows?.map((r) => r.id)).toEqual(['t-1']);
   });
 
   it('starts clean rather than throwing when the file cannot be parsed', () => {

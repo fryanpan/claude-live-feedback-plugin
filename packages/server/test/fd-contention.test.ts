@@ -1,13 +1,13 @@
 /**
- * The suite's answer to concurrent worktree runs: when descriptors run out,
- * the failure must NAME contention (fd-contention.ts, wired into every test
- * by the bunfig preload) rather than surface as a bare EMFILE inside
- * whichever test happened to be running.
+ * The suite's answer to a machine it is sharing: when descriptors or sockets
+ * run out, the failure must NAME the exhaustion (fd-contention.ts, wired into
+ * every test by the bunfig preload) rather than surface as a bare EMFILE, or
+ * as ten socket tests failing on assertions with no cause given at all.
  */
 import { describe, expect, it } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
-import { fdContentionError, otherTestRunnerCount } from './fd-contention.ts';
+import { fdContentionError, otherTestRunnerCount, socketContentionError } from './fd-contention.ts';
 
 const fixture = join(import.meta.dir, 'fixtures', 'fd-exhaust-probe.ts');
 
@@ -38,6 +38,62 @@ describe('fd contention probe', () => {
     expect(parsed.exhausted).toBeLessThan(4096);
     expect(parsed.message).toContain('FILE-DESCRIPTOR CONTENTION');
     expect(parsed.message).toContain('concurrent suite runs');
+  });
+});
+
+describe('socket-table contention probe', () => {
+  const throwing = (code: string) => () => {
+    const err = new Error(`listen failed: ${code}`) as NodeJS.ErrnoException;
+    err.code = code;
+    throw err;
+  };
+
+  it('stays silent while the machine can still allocate a socket', () => {
+    // The positive control on the real opener: it runs, it returns, and it
+    // gives the protocol control block back. Without this the injected
+    // faults below could pass against an opener that never worked.
+    expect(socketContentionError()).toBeNull();
+  });
+
+  it('names socket-table contention on ENOBUFS', () => {
+    // ENOBUFS by injection, deliberately. The real fault is a kernel-wide
+    // table shared with everything else on the machine, and exhausting it
+    // on purpose is what took this machine down on 2026-09-04.
+    const err = socketContentionError(throwing('ENOBUFS'));
+    expect(err?.message).toContain('SOCKET-TABLE CONTENTION (ENOBUFS)');
+    expect(err?.message).toContain('pcbcount');
+    expect(err?.message).toContain('Do not bisect a diff against this');
+  });
+
+  it('names the other exhaustion codes too', () => {
+    for (const code of ['ENFILE', 'EMFILE', 'ENOMEM']) {
+      expect(socketContentionError(throwing(code))?.message).toContain(
+        `SOCKET-TABLE CONTENTION (${code})`,
+      );
+    }
+  });
+
+  it('accuses nothing on a failure it cannot prove', () => {
+    // A refused connection, a bad address, an ordinary throw: none of these
+    // are exhaustion, and a probe that reported them would make every real
+    // red in the run unreadable behind a false cause.
+    expect(socketContentionError(throwing('ECONNREFUSED'))).toBeNull();
+    expect(socketContentionError(throwing('EADDRINUSE'))).toBeNull();
+    expect(
+      socketContentionError(() => {
+        throw new Error('no code at all');
+      }),
+    ).toBeNull();
+  });
+
+  it('is a probe the descriptor half cannot stand in for', () => {
+    // The gap this file exists to close. Opening a regular file allocates no
+    // protocol control block, so the fd probe reports headroom in exactly the
+    // state that fails every socket test — which is how ten of them went red
+    // under a green arbiter. Same machine, same instant, two answers.
+    const socketOut = socketContentionError(throwing('ENOBUFS'));
+    expect(socketOut).not.toBeNull();
+    expect(fdContentionError()).toBeNull();
   });
 });
 

@@ -1,26 +1,40 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
-import { isComposerFocused } from '../src/md-composer.ts';
+import * as realChunk from '../src/md-composer-chunk.ts';
+import {
+  attachMarkdownComposer,
+  focusMarkdownComposer,
+  isComposerFocused,
+  setComposerEditorLoader,
+} from '../src/md-composer.ts';
 import { MountScope } from '../src/mount-scope.ts';
 import { type ChromeOpts, mountReviewChrome } from '../src/review-chrome.ts';
 import type { ReviewSurface } from '../src/review-surface.ts';
 
 /**
- * Opening the composer schedules the caret 30ms out, so iOS's
- * auto-scroll-to-focus doesn't yank the page. That timer used to be able to
- * outlive what it was aimed at: a test file that opened a composer and
+ * The composer's caret cannot outlive the composer.
+ *
+ * It used to be scheduled 30ms after the composer opened, and that timer
+ * could outlive what it was aimed at: a test file that opened a composer and
  * finished inside those 30ms had the focus land after vitest deleted the
  * environment's globals, where Tiptap's focus command reaches for a
  * `requestAnimationFrame` that is no longer defined. A run in which all 310
  * files passed still failed, on one unhandled `ReferenceError` naming nothing
  * a person could act on.
  *
- * Two things had to be true, and there is a test for each. The timer is
- * cancelled when the composer goes away, so nothing is pending to land — that
- * is also the behaviour a reader wants, since a dismissed composer taking the
- * caret is a bug on its own. And the focus itself declines to run where there
- * is no `requestAnimationFrame`, so the next stray timer from anywhere fails
- * quietly instead of failing the run.
+ * THE TIMER IS GONE (2026-09-04): the focus is synchronous inside
+ * `openComposer`, because iOS raises the keyboard only for a focus that
+ * happens inside the gesture that asked for it and a caret 30ms behind the
+ * tap cost the reader a second one. That removes the hazard structurally —
+ * there is no longer anything scheduled that could land anywhere. So this
+ * file no longer proves the cancellation; it proves the two things the
+ * cancellation was buying, which are still true and are now somebody's job:
+ * a dismissed or torn-down composer gives the caret BACK (`hideComposer`
+ * blurs, and the mount's cleanup closes the composer), and a focus that
+ * reaches a page with no `requestAnimationFrame` still declines to run.
+ *
+ * That the focus lands in the click's own tick is asserted in
+ * `pill-comment-focus.test.ts`, on the pill that asks for it.
  */
 
 function mountChromeDom(): void {
@@ -108,42 +122,62 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  setComposerEditorLoader(null);
   document.body.innerHTML = '';
 });
 
-describe('the composer’s delayed focus cannot outlive the composer', () => {
-  it('a composer dismissed before the 30ms focus lands never takes the caret', () => {
+describe('a composer that goes away gives the caret back', () => {
+  it('positive control: a composer left open ends up with the caret', () => {
+    vi.useFakeTimers();
+    const { chrome } = harness();
+    expect(isComposerFocused(composerText())).toBe(false);
+    chrome.openComposer();
+    // The composer's own focus is synchronous now, but the editor is LIVE in
+    // this file — importing the chunk at the top makes vitest hand it back
+    // without a promise — and Tiptap moves the DOM focus into a frame for
+    // every user agent that is not iOS, iPadOS or Safari. happy-dom is none
+    // of them, so the caret lands one frame out here and the advance below
+    // is that frame, not a timer of ours. `pill-comment-focus.test.ts` is
+    // where the same-tick claim is asserted, against a composer whose chunk
+    // has not landed yet.
+    vi.advanceTimersByTime(200);
+    expect(isComposerFocused(composerText())).toBe(true);
+  });
+
+  it('a dismissed composer does not keep swallowing what is typed next', () => {
     vi.useFakeTimers();
     const { chrome } = harness();
     chrome.openComposer();
     chrome.hideComposer();
+    expect(isComposerFocused(composerText())).toBe(false);
     vi.advanceTimersByTime(200);
     expect(isComposerFocused(composerText())).toBe(false);
   });
 
-  it('a disposed mount never takes the caret', () => {
+  it('a disposed mount leaves no open composer wired to the document it left', () => {
     vi.useFakeTimers();
     const { chrome, scope } = harness();
     chrome.openComposer();
     scope.dispose();
+    // `#composer` is shell DOM and outlives the mount, so "closed" is the
+    // only state that cannot post a comment to the previous docId.
+    expect(document.getElementById('composer')?.classList.contains('hidden')).toBe(true);
+    expect(isComposerFocused(composerText())).toBe(false);
     vi.advanceTimersByTime(200);
     expect(isComposerFocused(composerText())).toBe(false);
   });
+});
 
-  it('a focus that lands where there is no requestAnimationFrame does not throw', () => {
-    vi.useFakeTimers();
-    const { chrome } = harness();
-    chrome.openComposer();
+describe('the focus itself', () => {
+  it('declines to run where there is no requestAnimationFrame, rather than throwing', () => {
+    // Driven against a LIVE editor, which is the only surface that reaches
+    // the guard: the plain textarea's `focus()` needs no frame. The guard
+    // used to be reached through the composer's 30ms timer, which is gone.
+    setComposerEditorLoader(() => realChunk);
+    const ta = document.createElement('textarea');
+    document.body.append(ta);
+    attachMarkdownComposer(ta);
     removeAnimationFrame();
-    expect(() => vi.advanceTimersByTime(200)).not.toThrow();
-  });
-
-  it('positive control: a composer left open still gets the caret', () => {
-    vi.useFakeTimers();
-    const { chrome } = harness();
-    expect(isComposerFocused(composerText())).toBe(false);
-    chrome.openComposer();
-    vi.advanceTimersByTime(200);
-    expect(isComposerFocused(composerText())).toBe(true);
+    expect(() => focusMarkdownComposer(ta, null, { scroll: false })).not.toThrow();
   });
 });

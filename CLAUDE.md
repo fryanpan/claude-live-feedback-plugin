@@ -66,7 +66,7 @@ that way and add new subsystem docs to the list here.
 - PR after each task is done; a cohesive feature is ONE PR with ordered
   commits, not a fragment per file.
 - **Mockups and sketches never enter the repo** — write the HTML outside the
-  working tree and serve it with `bind_mock(docId, sourceHtmlPath)`.
+  working tree and serve it with `attach_mockup(docId, sourceHtmlPath)`.
 
 ## The four gates — run all of them before you push
 
@@ -82,10 +82,13 @@ don't recite it from memory. What a test has to do to be worth its runtime —
 behaviour not source shape, poll-until not sleep, no wall-clock assertions —
 is [.claude/rules/testing-standards.md](.claude/rules/testing-standards.md),
 whose mechanical half is `bun run test:audit` (ratcheted, runs in CI).
-`bunx biome check --write` fixes formatting; pre-existing `noExplicitAny`
-warnings stay. Per diff: `packages/mcp/src/**` → `bun run build:mcp` + commit
-the bundle; `packages/plugin/**` → version bump (below); touching neither
-adds nothing.
+The other bars — 500-line files, strict types, the security-review trigger —
+are [.claude/rules/code-health.md](.claude/rules/code-health.md), one
+enforcing command named per bar.
+`bunx biome check --write` fixes formatting; `any` and unused imports are
+lint errors, at zero today. Per diff: `packages/mcp/src/**` → `bun run
+build:mcp` + commit the bundle; `packages/plugin/**` → version bump (below);
+touching neither adds nothing.
 
 ## Releasing the plugin
 
@@ -165,13 +168,19 @@ written.
   `~/.claude/claude-workspaces` to boot-disk storage would remove the first —
   it works under launchd, but it is NOT currently installed. Audit every new
   `homedir()` path against this.
-- **Whether the grant survives a reboot is OPEN.** Nothing observed on
-  2026-09-01 spanned one (`kern.boottime` was Aug 31 23:20 throughout). A
-  `/bin/cat` probe that *hung* in the morning returned a clean `Operation not
-  permitted` that afternoon — two failure modes on one binary in a single boot
-  session, still **unexplained**. Leading hypothesis, unconfirmed: a TCC write
-  made when the plist change was approved. Do not let this get retold as
-  settled.
+- **The 2026-09-04 reboot answered it, and the answer is not TCC alone.**
+  After the 14:25Z reboot prod wedged for ~20 min: the main thread sat in a
+  synchronous open of a Dropbox-bound doc while macOS showed a consent dialog
+  for prod's bun, and Bryan allowing it ended the hang. Every boot since logs
+  `EDEADLK` on the same reads. `open(2)` documents EDEADLK as "a dataless file
+  needs materialization and the process's I/O policy disallows it", and a
+  probe with prod's own bun under launchd read
+  `IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES` = OFF (the system default). So a
+  Dropbox file that is online-only fails instantly (the doc runs from its
+  `.ydoc`, disk edits never flow in, and the next flush overwrites the file),
+  while one still downloading or waiting on consent hangs the open. The
+  hydrate guard bounds the hang; whether the server turns materialization on
+  or the folders go Available Offline is Bryan's call on the hydrate ticket.
 - Diagnosing it: `launchctl submit` a probe **using the same binary the
   service runs**, and pair it with a positive control on a path you expect to
   work. A system binary like `/bin/cat` is not a proxy for bun — it will

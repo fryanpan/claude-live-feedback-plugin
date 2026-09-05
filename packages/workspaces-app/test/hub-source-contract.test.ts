@@ -190,7 +190,9 @@ describe('hub-app voice wiring', () => {
   /** Comment lines stripped — prose ABOUT a call must not count as a call
    *  site. (It did, on the first run of this test.) */
   function code(): string {
-    const src = readFileSync(resolve('packages/workspaces-app/src/hub/hub-app.ts'), 'utf8');
+    const src = HUB_BOOT_SOURCES.map((m) =>
+      readFileSync(resolve(`packages/workspaces-app/src/hub/${m}.ts`), 'utf8'),
+    ).join('\n');
     return src
       .split('\n')
       .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
