@@ -103,6 +103,8 @@ Roles, and finer control than "everything", are not built yet. When they are, th
 
 **A shared folder shows only what git lists.** A reviewer can open a file from a shared folder or diff review only if `git ls-files` lists it, so ignored files and anything under `.git` never appear. Files whose names look like credentials (`.env`, `*.pem`, `*.key`, `id_*` and their relatives) are refused even when untracked. Outside a git checkout, every dotfile is hidden.
 
+**An agent's own event feed is that agent's to read.** Everything one session subscribes to — every board, document and comment thread it watches — arrives on a single connection addressed by that agent's name, and the list of what is on it is a second door onto the same thing. The name is written on the board for everyone in it to see, so the address was never a secret and cannot be the check. Both doors are now served only to a process on this machine that is not a browser and did not arrive through the edge, and only against a token the server mints for that one agent and no other. What this does not do is separate two programs the owner is already running: they share one account and one trust zone. The token turns away a page on another local port, anything on the network, and an agent asking for the wrong name by mistake — it is not a wall between the owner's own processes, and nothing here should be read as claiming otherwise. Sessions on an older plugin present no token yet and are still served, with a line in the log naming them, until the fleet has updated and a switch closes the window.
+
 **What a visitor is sent is built from a list of allowed fields, not forbidden ones.** Review links are rewritten to the visitor's own workspace, paths on this machine are removed, and the record of which agents are present names exactly the fields a visitor gets. A field added later is withheld until someone adds it to the list.
 
 ## Where secrets live
@@ -143,6 +145,7 @@ Every hostname below is a placeholder; the real ones live in the launchd configu
 | Browser write gate                       | `isGatedWrite`, `middleware/write-gate.ts`                   | `CW_REQUIRE_SIGNIN_TO_WRITE` (on by default)                 |
 | Fields sent to a visitor                 | `share/redact-meta.ts`                                       | none                                                         |
 | Shared-folder listing                    | `isListedFile`, `fs-scan.ts`                                 | none                                                         |
+| Agent event feed and its index           | `authorizeAgentCaller`, `auth/agent-token.ts`                | `CW_REQUIRE_AGENT_TOKEN` (off during the rollout)            |
 | Signed tokens                            | `auth/signed-token.ts`                                       | none                                                         |
 | Emailed-code sign-in                     | off                                                          | `CW_EMAIL_CODE_SIGNIN=1` turns it on                         |
 

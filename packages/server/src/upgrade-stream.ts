@@ -49,6 +49,7 @@ import {
   SHARED_IDENTITY_MESSAGE,
   isValidAgentId,
 } from './agent-watches.ts';
+import { authorizeAgentCaller } from './auth/agent-token.ts';
 import type { OriginPolicy } from './middleware/browser-origin.ts';
 import { isAllowedBrowserOrigin } from './middleware/browser-origin.ts';
 import type { ShareTarget } from './middleware/host-guard.ts';
@@ -135,6 +136,18 @@ export interface UpgradeStreamContext {
   fileUnderHubWorkspace: (docId: string) => void;
   /** The JSON responder, so a refusal here is spelled as a route's. */
   j: (status: number, body: unknown) => Response;
+  /** The request's SOCKET peer address, never a header. Long-lived here
+   *  rather than passed per call, the same shape `opsRoutesCtx` uses: it
+   *  closes over the Bun server, which is a forward reference at compose
+   *  time and answers per request. */
+  requestAddress: (req: Request) => string | undefined;
+  /** The key the agent stream's `at1` bearer verifies under. */
+  agentTokenKey: () => string;
+  /** Whether the agent stream REFUSES a caller that presents no token. Off
+   *  during the deprecation window; `CW_REQUIRE_AGENT_TOKEN` flips it. */
+  requireAgentToken: boolean;
+  /** Logs the deprecation-window warning, once per agent id per route. */
+  warnLegacyAgentCaller: (agentId: string, route: string) => void;
 }
 
 /** The address this request is asking about, and what admission proved. */
@@ -185,6 +198,10 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
     canonicalDocId,
     fileUnderHubWorkspace,
     j,
+    requestAddress,
+    agentTokenKey,
+    requireAgentToken,
+    warnLegacyAgentCaller,
   } = ctx;
 
   const serveUpgradeAndStreamRoutes = ({
@@ -367,6 +384,20 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
           // them. Those sessions keep the per-key routes.
           return j(400, { error: SHARED_IDENTITY_ERROR, message: SHARED_IDENTITY_MESSAGE });
         }
+        // Prove it is that agent. An agent id is a hash of a name written on
+        // the board, so before this the id was not a secret and this feed —
+        // every channel one agent watches — opened to anyone who could type
+        // one. Same function as the watches route runs, so the two doors
+        // onto the same feed cannot drift. See auth/agent-token.ts.
+        const allowed = authorizeAgentCaller({
+          agentId: streamAgentId,
+          req,
+          address: requestAddress(req),
+          key: agentTokenKey(),
+          requireToken: requireAgentToken,
+        });
+        if (!allowed.ok) return j(allowed.status, allowed.body);
+        if (allowed.proof === 'legacy') warnLegacyAgentCaller(streamAgentId, '/events/agent/<id>');
         return openAgentMuxStream({
           hub: sse,
           agentId: streamAgentId,
