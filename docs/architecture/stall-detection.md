@@ -304,6 +304,57 @@ wakes correctly:
   — billed turns, not decided wakes. `lead=` always names the SEAT HOLDER;
   an escalated wake adds `to=<agent>` for who actually got it.
 
+## Past the lead: the board files it itself
+
+Everything above ends at the lead. That is the right first addressee and the
+wrong last one: a lead session that has died, hit its usage limit, or is
+itself waiting on somebody cannot act on a wake, and every later wake is
+addressed to the same silence. Nothing in the loop could tell that apart from
+a board being driven.
+
+So when a row **the lead was already told about** is still a finding an hour
+later, the board goes over the lead's head and files ONE review item on the
+reader's own queue (`stall-escalation.ts`). What makes that possible is a
+told-time in the nudger's memory: `ToldRow.toldAt`, stamped on a DELIVERED
+wake, never refreshed while the row is remembered, and persisted in
+`stall-nudge-stamps.json` so a deploy does not hand every board a fresh hour.
+A row nobody was reached about carries no told time and never escalates —
+escalating past a lead who was never woken is the same mistake as a wake that
+fires while the turn that would have acted on it is still running.
+
+- **One item per board, revised in place.** The rows live in its body, each
+  with a relative link (`/workspaces/<id>?task=<taskId>`), what kind of stuck
+  it is in plain words, how long it has been quiet and how long ago the lead
+  was told. Rows joining or leaving revise that item; they never file a
+  second one. A queue that grows an entry per stuck row is the wake's own
+  failure mode wearing a different hat.
+- **Unjudged, by the same door the allow-rule proposals use.** It calls
+  `addReviewItem` on the store directly, so it lands in `task-review` without
+  passing the quality gate, which lives on the ROUTE. Deliberate: the judge
+  exists to make an agent's ask readable, and an item generated from board
+  state has no author to send it back to.
+- **Written as the server.** `agent-workspaces-server` / "Claude Workspaces",
+  the identity `park-migration.ts` and `artifact-check.ts` already use. No
+  session decided this and no person did.
+- **The anchor is the worst UNFILED row**, falling back to the worst stalled
+  one. A review item has to hang on a ticket, and an open item makes that row
+  `blocked-on-owner` — so the anchor stops being a stall finding while the
+  item is open. On an unfiled row that is the loop closing (this IS the filed
+  ask that was missing); on a stalled row it is a real loss of visibility,
+  which is why it is the fallback rather than the choice.
+- **It clears itself, and does not blink.** The item is withdrawn when no
+  named row still qualifies; the anchor, which the gate can no longer judge,
+  is read from its own ticket instead (closed, or touched by somebody after
+  our own write). Without that the module would react to the silence it
+  caused — file, watch the anchor leave the findings, withdraw, watch it come
+  back. A re-file cooldown of one escalation window is the second half of the
+  same guard.
+- **Answered means heard.** An item the reader answered or withdrew is not
+  re-filed for rows it already named; a row it did not name files afresh.
+- `[stall] escalated ws=<id> rows=<n> item=<id>` and
+  `[stall] escalation cleared …` are the log lines — this is the one place
+  the server writes to a person's queue on its own, so it says so.
+
 ## Field results (first night, 2026-08-28)
 
 9 wakes across 4 boards. The stall class worked (a board woken for 2
@@ -319,6 +370,7 @@ grace window that #411 fixed.
 | `CW_STALL_NUDGE_MINUTES` | 20 | quiet time before a row is a finding |
 | `CW_STALL_REPEAT_HOURS` | 4 | how often an unchanged bad board is re-said |
 | `CW_HELD_ITEM_MINUTES` | 5 | how long a held review item may stand before its filer, then the lead, is told |
+| `CW_STALL_ESCALATE_MINUTES` | 60 | how long a row the lead was already told about may stay stuck before the board files over the lead's head |
 | `CW_REVIEW_GATE` | on | `0` turns the judge off; every item passes unjudged (also the state with no summary API key) |
 | `CW_NOTE_ASK_JUDGE` | on | `0` turns the note-ask confirmation off; the deterministic prefilter decides alone (also the state with no summary API key) |
 
@@ -332,7 +384,9 @@ the default rather than firing every tick (`positiveEnvDuration` in
 the two nudgers, the lead-presence monitor and the comment-queue bridge —
 `createServer` composes it and arms the nudgers, it derives none of it) ·
 `packages/server/src/stall-gate.ts` (classification) ·
-`packages/server/src/stall-nudge.ts` (stamps, wakes, logging) ·
+`packages/server/src/stall-nudge.ts` (stamps, told-times, wakes, logging) ·
+`packages/server/src/stall-escalation.ts` (the review item filed past the
+lead, and its sidecar `stall-escalations.json`) ·
 `packages/server/src/review-judge.ts` (the Haiku judge; prompt in
 `packages/core/src/review-judge-prompt.ts`) ·
 `packages/server/src/note-ask.ts` (the note prefilter and its verdict cache)
