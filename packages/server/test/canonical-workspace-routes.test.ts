@@ -134,20 +134,18 @@ describe('the board collections that moved under /workspaces/<id>', () => {
     // route is not an existence oracle.
     const ws = await makeWorkspace('canonical-scope');
     await post(`/workspaces/${ws}/agents`, { agentId: 'agent-wren', runtime: 'claude-code-local' });
-    expect((await local('/workspaces/w-not-a-board/agents')).status).toBe(404);
+    expect((await local('/workspaces/w-other/agents')).status).toBe(404);
     expect(
       (
-        await post('/workspaces/w-not-a-board/agents', {
+        await post('/workspaces/w-other/agents', {
           agentId: 'agent-wren',
           runtime: 'claude-code-local',
         })
       ).status,
     ).toBe(404);
-    expect((await post('/workspaces/w-not-a-board/agents/agent-wren/heartbeat', {})).status).toBe(
-      404,
-    );
+    expect((await post('/workspaces/w-other/agents/agent-wren/heartbeat', {})).status).toBe(404);
     expect(
-      (await local('/workspaces/w-not-a-board/agents/agent-wren', { method: 'DELETE' })).status,
+      (await local('/workspaces/w-other/agents/agent-wren', { method: 'DELETE' })).status,
     ).toBe(404);
   });
 
@@ -160,7 +158,7 @@ describe('the board collections that moved under /workspaces/<id>', () => {
     expect(res.headers.get('content-type')).toContain('text/event-stream');
     await (res.body as ReadableStream<Uint8Array>).cancel();
 
-    const missing = await local('/workspaces/w-not-a-board/events:stream', {
+    const missing = await local('/workspaces/w-other/events:stream', {
       headers: { accept: 'text/event-stream' },
     });
     expect(missing.status).toBe(404);
