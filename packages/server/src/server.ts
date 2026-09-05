@@ -36,6 +36,7 @@ import { MEETING_CAPTURE_ACTOR } from './meeting-task-capture.ts';
 import { MeetingStore } from './meetings.ts';
 import { isAllowedBrowserOrigin } from './middleware/browser-origin.ts';
 import { isGatedWrite, signInRequiredBody } from './middleware/write-gate.ts';
+import { spokenLinkRef } from './notes-link-intent.ts';
 import {
   PARK_MIGRATION_ACTOR,
   type ParkMigrationResult,
@@ -369,6 +370,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               taskId: wake.taskId,
               taskTitle: wake.title,
             }),
+          // "Link that to the existing task", heard: the row gains the same
+          // ref `link_refs` writes, so the meeting is findable from the row
+          // and unlinking has something to remove. Link changes emit no store
+          // event, so the projection is refreshed by hand — the same pattern
+          // the link-refs route uses.
+          linkTaskToDoc: (taskId, docId) => {
+            const linked = taskStore.linkRef(taskId, spokenLinkRef(docId));
+            if (!linked.ok) {
+              console.error(`[meeting-tasks] spoken link refused for ${taskId}: ${linked.error}`);
+              return;
+            }
+            if (linked.changed) taskProjection.ensureWorkspace(linked.task.workspaceId);
+          },
           // A huddle doc is HELD by a hub workspace rather than owned by one
           // (no `setId`), which is where "create a task" said aloud used to
           // go quiet: the capture had no board. The doc's back-target is the

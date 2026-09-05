@@ -957,6 +957,57 @@ Four references per tick, at most. Rows the capture pass FILED from this
 speech arrive separately as `taskLinks`; these were merely mentioned, and most
 ticks name none.
 
+### "Link that to the existing task" — the loose matcher, and the question
+
+The precision bar above is right for a row nobody asked about, and wrong the
+moment somebody asks. "Link that to the existing task" is a person saying they
+know the row exists; answering "no contiguous run of significant words" to
+that is a refusal to look. And the ask is exactly when the description is
+loosest — a person who could quote the title would have quoted it.
+
+So there are two matchers with opposite bars, and which one is allowed to
+answer depends on whether anybody asked (`notes-link-intent.ts`, deterministic
+and testable with no model in the loop):
+
+- **Asked.** `detectLinkAsk` reads a link verb followed by a row noun
+  ("link that to the ticket", "hook this up to the card"), and refuses when
+  the noun is preceded by *new* / *another* / *separate* — "file a new ticket"
+  is the capture pass's job, not this one. The rest of the tick's words then
+  go through `scoreRelatedWork`, the SAME scorer behind the board's
+  `find_related_work` verb, over the row titles AND their bodies. The ask's
+  own vocabulary is blanked out of the query first, or a row called "Task
+  capture" outranks the subject in every sentence containing the word "task".
+  The top row is linked when it clears a low bar and beats the runner-up by a
+  margin; a near-tie is not guessed at, it is offered.
+- **Not asked.** The same scores, a much higher bar, and the answer is never a
+  link. At most two rows are written into the note as questions.
+
+**Neither branch is allowed to be silent.** An ask that finds nothing clear
+still leaves the shortlist in the note as questions, so the room can see what
+was considered. That is the difference from the strict matcher, which is
+silent by design.
+
+**A question is a link, not a caption.** It is written as ordinary markdown
+pointing at the row, with `suggest=1` on the href
+(`core/note-suggestion.ts`) and the words "related: <title>?". So it survives
+the `.md` on disk and a browser with no script running, it opens the right row
+either way, and in the editor one tap turns it into the citation it was asking
+about — the link the reader touched is the link they are left with, which is
+why it needs no chip and no confirm step. Suggestions are appended
+deterministically AFTER the composer returns, never asked of the model: a
+marker the model has to spell exactly is a marker it will eventually spell
+wrong.
+
+**Every link a tick writes is undoable.** A spoken link puts a
+`{kind:'doc'}` ref on the row (`spokenLinkRef`, the same shape the note's own
+undo control deletes), and the row's backlink is computed from that ref rather
+than stored beside it — so removing the ref removes both sides at once. The
+control sits beside the link in the notes and appears only where the doc
+actually holds a ref, which is why its presence always means there is
+something to take back. Undoing removes the link, not the words: the composer
+weaves a row's title into the middle of a sentence, and deleting the text
+would take a clause of somebody's meeting record with it.
+
 ### A rename reaches backwards (owner's call, 2026-08-29: "rewrite them")
 
 Naming a voice mid-meeting fixes the notes ALREADY in the doc, not just the
@@ -1939,7 +1990,12 @@ latency measurement) · `scripts/room-labels-check.ts` +
 arithmetic, and the AMI corpus reference it scores against) ·
 `packages/server/src/notes-prompt-store.ts` (what the note-taker is told to
 do) + `notes-references.ts` (which board rows this tick's speech named) +
-`notes-quality.ts` (the decidable half of "did it behave") ·
+`notes-link-intent.ts` (whether anybody ASKED for a link, and which row
+answers a loose description) + `notes-quality.ts` (the decidable half of "did
+it behave") · `packages/core/src/note-suggestion.ts` +
+`packages/workspaces-app/src/notes-link-affordance.ts` +
+`doc/notes-link-refs.ts` (how a written question is spelled, and the two taps
+that accept it or take it back) ·
 `scripts/notes-eval.ts` + `notes-eval-fixtures.ts` +
 `packages/server/test/fixtures/ami-notes-eval/` (the behaviour eval, its
 corpus excerpts, and the CC BY 4.0 attribution they carry) ·

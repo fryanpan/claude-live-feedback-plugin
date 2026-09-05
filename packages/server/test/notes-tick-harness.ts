@@ -115,7 +115,13 @@ export interface NotesTickHarnessOptions {
    */
   workspaceId?: string;
   /** The board's rows, as the task store would list them. */
-  tasks?: Array<{ id?: string; title: string; status: string; kind?: 'task' | 'goal' }>;
+  tasks?: Array<{
+    id?: string;
+    title: string;
+    status: string;
+    kind?: 'task' | 'goal';
+    body?: string;
+  }>;
   /** The board's other docs, as the lookup would list them. */
   boardDocs?: Array<{ docId: string; title: string; meetingAt?: number }>;
   /**
@@ -150,6 +156,12 @@ export interface NotesTickHarness {
    * already covered.
    */
   end(): Promise<TickSnapshot | null>;
+  /**
+   * Refs the meeting wrote onto board rows, in order — `[taskId, docId]` per
+   * spoken link. The harness stands in for the task store here, so a script
+   * can assert the row's side of a link without a server.
+   */
+  readonly taskLinks: ReadonlyArray<{ taskId: string; docId: string }>;
   /** Every snapshot so far, in order. */
   readonly snapshots: readonly TickSnapshot[];
   /** Errors the session reported — an empty list is part of most assertions. */
@@ -182,6 +194,7 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
   const schedule = new ManualScheduler();
   const snapshots: TickSnapshot[] = [];
   const errors: string[] = [];
+  const taskLinks: Array<{ taskId: string; docId: string }> = [];
   let summary: NotesMeetingSummary | null = null;
   const settled = new Map<number, { input: NotesComposeInput; composed: string }>();
   const done = new Set<number>();
@@ -216,6 +229,9 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
       tasks: () => ({ listTasks: () => opts.tasks ?? [] }),
       ...(opts.workspaceId ? { boardOf: () => opts.workspaceId } : {}),
       ...(opts.boardDocs ? { lookup: { docs: () => opts.boardDocs ?? [] } } : {}),
+      linkTaskToDoc: (taskId, linkedDocId) => {
+        taskLinks.push({ taskId, docId: linkedDocId });
+      },
       ...(opts.dataDir ? { dataDir: opts.dataDir } : {}),
       ...(opts.ledger ? { ledger: opts.ledger } : {}),
     },
@@ -261,6 +277,7 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
   const harness: NotesTickHarness = {
     snapshots,
     errors,
+    taskLinks,
     summary: () => summary,
     ydoc,
     markdown,
