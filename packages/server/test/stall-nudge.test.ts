@@ -453,6 +453,118 @@ describe('a repeat wake names what changed since the last one', () => {
   });
 });
 
+/**
+ * The finding that flickered.
+ *
+ * The board's escalation bucket is computed from the findings the CURRENT
+ * tick can see, and every tick re-arms the board with it — the silent ones
+ * as well as the ones that woke somebody. So a remembered row that drops off
+ * the list for a single pass takes the armed bucket down with it, and its
+ * return reads as the board crossing another repeat window: a wake naming a
+ * row nobody has been told anything new about, repeatable as often as the
+ * row flickers. Measured in prod on 2026-09-04, two wakes three minutes
+ * apart over one `ready-unpicked` row quiet for twelve hours, `stalled=1
+ * unfiled=0` in both.
+ *
+ * Two things make a row flicker, and neither is the row moving:
+ *
+ *  - the escalation filer (`stall-escalation.ts`) hangs its review item on
+ *    an anchor row, which masks that row from the gate until the item is
+ *    withdrawn or re-anchored;
+ *  - the parallelism cap (`stall-gate.ts`) judges only the runnable rows
+ *    that fit inside it, so a row on the cap boundary leaves the findings
+ *    whenever another row starts or stops being runnable.
+ *
+ * So the bucket is HELD: it may rise with the board's worst row and fall
+ * only when the board goes wholly clean, which drops the arming outright.
+ */
+describe('a finding that flickers off the list is not an escalation', () => {
+  const ROW = {
+    id: 't-ready',
+    title: 'Split the tile importer',
+    bucket: 'ready-unpicked',
+    quietMs: 12 * 60 * MIN,
+  };
+  const YOUNGER = {
+    id: 't-fresh',
+    title: 'Cache the facet counts',
+    bucket: 'ready-unpicked',
+    quietMs: 5 * MIN,
+  };
+
+  it('says nothing on a second tick three minutes later with the row unchanged', () => {
+    const { world, sent, nudger } = harness();
+    world.boards[0]!.stalled = [{ ...ROW }];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    world.now += 3 * MIN;
+    nudger.tick();
+
+    expect(sent).toHaveLength(1);
+  });
+
+  it('says nothing when the row returns from behind a younger finding', () => {
+    const { world, sent, nudger } = harness();
+    world.boards[0]!.stalled = [{ ...ROW }];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    // Masked — an escalation item filed on it, or the cap re-slotting — while
+    // a younger row is the board's only finding. That row IS news, and the
+    // wake it earns is the second one here.
+    world.now += MIN;
+    world.boards[0]!.stalled = [{ ...YOUNGER }];
+    nudger.tick();
+    expect(sent).toHaveLength(2);
+
+    // Unmasked, unchanged, and quiet for exactly as long as before. Nothing
+    // about the board is worse than the tick that woke the lead about it.
+    world.now += MIN;
+    world.boards[0]!.stalled = [{ ...ROW }];
+    nudger.tick();
+
+    expect(sent).toHaveLength(2);
+    expect(sent.some((s) => s.frame.changed?.escalated)).toBe(false);
+  });
+
+  it('drops the held bucket when the board goes wholly clean', () => {
+    const { world, sent, nudger } = harness();
+    world.boards[0]!.stalled = [{ ...ROW }];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    // Nothing to say at all: the arming goes, and with it the held bucket.
+    world.now += MIN;
+    world.boards[0]!.stalled = [];
+    nudger.tick();
+    expect(nudger.armedCount()).toBe(0);
+
+    world.now += MIN;
+    world.boards[0]!.stalled = [{ ...ROW }];
+    nudger.tick();
+
+    expect(sent).toHaveLength(1);
+  });
+
+  it('POSITIVE CONTROL: a row nobody was ever told about still wakes the lead', () => {
+    const { world, sent, nudger } = harness();
+    world.boards[0]!.stalled = [{ ...ROW }];
+    nudger.tick();
+    world.now += MIN;
+    world.boards[0]!.stalled = [{ ...ROW }];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    world.now += MIN;
+    world.boards[0]!.stalled = [{ ...ROW }, { ...YOUNGER }];
+    nudger.tick();
+
+    expect(sent).toHaveLength(2);
+    expect(sent[1]?.frame.changed?.rows?.map((r) => r.id)).toEqual(['t-fresh']);
+  });
+});
+
 describe('a row that stays stalled is said again, eventually', () => {
   it('re-fires once the row has been quiet for another repeat window', () => {
     const { world, sent, nudger } = harness({ repeatMs: 60 * MIN });
