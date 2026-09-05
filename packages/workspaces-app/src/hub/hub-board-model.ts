@@ -17,8 +17,21 @@ import {
   formatGoalEffortSeconds,
   summarizeGoalEffort,
 } from '@feedback/core/goal-effort';
+import {
+  MONTH_SHORT,
+  WEEKDAY_LONG,
+  formatTimeOfDay,
+  scheduleRuleChipParts,
+} from '@feedback/core/schedule-phrase';
 import { blockableStatus, blockerLookup, openBlockerIds } from '@feedback/core/task-blocked';
-import type { ScheduleRule, TaskSchedule } from '@feedback/core/task-schedule';
+import {
+  DEFAULT_SCHEDULE_TIMEZONE,
+  type ScheduleCursor,
+  type ScheduleRule,
+  type TaskSchedule,
+  nextOccurrence,
+  zonedParts,
+} from '@feedback/core/task-schedule';
 import {
   type DecisionOption,
   TASK_STATUSES,
@@ -143,6 +156,16 @@ export interface HubTask {
    *  `schedule.state` is what answers. The panel's phrase editor reads this
    *  back into the sentence a person typed. */
   schedule?: TaskSchedule;
+  /**
+   * This row is one OCCURRENCE of a scheduled rule, and which one — present
+   * iff the scheduler created it. `taskId` names the rule row, which is what
+   * lets a live instance carry a mark back to the Scheduled section.
+   *
+   * Absent means somebody filed the row. Never read absence as "not
+   * recurring yet": a rule that has never fired has no instances at all, so
+   * there is nothing here to be absent from.
+   */
+  recurrenceOf?: { taskId: string; occurrenceAt: number; missed?: number };
   /** Soft-deleted at this instant — off every lane, one tap from coming back.
    *  The row is still PROJECTED while archived (that is what lets the Undo
    *  toast and the restore list draw without a fetch); `taskVisible` is what
@@ -385,6 +408,28 @@ export const CHORES_ID = 'chores';
  */
 export const CHORES_TITLE = 'Backlog';
 
+/**
+ * The Scheduled section: every row that carries a RULE, in one place, above
+ * Backlog and below every goal band.
+ *
+ * Its own section rather than a badge in the band, because a rule row is not
+ * the work (`TaskWire.schedule` says why at length): it is the thing that
+ * MAKES work, and a band listing both would put "post the digest" next to
+ * "post the digest, every day at 9" and ask the reader to tell them apart.
+ * The live instance the scheduler creates each occurrence stays in the band,
+ * which is where somebody actually does it.
+ *
+ * Reserved like Backlog — not a goal, so it is never in `goals[]`, never
+ * renamed, never opened as a band and never a drop target. Hidden outright
+ * when nothing is scheduled: a permanently empty section on a board that has
+ * never used schedules would be a feature advertising itself on every row of
+ * every board.
+ */
+export const SCHEDULED_ID = 'scheduled';
+
+/** The one spelling of the Scheduled header. */
+export const SCHEDULED_TITLE = 'Scheduled';
+
 // ── Done visibility ────────────────────────────────────────────────────────
 
 export type DoneWindow = 'none' | 'hour' | '3h' | 'day' | 'all';
@@ -590,6 +635,13 @@ export interface BoardSection {
   archivedBy?: string;
   archiveReason?: string;
   isChores: boolean;
+  /**
+   * The reserved Scheduled section — the rules, not the work. Absent on every
+   * other section, which reads as false; `isChores` stays false on it, because
+   * the two reserved sections are reserved for different reasons and a caller
+   * asking "is this Backlog" must not get a yes for this one.
+   */
+  isScheduled?: boolean;
   tasks: HubTask[];
   /**
    * Which of this band's rows are Blocked, and by what: row id → the ids of
@@ -697,12 +749,31 @@ export function boardSections(goals: HubGoal[], tasks: HubTask[], f: BoardFilter
     isChores: true,
     tasks: [],
   };
-  sections.push(chores);
-  const byId = new Map(sections.map((s) => [s.id, s]));
+  const scheduled: BoardSection = {
+    id: SCHEDULED_ID,
+    title: SCHEDULED_TITLE,
+    isChores: false,
+    isScheduled: true,
+    tasks: [],
+  };
+  const byId = new Map([...sections, chores].map((s) => [s.id, s]));
   for (const task of tasks) {
     if (!taskVisible(task, f)) continue;
+    // A RULE ROW LEAVES ITS BAND, goal or no goal. It keeps the goal it was
+    // filed under — that is what the instances inherit — but the band shows
+    // the instances, so a rule listed in both places would be the same words
+    // twice with only a chip between them.
+    if (task.schedule !== undefined) {
+      scheduled.tasks.push(task);
+      continue;
+    }
     (byId.get(task.goal) ?? chores).tasks.push(task);
   }
+  // Directly above Backlog, after every goal band: upcoming work is not a
+  // goal and is not a bucket for work nobody placed. Dropped entirely when
+  // nothing is scheduled.
+  if (scheduled.tasks.length > 0) sections.push(scheduled);
+  sections.push(chores);
   const blocked = boardBlockers(tasks);
   for (const s of sections) {
     s.tasks.sort(byBoardOrder);
@@ -714,6 +785,109 @@ export function boardSections(goals: HubGoal[], tasks: HubTask[], f: BoardFilter
     s.blockedBy = mine;
   }
   return sections;
+}
+
+// ── Scheduled rows: the rule, and when it is next owed ─────────────────────
+
+/** Every rule row on the board, by id — what a live instance's mark resolves
+ *  through to reach the rule it came from. */
+export function scheduleRules(tasks: readonly HubTask[]): Map<string, HubTask> {
+  const out = new Map<string, HubTask>();
+  for (const task of tasks) {
+    if (task.schedule !== undefined) out.set(task.id, task);
+  }
+  return out;
+}
+
+/**
+ * What the runner knows and the rule cannot: whether the last instance this
+ * rule created has finished, and when.
+ *
+ * Read by `after-completion` rules and by nothing else — for every other kind
+ * `nextOccurrence` ignores it. An instance the board cannot see (aged out of
+ * the done window, archived) reads as "not finished", which is the same
+ * answer the server's own runner gives for a row it cannot resolve: the rule
+ * is owed nothing until something says otherwise.
+ */
+export function scheduleCursorFor(
+  task: HubTask,
+  byId: ReadonlyMap<string, HubTask>,
+): ScheduleCursor {
+  const instanceId = task.schedule?.state?.lastInstanceId;
+  if (instanceId === undefined) return {};
+  const instance = byId.get(instanceId);
+  if (!instance || instance.status !== 'done') return {};
+  return { lastCompletedAt: doneAt(instance) };
+}
+
+/**
+ * The next occurrence as a person reads it: `Today 5pm`, `Thu 10 Sep, 9am`.
+ *
+ * Written in the RULE'S OWN timezone rather than the reader's, because that
+ * is the clock the rule fires on — a rule set to 9am in Los Angeles fires at
+ * 9am there whoever is looking at the board, and rendering it as the reader's
+ * 5pm would be a true instant and a false answer to "when does this run".
+ *
+ * The time uses `formatTimeOfDay`, the same spelling the rule chip beside it
+ * uses, so one row never says `17:00` in one chip and `5pm` in the next.
+ */
+export function formatNextOccurrence(at: number, now: number, timezone?: string): string {
+  const tz = timezone ?? DEFAULT_SCHEDULE_TIMEZONE;
+  const p = zonedParts(at, tz);
+  const time = formatTimeOfDay({ hour: p.hour, minute: p.minute });
+  if (sameLocalDay(at, now, tz)) return `Today ${time}`;
+  // The weekday of a calendar DATE has no offset of its own, so reading it off
+  // a UTC date built from the zoned parts is exact — the same trick the
+  // calendar walk in `task-schedule.ts` uses.
+  const weekday = WEEKDAY_LONG[new Date(Date.UTC(p.year, p.month - 1, p.day)).getUTCDay()] ?? '';
+  return `${weekday.slice(0, 3)} ${p.day} ${MONTH_SHORT[p.month - 1]}, ${time}`;
+}
+
+function sameLocalDay(a: number, b: number, tz: string): boolean {
+  const x = zonedParts(a, tz);
+  const y = zonedParts(b, tz);
+  return x.year === y.year && x.month === y.month && x.day === y.day;
+}
+
+/** What a scheduled row says on its right-hand side. */
+export interface ScheduleChips {
+  /** The next occurrence, written. Absent when the rule is owed nothing more
+   *  — a spent one-off, a rule past its end, an after-completion rule whose
+   *  instance is still open. Absent is not "soon" and not "never": the row
+   *  says nothing rather than guessing which. */
+  next?: string;
+  /** The next occurrence falls TODAY on the rule's own clock. The one thing
+   *  on the row that changes what a reader does next, so it is the one thing
+   *  that gets the accent. */
+  soon: boolean;
+  /** The rule itself, as chip parts (`scheduleRuleChipParts`). Empty for a
+   *  one-off, whose rule is the instant already printed above. */
+  rule: string[];
+}
+
+/**
+ * The two things a scheduled row shows: when it next runs, and the rule.
+ *
+ * Null for an unscheduled row, so the caller asks once rather than testing
+ * `schedule` itself and then asking again.
+ */
+export function scheduleChips(
+  task: HubTask,
+  now: number,
+  cursor: ScheduleCursor = {},
+): ScheduleChips | null {
+  const schedule = task.schedule;
+  if (schedule === undefined) return null;
+  const at = nextOccurrence(schedule, cursor);
+  const tz = schedule.timezone;
+  return {
+    ...(at !== undefined ? { next: formatNextOccurrence(at, now, tz) } : {}),
+    soon: at !== undefined && sameLocalDay(at, now, tz ?? DEFAULT_SCHEDULE_TIMEZONE),
+    rule: scheduleRuleChipParts(
+      { rule: schedule.rule, ...(schedule.until !== undefined ? { until: schedule.until } : {}) },
+      { now, ...(tz !== undefined ? { timezone: tz } : {}) },
+    ),
+  };
 }
 
 /**
@@ -1286,6 +1460,13 @@ export function dropTarget(
   if (!section) return null;
   const from = sections.find((s) => s.tasks.some((t) => t.id === taskId));
   if (!from) return null;
+  // SCHEDULED IS NOT A BAND, so it is not a destination and not an origin.
+  // Its id is not a goal id: a drop resolved into it would send
+  // `set_task_goal(goal: 'scheduled')` and file the row under a band no
+  // board has, which the projection would then sweep into Backlog. Dragging
+  // a rule row out is refused for the mirror reason — the section a rule is
+  // in is decided by whether it HAS a rule, not by where anyone put it.
+  if (section.isScheduled === true || from.isScheduled === true) return null;
   const rest = section.tasks.filter((t) => t.id !== taskId);
   const clamped = Math.max(0, Math.min(index, rest.length));
   if (from.id === section.id) {
@@ -1315,6 +1496,20 @@ export function stepTarget(
   if (next >= 0 && next <= rest.length) return dropTarget(sections, taskId, section.id, next);
   const neighbour = sections[si + dir];
   if (!neighbour) return null;
+  // Stepping DOWN off the last goal band would otherwise land in Scheduled,
+  // which `dropTarget` refuses — so the keyboard would report a dead key at
+  // the boundary. Skip past it to the section beyond, which is the band the
+  // reader was aiming for.
+  if (neighbour.isScheduled === true) {
+    const beyond = sections[si + dir * 2];
+    if (!beyond) return null;
+    return dropTarget(
+      sections,
+      taskId,
+      beyond.id,
+      dir === 1 ? 0 : beyond.tasks.filter((t) => t.id !== taskId).length,
+    );
+  }
   // Leaving downwards lands at the top of the next section; leaving upwards
   // lands at the bottom of the previous one — the row keeps moving the way
   // the key points.
