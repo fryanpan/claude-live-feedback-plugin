@@ -419,7 +419,7 @@ const { ensureWatchesRestored } = restore;
 const http = createHttp(
   resolveBaseUrl,
   (url, init) => fetch(url, init),
-  () => agentTokens.headers(),
+  (path) => agentTokens.headersFor(path),
 );
 
 const transport = new StdioServerTransport();

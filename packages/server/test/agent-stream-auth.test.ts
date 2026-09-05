@@ -34,8 +34,8 @@ import {
   mintAgentToken,
   verifyAgentToken,
 } from '../src/auth/agent-token.ts';
-import { widgetToken } from '../src/auth/widget-token.ts';
 import { mintToken, tokenKey } from '../src/auth/signed-token.ts';
+import { widgetToken } from '../src/auth/widget-token.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 
 /** Two invented agents. Neither name resolves to anything real. */
@@ -187,7 +187,9 @@ describe('an agent feed is readable only by that agent', () => {
     });
 
     it('refuses a browser and a proxied request', async () => {
-      expect((await get(`/api/agents/${MIRA}/token`, { origin: 'http://x.test' })).status).toBe(403);
+      expect((await get(`/api/agents/${MIRA}/token`, { origin: 'http://x.test' })).status).toBe(
+        403,
+      );
       // As above: on a loopback Host the host gate refuses the `cf-ray`
       // first. Still 403, still never a token.
       expect((await get(`/api/agents/${MIRA}/token`, { 'cf-ray': 'abc-SJC' })).status).toBe(403);
