@@ -570,7 +570,7 @@ describe('runDeploy — a checkout at the tip serving an older client', () => {
   it('does not refuse over a bound document — no file is rewritten', async () => {
     // The busy refusal exists because a PULL overwrites files under an
     // editor. A restart writes nothing, and `handle.stop()` flushes every
-    // pending write-back on the way down (rooms.ts `flush`), so refusing
+    // pending write-back on the way down (doc-store.ts `flush`), so refusing
     // here would block a deploy over a hazard that is not present.
     const git = fakeGit(currentScript());
     const w = fakeWait();

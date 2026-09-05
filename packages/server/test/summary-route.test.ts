@@ -2,9 +2,9 @@
  * POST /api/docs/:docId/threads/:threadId/summary, over real HTTP.
  *
  * This file exists because of a failure mode this repo has hit before: a route
- * hand-copies fields between the HTTP body and the rooms call, so a value can
+ * hand-copies fields between the HTTP body and the doc-store call, so a value can
  * be accepted, answered with 200, and silently dropped — and a unit test that
- * calls `rooms.applyThreadSummary` directly never sees it. Everything here
+ * calls `docStore.applyThreadSummary` directly never sees it. Everything here
  * therefore goes through `fetch` against a real `createServer({ port: 0 })`,
  * and every claim about what got stored is re-read with a fresh GET rather
  * than taken from the POST's own response body.
@@ -270,7 +270,7 @@ describe('POST /api/docs/:docId/threads/:threadId/summary', () => {
     expect(posted.summary.topic).toBe('retry loop swallows the error');
 
     // THE POINT OF THE FILE: re-read through a separate request. If the route
-    // generated a summary and forgot to hand it to `rooms.applyThreadSummary`,
+    // generated a summary and forgot to hand it to `docStore.applyThreadSummary`,
     // the POST body above would still look perfect and this would be empty.
     const after = await getThread(docId, threadId);
     expect(after.summary).toBeDefined();

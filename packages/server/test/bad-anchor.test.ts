@@ -92,7 +92,7 @@ async function listThreads(docId: string): Promise<Thread[]> {
 
 /** Read the anchor as the CRDT holds it — the shape every reader sees. */
 function storedAnchor(docId: string, threadId: string): Record<string, unknown> | undefined {
-  const room = handle.rooms.get(docId);
+  const room = handle.docStore.get(docId);
   const threads = room?.ydoc.getMap('threads') as Y.Map<Y.Map<unknown>> | undefined;
   return threads?.get(threadId)?.get('anchor') as Record<string, unknown> | undefined;
 }
@@ -102,7 +102,7 @@ function storedAnchor(docId: string, threadId: string): Record<string, unknown> 
  * no validation anywhere. This is the already-on-disk state, not a shortcut.
  */
 function plantLegacyAnchor(docId: string, anchor: unknown): string {
-  const room = handle.rooms.get(docId);
+  const room = handle.docStore.get(docId);
   if (!room) throw new Error(`no room for ${docId}`);
   const threadId = `legacy-${docSeq++}`;
   createThread(room.ydoc, {
@@ -334,7 +334,7 @@ describe('a malformed text-range anchor', () => {
       // a cold process. Room load sweeps synchronously, so a throw there is
       // a 500 on the first request that opens the doc — not a deferred
       // orphan. This is the "cannot be opened" half.
-      handle.rooms.flush();
+      handle.docStore.flush();
       const restarted = createServer({ port: 0, dataDir });
       try {
         const restartedBase = `http://localhost:${restarted.port}`;

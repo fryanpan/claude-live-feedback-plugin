@@ -68,14 +68,14 @@ describe('the /y/ mockup auto-create is behind the sign-in gate', () => {
   it('refuses a signed-out browser: no room, and no board-workspace row', async () => {
     const handle = boot(true);
     expect(await connectAsBrowser(handle, 'ws-create-refused')).toBe(false);
-    expect(handle.rooms.get('ws-create-refused')).toBeUndefined();
+    expect(handle.docStore.get('ws-create-refused')).toBeUndefined();
     expect(handle.tasks.workspaceOfDoc('ws-create-refused')).toBeFalsy();
   });
 
   it('positive control: the same socket creates and files the doc with the flag off', async () => {
     const handle = boot(false);
     expect(await connectAsBrowser(handle, 'ws-create-allowed')).toBe(true);
-    expect(handle.rooms.get('ws-create-allowed')).toBeTruthy();
+    expect(handle.docStore.get('ws-create-allowed')).toBeTruthy();
     expect(handle.tasks.workspaceOfDoc('ws-create-allowed')).toBeTruthy();
   });
 });

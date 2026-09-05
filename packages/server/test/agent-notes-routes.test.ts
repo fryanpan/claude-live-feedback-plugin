@@ -24,7 +24,7 @@ import {
   TASK_NOTES_STORE_CAP,
 } from '../src/agent-notes.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { workspaceRoomId } from '../src/task-projection.ts';
+import { workspaceDocId } from '../src/task-projection.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'person' };
 const LEAD = { id: 'agent-cartographer', name: 'Cartographer', kind: 'agent' };
@@ -101,7 +101,7 @@ describe('agent notes routes', () => {
   }
 
   function projected(workspaceId: string, taskId: string): ProjectedTask {
-    const room = handle.rooms.get(workspaceRoomId(workspaceId));
+    const room = handle.docStore.get(workspaceDocId(workspaceId));
     if (!room) throw new Error('ws room was not created');
     const row = room.ydoc.getMap('tasks').get(taskId) as ProjectedTask | undefined;
     if (!row) throw new Error('task was not projected');

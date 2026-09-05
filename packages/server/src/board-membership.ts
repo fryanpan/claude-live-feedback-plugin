@@ -37,8 +37,8 @@
  * them before the move, and a wider surface is a wider thing to keep true.
  */
 import { type DocMeta, normalizeEmail, reviewIdOf } from '@feedback/core';
+import type { DocStore } from './doc-store.ts';
 import type { ShareTarget } from './middleware/host-guard.ts';
-import type { Rooms } from './rooms.ts';
 import { renderShareLinkUnavailable } from './share/share-link-page.ts';
 import type { ShareLinks } from './share/share-links.ts';
 import { type Shares, audienceEntryAdmits } from './share/shares.ts';
@@ -162,8 +162,8 @@ export const DEFAULT_BOARD_WORKSPACE_NAME = 'Unfiled';
 /** What the membership map reads. Every member is a value — see the note at
  *  the top of this file about why none of them needs to be a thunk. */
 export interface BoardMembershipContext {
-  /** Doc rooms: id canonicalization and the meta a review id is read from. */
-  rooms: Rooms;
+  /** Doc store: id canonicalization and the meta a review id is read from. */
+  docStore: DocStore;
   /** The boards themselves: `docIds`, attach/detach, the lead seat, the voice
    *  queue and the attachment records coverage is measured against. */
   taskStore: TaskStore;
@@ -213,7 +213,7 @@ export interface BoardMembership {
 
 export function createBoardMembership(ctx: BoardMembershipContext): BoardMembership {
   const {
-    rooms,
+    docStore,
     taskStore,
     taskProjection,
     shares,
@@ -252,9 +252,9 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
     // readable URL handed to an outside reviewer would simply not open. This
     // is the one resolver every share-scope predicate reads, which is why the
     // fix belongs here and not in each of them.
-    const id = rooms.resolveDocId(rawId);
+    const id = docStore.resolveDocId(rawId);
     const out = new Set<string>();
-    const reviewId = reviewIdOf(rooms.peekMeta(id) ?? {});
+    const reviewId = reviewIdOf(docStore.peekMeta(id) ?? {});
     if (reviewId) out.add(reviewId);
     for (const board of boardWorkspacesHolding(id)) out.add(board);
     if (reviewId) for (const board of boardWorkspacesHolding(reviewId)) out.add(board);
@@ -458,7 +458,7 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
    */
   function boardsForDoc(docId: string): Set<string> {
     const boards = new Set(boardWorkspacesHolding(docId));
-    const reviewId = reviewIdOf(rooms.peekMeta(docId) ?? {});
+    const reviewId = reviewIdOf(docStore.peekMeta(docId) ?? {});
     if (reviewId) for (const board of boardWorkspacesHolding(reviewId)) boards.add(board);
     return boards;
   }

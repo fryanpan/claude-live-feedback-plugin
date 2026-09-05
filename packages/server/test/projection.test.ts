@@ -30,7 +30,7 @@ import * as encoding from 'lib0/encoding';
 import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { BODY_PROJECTION_LIMIT, taskBodyDocId, workspaceRoomId } from '../src/task-projection.ts';
+import { BODY_PROJECTION_LIMIT, taskBodyDocId, workspaceDocId } from '../src/task-projection.ts';
 import { eventsLogPath } from '../src/tasks.ts';
 
 const PERSON = { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' };
@@ -201,7 +201,7 @@ describe('ydoc projection + workspace room', () => {
 
   it('a REST-created task appears in the ws room tasks map, and a transition updates it', async () => {
     const wsId = await makeWorkspace('search-revamp');
-    const room = handle.rooms.get(workspaceRoomId(wsId));
+    const room = handle.docStore.get(workspaceDocId(wsId));
     if (!room) throw new Error('ws room was not created');
     // The workspace map carries the board's name (visitor-contract field).
     expect(room.ydoc.getMap('workspace').get('name')).toBe('search-revamp');
@@ -294,7 +294,7 @@ describe('ydoc projection + workspace room', () => {
     // and note, so an absent `evidence` below is a decision and not an empty
     // room.
     const wsId = await makeWorkspace('evidence-room');
-    const room = handle.rooms.get(workspaceRoomId(wsId));
+    const room = handle.docStore.get(workspaceDocId(wsId));
     if (!room) throw new Error('ws room was not created');
     const taskId = await makeTask(wsId, { title: 'Fix the ranking' });
     await post(`/api/tasks/${taskId}/transition`, {
@@ -321,7 +321,7 @@ describe('ydoc projection + workspace room', () => {
     expect(sseRes.status).toBe(200);
     const sse = listen(sseRes);
 
-    const client = connectDoc(`${wsBase}/y/${workspaceRoomId(wsId)}`);
+    const client = connectDoc(`${wsBase}/y/${workspaceDocId(wsId)}`);
     try {
       await waitForOpen(client.ws);
       await client.ready;
@@ -341,7 +341,7 @@ describe('ydoc projection + workspace room', () => {
       await settle();
 
       // Server state reverted…
-      const room = handle.rooms.get(workspaceRoomId(wsId));
+      const room = handle.docStore.get(workspaceDocId(wsId));
       if (!room) throw new Error('ws room missing');
       const serverTask = room.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
       expect(serverTask.status).toBe('triage');
@@ -383,7 +383,7 @@ describe('ydoc projection + workspace room', () => {
       title: 'Write the rollout note',
       body: '## Steps\n\nCheck the flow works end to end.\n',
     });
-    const bodyRoom = handle.rooms.get(taskBodyDocId(taskId));
+    const bodyRoom = handle.docStore.get(taskBodyDocId(taskId));
     if (!bodyRoom) throw new Error('body room missing');
     const md = prose.serializeFragmentToMarkdown(prose.getProseFragment(bodyRoom.ydoc));
     expect(md).toContain('Check the flow works end to end.');
@@ -416,7 +416,7 @@ describe('ydoc projection + workspace room', () => {
       title: 'Write the rollout note',
       body: 'Agent can read the description on the task so that it can pick it up cold.\n',
     });
-    const room = handle.rooms.get(workspaceRoomId(wsId));
+    const room = handle.docStore.get(workspaceDocId(wsId));
     if (!room) throw new Error('ws room missing');
     const projected = room.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
     expect(projected.body).toContain('pick it up cold');
@@ -437,7 +437,7 @@ describe('ydoc projection + workspace room', () => {
     // syncs to every board viewer on every debounced snapshot.
     const long = `${'word '.repeat(1_200)}TAIL`;
     const taskId = await makeTask(wsId, { title: 'Pasted a whole plan in here', body: long });
-    const room = handle.rooms.get(workspaceRoomId(wsId));
+    const room = handle.docStore.get(workspaceDocId(wsId));
     if (!room) throw new Error('ws room missing');
     const projected = room.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
     expect(projected.bodyTruncated).toBe(true);
@@ -464,9 +464,9 @@ describe('ydoc projection + workspace room', () => {
     const { thread } = (await tr.json()) as { thread: { id: string } };
 
     const resolves = (h: ServerHandle): boolean => {
-      const room = h.rooms.get(docId);
+      const room = h.docStore.get(docId);
       if (!room) return false;
-      const stored = h.rooms.getThread(docId, thread.id);
+      const stored = h.docStore.getThread(docId, thread.id);
       if (!stored || stored.anchor.kind !== 'text-range') return false;
       return prose.resolveRelativePosition(room.ydoc, stored.anchor.startRel) !== null;
     };
@@ -487,7 +487,7 @@ describe('ydoc projection + workspace room', () => {
     base = `http://localhost:${handle.port}`;
     wsBase = `ws://localhost:${handle.port}`;
     expect(resolves(handle)).toBe(true);
-    const room = handle.rooms.get(docId);
+    const room = handle.docStore.get(docId);
     if (!room) throw new Error('body room missing after restart');
     expect(prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc))).toContain(
       'anchor me here',
@@ -501,7 +501,7 @@ describe('ydoc projection + workspace room', () => {
     await handle.stop();
 
     // Forge the persisted ws room offline — the crash-leaves-fake-state shape.
-    const ydocPath = join(dataDir, `${workspaceRoomId(wsId)}.ydoc`);
+    const ydocPath = join(dataDir, `${workspaceDocId(wsId)}.ydoc`);
     const forged = new Y.Doc();
     Y.applyUpdate(forged, new Uint8Array(readFileSync(ydocPath)));
     const before = forged.getMap('tasks').get(taskId) as ProjectedTask;
@@ -516,7 +516,7 @@ describe('ydoc projection + workspace room', () => {
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
     wsBase = `ws://localhost:${handle.port}`;
-    const room = handle.rooms.get(workspaceRoomId(wsId));
+    const room = handle.docStore.get(workspaceDocId(wsId));
     if (!room) throw new Error('ws room missing after restart');
     const projected = room.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
     expect(projected.status).toBe('triage');

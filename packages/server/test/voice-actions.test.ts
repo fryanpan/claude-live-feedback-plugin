@@ -3,7 +3,7 @@
  *
  * A spoken "mark this done" over a ticket in view no longer waits for an
  * agent — the router runs it through `taskStore.transition` /
- * `taskStore.setAssignee` / `rooms.postComment` / `rooms.answerReviewItem`,
+ * `taskStore.setAssignee` / `docStore.postComment` / `docStore.answerReviewItem`,
  * the SAME choke points the REST routes use, so the move is attributed to the
  * speaker and lands in `events.jsonl` exactly as a tapped one does. Anything
  * outside the scoped verb set still goes to the agent, unchanged.

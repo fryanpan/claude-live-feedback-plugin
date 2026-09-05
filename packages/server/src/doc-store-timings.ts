@@ -20,7 +20,7 @@
  * environment cannot slow a deploy down or widen a race window.
  */
 
-export type RoomTimings = {
+export type DocStoreTimings = {
   /** How often the shared mtime sweep runs. */
   filePollMs: number;
   /** Settle time after a file change before reading it, so no half-written save is parsed. */
@@ -40,7 +40,7 @@ export type RoomTimings = {
 };
 
 /** The production cadences. Every one of these is a documented number elsewhere. */
-export const DEFAULT_ROOM_TIMINGS: RoomTimings = {
+export const DEFAULT_DOC_STORE_TIMINGS: DocStoreTimings = {
   filePollMs: 500,
   readDebounceMs: 150,
   writeBackMs: 800,
@@ -63,20 +63,21 @@ const MIN_MS = 5;
  * number in `(0, 1]` yields the defaults untouched — including `undefined`,
  * an empty string, a word, a negative, a zero, and anything above 1.
  */
-export function resolveRoomTimings(scale: string | undefined): RoomTimings {
-  if (scale === undefined || scale.trim() === '') return { ...DEFAULT_ROOM_TIMINGS };
+export function resolveDocStoreTimings(scale: string | undefined): DocStoreTimings {
+  if (scale === undefined || scale.trim() === '') return { ...DEFAULT_DOC_STORE_TIMINGS };
   const factor = Number(scale);
-  if (!Number.isFinite(factor) || factor <= 0 || factor > 1) return { ...DEFAULT_ROOM_TIMINGS };
+  if (!Number.isFinite(factor) || factor <= 0 || factor > 1)
+    return { ...DEFAULT_DOC_STORE_TIMINGS };
   const scaled = (ms: number): number => Math.max(MIN_MS, Math.round(ms * factor));
   return {
-    filePollMs: scaled(DEFAULT_ROOM_TIMINGS.filePollMs),
-    readDebounceMs: scaled(DEFAULT_ROOM_TIMINGS.readDebounceMs),
-    writeBackMs: scaled(DEFAULT_ROOM_TIMINGS.writeBackMs),
-    persistMs: scaled(DEFAULT_ROOM_TIMINGS.persistMs),
-    revisionSettleMs: scaled(DEFAULT_ROOM_TIMINGS.revisionSettleMs),
-    reanchorMs: scaled(DEFAULT_ROOM_TIMINGS.reanchorMs),
-    boundReadDeadlineMs: scaled(DEFAULT_ROOM_TIMINGS.boundReadDeadlineMs),
-    boundReadRetryMs: scaled(DEFAULT_ROOM_TIMINGS.boundReadRetryMs),
+    filePollMs: scaled(DEFAULT_DOC_STORE_TIMINGS.filePollMs),
+    readDebounceMs: scaled(DEFAULT_DOC_STORE_TIMINGS.readDebounceMs),
+    writeBackMs: scaled(DEFAULT_DOC_STORE_TIMINGS.writeBackMs),
+    persistMs: scaled(DEFAULT_DOC_STORE_TIMINGS.persistMs),
+    revisionSettleMs: scaled(DEFAULT_DOC_STORE_TIMINGS.revisionSettleMs),
+    reanchorMs: scaled(DEFAULT_DOC_STORE_TIMINGS.reanchorMs),
+    boundReadDeadlineMs: scaled(DEFAULT_DOC_STORE_TIMINGS.boundReadDeadlineMs),
+    boundReadRetryMs: scaled(DEFAULT_DOC_STORE_TIMINGS.boundReadRetryMs),
   };
 }
 
@@ -86,4 +87,6 @@ export function resolveRoomTimings(scale: string | undefined): RoomTimings {
  * the hot path. A test that needs different cadences sets the variable before
  * the process starts — which is what `bun run test:server` does.
  */
-export const ROOM_TIMINGS: RoomTimings = resolveRoomTimings(process.env.CW_TEST_TIMING_SCALE);
+export const DOC_STORE_TIMINGS: DocStoreTimings = resolveDocStoreTimings(
+  process.env.CW_TEST_TIMING_SCALE,
+);

@@ -213,7 +213,7 @@ success. That refusal waits ~1.5s and re-reads first, because "busy" is an
 before the deploy arrives would otherwise refuse over a flush already on its way
 to disk. A doc that settles proceeds; one still being typed in still refuses and
 still names its files. The refusal is about the PULL, so a `restarted` deploy
-skips it — nothing is rewritten, and `Rooms.flush` saves every pending
+skips it — nothing is rewritten, and `DocStore.flush` saves every pending
 write-back on the way down. The manual three steps remain the fallback for the
 one case the route cannot serve: a server that is already down.
 

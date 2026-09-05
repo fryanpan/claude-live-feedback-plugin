@@ -293,7 +293,7 @@ export interface CreateAnchorResult {
  * Resolve a `find` (with optional context / occurrence) to a serialized
  * Y.RelativePosition pair plus the matched snippet text. Shared by:
  *   - `createAgentAnchor` (agent-private bookmarks)
- *   - `rooms.createThreadByFind` (agent-created review threads)
+ *   - `docStore.createThreadByFind` (agent-created review threads)
  *
  * Both call sites need the same disambiguation semantics as
  * `find_and_replace`: occurrence picker, cross-node detection, ambiguous

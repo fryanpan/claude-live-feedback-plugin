@@ -1,6 +1,6 @@
 /**
  * The websocket fan-out of a doc room, driven directly rather than through a
- * `Rooms`. It came out of `rooms.ts` as a pure move, so everything below had
+ * `DocStore`. It came out of `doc-store.ts` as a pure move, so everything below had
  * SOME coverage through the higher layers already; what it lacked was a test
  * that can fail for the fan-out's own reasons — the frame it builds, the
  * channels it writes it to, which sockets it hangs up, and which transaction
@@ -10,13 +10,13 @@
 import { describe, expect, it } from 'bun:test';
 import type { DocMeta, Thread, User, WebhookPayload } from '@feedback/core';
 import * as Y from 'yjs';
+import type { DocRoom, FeedbackWs } from '../src/doc-store.ts';
 import {
   CONTENT_REVISION_ORIGIN,
   RoomFanout,
   type RoomFanoutHost,
   maintainAwareness,
 } from '../src/room-fanout.ts';
-import type { DocRoom, FeedbackWs } from '../src/rooms.ts';
 import { SseBus } from '../src/sse.ts';
 import type { ThreadSummarizer } from '../src/summarize.ts';
 
@@ -38,7 +38,7 @@ function fakeWs(data: { shareId?: string; shareMember?: string }): {
   return { ws: ws as unknown as FeedbackWs, closes };
 }
 
-/** Presence per room, held the way `Rooms` holds it: built on demand, then
+/** Presence per room, held the way `DocStore` holds it: built on demand, then
  *  readable without constructing a second one. */
 const awarenessOf = new WeakMap<DocRoom, DocRoom['awareness']>();
 
@@ -81,7 +81,7 @@ interface Recorder {
 }
 
 function makeHost(
-  rooms: DocRoom[],
+  resident: DocRoom[],
   opts: { summarizer?: ThreadSummarizer; companionOf?: Record<string, string> } = {},
 ): Recorder {
   const sse = new SseBus();
@@ -94,7 +94,7 @@ function makeHost(
     rebinds: [],
   };
   const host: RoomFanoutHost = {
-    rooms: () => rooms,
+    residentRooms: () => resident,
     sse: () => sse,
     webhooks: () => ({
       send: async (url, payload) => {

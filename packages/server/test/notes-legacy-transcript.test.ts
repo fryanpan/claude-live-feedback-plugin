@@ -327,7 +327,7 @@ describe('across a scripted meeting', () => {
 describe('the kept section is reported once per doc', () => {
   it('says so on the first tick and stays quiet on every tick after', () => {
     const ydoc = docFrom(A_PERSON_PASTED_IT.replace('```text', '```json'));
-    const rooms = {
+    const docStore = {
       get: (id: string) =>
         id === 'd-quiet' ? { ydoc, meta: { type: 'markdown' as const } } : undefined,
     };
@@ -344,7 +344,7 @@ describe('the kept section is reported once per doc', () => {
     };
     try {
       const ledger = createNotesLedger();
-      for (let i = 0; i < 3; i++) applyNotesUpdate(rooms, update as never, ledger);
+      for (let i = 0; i < 3; i++) applyNotesUpdate(docStore, update as never, ledger);
     } finally {
       console.log = real;
     }

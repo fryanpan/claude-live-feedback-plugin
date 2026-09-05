@@ -7,7 +7,7 @@ import * as encoding from 'lib0/encoding';
 import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
 import { getProseFragment } from '../../core/src/prose.ts';
-import { Rooms } from '../src/rooms.ts';
+import { DocStore } from '../src/doc-store.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
@@ -160,11 +160,11 @@ describe('stale-write guard on POST /api/docs/:id/content', () => {
     // Wait until the server has actually seen the human-origin update.
     const deadline = Date.now() + 3000;
     while (Date.now() < deadline) {
-      if (handle.rooms.staleWriteCheck('g1')) break;
+      if (handle.docStore.staleWriteCheck('g1')) break;
       await new Promise((r) => setTimeout(r, 25));
     }
     client.close();
-    expect(handle.rooms.staleWriteCheck('g1')).not.toBeNull();
+    expect(handle.docStore.staleWriteCheck('g1')).not.toBeNull();
   }
 
   async function setContent(
@@ -219,7 +219,7 @@ describe('stale-write guard on POST /api/docs/:id/content', () => {
     // here made the test a coin flip on the same-tick boundary, which the
     // unit suite below owns; this test owns the ROUTE wiring: the reader
     // param records a read, and that read is what flips 409 to 200.
-    handle.rooms.noteHumanEdit('g1', Date.now() - 60_000);
+    handle.docStore.noteHumanEdit('g1', Date.now() - 60_000);
     const refused = await setContent({ markdown: '# Pre-read\n\nStale.\n', author: AGENT });
     expect(refused.status).toBe(409);
     const read = await fetch(`${base}/api/docs/g1/content?reader=${AGENT.id}`);
@@ -235,7 +235,7 @@ describe('stale-write guard on POST /api/docs/:id/content', () => {
     // Explicit distinct timestamps, for the same reason as above: this test
     // asserts the refusal SHAPE when read < edit, not the clock boundary.
     const readAt = Date.now() - 120_000;
-    handle.rooms.noteAgentRead('g1', AGENT.id, readAt);
+    handle.docStore.noteAgentRead('g1', AGENT.id, readAt);
     await humanEdit();
     const res = await setContent({ markdown: '# Stale\n\nOld copy.\n', author: AGENT });
     expect(res.status).toBe(409);
@@ -290,19 +290,19 @@ describe('stale-write guard on POST /api/docs/:id/content', () => {
   });
 });
 
-describe('Rooms.staleWriteCheck (10-minute fallback window)', () => {
+describe('DocStore.staleWriteCheck (10-minute fallback window)', () => {
   let dataDir: string;
-  let rooms: Rooms;
+  let docStore: DocStore;
 
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-stale-rooms-'));
-    rooms = new Rooms({
+    docStore = new DocStore({
       dataDir,
       sse: new SseBus(),
       webhooks: createWebhookDispatcher({ onLog: () => {} }),
     });
-    rooms.getOrCreate('d1', { type: 'markdown' });
-    rooms.setDocContent('d1', '# Doc\n\nBody.\n');
+    docStore.getOrCreate('d1', { type: 'markdown' });
+    docStore.setDocContent('d1', '# Doc\n\nBody.\n');
   });
 
   afterEach(() => {
@@ -310,18 +310,18 @@ describe('Rooms.staleWriteCheck (10-minute fallback window)', () => {
   });
 
   it('is quiet when no human has ever edited', () => {
-    expect(rooms.staleWriteCheck('d1')).toBeNull();
-    expect(rooms.staleWriteCheck('d1', 'agent-x')).toBeNull();
+    expect(docStore.staleWriteCheck('d1')).toBeNull();
+    expect(docStore.staleWriteCheck('d1', 'agent-x')).toBeNull();
   });
 
   it('an untracked caller is refused inside the window and allowed outside it', () => {
     const now = Date.now();
-    rooms.noteHumanEdit('d1', now - 9 * 60_000);
-    expect(rooms.staleWriteCheck('d1', undefined, now)).toEqual({
+    docStore.noteHumanEdit('d1', now - 9 * 60_000);
+    expect(docStore.staleWriteCheck('d1', undefined, now)).toEqual({
       humanEditedAt: now - 9 * 60_000,
     });
-    rooms.noteHumanEdit('d1', now - 11 * 60_000);
-    expect(rooms.staleWriteCheck('d1', undefined, now)).toBeNull();
+    docStore.noteHumanEdit('d1', now - 11 * 60_000);
+    expect(docStore.staleWriteCheck('d1', undefined, now)).toBeNull();
   });
 
   it('a same-millisecond read and edit is a TIE — order unknowable — and a tie refuses', () => {
@@ -331,29 +331,29 @@ describe('Rooms.staleWriteCheck (10-minute fallback window)', () => {
     // and made the boundary a coin flip CI kept losing. The safe verdict for
     // an unknowable order is refuse; a re-read one tick later clears it.
     const now = Date.now();
-    rooms.noteAgentRead('d1', 'agent-x', now - 5_000);
-    rooms.noteHumanEdit('d1', now - 5_000);
-    expect(rooms.staleWriteCheck('d1', 'agent-x', now)).toEqual({
+    docStore.noteAgentRead('d1', 'agent-x', now - 5_000);
+    docStore.noteHumanEdit('d1', now - 5_000);
+    expect(docStore.staleWriteCheck('d1', 'agent-x', now)).toEqual({
       humanEditedAt: now - 5_000,
       lastReadAt: now - 5_000,
     });
     // One millisecond of provable order is enough.
-    rooms.noteAgentRead('d1', 'agent-x', now - 4_999);
-    expect(rooms.staleWriteCheck('d1', 'agent-x', now)).toBeNull();
+    docStore.noteAgentRead('d1', 'agent-x', now - 4_999);
+    expect(docStore.staleWriteCheck('d1', 'agent-x', now)).toBeNull();
   });
 
   it('a tracked reader is judged by read-vs-edit order, not the clock', () => {
     const now = Date.now();
     // Human edit 30 minutes ago — outside the window — but this reader's
     // last read is OLDER still, so its in-context copy predates the edit.
-    rooms.noteHumanEdit('d1', now - 30 * 60_000);
-    rooms.noteAgentRead('d1', 'agent-x', now - 60 * 60_000);
-    expect(rooms.staleWriteCheck('d1', 'agent-x', now)).toEqual({
+    docStore.noteHumanEdit('d1', now - 30 * 60_000);
+    docStore.noteAgentRead('d1', 'agent-x', now - 60 * 60_000);
+    expect(docStore.staleWriteCheck('d1', 'agent-x', now)).toEqual({
       humanEditedAt: now - 30 * 60_000,
       lastReadAt: now - 60 * 60_000,
     });
     // Re-read after the edit: safe again.
-    rooms.noteAgentRead('d1', 'agent-x', now - 60_000);
-    expect(rooms.staleWriteCheck('d1', 'agent-x', now)).toBeNull();
+    docStore.noteAgentRead('d1', 'agent-x', now - 60_000);
+    expect(docStore.staleWriteCheck('d1', 'agent-x', now)).toBeNull();
   });
 });

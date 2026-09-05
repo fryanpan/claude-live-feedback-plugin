@@ -326,7 +326,7 @@ export interface TaskCaptureBoard {
 
 /**
  * Where a lookup ask looks, beyond the board rows this pass has already
- * read. Docs and their past meetings live behind `rooms` and the meeting
+ * read. Docs and their past meetings live behind `docStore` and the meeting
  * store, which this module has no business knowing about.
  */
 export interface TaskCaptureLookup {

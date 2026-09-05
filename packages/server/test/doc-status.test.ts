@@ -10,7 +10,7 @@
  * HTTP-level on purpose (the route layer hand-copies fields and is the layer
  * no unit test covers), same pattern as find-replace-bulk.test.ts. The share
  * half rides the real share flow because visitor redaction lives in the
- * route, not in rooms. All fixtures are synthetic.
+ * route, not in the doc store. All fixtures are synthetic.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';

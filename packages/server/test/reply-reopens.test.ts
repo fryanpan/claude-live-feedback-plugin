@@ -28,8 +28,8 @@ import { type ServerHandle, createServer } from '../src/server.ts';
 
 const reviewer: User = { id: 'known-reviewer', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
 const visitor: User = { id: 'anon-7f3', name: 'Sam', kind: 'anon', color: '#7a5' };
-/** What `resolveAgentAuthor` builds from FEEDBACK_AGENT_NAME="Quick Build". */
-const agent: User = { id: 'agent-quick-build', name: 'Quick Build', kind: 'known', color: '#888' };
+/** What `resolveAgentAuthor` builds from FEEDBACK_AGENT_NAME="Lantern Bay". */
+const agent: User = { id: 'agent-lantern-bay', name: 'Lantern Bay', kind: 'known', color: '#888' };
 /** An agent that DECLARES what it is instead of encoding it in the id — the
  *  obvious thing for a REST caller or a hand-rolled MCP wrapper to send, and
  *  the shape that used to be classified as a person. Its id and name are both
@@ -111,7 +111,7 @@ async function reply(docId: string, threadId: string, author: User, text: string
  *  A reopen the REST response reports but the CRDT doesn't carry would leave
  *  the thread hidden in the drawer, which is the whole bug. */
 function syncedStatus(docId: string, threadId: string): unknown {
-  const room = handle.rooms.get(docId);
+  const room = handle.docStore.get(docId);
   const threads = room?.ydoc.getMap('threads') as Y.Map<Y.Map<unknown>> | undefined;
   return threads?.get(threadId)?.get('status');
 }
@@ -165,7 +165,7 @@ describe('a reply to a resolved thread', () => {
     // Positive control: the reply itself landed. Without this, "still
     // resolved" would also pass if the POST had failed outright.
     expect(t.comments.length).toBe(2);
-    expect(t.comments.at(-1)?.author.id).toBe('agent-quick-build');
+    expect(t.comments.at(-1)?.author.id).toBe('agent-lantern-bay');
     expect(t.status).toBe('resolved');
     expect(syncedStatus(docId, threadId)).toBe('resolved');
   });

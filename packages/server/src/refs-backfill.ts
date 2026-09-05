@@ -24,7 +24,7 @@
  */
 
 import { extractWorkspaceLinks, parseWorkspaceLink } from '@feedback/core';
-import type { Rooms } from './rooms.ts';
+import type { DocStore } from './doc-store.ts';
 import { taskIdOfBodyDoc } from './task-projection.ts';
 import type { GoalRow, Ref, Task, TaskStore } from './tasks.ts';
 import { isValidRef, refKey } from './tasks.ts';
@@ -46,7 +46,7 @@ export interface RefsBackfillStats {
 }
 
 interface Ctx {
-  rooms: Rooms;
+  docStore: DocStore;
   tasks: TaskStore;
   dryRun: boolean;
   stats: RefsBackfillStats;
@@ -56,24 +56,24 @@ interface Ctx {
 /** Whether `refs` (or a doc/thread `origin`) already ties to `canonicalDocId`,
  *  under alias-insensitive identity. */
 function hasDocTie(
-  rooms: Rooms,
+  docStore: DocStore,
   canonicalDocId: string,
   refs: readonly Ref[] | undefined,
   origin?: unknown,
 ): boolean {
   if (isValidRef(origin) && (origin.kind === 'doc' || origin.kind === 'thread')) {
-    if (rooms.resolveDocId(origin.docId) === canonicalDocId) return true;
+    if (docStore.resolveDocId(origin.docId) === canonicalDocId) return true;
   }
   const key = refKey({ kind: 'doc', docId: canonicalDocId });
   return (refs ?? []).some(
     (r) =>
-      r.kind === 'doc' && (refKey(r) === key || rooms.resolveDocId(r.docId) === canonicalDocId),
+      r.kind === 'doc' && (refKey(r) === key || docStore.resolveDocId(r.docId) === canonicalDocId),
   );
 }
 
 /** Land a doc ref on a task, honouring dryRun and the counters. */
 function addTaskDocRef(ctx: Ctx, task: Task, canonicalDocId: string, fromUrlRef: boolean): void {
-  if (hasDocTie(ctx.rooms, canonicalDocId, task.links, task.origin)) {
+  if (hasDocTie(ctx.docStore, canonicalDocId, task.links, task.origin)) {
     ctx.stats.skippedExisting++;
     return;
   }
@@ -88,7 +88,7 @@ function addTaskDocRef(ctx: Ctx, task: Task, canonicalDocId: string, fromUrlRef:
 
 /** Land a doc ref on a goal row, honouring dryRun and the counters. */
 function addGoalDocRef(ctx: Ctx, goal: GoalRow, canonicalDocId: string): void {
-  if (hasDocTie(ctx.rooms, canonicalDocId, goal.links)) {
+  if (hasDocTie(ctx.docStore, canonicalDocId, goal.links)) {
     ctx.stats.skippedExisting++;
     return;
   }
@@ -102,11 +102,11 @@ function addGoalDocRef(ctx: Ctx, goal: GoalRow, canonicalDocId: string): void {
 
 /** A docId a ref may point at, or null when it is not a real, linkable doc
  *  (missing, a task/goal body room, a projection room). Canonicalized. */
-function linkableDocId(rooms: Rooms, docId: string): string | null {
-  const canonical = rooms.resolveDocId(docId);
+function linkableDocId(docStore: DocStore, docId: string): string | null {
+  const canonical = docStore.resolveDocId(docId);
   if (taskIdOfBodyDoc(canonical) !== null) return null;
   if (canonical.startsWith('ws:')) return null;
-  if (!rooms.docExists(canonical)) return null;
+  if (!docStore.docExists(canonical)) return null;
   return canonical;
 }
 
@@ -116,8 +116,8 @@ function linkableDocId(rooms: Rooms, docId: string): string | null {
  * alias — refs are stored under the canonical id.
  */
 export function scanDocRefs(ctx: Ctx, docId: string): void {
-  const canonical = ctx.rooms.resolveDocId(docId);
-  const body = ctx.rooms.readMarkdownBody(canonical);
+  const canonical = ctx.docStore.resolveDocId(docId);
+  const body = ctx.docStore.readMarkdownBody(canonical);
   if (body === null) return;
   ctx.stats.docsScanned++;
   for (const { link } of extractWorkspaceLinks(body)) {
@@ -127,7 +127,7 @@ export function scanDocRefs(ctx: Ctx, docId: string): void {
     else if (link.kind === 'doc' || link.kind === 'mockup') {
       // A task's body room is addressed as `task:<id>` — a link to it is a
       // link to the row.
-      rowId = taskIdOfBodyDoc(ctx.rooms.resolveDocId(link.docId));
+      rowId = taskIdOfBodyDoc(ctx.docStore.resolveDocId(link.docId));
     }
     if (rowId === null) continue;
     const task = ctx.tasks.getTask(rowId);
@@ -142,11 +142,11 @@ export function scanDocRefs(ctx: Ctx, docId: string): void {
 }
 
 /** The doc/mockup links in one markdown body, as canonical linkable ids. */
-function docLinksIn(rooms: Rooms, body: string): string[] {
+function docLinksIn(docStore: DocStore, body: string): string[] {
   const out: string[] = [];
   for (const { link } of extractWorkspaceLinks(body)) {
     if (link.kind !== 'doc' && link.kind !== 'mockup') continue;
-    const id = linkableDocId(rooms, link.docId);
+    const id = linkableDocId(docStore, link.docId);
     if (id !== null && !out.includes(id)) out.push(id);
   }
   return out;
@@ -156,12 +156,12 @@ function docLinksIn(rooms: Rooms, body: string): string[] {
  *  really doc addresses, → structured doc refs on the task. */
 function scanTaskRefs(ctx: Ctx, task: Task): void {
   ctx.stats.taskBodiesScanned++;
-  for (const id of docLinksIn(ctx.rooms, task.body ?? '')) addTaskDocRef(ctx, task, id, false);
+  for (const id of docLinksIn(ctx.docStore, task.body ?? '')) addTaskDocRef(ctx, task, id, false);
   for (const ref of task.links) {
     if (ref.kind !== 'url') continue;
     const link = parseWorkspaceLink(ref.url);
     if (!link || (link.kind !== 'doc' && link.kind !== 'mockup')) continue;
-    const id = linkableDocId(ctx.rooms, link.docId);
+    const id = linkableDocId(ctx.docStore, link.docId);
     if (id !== null) addTaskDocRef(ctx, task, id, true);
   }
 }
@@ -169,12 +169,12 @@ function scanTaskRefs(ctx: Ctx, task: Task): void {
 /** One GOAL: its body's doc links → doc refs on the goal row. */
 function scanGoalRefs(ctx: Ctx, goal: GoalRow): void {
   ctx.stats.goalBodiesScanned++;
-  for (const id of docLinksIn(ctx.rooms, goal.body ?? '')) addGoalDocRef(ctx, goal, id);
+  for (const id of docLinksIn(ctx.docStore, goal.body ?? '')) addGoalDocRef(ctx, goal, id);
 }
 
 /** Doc ids worth scanning: real content docs, not body/projection rooms. */
-function scannableDocIds(rooms: Rooms): string[] {
-  return rooms
+function scannableDocIds(docStore: DocStore): string[] {
+  return docStore
     .list()
     .map((m) => m.docId)
     .filter((id) => taskIdOfBodyDoc(id) === null && !id.startsWith('ws:'));
@@ -187,12 +187,12 @@ function scannableDocIds(rooms: Rooms): string[] {
  * `workspacesTouched` — link writes emit no store event.
  */
 export function runRefsBackfill(opts: {
-  rooms: Rooms;
+  docStore: DocStore;
   tasks: TaskStore;
   dryRun: boolean;
 }): RefsBackfillStats {
   const ctx: Ctx = {
-    rooms: opts.rooms,
+    docStore: opts.docStore,
     tasks: opts.tasks,
     dryRun: opts.dryRun,
     touched: new Set(),
@@ -207,7 +207,7 @@ export function runRefsBackfill(opts: {
       workspacesTouched: [],
     },
   };
-  for (const docId of scannableDocIds(opts.rooms)) scanDocRefs(ctx, docId);
+  for (const docId of scannableDocIds(opts.docStore)) scanDocRefs(ctx, docId);
   for (const ws of opts.tasks.listWorkspaces()) {
     // Archived rows too: "backfill all past tasks" includes the ones the
     // board has moved past — their panel still opens.
@@ -228,11 +228,15 @@ export function runRefsBackfill(opts: {
  * snapshot, which may still be a flush behind at settle time. Returns the
  * workspaces whose rows changed, for the caller's projection refresh.
  */
-export function scanSettledDocRefs(rooms: Rooms, tasks: TaskStore, docId: string): Set<string> {
-  const canonical = rooms.resolveDocId(docId);
+export function scanSettledDocRefs(
+  docStore: DocStore,
+  tasks: TaskStore,
+  docId: string,
+): Set<string> {
+  const canonical = docStore.resolveDocId(docId);
   if (canonical.startsWith('ws:')) return new Set();
   const ctx: Ctx = {
-    rooms,
+    docStore,
     tasks,
     dryRun: false,
     touched: new Set(),
@@ -249,13 +253,13 @@ export function scanSettledDocRefs(rooms: Rooms, tasks: TaskStore, docId: string
   };
   const rowId = taskIdOfBodyDoc(canonical);
   if (rowId !== null) {
-    const body = rooms.readMarkdownBody(canonical);
+    const body = docStore.readMarkdownBody(canonical);
     if (body !== null) {
       const task = tasks.getTask(rowId);
-      if (task) for (const id of docLinksIn(rooms, body)) addTaskDocRef(ctx, task, id, false);
+      if (task) for (const id of docLinksIn(docStore, body)) addTaskDocRef(ctx, task, id, false);
       else {
         const goal = tasks.getGoalRow(rowId);
-        if (goal) for (const id of docLinksIn(rooms, body)) addGoalDocRef(ctx, goal, id);
+        if (goal) for (const id of docLinksIn(docStore, body)) addGoalDocRef(ctx, goal, id);
       }
     }
   } else {

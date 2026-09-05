@@ -33,7 +33,7 @@ export async function handleDocEditRoutes(
   ctx: DocRoutesContext,
   rq: DocResourceRouteRequest,
 ): Promise<Response | undefined> {
-  const { rooms, taskStore, j, safeJson, rewriteTaskBody } = ctx;
+  const { docStore, taskStore, j, safeJson, rewriteTaskBody } = ctx;
   const { req, docId, rest, visitor, authorFor } = rq;
   // Whole-doc rewrite through the live doc — the safe replacement for
   // Write-the-bound-file + reparse_from_disk, which raced the
@@ -50,7 +50,7 @@ export async function handleDocEditRoutes(
     // opens the gate, and even then the backup below has already run.
     if (body?.confirmOverwriteHumanEdits !== true) {
       const reader = authorFor(body?.author)?.id;
-      const stale = rooms.staleWriteCheck(docId, reader);
+      const stale = docStore.staleWriteCheck(docId, reader);
       if (stale) {
         return j(409, {
           error: 'stale-write',
@@ -86,18 +86,18 @@ export async function handleDocEditRoutes(
       });
       return res.ok ? j(200, { ok: true }) : j(409, res);
     }
-    const res = rooms.setDocContent(docId, markdown);
-    return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
+    const res = docStore.setDocContent(docId, markdown);
+    return res.ok ? j(200, withSyncError(docStore, docId, res)) : j(409, res);
   }
   if (rest === 'reparse_from_disk' && req.method === 'POST') {
-    const res = rooms.reparseFromDisk(docId);
+    const res = docStore.reparseFromDisk(docId);
     return res.ok ? j(200, res) : j(409, res);
   }
   if (rest === 'agent_anchors' && req.method === 'POST') {
     const body = await safeJson(req);
     const find = String(body?.find ?? '');
     if (find.length === 0) return j(400, { error: 'find is required' });
-    const res = rooms.createAgentAnchor(docId, {
+    const res = docStore.createAgentAnchor(docId, {
       find,
       contextBefore: body?.contextBefore ? String(body.contextBefore) : undefined,
       contextAfter: body?.contextAfter ? String(body.contextAfter) : undefined,
@@ -117,8 +117,8 @@ export async function handleDocEditRoutes(
       if (kind !== 'replace' && kind !== 'insert_after') {
         return j(400, { error: 'kind must be replace or insert_after' });
       }
-      const res = rooms.editAtAgentAnchor(docId, anchorId, { kind, text });
-      return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
+      const res = docStore.editAtAgentAnchor(docId, anchorId, { kind, text });
+      return res.ok ? j(200, withSyncError(docStore, docId, res)) : j(409, res);
     }
     if (anchorRest === '/insert_blocks' && req.method === 'POST') {
       const body = await safeJson(req);
@@ -128,11 +128,11 @@ export async function handleDocEditRoutes(
       if (placement === PLACEMENT_INVALID) {
         return j(400, { error: "placement must be 'after-block' or 'top-level'" });
       }
-      const res = rooms.insertBlocksAtAnchor(docId, anchorId, markdown, { placement });
-      return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
+      const res = docStore.insertBlocksAtAnchor(docId, anchorId, markdown, { placement });
+      return res.ok ? j(200, withSyncError(docStore, docId, res)) : j(409, res);
     }
     if (anchorRest === '' && req.method === 'DELETE') {
-      const removed = rooms.deleteAgentAnchor(docId, anchorId);
+      const removed = docStore.deleteAgentAnchor(docId, anchorId);
       return removed ? j(200, { ok: true }) : j(404, { error: 'anchor not found' });
     }
   }
@@ -155,7 +155,7 @@ export async function handleDocEditRoutes(
       }
       const author = parseSuggestionAuthor(visitor ? { author: authorFor(body?.author) } : body);
       if (!author) return j(400, { error: 'author required when suggest is true' });
-      const res = rooms.createSuggestion(docId, {
+      const res = docStore.createSuggestion(docId, {
         find,
         replace,
         contextBefore,
@@ -166,7 +166,7 @@ export async function handleDocEditRoutes(
       });
       return res.ok ? j(200, res) : j(409, res);
     }
-    const res = rooms.findAndReplace(docId, {
+    const res = docStore.findAndReplace(docId, {
       find,
       replace,
       contextBefore,
@@ -178,14 +178,14 @@ export async function handleDocEditRoutes(
     // Piggy-back any pending sync trouble on the response: agents act
     // on edit results, not on get_doc, so this is where a conflict
     // actually gets seen.
-    return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
+    return res.ok ? j(200, withSyncError(docStore, docId, res)) : j(409, res);
   }
   // Suggested edits (redline-suggestions phase 2, commit 3): list/
   // accept/reject/resolve-all over the doc's pending proposals. See
   // `suggest: true` on find_and_replace / rewrite_region above for
   // creation.
   if (rest === 'suggestions' && req.method === 'GET') {
-    return j(200, { suggestions: rooms.listSuggestions(docId) });
+    return j(200, { suggestions: docStore.listSuggestions(docId) });
   }
   if (rest === 'suggestions/resolve_all' && req.method === 'POST') {
     const body = await safeJson(req);
@@ -194,16 +194,18 @@ export async function handleDocEditRoutes(
       return j(400, { error: 'action must be accept or reject' });
     }
     const authorId = body?.authorId ? String(body.authorId) : undefined;
-    const res = rooms.resolveAllSuggestions(docId, { action, authorId });
-    return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(404, res);
+    const res = docStore.resolveAllSuggestions(docId, { action, authorId });
+    return res.ok ? j(200, withSyncError(docStore, docId, res)) : j(404, res);
   }
   const suggestionMatch = rest.match(/^suggestions\/([^/]+)\/(accept|reject)$/);
   if (suggestionMatch && req.method === 'POST') {
     const sid = decodeURIComponent(suggestionMatch[1] ?? '');
     const action = suggestionMatch[2];
     const res =
-      action === 'accept' ? rooms.acceptSuggestion(docId, sid) : rooms.rejectSuggestion(docId, sid);
-    return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(404, res);
+      action === 'accept'
+        ? docStore.acceptSuggestion(docId, sid)
+        : docStore.rejectSuggestion(docId, sid);
+    return res.ok ? j(200, withSyncError(docStore, docId, res)) : j(404, res);
   }
   if (rest === 'delete_block_at_anchor' && req.method === 'POST') {
     const body = await safeJson(req);
@@ -213,8 +215,8 @@ export async function handleDocEditRoutes(
       return j(400, { error: 'exactly one of threadId or anchorId required' });
     }
     const res = threadId
-      ? rooms.deleteBlockAtThread(docId, threadId)
-      : rooms.deleteBlockAtAgentAnchor(docId, anchorId!);
+      ? docStore.deleteBlockAtThread(docId, threadId)
+      : docStore.deleteBlockAtAgentAnchor(docId, anchorId!);
     return res.ok ? j(200, res) : j(409, res);
   }
   if (rest === 'delete_blocks_in_range' && req.method === 'POST') {
@@ -224,7 +226,7 @@ export async function handleDocEditRoutes(
     if (startFind.length === 0 || endFind.length === 0) {
       return j(400, { error: 'startFind and endFind are required' });
     }
-    const res = rooms.deleteBlocksInRange(docId, {
+    const res = docStore.deleteBlocksInRange(docId, {
       startFind,
       endFind,
       contextBefore: body?.contextBefore ? String(body.contextBefore) : undefined,
@@ -240,7 +242,7 @@ export async function handleDocEditRoutes(
     const body = await safeJson(req);
     const heading = String(body?.heading ?? '');
     if (heading.length === 0) return j(400, { error: 'heading is required' });
-    const res = rooms.deleteSection(docId, {
+    const res = docStore.deleteSection(docId, {
       heading,
       level: typeof body?.level === 'number' ? Number(body.level) : undefined,
       occurrence: typeof body?.occurrence === 'number' ? Number(body.occurrence) : undefined,

@@ -136,11 +136,11 @@ export type VoiceDocResourceReader = (
  * Declared as a narrow structural interface rather than by importing the room
  * store's type, for the same reason `VoiceReviewItem` is a projection: the
  * review-item entity is being reshaped on another branch, and voice must meet
- * it at a stable seam. `DocRooms` satisfies this as-is — these ARE its methods,
+ * it at a stable seam. `DocStore` satisfies this as-is — these ARE its methods,
  * called with the arguments they already take, not reimplemented and not
  * restructured.
  */
-export interface VoiceRooms {
+export interface VoiceDocStore {
   postComment(
     docId: string,
     threadId: string | null,
@@ -248,7 +248,7 @@ export class VoiceRouter {
   private tasks: TaskStore;
   private complete: VoiceComplete | undefined;
   private docResource: VoiceDocResourceReader | undefined;
-  private rooms: VoiceRooms | undefined;
+  private docStore: VoiceDocStore | undefined;
   private taskCommentDoc: VoiceTaskCommentDoc | undefined;
   private docTitle: ((workspaceId: string, docId: string) => string | undefined) | undefined;
   private queue: ((workspaceId: string) => StatusQueueRow[]) | undefined;
@@ -275,7 +275,7 @@ export class VoiceRouter {
     docResource?: VoiceDocResourceReader;
     /** Absent on a server built without a room store — the two text verbs then
      *  defer, exactly as they did before their executors existed. */
-    rooms?: VoiceRooms;
+    docStore?: VoiceDocStore;
     taskCommentDoc?: VoiceTaskCommentDoc;
     /** A doc's label, for title matching and the prompt's index. Absent, a
      *  doc can only be reached by its id — which is what "never worked". */
@@ -290,7 +290,7 @@ export class VoiceRouter {
     this.tasks = opts.tasks;
     this.complete = opts.complete;
     this.docResource = opts.docResource;
-    this.rooms = opts.rooms;
+    this.docStore = opts.docStore;
     this.taskCommentDoc = opts.taskCommentDoc;
     this.docTitle = opts.docTitle;
     this.queue = opts.queue;
@@ -424,9 +424,9 @@ export class VoiceRouter {
    * reach events.jsonl at the store's emit choke point before any listener
    * fires. A voice move and a tapped move are the same bytes in the log.
    *
-   * The two text verbs go through `rooms.postComment` — the ONE choke point
+   * The two text verbs go through `docStore.postComment` — the ONE choke point
    * every reply path in this server already funnels through — and through
-   * `rooms.answerReviewItem` called exactly as it stands. Neither is
+   * `docStore.answerReviewItem` called exactly as it stands. Neither is
    * reimplemented here: a spoken comment and a typed one are the same write,
    * fire the same events, and reach a watching agent identically.
    *
@@ -505,8 +505,8 @@ export class VoiceRouter {
         };
       }
       case 'comment': {
-        if (!this.verbatim(transcript, plan.text) || !this.rooms) return { kind: 'defer' };
-        const rooms = this.rooms;
+        if (!this.verbatim(transcript, plan.text) || !this.docStore) return { kind: 'defer' };
+        const docStore = this.docStore;
         // A task discussion lives in the task's own body room, which may not
         // exist yet; a doc's comments live on the doc itself.
         const docId =
@@ -527,7 +527,7 @@ export class VoiceRouter {
             // at the thing as a whole, and `VoiceContext` carries no text
             // range for it to point into. A subject anchor also cannot break,
             // so this comment can never orphan.
-            const thread = await rooms.postComment(
+            const thread = await docStore.postComment(
               docId,
               null,
               plan.actor,
@@ -569,8 +569,8 @@ export class VoiceRouter {
               }).ok,
           );
         }
-        if (!this.rooms) return { kind: 'defer' };
-        const rooms = this.rooms;
+        if (!this.docStore) return { kind: 'defer' };
+        const docStore = this.docStore;
         return this.once(
           workspaceId,
           `answer-review|${target.docId}|${target.threadId}|${plan.actor.id}|${plan.optionId ?? ''}|${plan.text}`,
@@ -583,7 +583,7 @@ export class VoiceRouter {
               // that makes an answer an answer — the reply, the reopen, the
               // events a watching agent receives — is that function's, not
               // this one's.
-              const res = await rooms.answerReviewItem(
+              const res = await docStore.answerReviewItem(
                 target.docId,
                 target.threadId,
                 target.commentId,
@@ -599,7 +599,7 @@ export class VoiceRouter {
             // Not a fallback keyed off an error string: `answerable` is read
             // from the projection, so the branch is chosen from a fact rather
             // than from a message another branch may rename.
-            const replied = await rooms.postComment(
+            const replied = await docStore.postComment(
               target.docId,
               target.threadId,
               plan.actor,

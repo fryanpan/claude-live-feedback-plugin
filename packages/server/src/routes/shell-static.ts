@@ -37,6 +37,7 @@ import { reviewIdOf } from '@feedback/core';
 import type { DocType } from '@feedback/core';
 import type { BrowserSentryConfig, PageType } from '../browser-sentry.ts';
 import { injectSentryHead } from '../browser-sentry.ts';
+import type { DocStore } from '../doc-store.ts';
 import { buildLandingModel } from '../landing.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
 import {
@@ -47,7 +48,6 @@ import {
 } from '../mockup-capture.ts';
 import { injectWidget } from '../mockup-widget.ts';
 import type { ReviewItemRow } from '../review-queue.ts';
-import type { Rooms } from '../rooms.ts';
 import {
   HTML_SHELL_HEADERS,
   appCacheControl,
@@ -90,9 +90,9 @@ export interface ShellStaticContext {
   demosDir: string | null;
   /** Where a mockup's capture is written and read back. */
   dataDir: string;
-  /** Doc rooms: what an address resolves to, and the meta a mockup is
+  /** Doc store: what an address resolves to, and the meta a mockup is
    *  served from. */
-  rooms: Rooms;
+  docStore: DocStore;
   /** The boards, for the board shell's name and the landing page's rows. */
   taskStore: TaskStore;
   /** The browser Sentry config, injected into every shell on the way out.
@@ -144,7 +144,7 @@ export function createShellStatic(ctx: ShellStaticContext): ShellStatic {
     markdownAppDist,
     demosDir,
     dataDir,
-    rooms,
+    docStore,
     taskStore,
     browserSentry,
     emailCodeSignIn,
@@ -179,7 +179,7 @@ export function createShellStatic(ctx: ShellStaticContext): ShellStatic {
    * on dotfile and config noise on any large review.
    */
   const reviewEntryDocId = (reviewId: string): string | null => {
-    const members = rooms.list().filter((m) => reviewIdOf(m) === reviewId);
+    const members = docStore.list().filter((m) => reviewIdOf(m) === reviewId);
     if (members.length === 0) return null;
     const best = members.reduce((a, b) =>
       (b.diffAdditions ?? 0) + (b.diffDeletions ?? 0) >
@@ -196,7 +196,7 @@ export function createShellStatic(ctx: ShellStaticContext): ShellStatic {
     // Docs are file-backed and created upfront via POST /api/docs. Arriving
     // before an agent has done that gets a clean 404 — there is nothing the
     // app could render for a doc that does not exist.
-    if (!rooms.get(docId)) {
+    if (!docStore.get(docId)) {
       return new Response(renderReviewNotFound(docId), {
         status: 404,
         headers: { 'content-type': 'text/html; charset=utf-8' },
@@ -257,7 +257,7 @@ export function createShellStatic(ctx: ShellStaticContext): ShellStatic {
    * `workspace` room also holds no content surface, but its route is the
    * board, not a mockup.
    */
-  const isMockupDoc = (docId: string): boolean => rooms.peekMeta(docId)?.type === 'mockup';
+  const isMockupDoc = (docId: string): boolean => docStore.peekMeta(docId)?.type === 'mockup';
 
   /**
    * A mockup's own HTML, streamed from the file the room is bound to — with
@@ -281,7 +281,7 @@ export function createShellStatic(ctx: ShellStaticContext): ShellStatic {
         status: 404,
         headers: { 'content-type': 'text/html; charset=utf-8' },
       });
-    const room = rooms.get(docId);
+    const room = docStore.get(docId);
     if (!room || room.meta.type !== 'mockup' || !room.meta.sourceUrl) return notFound();
     const source = room.meta.sourceUrl;
     // A mockup bound to something that isn't HTML is served as-is, as before:
@@ -457,7 +457,7 @@ export function createShellStatic(ctx: ShellStaticContext): ShellStatic {
         );
       }
       if (!isValidDocId(id)) return j(400, { error: 'bad docId' });
-      const canonical = rooms.get(id)?.docId ?? id;
+      const canonical = docStore.get(id)?.docId ?? id;
       if (kind === 'mockups') return serveMockup(canonical);
       if (isMockupDoc(canonical)) {
         return redirectTo(
@@ -482,7 +482,7 @@ export function createShellStatic(ctx: ShellStaticContext): ShellStatic {
       // pre-migration doc's own id, or the readable alias of one minted
       // since. Both land on the same doc, and the redirect below rewrites
       // either into the canonical address.
-      const docId = rooms.get(addressed)?.docId ?? addressed;
+      const docId = docStore.get(addressed)?.docId ?? addressed;
       // A mockup has no editor, so the doc route is the wrong destination
       // for one — see `isMockupDoc`. Hand it to the mockup route's own
       // resolution, which is the behaviour `/mockup/<docId>` already has.
@@ -502,7 +502,7 @@ export function createShellStatic(ctx: ShellStaticContext): ShellStatic {
       // about this deployment. Tying the two together would make an old
       // URL 404 on a server that simply has no app bundle, which is a
       // different failure wearing the same status code.
-      if (rooms.get(docId)) {
+      if (docStore.get(docId)) {
         const home = addressableWorkspaceFor(docId, visitor);
         if (home) {
           return redirectTo(
@@ -541,8 +541,8 @@ export function createShellStatic(ctx: ShellStaticContext): ShellStatic {
       // share whichever URL feels natural.
       const addressed = slug.replace(/\.html?$/i, '');
       if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-      const docId = rooms.get(addressed)?.docId ?? addressed;
-      const home = rooms.get(docId) ? addressableWorkspaceFor(docId, visitor) : null;
+      const docId = docStore.get(addressed)?.docId ?? addressed;
+      const home = docStore.get(docId) ? addressableWorkspaceFor(docId, visitor) : null;
       if (home) {
         return redirectTo(
           `/workspaces/${encodeURIComponent(home)}/mockups/${encodeURIComponent(docId)}`,
@@ -579,8 +579,10 @@ export function createShellStatic(ctx: ShellStaticContext): ShellStatic {
     // --- Landing ---
     if (pathname === '/') {
       const model = buildLandingModel(
-        collectLandingWorkspaces(rooms, taskStore, (ws) => homeQueueTotal(ws, reviewItemsFor(ws))),
-        collectLandingProjects(rooms),
+        collectLandingWorkspaces(docStore, taskStore, (ws) =>
+          homeQueueTotal(ws, reviewItemsFor(ws)),
+        ),
+        collectLandingProjects(docStore),
         Date.now(),
       );
       // The landing banner's join files its doc under the default board
@@ -614,7 +616,7 @@ export function createShellStatic(ctx: ShellStaticContext): ShellStatic {
         return new Response('bad project', { status: 400 });
       }
       if (owner === '') return new Response('not found', { status: 404 });
-      const artifacts = buildProjectArtifacts(rooms, withReviewUrl, owner);
+      const artifacts = buildProjectArtifacts(docStore, withReviewUrl, owner);
       return new Response(
         renderProjectPage(owner, artifacts, browserSentry, readAppAssetManifest(markdownAppDist)),
         { status: artifacts.length === 0 ? 404 : 200, headers: HTML_SHELL_HEADERS },

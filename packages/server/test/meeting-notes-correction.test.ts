@@ -441,10 +441,10 @@ describe('correctNotesSection — a person’s note', () => {
 });
 
 describe('applyNotesCorrection — through the real notes-doc path', () => {
-  const roomsWith = (docId: string, type: DocType, markdown: string) => {
+  const docStoreWith = (docId: string, type: DocType, markdown: string) => {
     const ydoc = docFrom(markdown);
     return {
-      rooms: { get: (id: string) => (id === docId ? { ydoc, meta: { type } } : undefined) },
+      docStore: { get: (id: string) => (id === docId ? { ydoc, meta: { type } } : undefined) },
       ydoc,
     };
   };
@@ -460,12 +460,12 @@ describe('applyNotesCorrection — through the real notes-doc path', () => {
     // so the ledger has to learn its new wording — otherwise the note-taker
     // has silently handed that line to the person, and the NEXT tick can only
     // propose on it. That is what the second tick below proves.
-    const { rooms, ydoc } = roomsWith('doc-a', 'markdown', '# Huddle\n');
+    const { docStore, ydoc } = docStoreWith('doc-a', 'markdown', '# Huddle\n');
     const ledger = createNotesLedger();
     let n = 0;
     const tick = (notes: string) =>
       applyNotesUpdate(
-        rooms,
+        docStore,
         {
           docId: 'doc-a',
           meetingId: 'm-1',
@@ -476,7 +476,7 @@ describe('applyNotesCorrection — through the real notes-doc path', () => {
       );
 
     tick(`## ${MEETING_NOTES_HEADING}\n\n- Ship the gate on Tuesday.\n`);
-    expect(applyNotesCorrection(rooms, ask('doc-a', 'Tuesday', 'Thursday'), ledger)).toBe(
+    expect(applyNotesCorrection(docStore, ask('doc-a', 'Tuesday', 'Thursday'), ledger)).toBe(
       'revised',
     );
     expect(markdownOf(ydoc)).toContain('- Ship the gate on Thursday.');
@@ -491,10 +491,10 @@ describe('applyNotesCorrection — through the real notes-doc path', () => {
   });
 
   it('a line the person made theirs is proposed on, not reclaimed by the correction', () => {
-    const { rooms, ydoc } = roomsWith('doc-a', 'markdown', '# Huddle\n');
+    const { docStore, ydoc } = docStoreWith('doc-a', 'markdown', '# Huddle\n');
     const ledger = createNotesLedger();
     applyNotesUpdate(
-      rooms,
+      docStore,
       {
         docId: 'doc-a',
         meetingId: 'm-1',
@@ -513,20 +513,20 @@ describe('applyNotesCorrection — through the real notes-doc path', () => {
       prose.insertTextWithMarks(text, 0, 'MY wording: gate ships Tuesday', {});
     }, 'browser');
 
-    expect(applyNotesCorrection(rooms, ask('doc-a', 'Tuesday', 'Thursday'), ledger)).toBe(
+    expect(applyNotesCorrection(docStore, ask('doc-a', 'Tuesday', 'Thursday'), ledger)).toBe(
       'suggested',
     );
     expect(markdownOf(ydoc)).toContain('MY wording: gate ships Tuesday');
   });
 
   it('a gone doc and a flat doc are both none, never a throw', () => {
-    const { rooms } = roomsWith('doc-a', 'markdown', NOTES('- Ship on Tuesday.\n'));
+    const { docStore } = docStoreWith('doc-a', 'markdown', NOTES('- Ship on Tuesday.\n'));
     expect(
-      applyNotesCorrection(rooms, ask('doc-gone', 'Tuesday', 'Thursday'), createNotesLedger()),
+      applyNotesCorrection(docStore, ask('doc-gone', 'Tuesday', 'Thursday'), createNotesLedger()),
     ).toBe('none');
-    const flat = roomsWith('doc-b', 'diff', NOTES('- Ship on Tuesday.\n'));
+    const flat = docStoreWith('doc-b', 'diff', NOTES('- Ship on Tuesday.\n'));
     expect(
-      applyNotesCorrection(flat.rooms, ask('doc-b', 'Tuesday', 'Thursday'), createNotesLedger()),
+      applyNotesCorrection(flat.docStore, ask('doc-b', 'Tuesday', 'Thursday'), createNotesLedger()),
     ).toBe('none');
     expect(markdownOf(flat.ydoc)).toContain('Tuesday');
   });
@@ -534,9 +534,9 @@ describe('applyNotesCorrection — through the real notes-doc path', () => {
   it('a restarted server claims nothing, so it proposes rather than rewriting', () => {
     // A fresh ledger reads every item in the section as somebody else's —
     // the safe direction, and the correction inherits it.
-    const { rooms, ydoc } = roomsWith('doc-a', 'markdown', NOTES('- Ship on Tuesday.\n'));
+    const { docStore, ydoc } = docStoreWith('doc-a', 'markdown', NOTES('- Ship on Tuesday.\n'));
     expect(
-      applyNotesCorrection(rooms, ask('doc-a', 'Tuesday', 'Thursday'), createNotesLedger()),
+      applyNotesCorrection(docStore, ask('doc-a', 'Tuesday', 'Thursday'), createNotesLedger()),
     ).toBe('suggested');
     expect(markdownOf(ydoc)).toContain('- Ship on Tuesday.');
   });

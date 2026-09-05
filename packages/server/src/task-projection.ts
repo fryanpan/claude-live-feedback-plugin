@@ -1,6 +1,6 @@
 import { listThreads, prose } from '@feedback/core';
 import * as Y from 'yjs';
-import type { Rooms } from './rooms.ts';
+import type { DocStore } from './doc-store.ts';
 import { projectBody, projectTask, taskBodyDocId, taskIdOfBodyDoc } from './task-row.ts';
 
 export {
@@ -118,17 +118,17 @@ export interface ClaimSession extends OwnerSession {
 export const PROJECTION_ORIGIN = 'task-projection';
 
 /** The workspace board room's docId. */
-export function workspaceRoomId(workspaceId: string): string {
+export function workspaceDocId(workspaceId: string): string {
   return `ws:${workspaceId}`;
 }
 
 export class TaskProjection {
-  private rooms: Rooms;
+  private docStore: DocStore;
   private tasks: TaskStore;
   private snapshotDebounceMs: number;
   /**
    * The DOC a workspace's revert guard is wired to — keyed to the ydoc, not
-   * to the workspaceId. `rooms.getOrCreate` hands back a NEW Y.Doc whenever
+   * to the workspaceId. `docStore.getOrCreate` hands back a NEW Y.Doc whenever
    * the room is no longer in the map (a `DELETE /api/docs/ws:<id>` drops
    * it), and a workspaceId-keyed "already wired" set then skips observing
    * the replacement: from that moment the board accepts and KEEPS arbitrary
@@ -141,8 +141,8 @@ export class TaskProjection {
   private snapshotTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private off: (() => void) | null = null;
 
-  constructor(opts: { rooms: Rooms; tasks: TaskStore; snapshotDebounceMs?: number }) {
-    this.rooms = opts.rooms;
+  constructor(opts: { docStore: DocStore; tasks: TaskStore; snapshotDebounceMs?: number }) {
+    this.docStore = opts.docStore;
     this.tasks = opts.tasks;
     this.snapshotDebounceMs = opts.snapshotDebounceMs ?? 300;
   }
@@ -167,7 +167,7 @@ export class TaskProjection {
    * discussion would sit in a file nothing reads.
    *
    * The board's continued existence is the discriminator, and it is the
-   * reason this lives here rather than in Rooms: a staged file whose board
+   * reason this lives here rather than in DocStore: a staged file whose board
    * is GONE is the opposite case — post-commit litter, where restoring
    * would resurrect a room belonging to nothing. So this restores only for
    * boards the store still has, and it runs before anything opens a room.
@@ -317,8 +317,8 @@ export class TaskProjection {
   ensureWorkspace(workspaceId: string): void {
     const ws = this.tasks.getWorkspace(workspaceId);
     if (!ws) return;
-    const room = this.rooms.getOrCreate(
-      workspaceRoomId(workspaceId),
+    const room = this.docStore.getOrCreate(
+      workspaceDocId(workspaceId),
       { type: 'workspace', title: ws.name },
       // The `ws:` namespace is the server's; the projection is the server.
       { authority: 'server' },
@@ -350,8 +350,8 @@ export class TaskProjection {
   /** Every room this projection owns for a workspace: the board, plus one
    *  body room per task. The caller passes the ids because after the board
    *  is deleted the store can no longer enumerate them. */
-  private workspaceRoomIds(workspaceId: string, taskIds: string[]): string[] {
-    return [...taskIds.map(taskBodyDocId), workspaceRoomId(workspaceId)];
+  private workspaceDocIds(workspaceId: string, taskIds: string[]): string[] {
+    return [...taskIds.map(taskBodyDocId), workspaceDocId(workspaceId)];
   }
 
   /**
@@ -376,8 +376,8 @@ export class TaskProjection {
    */
   stageWorkspaceFiles(workspaceId: string, taskIds: string[]): { ok: boolean } {
     let ok = true;
-    for (const docId of this.workspaceRoomIds(workspaceId, taskIds)) {
-      if (!this.rooms.stagePersisted(docId)) ok = false;
+    for (const docId of this.workspaceDocIds(workspaceId, taskIds)) {
+      if (!this.docStore.stagePersisted(docId)) ok = false;
     }
     return { ok };
   }
@@ -386,8 +386,8 @@ export class TaskProjection {
    *  the whole set, including ids that never staged, because a partial
    *  failure leaves a partial staging. */
   unstageWorkspaceFiles(workspaceId: string, taskIds: string[]): void {
-    for (const docId of this.workspaceRoomIds(workspaceId, taskIds)) {
-      this.rooms.unstagePersisted(docId);
+    for (const docId of this.workspaceDocIds(workspaceId, taskIds)) {
+      this.docStore.unstagePersisted(docId);
     }
   }
 
@@ -401,7 +401,7 @@ export class TaskProjection {
    * longer exists. `deleteDoc` re-purges the persisted file, which covers
    * anything a live room rewrote between the purge above and here.
    */
-  dropWorkspaceRooms(workspaceId: string, taskIds: string[]): void {
+  dropWorkspaceDocs(workspaceId: string, taskIds: string[]): void {
     for (const taskId of taskIds) {
       const docId = taskBodyDocId(taskId);
       const timer = this.snapshotTimers.get(docId);
@@ -410,15 +410,15 @@ export class TaskProjection {
       this.bodyWired.delete(docId);
     }
     this.wired.delete(workspaceId);
-    for (const docId of this.workspaceRoomIds(workspaceId, taskIds)) {
+    for (const docId of this.workspaceDocIds(workspaceId, taskIds)) {
       // force: a task body's discussion threads are part of what's being
       // deleted, so open ones are not a reason to refuse here — the refusal
       // that matters (open TASKS) already happened, before any of this.
-      this.rooms.deleteDoc(docId, { force: true });
+      this.docStore.deleteDoc(docId, { force: true });
       // deleteDoc unlinks the LIVE path, which covers anything a room
       // rewrote between the staging and here; the staged copy is the one
       // holding the state, and this is the point of no return for it.
-      this.rooms.dropStaged(docId);
+      this.docStore.dropStaged(docId);
     }
   }
 
@@ -430,8 +430,8 @@ export class TaskProjection {
   refresh(workspaceId: string): void {
     const ws = this.tasks.getWorkspace(workspaceId);
     if (!ws) return;
-    const room = this.rooms.getOrCreate(
-      workspaceRoomId(workspaceId),
+    const room = this.docStore.getOrCreate(
+      workspaceDocId(workspaceId),
       { type: 'workspace', title: ws.name },
       // The `ws:` namespace is the server's; the projection is the server.
       { authority: 'server' },
@@ -577,7 +577,7 @@ export class TaskProjection {
    */
   ensureTaskBody(task: Task): void {
     const docId = taskBodyDocId(task.id);
-    const room = this.rooms.getOrCreate(
+    const room = this.docStore.getOrCreate(
       docId,
       { type: 'markdown', title: task.title },
       // Likewise `task:` — a body room is minted here or nowhere.
@@ -585,7 +585,7 @@ export class TaskProjection {
     );
     const fragment = prose.getProseFragment(room.ydoc);
     if (fragment.length === 0 && task.body?.trim()) {
-      this.rooms.setDocContent(docId, task.body);
+      this.docStore.setDocContent(docId, task.body);
     }
     if (this.bodyWired.get(docId) !== room.ydoc) {
       this.bodyWired.set(docId, room.ydoc);
@@ -599,7 +599,7 @@ export class TaskProjection {
    * Settled in the approved design against the ticket's `goal:<goalId>`
    * proposal: goal ids are `g-…` and task ids are `t-…`, so one namespace
    * holds both without collision, and reusing the prefix is what makes every
-   * piece of body machinery apply unchanged — `isBoardOwnedRoom`, the prose edit
+   * piece of body machinery apply unchanged — `isBoardOwnedDoc`, the prose edit
    * tools, the thread store, the SSE redactors, the doc routes. A second
    * prefix would have been an edit to each of them buying nothing a reader
    * could see.
@@ -610,14 +610,14 @@ export class TaskProjection {
    */
   ensureGoalBody(goal: GoalRow): void {
     const docId = taskBodyDocId(goal.id);
-    const room = this.rooms.getOrCreate(
+    const room = this.docStore.getOrCreate(
       docId,
       { type: 'markdown', title: goal.title },
       { authority: 'server' },
     );
     const fragment = prose.getProseFragment(room.ydoc);
     if (fragment.length === 0 && goal.body?.trim()) {
-      this.rooms.setDocContent(docId, goal.body);
+      this.docStore.setDocContent(docId, goal.body);
     }
     if (this.bodyWired.get(docId) !== room.ydoc) {
       this.bodyWired.set(docId, room.ydoc);
@@ -629,13 +629,13 @@ export class TaskProjection {
    * Make a task's body room exist and hand back its docId — the entry point
    * for anything that wants to WRITE a body rather than react to one.
    *
-   * Rooms are created lazily and re-armed by `ensureWorkspace`, so on a
+   * DocStore are created lazily and re-armed by `ensureWorkspace`, so on a
    * process that hasn't served this workspace yet (i.e. after every deploy)
    * the room for a task nobody has opened does not exist, and a write aimed
    * straight at the doc comes back 'not-found' — which reads as "no such
    * task" to the caller.
    */
-  ensureBodyRoom(task: Task): string {
+  ensureBodyDoc(task: Task): string {
     this.ensureTaskBody(task);
     return taskBodyDocId(task.id);
   }
@@ -660,7 +660,7 @@ export class TaskProjection {
    * threads either way.
    */
   private commentCount(rowId: string): number {
-    const room = this.rooms.get(taskBodyDocId(rowId));
+    const room = this.docStore.get(taskBodyDocId(rowId));
     if (!room) return 0;
     return listThreads(room.ydoc).reduce((n, t) => n + t.comments.length, 0);
   }
@@ -669,7 +669,7 @@ export class TaskProjection {
    * Every comment on the task, flattened across threads — the discussion the
    * pickup path has always dropped.
    *
-   * Reads from memory only, and that is sound rather than lucky: `Rooms`
+   * Reads from memory only, and that is sound rather than lucky: `DocStore`
    * hydrates every `.ydoc` under the data dir at construction, so a task
    * whose body room has ever held content is loaded. A room that genuinely
    * does not exist has no threads either, so the empty answer is the true
@@ -681,7 +681,7 @@ export class TaskProjection {
    * have been confirmed.
    */
   discussionNotes(taskId: string): PremiseNote[] {
-    const room = this.rooms.get(taskBodyDocId(taskId));
+    const room = this.docStore.get(taskBodyDocId(taskId));
     if (!room) return [];
     const notes: PremiseNote[] = [];
     for (const thread of listThreads(room.ydoc)) {
@@ -704,7 +704,7 @@ export class TaskProjection {
   }
 
   private snapshotNow(docId: string): void {
-    const room = this.rooms.get(docId);
+    const room = this.docStore.get(docId);
     if (!room) return;
     const rowId = taskIdOfBodyDoc(docId);
     if (!rowId) return;

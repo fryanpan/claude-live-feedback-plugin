@@ -2,12 +2,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Rooms } from '../src/rooms.ts';
+import { DocStore } from '../src/doc-store.ts';
 import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 
-function makeRooms(dataDir: string): Rooms {
-  return new Rooms({
+function makeDocStore(dataDir: string): DocStore {
+  return new DocStore({
     dataDir,
     sse: new SseBus(),
     webhooks: createWebhookDispatcher({ onLog: () => {} }),
@@ -19,7 +19,7 @@ function makeRooms(dataDir: string): Rooms {
  *  lazily (entry only), so tests that need every file as a doc open the
  *  rest explicitly, mirroring what a reviewer clicking through does. */
 async function bindAllFiles(
-  rooms: Rooms,
+  docStore: DocStore,
   folderPath: string,
   owner?: string,
 ): Promise<
@@ -32,17 +32,17 @@ async function bindAllFiles(
     }
   | { ok: false }
 > {
-  const bound = await rooms.bindFolder({ folderPath, owner });
+  const bound = await docStore.bindFolder({ folderPath, owner });
   if (!bound.ok) return { ok: false };
-  const all = rooms.listRepoFiles(bound.workspaceId);
+  const all = docStore.listRepoFiles(bound.workspaceId);
   const files: Array<{ docId: string; relPath: string; type: string; title: string }> = [];
   for (const f of all.files ?? []) {
-    const opened = await rooms.openContextFile(bound.workspaceId, f.relPath);
+    const opened = await docStore.openContextFile(bound.workspaceId, f.relPath);
     if (opened.ok) {
       files.push({
         docId: opened.docId,
         relPath: f.relPath,
-        type: rooms.get(opened.docId)?.meta.type ?? 'code',
+        type: docStore.get(opened.docId)?.meta.type ?? 'code',
         title: f.relPath,
       });
     }
@@ -56,15 +56,15 @@ async function bindAllFiles(
   };
 }
 
-describe('Rooms.deleteWorkspace + listWorkspaces', () => {
+describe('DocStore.deleteWorkspace + listWorkspaces', () => {
   let dataDir: string;
   let folder: string;
-  let rooms: Rooms;
+  let docStore: DocStore;
 
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'dw-data-'));
     folder = mkdtempSync(join(tmpdir(), 'dw-src-'));
-    rooms = makeRooms(dataDir);
+    docStore = makeDocStore(dataDir);
     mkdirSync(join(folder, 'src'));
     writeFileSync(join(folder, 'README.md'), '# Project\n\nthe unique md line\n');
     writeFileSync(join(folder, 'src', 'index.ts'), 'export const answer = 42;\n');
@@ -77,35 +77,35 @@ describe('Rooms.deleteWorkspace + listWorkspaces', () => {
   });
 
   it('returns not-found for an unknown workspaceId', () => {
-    const res = rooms.deleteWorkspace('nope');
+    const res = docStore.deleteWorkspace('nope');
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toBe('not-found');
   });
 
   it('deletes every member doc when no member has open threads', async () => {
-    const bound = await bindAllFiles(rooms, folder, '/cwd');
+    const bound = await bindAllFiles(docStore, folder, '/cwd');
     expect(bound.ok).toBe(true);
     if (!bound.ok) return;
-    const before = rooms.list().length;
+    const before = docStore.list().length;
     expect(before).toBe(3);
 
-    const res = rooms.deleteWorkspace(bound.workspaceId);
+    const res = docStore.deleteWorkspace(bound.workspaceId);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.deleted).toBe(3);
     // Every member room is gone.
-    expect(rooms.list().length).toBe(0);
-    for (const f of bound.files) expect(rooms.get(f.docId)).toBeUndefined();
+    expect(docStore.list().length).toBe(0);
+    for (const f of bound.files) expect(docStore.get(f.docId)).toBeUndefined();
   });
 
   it('all-or-nothing guardrail: one open thread aborts the WHOLE delete', async () => {
-    const bound = await bindAllFiles(rooms, folder, '/cwd');
+    const bound = await bindAllFiles(docStore, folder, '/cwd');
     expect(bound.ok).toBe(true);
     if (!bound.ok) return;
     const mdDocId = bound.files.find((f) => f.relPath === 'README.md')!.docId;
 
     // Open a thread on exactly one member file.
-    const created = await rooms.createThreadByFind(
+    const created = await docStore.createThreadByFind(
       mdDocId,
       { find: 'the unique md line' },
       { id: 'u1', name: 'Reviewer', kind: 'known', color: '#2e7dd7' },
@@ -113,7 +113,7 @@ describe('Rooms.deleteWorkspace + listWorkspaces', () => {
     );
     expect(created.ok).toBe(true);
 
-    const res = rooms.deleteWorkspace(bound.workspaceId);
+    const res = docStore.deleteWorkspace(bound.workspaceId);
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toBe('has-open-threads');
@@ -121,42 +121,42 @@ describe('Rooms.deleteWorkspace + listWorkspaces', () => {
     // Only the offending file is reported, with its open count.
     expect(res.files).toEqual([{ docId: mdDocId, openThreads: 1 }]);
     // NOTHING was deleted — all three member docs survive.
-    expect(rooms.list().length).toBe(3);
-    for (const f of bound.files) expect(rooms.get(f.docId)).toBeTruthy();
+    expect(docStore.list().length).toBe(3);
+    for (const f of bound.files) expect(docStore.get(f.docId)).toBeTruthy();
   });
 
   it('force deletes all members even with open threads', async () => {
-    const bound = await bindAllFiles(rooms, folder, '/cwd');
+    const bound = await bindAllFiles(docStore, folder, '/cwd');
     expect(bound.ok).toBe(true);
     if (!bound.ok) return;
     const mdDocId = bound.files.find((f) => f.relPath === 'README.md')!.docId;
-    await rooms.createThreadByFind(
+    await docStore.createThreadByFind(
       mdDocId,
       { find: 'the unique md line' },
       { id: 'u1', name: 'Reviewer', kind: 'known', color: '#2e7dd7' },
       'keep this',
     );
 
-    const res = rooms.deleteWorkspace(bound.workspaceId, { force: true });
+    const res = docStore.deleteWorkspace(bound.workspaceId, { force: true });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.deleted).toBe(3);
-    expect(rooms.list().length).toBe(0);
+    expect(docStore.list().length).toBe(0);
   });
 
   it('listWorkspaces rolls up fileCount + openThreads + owner', async () => {
-    const bound = await bindAllFiles(rooms, folder, '/cwd');
+    const bound = await bindAllFiles(docStore, folder, '/cwd');
     expect(bound.ok).toBe(true);
     if (!bound.ok) return;
     const mdDocId = bound.files.find((f) => f.relPath === 'README.md')!.docId;
-    await rooms.createThreadByFind(
+    await docStore.createThreadByFind(
       mdDocId,
       { find: 'the unique md line' },
       { id: 'u1', name: 'Reviewer', kind: 'known', color: '#2e7dd7' },
       'expand',
     );
 
-    const ws = rooms.listWorkspaces();
+    const ws = docStore.listWorkspaces();
     expect(ws.length).toBe(1);
     const w = ws[0]!;
     expect(w.workspaceId).toBe(bound.workspaceId);
@@ -167,17 +167,17 @@ describe('Rooms.deleteWorkspace + listWorkspaces', () => {
   });
 
   it('listWorkspaces.allIdle is true only when every member is idle >24h', async () => {
-    const bound = await bindAllFiles(rooms, folder, '/cwd');
+    const bound = await bindAllFiles(docStore, folder, '/cwd');
     expect(bound.ok).toBe(true);
     if (!bound.ok) return;
 
     // Fresh bind: lastActivityAt is ~now, so with now=now nothing is idle.
-    const liveNow = rooms.listWorkspaces(Date.now());
+    const liveNow = docStore.listWorkspaces(Date.now());
     expect(liveNow[0]!.allIdle).toBe(false);
 
     // Pretend it's far in the future — every member is now idle >24h.
     const future = Date.now() + 10 * 24 * 60 * 60 * 1000;
-    const idle = rooms.listWorkspaces(future);
+    const idle = docStore.listWorkspaces(future);
     expect(idle[0]!.allIdle).toBe(true);
   });
 });

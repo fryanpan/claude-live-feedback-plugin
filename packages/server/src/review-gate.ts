@@ -29,10 +29,10 @@ import {
   reviewItemState,
   reviewPayloadVersion,
 } from '@feedback/core';
+import type { DocStore } from './doc-store.ts';
 import { taskDeepLink } from './home-brief.ts';
 import type { ReviewGate, ThreadReviewGate } from './review-gate-types.ts';
 import type { ReviewJudge, ReviewJudgeVerdict } from './review-judge.ts';
-import type { Rooms } from './rooms.ts';
 import type { SseBus } from './sse.ts';
 import { REVIEW_ITEM_HELD_EVENT, type ReviewItemHeldFrame } from './stall-nudge.ts';
 import type { TaskProjection } from './task-projection.ts';
@@ -83,8 +83,8 @@ export type ReviewGateAddress =
 
 /** The long-lived collaborators the gate reads. */
 export interface ReviewGateContext {
-  /** Doc rooms — a comment-borne declaration is judged and stamped on one. */
-  rooms: Rooms;
+  /** Doc store — a comment-borne declaration is judged and stamped on one. */
+  docStore: DocStore;
   /** The board store — the tickets, their items and the board's criteria. */
   taskStore: TaskStore;
   /** The ydoc projection, refreshed after a verdict the store does not emit. */
@@ -131,7 +131,7 @@ export interface ReviewGateContext {
  */
 export function createReviewGate(ctx: ReviewGateContext) {
   const {
-    rooms,
+    docStore,
     taskStore,
     taskProjection,
     sse,
@@ -160,7 +160,7 @@ export function createReviewGate(ctx: ReviewGateContext) {
       const task = taskStore.getTask(docId.slice('task:'.length));
       if (task) return task.title;
     }
-    return rooms.peekMeta(docId)?.title ?? 'A document';
+    return docStore.peekMeta(docId)?.title ?? 'A document';
   }
 
   /** One spelling of "a declaration just landed on a comment", for the three
@@ -708,13 +708,13 @@ export function createReviewGate(ctx: ReviewGateContext) {
         address: { kind: 'thread', docId, threadId, commentId },
         title: reviewThreadContext(docId),
         current: () =>
-          rooms.getThread(docId, threadId)?.comments.find((c) => c.id === commentId)?.review,
+          docStore.getThread(docId, threadId)?.comments.find((c) => c.id === commentId)?.review,
         words: (row) => row,
         version: (row) => reviewPayloadVersion(row),
         held: (row) => isReviewPayloadHeld(row),
         judgement: (row) => row.judge,
         record: (judgement, o) => {
-          const res = rooms.judgeCommentReview(docId, threadId, commentId, judgement, o);
+          const res = docStore.judgeCommentReview(docId, threadId, commentId, judgement, o);
           return res.ok ? { ok: true, row: res.review } : { ok: false };
         },
         // Nothing to project: the payload lives in the doc's own CRDT, and
@@ -824,8 +824,8 @@ export function createReviewGate(ctx: ReviewGateContext) {
     const headlineRange = locateReviewItemRange(item.review.detail, {
       text: item.review.headline,
     });
-    const created = await rooms.postComment(
-      taskProjection.ensureBodyRoom(task),
+    const created = await docStore.postComment(
+      taskProjection.ensureBodyDoc(task),
       null,
       author,
       text,

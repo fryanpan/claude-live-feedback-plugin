@@ -27,7 +27,7 @@ export async function handleTaskFields(
   const {
     taskStore,
     taskProjection,
-    rooms,
+    docStore,
     j,
     safeJson,
     regateDecisionWords,
@@ -376,7 +376,7 @@ export async function handleTaskFields(
     // records now, and a row already in triage is exactly the row a
     // second park has something new to say about.
     taskProjection.ensureTaskBody(task);
-    const note = await rooms.postComment(
+    const note = await docStore.postComment(
       taskBodyDocId(taskId),
       null,
       author,

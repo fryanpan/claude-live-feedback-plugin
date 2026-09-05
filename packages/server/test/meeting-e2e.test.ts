@@ -139,7 +139,7 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
   const updates: NotesUpdate[] = [];
 
   const docMarkdown = (): string => {
-    const room = handle.rooms.get(docId);
+    const room = handle.docStore.get(docId);
     if (!room) throw new Error(`no room for ${docId}`);
     return prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
   };
@@ -414,7 +414,7 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     expect(created.status, await created.clone().text()).toBe(200);
     const carryDocId = ((await created.json()) as { docId: string }).docId;
     const carryMarkdown = (): string => {
-      const room = handle.rooms.get(carryDocId);
+      const room = handle.docStore.get(carryDocId);
       if (!room) throw new Error(`no room for ${carryDocId}`);
       return prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
     };
@@ -517,7 +517,7 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     expect(created.status, await created.clone().text()).toBe(200);
     const lateDocId = ((await created.json()) as { docId: string }).docId;
     const lateMarkdown = (): string => {
-      const room = handle.rooms.get(lateDocId);
+      const room = handle.docStore.get(lateDocId);
       if (!room) throw new Error(`no room for ${lateDocId}`);
       return prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
     };

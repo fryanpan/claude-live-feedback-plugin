@@ -2,11 +2,11 @@ import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
 import { type DocMeta, type DocType, reviewIdOf } from '@feedback/core';
 import type { BindDiffOpts } from './bind-diff.ts';
+import type { DocRoom } from './doc-store.ts';
 import type { DiffFileEntry } from './git-diff.ts';
 import { isPrivateMetaKey } from './private-meta.ts';
-import type { DocRoom } from './rooms.ts';
 /**
- * The shared vocabulary of a bind: the slice of `Rooms` the bind flows use,
+ * The shared vocabulary of a bind: the slice of `DocStore` the bind flows use,
  * the deterministic ids, and the small writers that put derived facts onto a
  * member's meta.
  *
@@ -17,8 +17,8 @@ import type { DocRoom } from './rooms.ts';
  * means, now that they are separate files.
  */
 
-/** The slice of Rooms the bind flows actually need (avoids a runtime
- *  circular import; Rooms passes itself). */
+/** The slice of DocStore the bind flows actually need (avoids a runtime
+ *  circular import; DocStore passes itself). */
 export interface BindHost {
   get(docId: string): DocRoom | undefined;
   /** Force a persistence pass for a doc whose in-memory meta changed without

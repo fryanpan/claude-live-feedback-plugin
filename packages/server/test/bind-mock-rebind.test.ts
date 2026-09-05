@@ -6,7 +6,7 @@ import { type ServerHandle, createServer } from '../src/server.ts';
 import { waitFor } from './wait-for.ts';
 
 // bind_mock(docId, newPath) is documented as REPOINTING an existing mockup
-// doc, but POST /api/docs routes through Rooms.getOrCreate, whose
+// doc, but POST /api/docs routes through DocStore.getOrCreate, whose
 // existing-room branch used to update only webhookUrl and setId — the doc
 // kept serving the old file while the call reported success. These tests pin
 // the repoint: served content follows the new path, meta.sourceUrl follows,

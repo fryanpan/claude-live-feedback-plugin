@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'bun:test';
-import { DEFAULT_ROOM_TIMINGS, ROOM_TIMINGS, resolveRoomTimings } from '../src/room-timings.ts';
+import {
+  DEFAULT_DOC_STORE_TIMINGS,
+  DOC_STORE_TIMINGS,
+  resolveDocStoreTimings,
+} from '../src/doc-store-timings.ts';
 
 /**
  * `CW_TEST_TIMING_SCALE` exists so the suite can run the server's debounces
@@ -12,11 +16,11 @@ describe('room timings', () => {
     // could reach a real deploy: a blank from a shell expansion, a word, a
     // negative, a zero, and anything that would make the server SLOWER.
     for (const scale of [undefined, '', '   ', 'fast', 'NaN', '-1', '0', '1.5', '10']) {
-      expect(resolveRoomTimings(scale)).toEqual(DEFAULT_ROOM_TIMINGS);
+      expect(resolveDocStoreTimings(scale)).toEqual(DEFAULT_DOC_STORE_TIMINGS);
     }
     // The numbers themselves, spelled out, so a careless edit to the defaults
     // has to change this line too.
-    expect(DEFAULT_ROOM_TIMINGS).toEqual({
+    expect(DEFAULT_DOC_STORE_TIMINGS).toEqual({
       filePollMs: 500,
       readDebounceMs: 150,
       writeBackMs: 800,
@@ -30,7 +34,7 @@ describe('room timings', () => {
 
   it('reads the defaults in a process with the variable unset', async () => {
     // This suite runs WITH the scale set (test/timing.preload.ts), so the
-    // in-process `ROOM_TIMINGS` cannot answer the question the standard
+    // in-process `DOC_STORE_TIMINGS` cannot answer the question the standard
     // actually asks: what does the server do when nobody set the variable?
     // Only a fresh process can, because the value is resolved at module load.
     // Built by omission rather than by deleting a key: the point of the test
@@ -43,8 +47,8 @@ describe('room timings', () => {
         process.execPath,
         '-e',
         [
-          "const m = await import('./packages/server/src/room-timings.ts');",
-          'console.log(JSON.stringify(m.ROOM_TIMINGS));',
+          "const m = await import('./packages/server/src/doc-store-timings.ts');",
+          'console.log(JSON.stringify(m.DOC_STORE_TIMINGS));',
         ].join(''),
       ],
       { cwd: new URL('../../..', import.meta.url).pathname, env, stdout: 'pipe', stderr: 'pipe' },
@@ -55,11 +59,11 @@ describe('room timings', () => {
       proc.exited,
     ]);
     expect({ code, err }).toEqual({ code: 0, err: '' });
-    expect(JSON.parse(out.trim())).toEqual(DEFAULT_ROOM_TIMINGS);
+    expect(JSON.parse(out.trim())).toEqual(DEFAULT_DOC_STORE_TIMINGS);
   });
 
   it('scales every cadence by one factor, preserving their order', () => {
-    const t = resolveRoomTimings('0.1');
+    const t = resolveDocStoreTimings('0.1');
     expect(t).toEqual({
       filePollMs: 50,
       readDebounceMs: 15,
@@ -83,7 +87,7 @@ describe('room timings', () => {
   });
 
   it('floors every cadence so an extreme scale cannot collapse two into one', () => {
-    const t = resolveRoomTimings('0.000001');
+    const t = resolveDocStoreTimings('0.000001');
     for (const ms of Object.values(t)) expect(ms).toBe(5);
   });
 
@@ -91,7 +95,7 @@ describe('room timings', () => {
     // A positive control on the preload. Without it, every test above could
     // pass while the suite quietly ran at production speed.
     expect(process.env.CW_TEST_TIMING_SCALE).toBe('0.1');
-    expect(ROOM_TIMINGS).toEqual(resolveRoomTimings('0.1'));
-    expect(ROOM_TIMINGS).not.toEqual(DEFAULT_ROOM_TIMINGS);
+    expect(DOC_STORE_TIMINGS).toEqual(resolveDocStoreTimings('0.1'));
+    expect(DOC_STORE_TIMINGS).not.toEqual(DEFAULT_DOC_STORE_TIMINGS);
   });
 });

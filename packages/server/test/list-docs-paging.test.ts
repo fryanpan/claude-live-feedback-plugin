@@ -19,7 +19,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ROOM_TIMINGS } from '../src/room-timings.ts';
+import { DOC_STORE_TIMINGS } from '../src/doc-store-timings.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { waitFor } from './wait-for.ts';
 
@@ -115,7 +115,7 @@ describe('GET /api/docs pages', () => {
     let previous = snapshot();
     await waitFor(
       async () => {
-        await new Promise((r) => setTimeout(r, ROOM_TIMINGS.persistMs * 3));
+        await new Promise((r) => setTimeout(r, DOC_STORE_TIMINGS.persistMs * 3));
         const current = snapshot();
         const same =
           current.length === previous.length && current.every((v, i) => v === previous[i]);

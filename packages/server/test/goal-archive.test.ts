@@ -305,7 +305,7 @@ describe('goal archive + restore routes', () => {
     // The board renders bands off the `ws:` room's projected `goals` and
     // nothing else, so an archive only the store can see is the
     // store-has-it/surface-can't-show-it bug for the field that hides it.
-    const room = handle.rooms.get(`ws:${wsId}`);
+    const room = handle.docStore.get(`ws:${wsId}`);
     const goals = room?.ydoc.getMap('workspace').get('goals') as
       | Array<{ id: string; archivedAt?: number; archivedBy?: string; archiveReason?: string }>
       | undefined;
@@ -318,7 +318,7 @@ describe('goal archive + restore routes', () => {
     expect((goals ?? []).find((g) => g.id === G.fast)?.archivedAt).toBeUndefined();
 
     await post(`/api/goals/${G.trust}/restore`, { author: PERSON });
-    const after = handle.rooms.get(`ws:${wsId}`)?.ydoc.getMap('workspace').get('goals') as
+    const after = handle.docStore.get(`ws:${wsId}`)?.ydoc.getMap('workspace').get('goals') as
       | Array<{ id: string; archivedAt?: number }>
       | undefined;
     expect((after ?? []).find((g) => g.id === G.trust)?.archivedAt).toBeUndefined();
@@ -330,7 +330,7 @@ describe('goal archive + restore routes', () => {
   it('stamps only the archived band, leaving the one next to it on the board', async () => {
     await post(`/api/goals/${G.fast}/archive`, { author: PERSON });
     const read = () =>
-      (handle.rooms.get(`ws:${wsId}`)?.ydoc.getMap('workspace').get('goals') as
+      (handle.docStore.get(`ws:${wsId}`)?.ydoc.getMap('workspace').get('goals') as
         | Array<{ id: string; archivedAt?: number }>
         | undefined) ?? [];
     expect(read().find((g) => g.id === G.fast)?.archivedAt).toBeGreaterThan(0);

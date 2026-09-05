@@ -55,12 +55,12 @@ describe('plan-doc linkage (routes)', () => {
    *  `agent`-shaped origin, then the settle (which commits the debounce the
    *  way a create-from-doc or the timer would). Returns the new revision. */
   const editDoc = (docId: string): number => {
-    const room = handle.rooms.get(docId);
+    const room = handle.docStore.get(docId);
     if (!room) throw new Error(`no room for ${docId}`);
     room.ydoc.transact(() => {
       room.ydoc.getText('content').insert(0, 'x');
     }, 'agent');
-    return handle.rooms.settledContentRevision(docId) ?? -1;
+    return handle.docStore.settledContentRevision(docId) ?? -1;
   };
 
   const taskById = (id: string): Task => {
@@ -198,7 +198,7 @@ describe('plan-doc linkage (routes)', () => {
     });
 
     it("discussion mode never holds, and a huddle doc defaults to it — a plain doc defaults to 'plan' (control above)", async () => {
-      handle.rooms.getOrCreate('standup-notes', { type: 'markdown', huddle: true });
+      handle.docStore.getOrCreate('standup-notes', { type: 'markdown', huddle: true });
       const r = await post(`/api/workspaces/${wsId}/tasks/batch`, {
         author: AGENT,
         sourceDoc: { docId: 'standup-notes' },
@@ -212,7 +212,7 @@ describe('plan-doc linkage (routes)', () => {
       expect(body.tasks[0]?.planHold).toBeUndefined();
       expect(body.tasks[0]?.origin).toEqual({ kind: 'doc', docId: 'standup-notes' });
       // The huddle doc was NOT marked a pending plan by riding through here.
-      expect(handle.rooms.get('standup-notes')?.meta.planState).toBeUndefined();
+      expect(handle.docStore.get('standup-notes')?.meta.planState).toBeUndefined();
     });
 
     it('a sourceDoc that names no real doc is refused whole — its gate cannot be read', async () => {
@@ -233,7 +233,7 @@ describe('plan-doc linkage (routes)', () => {
     let docId: string;
 
     beforeAll(async () => {
-      handle.rooms.getOrCreate('drift-plan', { type: 'markdown' });
+      handle.docStore.getOrCreate('drift-plan', { type: 'markdown' });
       docId = 'drift-plan';
       const r = await post(`/api/workspaces/${wsId}/tasks/batch`, {
         author: AGENT,
@@ -279,7 +279,7 @@ describe('plan-doc linkage (routes)', () => {
     });
 
     it('a row created mid-burst stamps the settled (post-edit) revision, so its own source words never flag it', async () => {
-      const room = handle.rooms.get(docId);
+      const room = handle.docStore.get(docId);
       if (!room) throw new Error('room gone');
       // An authoring burst that has NOT settled yet…
       room.ydoc.transact(() => {
@@ -299,7 +299,7 @@ describe('plan-doc linkage (routes)', () => {
 
   describe('promote_to_task under a pending plan', () => {
     it('a thread promoted off a pending plan doc is held like a batch draft', async () => {
-      handle.rooms.getOrCreate('promote-plan', { type: 'markdown' });
+      handle.docStore.getOrCreate('promote-plan', { type: 'markdown' });
       // Declare it a plan by filing one draft from it.
       await post(`/api/workspaces/${wsId}/tasks/batch`, {
         author: AGENT,
@@ -323,7 +323,7 @@ describe('plan-doc linkage (routes)', () => {
       expect(body.task.status).toBe('triage');
       expect(body.visibility).toContain('plan');
       // Control: promoting off a doc with NO plan gate carries no hold.
-      handle.rooms.getOrCreate('free-doc', { type: 'markdown' });
+      handle.docStore.getOrCreate('free-doc', { type: 'markdown' });
       const th2 = await post('/api/docs/free-doc/threads', {
         author: PERSON,
         text: 'Just do it.',
@@ -382,8 +382,8 @@ describe('plan-doc linkage (routes)', () => {
 
   describe('the plan gate is server-authoritative', () => {
     it("a peer's CRDT write to planState or contentRevision is reverted on the spot", () => {
-      handle.rooms.getOrCreate('guarded-plan', { type: 'markdown' });
-      const room = handle.rooms.get('guarded-plan');
+      handle.docStore.getOrCreate('guarded-plan', { type: 'markdown' });
+      const room = handle.docStore.get('guarded-plan');
       if (!room) throw new Error('room gone');
       const meta = room.ydoc.getMap('meta');
       // A peer write arrives under the connection object's origin — any
@@ -400,7 +400,7 @@ describe('plan-doc linkage (routes)', () => {
       expect(meta.get('contentRevision')).toBeUndefined();
       expect(room.meta.planState).toBeUndefined();
       // Positive control: the server's own write takes, through the same map.
-      const set = handle.rooms.setPlanState('guarded-plan', 'pending');
+      const set = handle.docStore.setPlanState('guarded-plan', 'pending');
       expect(set.ok).toBe(true);
       expect(meta.get('planState')).toBe('pending');
       // And a peer cannot flip it back off pending either.

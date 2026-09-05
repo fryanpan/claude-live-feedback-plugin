@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Rooms } from '../src/rooms.ts';
+import { DocStore } from '../src/doc-store.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
@@ -11,19 +11,19 @@ import { waitFor } from './wait-for.ts';
 /**
  * Graceful shutdown must flush the debounced persistence timers — the 200ms
  * `.ydoc` save and the ~800ms bound-file write-back. Before this suite,
- * `handle.stop()` flushed taskProjection and taskStore but never Rooms, so a
+ * `handle.stop()` flushed taskProjection and taskStore but never DocStore, so a
  * SIGTERM (what the deploy path sends; bin.ts routes it through
  * `handle.stop()`) lost exactly as much just-typed content as a SIGKILL.
  *
  * The two death models here:
  *  - SIGKILL-shaped: the process vanishes mid-debounce; nothing runs. We
- *    model it by simply abandoning the Rooms instance and re-hydrating a
+ *    model it by simply abandoning the DocStore instance and re-hydrating a
  *    fresh one from the same dataDir.
  *  - SIGTERM-shaped: bin.ts awaits `handle.stop()`. We call it directly.
  */
 
-function makeRooms(dataDir: string): Rooms {
-  return new Rooms({
+function makeDocStore(dataDir: string): DocStore {
+  return new DocStore({
     dataDir,
     sse: new SseBus(),
     webhooks: createWebhookDispatcher({ onLog: () => {} }),
@@ -56,28 +56,28 @@ afterEach(async () => {
 describe('shutdown flush of room save timers', () => {
   it('SIGKILL-shaped death inside the 200ms debounce window loses the burst (the loss window is real)', () => {
     const dataDir = tempDir();
-    const rooms = makeRooms(dataDir);
-    const room = rooms.getOrCreate('burst-doc', { type: 'code' });
+    const docStore = makeDocStore(dataDir);
+    const room = docStore.getOrCreate('burst-doc', { type: 'code' });
     room.ydoc.getText('content').insert(0, 'burst-typed-just-before-death');
     // No stop, no wait: the 200ms save timer never fires. A fresh hydrate
     // from the same dataDir must NOT see the burst — this is the positive
     // premise the SIGTERM test below differs from.
-    const rehydrated = makeRooms(dataDir).getOrCreate('burst-doc', { type: 'code' });
+    const rehydrated = makeDocStore(dataDir).getOrCreate('burst-doc', { type: 'code' });
     expect(rehydrated.ydoc.getText('content').toString()).not.toContain(
       'burst-typed-just-before-death',
     );
   });
 
   it('graceful stop() flushes the 200ms .ydoc debounce — SIGTERM now keeps the burst SIGKILL loses', async () => {
-    // Named red test: remove the rooms flush from handle.stop() and this
+    // Named red test: remove the doc-store flush from handle.stop() and this
     // fails, because the burst dies inside the debounce window.
     const dataDir = tempDir();
     const handle = createServer({ port: 0, dataDir });
     handles.push(handle);
-    const room = handle.rooms.getOrCreate('burst-doc', { type: 'code' });
+    const room = handle.docStore.getOrCreate('burst-doc', { type: 'code' });
     room.ydoc.getText('content').insert(0, 'burst-typed-just-before-death');
     await handle.stop();
-    const rehydrated = makeRooms(dataDir).getOrCreate('burst-doc', { type: 'code' });
+    const rehydrated = makeDocStore(dataDir).getOrCreate('burst-doc', { type: 'code' });
     expect(rehydrated.ydoc.getText('content').toString()).toContain(
       'burst-typed-just-before-death',
     );
@@ -86,14 +86,14 @@ describe('shutdown flush of room save timers', () => {
   it('positive control: 2000ms idle keeps the content under BOTH death models', async () => {
     const killDir = tempDir();
     const termDir = tempDir();
-    const killRooms = makeRooms(killDir);
-    killRooms
+    const killStore = makeDocStore(killDir);
+    killStore
       .getOrCreate('idle-doc', { type: 'code' })
       .ydoc.getText('content')
       .insert(0, 'settled-content');
     const handle = createServer({ port: 0, dataDir: termDir });
     handles.push(handle);
-    handle.rooms
+    handle.docStore
       .getOrCreate('idle-doc', { type: 'code' })
       .ydoc.getText('content')
       .insert(0, 'settled-content');
@@ -105,10 +105,10 @@ describe('shutdown flush of room save timers', () => {
         existsSync(join(killDir, 'idle-doc.ydoc')) && existsSync(join(termDir, 'idle-doc.ydoc')),
       { describe: 'the idle 200ms persist to write both .ydoc files' },
     );
-    const afterKill = makeRooms(killDir).getOrCreate('idle-doc', { type: 'code' });
+    const afterKill = makeDocStore(killDir).getOrCreate('idle-doc', { type: 'code' });
     expect(afterKill.ydoc.getText('content').toString()).toContain('settled-content');
     await handle.stop();
-    const afterTerm = makeRooms(termDir).getOrCreate('idle-doc', { type: 'code' });
+    const afterTerm = makeDocStore(termDir).getOrCreate('idle-doc', { type: 'code' });
     expect(afterTerm.ydoc.getText('content').toString()).toContain('settled-content');
   });
 
@@ -119,10 +119,10 @@ describe('shutdown flush of room save timers', () => {
     writeFileSync(mdPath, '# Title\n\nOriginal paragraph.\n');
     const handle = createServer({ port: 0, dataDir });
     handles.push(handle);
-    handle.rooms.getOrCreate('bound-doc', { type: 'markdown' });
-    const attached = handle.rooms.attachFile('bound-doc', mdPath);
+    handle.docStore.getOrCreate('bound-doc', { type: 'markdown' });
+    const attached = handle.docStore.attachFile('bound-doc', mdPath);
     expect(attached.ok).toBe(true);
-    const set = handle.rooms.setDocContent(
+    const set = handle.docStore.setDocContent(
       'bound-doc',
       '# Title\n\nEdited just before shutdown.\n',
     );
