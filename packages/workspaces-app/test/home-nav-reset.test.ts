@@ -2,7 +2,7 @@
  * Tapping Home lands on the main Home page, from anywhere inside Home.
  *
  * Home has one drill-in: the review walkthrough. It is a PAGE inside Home
- * rather than an overlay — `renderWalkthrough` hides `#hub-home-page` whenever
+ * rather than an overlay — `renderWalkthrough` hides `#board-home-page` whenever
  * the queue position resolves to 0 or more, and that covers both the card
  * itself and the end-of-queue done state you land on after answering the last
  * item. The card carries its item in `?item=`; `/workspaces/<id>/home` with no
@@ -23,21 +23,21 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { CHORES_ID, type HubTask } from '../src/hub/hub-board-model.ts';
-import { CLOSED_WALK, reviewQueue, walkPosition } from '../src/hub/hub-review-model.ts';
-import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
+import { type BoardTask, CHORES_ID } from '../src/board/board-model.ts';
+import { CLOSED_WALK, reviewQueue, walkPosition } from '../src/board/board-review-model.ts';
+import { BOARD_BOOT_SOURCES } from './support/board-boot-sources.ts';
 
-// The hub's boot sources: `hub-app.ts` and the three modules split out of
+// The board's boot sources: `board-app.ts` and the three modules split out of
 // it. Read as one string because these assertions are about the board's
 // shape, not about which file a line ended up in — a move must not fail
 // them, and an absence checked across all four is the stronger read.
-const HUB_APP = HUB_BOOT_SOURCES.map((m) =>
-  readFileSync(resolve(import.meta.dirname, `../src/hub/${m}.ts`), 'utf8'),
+const BOARD_APP = BOARD_BOOT_SOURCES.map((m) =>
+  readFileSync(resolve(import.meta.dirname, `../src/board/${m}.ts`), 'utf8'),
 ).join('\n');
 
 const NOW = 1_700_000_000_000;
 
-function decision(n: number): HubTask {
+function decision(n: number): BoardTask {
   return {
     id: `t-${n}`,
     title: `Decision ${n}`,
@@ -55,7 +55,7 @@ function decision(n: number): HubTask {
   };
 }
 
-/** The one expression the render path reads: `#hub-home-page` is hidden while
+/** The one expression the render path reads: `#board-home-page` is hidden while
  *  this is 0 or more, so "the reader is on a Home subpage" and "this is not
  *  -1" are the same statement. */
 const onSubpage = (index: number, key: string | null) =>
@@ -83,12 +83,12 @@ describe('CLOSED_WALK — the pair that means the Home page is showing', () => {
   });
 });
 
-/** `setNav` is a local declaration inside `bootHub`, so it is unreachable by
- *  name even though the boot itself can now be driven (hub-boot.test.ts).
+/** `setNav` is a local declaration inside `bootBoard`, so it is unreachable by
+ *  name even though the boot itself can now be driven (board-boot.test.ts).
  *  These read its source; what the nav DOES on arrival is asserted there. */
 function setNavBody(): string {
-  const body = HUB_APP.match(/function setNav\([\s\S]*?\n {2}\}\n/)?.[0] ?? '';
-  expect(body, 'setNav went missing from hub-app.ts').not.toBe('');
+  const body = BOARD_APP.match(/function setNav\([\s\S]*?\n {2}\}\n/)?.[0] ?? '';
+  expect(body, 'setNav went missing from board-app.ts').not.toBe('');
   return body;
 }
 
@@ -122,7 +122,8 @@ describe('the Home nav item resets Home', () => {
     // stale tally under it.
     // Scoped to renderWalkthrough: the task detail panel has an `onClose` of
     // its own, and an unscoped match reads that one instead.
-    const walkthrough = HUB_APP.match(/function renderWalkthrough\([\s\S]*?\n {2}\}\n/)?.[0] ?? '';
+    const walkthrough =
+      BOARD_APP.match(/function renderWalkthrough\([\s\S]*?\n {2}\}\n/)?.[0] ?? '';
     expect(walkthrough, 'renderWalkthrough went missing').not.toBe('');
     const onClose = walkthrough.match(/onClose: \(\) => \{[\s\S]*?\n {8}\}/)?.[0] ?? '';
     expect(onClose, 'the walkthrough onClose handler moved').not.toBe('');

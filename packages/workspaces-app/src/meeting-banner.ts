@@ -3,7 +3,7 @@
  *
  * Two hosts, one element: the workspace board (first thing in the content
  * column, above the New task row) and the landing page (above the workspace
- * list). Shadow DOM like the widget's, not the hub's light-DOM classes,
+ * list). Shadow DOM like the widget's, not the board's light-DOM classes,
  * because the landing page carries its own tiny inline stylesheet and must
  * not load the whole app CSS for one banner; the shadow styles read the
  * host page's tokens through custom properties with literal fallbacks.
@@ -128,7 +128,7 @@ export class MeetingBannerEl extends HTMLElement {
     this.shadow.append(style);
     document.addEventListener('visibilitychange', this.onVisibility);
     void this.refresh();
-    // The hub mounts one instance per pane and only one pane shows at a
+    // The board mounts one instance per pane and only one pane shows at a
     // time, so a hidden instance skips its ticks — every poll is a vendor
     // list call. It catches up on its next tick once shown, the same ≤60s
     // freshness the visible one has. `checkVisibility` is absent in the

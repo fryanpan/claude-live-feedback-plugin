@@ -1,7 +1,7 @@
 import { options } from 'preact';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CHORES_ID, type HubTask } from '../src/hub/hub-board-model.ts';
-import type { DetailHandlers } from '../src/hub/hub-detail-render.ts';
+import type { DetailHandlers } from '../src/board/board-detail-render.ts';
+import { type BoardTask, CHORES_ID } from '../src/board/board-model.ts';
 import {
   type TaskAskKind,
   type TaskAskState,
@@ -9,8 +9,8 @@ import {
   taskAskReceipt,
   taskAskRequestPath,
   taskAskStatePath,
-} from '../src/hub/task-asks.ts';
-import { mountTaskDetailIsland, taskDetailData } from '../src/hub/task-detail-island.tsx';
+} from '../src/board/task-asks.ts';
+import { mountTaskDetailIsland, taskDetailData } from '../src/board/task-detail-island.tsx';
 import { IPAD, PHONE, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 /**
@@ -35,7 +35,7 @@ const NOW = 1_700_000_000_000;
 options.debounceRendering = (cb: () => void) => cb();
 
 let seq = 0;
-function task(overrides: Partial<HubTask> = {}): HubTask {
+function task(overrides: Partial<BoardTask> = {}): BoardTask {
   seq += 1;
   return {
     id: `t-${seq}`,
@@ -67,26 +67,26 @@ const handlers = (extra: Partial<DetailHandlers> = {}): DetailHandlers => ({
 let live: (() => void) | null = null;
 function mount(): HTMLElement {
   const host = document.createElement('div');
-  host.className = 'hub-detail hidden';
+  host.className = 'board-detail hidden';
   document.body.replaceChildren(host);
   live = mountTaskDetailIsland(host);
   return host;
 }
 
 /** The panel showing `t`, with whatever ask wiring the case needs. */
-function show(t: HubTask, extra: Partial<DetailHandlers> = {}): void {
+function show(t: BoardTask, extra: Partial<DetailHandlers> = {}): void {
   taskDetailData.value = { task: { ...t }, handlers: handlers(extra) };
 }
 
 const askButton = (host: HTMLElement, kind: string) =>
-  host.querySelector<HTMLButtonElement>(`button.hub-task-ask[data-ask="${kind}"]`);
+  host.querySelector<HTMLButtonElement>(`button.board-task-ask[data-ask="${kind}"]`);
 const receipt = (host: HTMLElement, kind: string) =>
-  host.querySelector<HTMLElement>(`.hub-task-ask-receipt[data-ask="${kind}"]`);
+  host.querySelector<HTMLElement>(`.board-task-ask-receipt[data-ask="${kind}"]`);
 
 let sheets = () => {};
 beforeEach(() => {
   setViewport(IPAD);
-  sheets = installSheets('hub.css', 'styles.css');
+  sheets = installSheets('board.css', 'styles.css');
 });
 afterEach(() => {
   sheets();
@@ -120,7 +120,7 @@ describe('the ticket’s Plan and Review controls', () => {
     show(task());
     expect(askButton(host, 'plan')).toBeNull();
     expect(askButton(host, 'review')).toBeNull();
-    expect(host.querySelector('.hub-task-asks')?.children.length ?? 0).toBe(0);
+    expect(host.querySelector('.board-task-asks')?.children.length ?? 0).toBe(0);
   });
 
   it('shows a non-writer the receipt for an ask somebody else made', () => {
@@ -137,7 +137,7 @@ describe('the ticket’s Plan and Review controls', () => {
     const host = mount();
     // Typed arguments, so the assertions below read the real pair rather than
     // an empty tuple the compiler cannot index.
-    const onAsk = vi.fn(async (_t: HubTask, _kind: TaskAskKind) => true);
+    const onAsk = vi.fn(async (_t: BoardTask, _kind: TaskAskKind) => true);
     const t = task();
     show(t, { onAsk });
 
@@ -265,7 +265,7 @@ describe('the controls at the two verified widths', () => {
   it('ranges the row to the right, where this panel keeps its chips', () => {
     const host = mount();
     show(task(), { onAsk: vi.fn(async () => true) });
-    const row = host.querySelector<HTMLElement>('.hub-task-asks');
+    const row = host.querySelector<HTMLElement>('.board-task-asks');
     expect(row).not.toBeNull();
     expect(styleOf(row as HTMLElement).justifyContent).toBe('flex-end');
   });

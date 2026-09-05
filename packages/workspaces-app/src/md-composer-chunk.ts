@@ -1,7 +1,7 @@
 /**
  * The lazily-loaded half of the composer editor: Tiptap, configured for a box
  * somebody types a comment into. Reached ONLY through the dynamic `import()`
- * in md-composer.ts, so the hub build splits it into its own chunk and the
+ * in md-composer.ts, so the board build splits it into its own chunk and the
  * board's entry stays a board. Import nothing from here statically.
  *
  * The extension list is the description editor's, minus what a composer has

@@ -144,8 +144,8 @@ describe('renderCommentMarkdown — XSS payload battery', () => {
 
 /**
  * The INLINE renderer feeds innerHTML sinks for USER-SUPPLIED text — the
- * answered record's quoted words in the doc panel (threads.ts) and on the hub
- * (hub-render.ts). It is escape-first by construction, but that property was
+ * answered record's quoted words in the doc panel (threads.ts) and on the board
+ * (board-render.ts). It is escape-first by construction, but that property was
  * unpinned: only the block renderer had a battery, so a refactor that
  * reordered or dropped the escape would have gone green.
  */

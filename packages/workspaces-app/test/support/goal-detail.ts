@@ -13,10 +13,10 @@
  * twice with the same goal is a real repaint of a live island.
  */
 import { options } from 'preact';
-import { goalDetailData, mountGoalDetailIsland } from '../../src/hub/goal-detail-island.tsx';
-import type { BoardSection } from '../../src/hub/hub-board-model.ts';
-import type { TaskDiscussion } from '../../src/hub/hub-detail-render.ts';
-import type { GoalDetailHandlers } from '../../src/hub/hub-render.ts';
+import type { TaskDiscussion } from '../../src/board/board-detail-render.ts';
+import type { BoardSection } from '../../src/board/board-model.ts';
+import type { GoalDetailHandlers } from '../../src/board/board-render.ts';
+import { goalDetailData, mountGoalDetailIsland } from '../../src/board/goal-detail-island.tsx';
 
 // A signal write re-renders on the next microtask — still before the next
 // paint, and still after the next line of a test. Flushed inline.

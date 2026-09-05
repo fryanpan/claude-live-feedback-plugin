@@ -5,7 +5,7 @@
  * Two families of properties:
  *
  *  1. Rendering from seeded projected tasks — group order, the header row's
- *     real `.hub-review-row` anatomy opening the task, one flag badge, note
+ *     real `.board-review-row` anatomy opening the task, one flag badge, note
  *     lines newest first with bare age and muted agent, "+N more", the
  *     empty state, and the island contract (own wrapper, render(null) on
  *     dispose).
@@ -19,13 +19,18 @@
  */
 import type { Thread, User } from '@feedback/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ACTIVITY_GROUP_CAP, ACTIVITY_NOTE_CAP } from '../src/hub/activity-model.ts';
+import { ACTIVITY_GROUP_CAP, ACTIVITY_NOTE_CAP } from '../src/board/activity-model.ts';
+import {
+  type BoardGoal,
+  type BoardNote,
+  type BoardTask,
+  CHORES_ID,
+} from '../src/board/board-model.ts';
 import {
   type ActivityHandlers,
   homeActivityData,
   mountHomeActivityIsland,
-} from '../src/hub/home-activity-island.tsx';
-import { CHORES_ID, type HubGoal, type HubNote, type HubTask } from '../src/hub/hub-board-model.ts';
+} from '../src/board/home-activity-island.tsx';
 import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 /** All fixtures are synthetic — invented agents, short fake ids. */
@@ -38,7 +43,7 @@ const HOUR = 60 * MIN;
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
 let seq = 0;
-function task(overrides: Partial<HubTask> = {}): HubTask {
+function task(overrides: Partial<BoardTask> = {}): BoardTask {
   seq += 1;
   return {
     id: `t-${seq}`,
@@ -57,11 +62,11 @@ function task(overrides: Partial<HubTask> = {}): HubTask {
   };
 }
 
-function note(agoMs: number, text: string, overrides: Partial<HubNote> = {}): HubNote {
+function note(agoMs: number, text: string, overrides: Partial<BoardNote> = {}): BoardNote {
   return { at: NOW - agoMs, kind: 'turn', text, agent: 'Beacon Bot', ...overrides };
 }
 
-const GOALS: HubGoal[] = [
+const GOALS: BoardGoal[] = [
   { id: 'g-pr', title: '1. Get the PR out' },
   { id: 'g-blog', title: '2. Blog post' },
 ];
@@ -75,7 +80,7 @@ const handlers = (): ActivityHandlers => ({
 });
 
 function mount(
-  tasks: HubTask[],
+  tasks: BoardTask[],
   h = handlers(),
   asks: { taskId: string; text: string }[] = [],
 ): { host: HTMLElement; h: ActivityHandlers; unmount: () => void } {
@@ -138,7 +143,7 @@ function reply(host: HTMLElement, text: string): void {
 
 const groupsIn = (host: HTMLElement) => [...host.querySelectorAll<HTMLElement>('.acti-group')];
 const notesIn = (g: Element) =>
-  [...g.querySelectorAll('.hub-activity-note')].map((n) => n.textContent ?? '');
+  [...g.querySelectorAll('.board-activity-note')].map((n) => n.textContent ?? '');
 
 describe('home-activity island rendering', () => {
   it('heads the section "Recent activity", groups by task newest first, and says who said what when', () => {
@@ -156,16 +161,16 @@ describe('home-activity island rendering', () => {
       ],
     });
     const { host, unmount } = mount([quiet, busy]);
-    expect(host.querySelector('.hub-activity-card .hub-home-heading')?.textContent).toBe(
+    expect(host.querySelector('.board-activity-card .board-home-heading')?.textContent).toBe(
       'Recent activity',
     );
     const groups = groupsIn(host);
     expect(groups.map((g) => g.dataset.taskId)).toEqual(['t-b', 't-q']);
 
     // The header row is the queue's own row anatomy: the title in
-    // .hub-review-row-title, the status as a tiny mark, no counters anywhere.
-    const head = groups[0]?.querySelector('.hub-review-row') as HTMLElement;
-    expect(head.querySelector('.hub-review-row-title')?.textContent).toBe('Busy one');
+    // .board-review-row-title, the status as a tiny mark, no counters anywhere.
+    const head = groups[0]?.querySelector('.board-review-row') as HTMLElement;
+    expect(head.querySelector('.board-review-row-title')?.textContent).toBe('Busy one');
     expect(head.querySelector('.acti-mark')?.className).toContain('acti-mark-in-progress');
     expect(head.getAttribute('title')).toContain('Busy one');
 
@@ -174,12 +179,12 @@ describe('home-activity island rendering', () => {
       'CSV writer done · 4m · Beacon Bot',
       'Picked this up · 8m · Helper',
     ]);
-    const agent = groups[0]?.querySelector('.hub-activity-note .acti-agent');
+    const agent = groups[0]?.querySelector('.board-activity-note .acti-agent');
     expect(agent?.textContent).toBe('Beacon Bot');
-    expect(groups[0]?.querySelector('.hub-activity-note .acti-age')?.textContent).toBe('4m');
+    expect(groups[0]?.querySelector('.board-activity-note .acti-age')?.textContent).toBe('4m');
     expect(notesIn(groups[1] as Element)).toEqual(['Opened PR, CI running · 2h · Beacon Bot']);
     // Nothing in the pane counts anything.
-    expect(host.querySelector('.hub-activity-card')?.textContent).not.toMatch(/\d+ notes?/);
+    expect(host.querySelector('.board-activity-card')?.textContent).not.toMatch(/\d+ notes?/);
     unmount();
     host.remove();
   });
@@ -187,7 +192,7 @@ describe('home-activity island rendering', () => {
   it('tapping the header row opens the task — click, Enter and Space', () => {
     const t = task({ id: 't-open', notes: [note(MIN, 'Working')] });
     const { host, h, unmount } = mount([t]);
-    const head = host.querySelector('.acti-group .hub-review-row') as HTMLElement;
+    const head = host.querySelector('.acti-group .board-review-row') as HTMLElement;
     head.click();
     expect(h.onOpenTask).toHaveBeenCalledWith('t-open');
     head.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
@@ -195,7 +200,7 @@ describe('home-activity island rendering', () => {
     expect(h.onOpenTask).toHaveBeenCalledTimes(3);
     // A tap on a note line is not a tap on the row: the lines are for reading
     // (and, next, for commenting on) — not a second way out of Home.
-    (host.querySelector('.hub-activity-note') as HTMLElement).click();
+    (host.querySelector('.board-activity-note') as HTMLElement).click();
     expect(h.onOpenTask).toHaveBeenCalledTimes(3);
     unmount();
     host.remove();
@@ -219,15 +224,16 @@ describe('home-activity island rendering', () => {
     const clean = task({ id: 't-clean', notes: [note(3 * MIN, 'CI green')] });
     const { host, unmount } = mount([off, stale, dark, clean]);
     const byId = new Map(groupsIn(host).map((g) => [g.dataset.taskId, g]));
-    const badge = (id: string) => byId.get(id)?.querySelector('.hub-badge');
+    const badge = (id: string) => byId.get(id)?.querySelector('.board-badge');
     expect(badge('t-off')?.textContent).toBe('off-band');
-    expect(badge('t-off')?.className).toContain('hub-badge-offband');
+    expect(badge('t-off')?.className).toContain('board-badge-offband');
     expect(badge('t-stale')?.textContent).toBe('stale');
-    expect(badge('t-stale')?.className).toContain('hub-badge-stale');
+    expect(badge('t-stale')?.className).toContain('board-badge-stale');
     expect(badge('t-dark')?.textContent).toBe('dark');
-    expect(badge('t-dark')?.className).toContain('hub-badge-dark');
+    expect(badge('t-dark')?.className).toContain('board-badge-dark');
     expect(badge('t-clean')).toBeNull();
-    for (const g of byId.values()) expect(g.querySelectorAll('.hub-badge').length).toBeLessThan(2);
+    for (const g of byId.values())
+      expect(g.querySelectorAll('.board-badge').length).toBeLessThan(2);
     unmount();
     host.remove();
   });
@@ -239,7 +245,7 @@ describe('home-activity island rendering', () => {
     });
     const { host, unmount } = mount([t]);
     const g = groupsIn(host)[0] as HTMLElement;
-    expect(g.querySelectorAll('.hub-activity-note')).toHaveLength(ACTIVITY_NOTE_CAP);
+    expect(g.querySelectorAll('.board-activity-note')).toHaveLength(ACTIVITY_NOTE_CAP);
     expect(g.querySelector('.acti-more')?.textContent).toBe('+2 more');
     unmount();
     host.remove();
@@ -268,13 +274,13 @@ describe('home-activity island rendering', () => {
       ],
     });
     const { host, unmount } = mount([t]);
-    const lines = [...(groupsIn(host)[0]?.querySelectorAll('.hub-activity-note') ?? [])];
+    const lines = [...(groupsIn(host)[0]?.querySelectorAll('.board-activity-note') ?? [])];
     expect(lines.map((l) => l.textContent)).toEqual([
       'blocked: git rm in this repo · 12m · Bike Map',
       'handed to Bike Map · 30m · Team Lead',
     ]);
-    expect(lines[0]?.className).toContain('hub-activity-note-denial');
-    expect(lines[1]?.className).toContain('hub-activity-note-move');
+    expect(lines[0]?.className).toContain('board-activity-note-denial');
+    expect(lines[1]?.className).toContain('board-activity-note-move');
     unmount();
     host.remove();
   });
@@ -285,7 +291,7 @@ describe('home-activity island rendering', () => {
       notes: [note(12 * MIN, 'git rm in this repo', { kind: 'denial', agent: 'Bike Map' })],
     });
     const { host, unmount } = mount([t]);
-    const line = host.querySelector('.hub-activity-note-denial') as HTMLElement;
+    const line = host.querySelector('.board-activity-note-denial') as HTMLElement;
     expect(line.textContent).toBe('blocked: git rm in this repo · 12m · Bike Map');
     const shape = line.querySelector('.acti-text code.acti-shape');
     expect(shape?.textContent).toBe('git rm in this repo');
@@ -312,7 +318,7 @@ describe('home-activity island rendering', () => {
 
   it('empty state is one muted line, and no groups', () => {
     const { host, unmount } = mount([task(), task({ notes: [] })]);
-    expect(host.querySelector('.hub-home-quiet')?.textContent).toBe(
+    expect(host.querySelector('.board-home-quiet')?.textContent).toBe(
       'Nothing yet — agents post a line per turn once they restart on 0.1.124.',
     );
     expect(host.querySelectorAll('.acti-group')).toHaveLength(0);
@@ -348,7 +354,7 @@ describe('home-activity island rendering', () => {
     const unmount = mountHomeActivityIsland(host, handlers());
     const wrapper = host.querySelector('[data-preact-island="home-activity"]');
     expect(wrapper).not.toBeNull();
-    expect(wrapper?.querySelector('.hub-activity-card')).not.toBeNull();
+    expect(wrapper?.querySelector('.board-activity-card')).not.toBeNull();
     expect(host.firstChild).toBe(vanillaChild);
     unmount();
     expect(wrapper?.childNodes.length).toBe(0);
@@ -529,7 +535,7 @@ describe('commenting on a note like a doc', () => {
     expect(pillShown(host), 'pill on an age').toBe(false);
     await selectAll(g.querySelector('.acti-agent') as Element);
     expect(pillShown(host), 'pill on an agent name').toBe(false);
-    await selectAll(g.querySelector('.hub-badge') as Element);
+    await selectAll(g.querySelector('.board-badge') as Element);
     expect(pillShown(host), 'pill on a badge').toBe(false);
     await selectAll(g.querySelector('.acti-more') as Element);
     expect(pillShown(host), 'pill on "+N more"').toBe(false);
@@ -637,7 +643,7 @@ describe('commenting on a note like a doc', () => {
 /* ---------------------------------------------------------------------- */
 
 /**
- * The pane's LAYOUT, read off the cascade instead of out of `hub.css`.
+ * The pane's LAYOUT, read off the cascade instead of out of `board.css`.
  *
  * happy-dom lays nothing out, so the rendered height is still a browser check
  * (`bun run ui:shot` at 1180×820 and 430px) — but the declarations the browser
@@ -659,7 +665,7 @@ describe('commenting on a note like a doc', () => {
  *  reads the phone cascade while looking like it reads the tablet one. */
 function pane(
   viewport: { width: number; height: number },
-  tasks: HubTask[] = [busyTask()],
+  tasks: BoardTask[] = [busyTask()],
 ): { host: HTMLElement; unmount: () => void; pick: (sel: string) => HTMLElement } {
   setViewport(viewport);
   const { host, unmount } = mount(tasks);
@@ -689,7 +695,7 @@ async function openDraft(host: HTMLElement, phrase: string): Promise<void> {
 
 let sheets = () => {};
 beforeEach(() => {
-  sheets = installSheets('hub.css', 'styles.css');
+  sheets = installSheets('board.css', 'styles.css');
 });
 afterEach(() => {
   sheets();
@@ -712,8 +718,8 @@ describe('the activity pane at 1180×820 spends a bounded number of lines', () =
     const { host, unmount } = mount(tasks);
     const groups = groupsIn(host);
     expect(groups.length).toBe(ACTIVITY_GROUP_CAP);
-    const headers = host.querySelectorAll('.acti-group .hub-review-row').length;
-    const lines = host.querySelectorAll('.hub-activity-note').length;
+    const headers = host.querySelectorAll('.acti-group .board-review-row').length;
+    const lines = host.querySelectorAll('.board-activity-note').length;
     expect(headers).toBe(ACTIVITY_GROUP_CAP);
     expect(lines).toBeLessThanOrEqual(ACTIVITY_GROUP_CAP * ACTIVITY_NOTE_CAP);
     expect(headers + lines).toBeLessThanOrEqual(ACTIVITY_GROUP_CAP * (1 + ACTIVITY_NOTE_CAP));
@@ -724,7 +730,7 @@ describe('the activity pane at 1180×820 spends a bounded number of lines', () =
 
   it('the card takes no fixed height, and each title and note line is ONE line at the tablet tier', () => {
     const { host, unmount, pick } = pane(IPAD);
-    const card = styleOf(pick('.hub-activity-card'));
+    const card = styleOf(pick('.board-activity-card'));
     // Positive control FIRST: the card IS styled, so the two absences below
     // are absences and not an unstyled element answering `''` to everything.
     expect(card.background).not.toBe('');
@@ -737,7 +743,7 @@ describe('the activity pane at 1180×820 spends a bounded number of lines', () =
     expect(title.whiteSpace).toBe('nowrap');
     expect(title.textOverflow).toBe('ellipsis');
     // A note line is one line for the same reason.
-    const line = styleOf(pick('.hub-activity-note'));
+    const line = styleOf(pick('.board-activity-note'));
     expect(line.whiteSpace).toBe('nowrap');
     expect(line.textOverflow).toBe('ellipsis');
     expect(line.overflow).toBe('hidden');
@@ -767,9 +773,9 @@ describe('the activity pane at 1180×820 spends a bounded number of lines', () =
         notes: [note(12 * MIN, 'git rm in this repo', { kind: 'denial', agent: 'Bike Map' })],
       }),
     ]);
-    expect(styleOf(pick('.hub-activity-note-denial .acti-shape')).fontFamily).toContain('mono');
+    expect(styleOf(pick('.board-activity-note-denial .acti-shape')).fontFamily).toContain('mono');
     // The tint itself is asserted in its own `it.fails` below, because it does
-    // not hold: `hub.css` paints the shape with `background: var(--danger-bg)`
+    // not hold: `board.css` paints the shape with `background: var(--danger-bg)`
     // and no stylesheet in this app defines that custom property, so the
     // browser paints no tint at all. A text read could not see that.
     //
@@ -779,7 +785,7 @@ describe('the activity pane at 1180×820 spends a bounded number of lines', () =
     // reached by different rules.
     await openDraft(host, 'git rm');
     const shape = styleOf(pick('.acti-shape'));
-    const text = styleOf(pick('.hub-activity-note-denial .acti-text'));
+    const text = styleOf(pick('.board-activity-note-denial .acti-text'));
     expect(text.background).toBe('');
     expect(text.fontFamily).not.toBe(shape.fontFamily);
     unmount();
@@ -791,8 +797,8 @@ describe('the activity pane at 1180×820 spends a bounded number of lines', () =
    * review-item-comment-css.test.ts: the contract is stated, and the test
    * says out loud that the product does not meet it.
    *
-   * `.hub-activity-note-denial .acti-shape` (hub.css:2040) and
-   * `.hub-note-body .acti-shape` (hub.css:4339) both paint
+   * `.board-activity-note-denial .acti-shape` (board.css:2040) and
+   * `.board-note-body .acti-shape` (board.css:4339) both paint
    * `background: var(--danger-bg)`. A repo-wide grep finds those two uses and
    * no definition, so the shape is untinted in a real browser and the denial
    * reads like any other note. This pass converts tests and does not change
@@ -810,7 +816,7 @@ describe('the activity pane at 1180×820 spends a bounded number of lines', () =
         notes: [note(12 * MIN, 'git rm in this repo', { kind: 'denial', agent: 'Bike Map' })],
       }),
     ]);
-    const shape = styleOf(pick('.hub-activity-note-denial .acti-shape'));
+    const shape = styleOf(pick('.board-activity-note-denial .acti-shape'));
     // Control: the shape IS reached by its rule, so the empty background below
     // is the undefined token and not a selector that stopped matching.
     expect(shape.fontFamily).toContain('mono');
@@ -833,7 +839,7 @@ describe('the activity pane at 430px is thumb-sized and lets the words wrap', ()
     // which is now read AT the phone width rather than inferred from a
     // ≤1100px extract that mentioned no `min-height`.
     const { host, unmount, pick } = pane(PHONE);
-    expect(Number.parseFloat(styleOf(pick('.acti-group .hub-review-row')).minHeight)).toBe(44);
+    expect(Number.parseFloat(styleOf(pick('.acti-group .board-review-row')).minHeight)).toBe(44);
     // …and the header adds no floor of its own on top of it. `.acti-head` is
     // the same element, so the control is the 44px above.
     expect(styleOf(pick('.acti-head')).minHeight).toBe('44px');
@@ -844,7 +850,7 @@ describe('the activity pane at 430px is thumb-sized and lets the words wrap', ()
   it('on the phone tier a title and a note line may wrap — clipping is a tablet economy', () => {
     const phone = pane(PHONE);
     expect(styleOf(phone.pick('.acti-title-text')).whiteSpace).toBe('normal');
-    expect(styleOf(phone.pick('.hub-activity-note')).whiteSpace).toBe('normal');
+    expect(styleOf(phone.pick('.board-activity-note')).whiteSpace).toBe('normal');
     phone.unmount();
     phone.host.remove();
     // Control, and the half a media-query extract could not make: at the
@@ -852,7 +858,7 @@ describe('the activity pane at 430px is thumb-sized and lets the words wrap', ()
     // reading would pass against a sheet that had stopped clipping anywhere.
     const ipad = pane(IPAD);
     expect(styleOf(ipad.pick('.acti-title-text')).whiteSpace).toBe('nowrap');
-    expect(styleOf(ipad.pick('.hub-activity-note')).whiteSpace).toBe('nowrap');
+    expect(styleOf(ipad.pick('.board-activity-note')).whiteSpace).toBe('nowrap');
     ipad.unmount();
     ipad.host.remove();
   });
@@ -886,7 +892,7 @@ describe('the activity pane at 430px is thumb-sized and lets the words wrap', ()
       expect(style[prop], `.acti-nonesuch is reached by a ${prop} rule`).toBe('');
     }
     // Control: a real class beside it IS reached, at this same width.
-    expect(styleOf(pick('.hub-activity-note')).whiteSpace).toBe('normal');
+    expect(styleOf(pick('.board-activity-note')).whiteSpace).toBe('normal');
     unmount();
     host.remove();
   });
@@ -902,13 +908,13 @@ describe('the activity pane at 430px is thumb-sized and lets the words wrap', ()
  */
 describe('Home’s sections are separated and its headings are labels, not a second bold', () => {
   it('each section after the first sits below a hairline with air above and below it', () => {
-    // The page shell, in the shape `hub-app.ts` writes it: `#hub-home-page`
+    // The page shell, in the shape `board-app.ts` writes it: `#board-home-page`
     // holding the queue, this pane and the brief. Built here because the
     // island renders the pane and not the page around it.
     setViewport(IPAD);
-    const page = attach('', { attrs: { id: 'hub-home-page' } });
-    const first = attach('', { parent: page, attrs: { id: 'hub-home-review' } });
-    const second = attach('', { parent: page, attrs: { id: 'hub-home-activity' } });
+    const page = attach('', { attrs: { id: 'board-home-page' } });
+    const first = attach('', { parent: page, attrs: { id: 'board-home-review' } });
+    const second = attach('', { parent: page, attrs: { id: 'board-home-activity' } });
     expect(Number.parseFloat(styleOf(page).gap)).toBeGreaterThan(0);
     // The hairline is on the SIBLINGS, not on the first child — a border on
     // every section would draw a line above the topmost one too, and `* + *`
@@ -922,7 +928,7 @@ describe('Home’s sections are separated and its headings are labels, not a sec
 
   it('the section heading is a small uppercase muted kicker, never a heavier bold', () => {
     const { host, unmount, pick } = pane(IPAD);
-    const heading = styleOf(pick('.hub-home-heading'));
+    const heading = styleOf(pick('.board-home-heading'));
     expect(heading.textTransform).toBe('uppercase');
     expect(heading.letterSpacing).not.toBe('');
     expect(heading.color).toBe(
@@ -938,10 +944,10 @@ describe('Home’s sections are separated and its headings are labels, not a sec
     const { host, unmount, pick } = pane(IPAD, [
       task({ id: 't-flag', goal: CHORES_ID, notes: [note(MIN, 'Picked this up')] }),
     ]);
-    expect(Number(styleOf(pick('.hub-review-row-title')).fontWeight)).toBeLessThanOrEqual(500);
+    expect(Number(styleOf(pick('.board-review-row-title')).fontWeight)).toBeLessThanOrEqual(500);
     // Positive control: the weight reading can see a bold when one is there —
     // the flag badge keeps its 600, because it IS the row's one cue.
-    expect(styleOf(pick('.acti-head .hub-badge')).fontWeight).toBe('600');
+    expect(styleOf(pick('.acti-head .board-badge')).fontWeight).toBe('600');
     unmount();
     host.remove();
   });

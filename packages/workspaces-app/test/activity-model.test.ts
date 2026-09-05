@@ -10,9 +10,14 @@ import {
   asksOf,
   firstLine,
   homeActivity,
-} from '../src/hub/activity-model.ts';
-import { CHORES_ID, type HubGoal, type HubNote, type HubTask } from '../src/hub/hub-board-model.ts';
-import { type ReviewItem } from '../src/hub/hub-review-model.ts';
+} from '../src/board/activity-model.ts';
+import {
+  type BoardGoal,
+  type BoardNote,
+  type BoardTask,
+  CHORES_ID,
+} from '../src/board/board-model.ts';
+import { type ReviewItem } from '../src/board/board-review-model.ts';
 
 /** All fixtures are synthetic — invented agents, short fake ids. */
 
@@ -21,7 +26,7 @@ const MIN = 60_000;
 const HOUR = 60 * MIN;
 
 let seq = 0;
-function task(overrides: Partial<HubTask> = {}): HubTask {
+function task(overrides: Partial<BoardTask> = {}): BoardTask {
   seq += 1;
   return {
     id: `t-${seq}`,
@@ -40,18 +45,18 @@ function task(overrides: Partial<HubTask> = {}): HubTask {
   };
 }
 
-function note(agoMs: number, text: string, overrides: Partial<HubNote> = {}): HubNote {
+function note(agoMs: number, text: string, overrides: Partial<BoardNote> = {}): BoardNote {
   return { at: NOW - agoMs, kind: 'turn', text, agent: 'Beacon Bot', ...overrides };
 }
 
-const GOALS: HubGoal[] = [
+const GOALS: BoardGoal[] = [
   { id: 'g-pr', title: '1. Get the PR out' },
   { id: 'g-pr-sub', title: '1.1 Tickets' },
   { id: 'g-blog', title: '2. Blog post' },
   { id: 'g-old', title: '3. Shipped', status: 'done' },
 ];
 
-function groups(tasks: HubTask[], extra: Partial<Parameters<typeof homeActivity>[0]> = {}) {
+function groups(tasks: BoardTask[], extra: Partial<Parameters<typeof homeActivity>[0]> = {}) {
   return homeActivity({ tasks, goals: GOALS, now: NOW, ...extra });
 }
 
@@ -139,7 +144,7 @@ describe('homeActivity', () => {
       const shipped = task({ goal: 'g-old', status: 'todo', notes: [note(MIN, 'x')] });
       const inBand = task({ goal: 'g-pr', status: 'todo', notes: [note(MIN, 'x')] });
       const inSub = task({ goal: 'g-pr-sub', status: 'todo', notes: [note(MIN, 'x')] });
-      const flagOf = (t: HubTask) => groups([t])[0]?.flag;
+      const flagOf = (t: BoardTask) => groups([t])[0]?.flag;
       expect(flagOf(backlog)).toBe('off-band');
       expect(flagOf(orphan)).toBe('off-band');
       expect(flagOf(shipped)).toBe('off-band');

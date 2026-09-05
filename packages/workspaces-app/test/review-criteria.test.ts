@@ -14,29 +14,29 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { type ReviewCriteria, mountReviewCriteria } from '../src/hub/review-criteria.ts';
-import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
+import { type ReviewCriteria, mountReviewCriteria } from '../src/board/review-criteria.ts';
+import { BOARD_BOOT_SOURCES } from './support/board-boot-sources.ts';
 
 const DEFAULT_TEXT = 'A good review item can be answered from the card alone.';
 const OWN_TEXT = 'Every headline is a question, and every option names its cost.';
 
 function dom() {
   document.body.innerHTML = `
-    <div class="hub-settings-row hub-settings-row--criteria">
-      <label class="hub-settings-label" for="hub-review-criteria">What makes a good review item
-        <small id="hub-review-criteria-note" class="hub-settings-note"></small>
+    <div class="board-settings-row board-settings-row--criteria">
+      <label class="board-settings-label" for="board-review-criteria">What makes a good review item
+        <small id="board-review-criteria-note" class="board-settings-note"></small>
       </label>
-      <textarea id="hub-review-criteria" class="hub-criteria"></textarea>
-      <div class="hub-criteria-actions">
-        <button type="button" id="hub-review-criteria-save" class="hub-btn"></button>
-        <button type="button" id="hub-review-criteria-default" class="hub-btn"></button>
+      <textarea id="board-review-criteria" class="board-criteria"></textarea>
+      <div class="board-criteria-actions">
+        <button type="button" id="board-review-criteria-save" class="board-btn"></button>
+        <button type="button" id="board-review-criteria-default" class="board-btn"></button>
       </div>
     </div>`;
   return {
-    box: document.getElementById('hub-review-criteria') as HTMLTextAreaElement,
-    note: document.getElementById('hub-review-criteria-note') as HTMLElement,
-    save: document.getElementById('hub-review-criteria-save') as HTMLButtonElement,
-    useDefault: document.getElementById('hub-review-criteria-default') as HTMLButtonElement,
+    box: document.getElementById('board-review-criteria') as HTMLTextAreaElement,
+    note: document.getElementById('board-review-criteria-note') as HTMLElement,
+    save: document.getElementById('board-review-criteria-save') as HTMLButtonElement,
+    useDefault: document.getElementById('board-review-criteria-default') as HTMLButtonElement,
   };
 }
 
@@ -163,27 +163,27 @@ describe('the review-item criteria field', () => {
  * it returned nothing.
  */
 describe('the settings panel carries the field', () => {
-  const shell = HUB_BOOT_SOURCES.map((m) =>
-    readFileSync(resolve(import.meta.dirname, `../src/hub/${m}.ts`), 'utf8'),
+  const shell = BOARD_BOOT_SOURCES.map((m) =>
+    readFileSync(resolve(import.meta.dirname, `../src/board/${m}.ts`), 'utf8'),
   ).join('\n');
 
   it('has the textarea, its note and both buttons inside the settings panel', () => {
     const panel = shell.slice(
-      shell.indexOf('id="hub-settings-panel"'),
-      shell.indexOf('id="hub-connection"'),
+      shell.indexOf('id="board-settings-panel"'),
+      shell.indexOf('id="board-connection"'),
     );
     expect(panel).not.toBe('');
     for (const id of [
-      'hub-review-criteria',
-      'hub-review-criteria-note',
-      'hub-review-criteria-save',
-      'hub-review-criteria-default',
+      'board-review-criteria',
+      'board-review-criteria-note',
+      'board-review-criteria-save',
+      'board-review-criteria-default',
     ]) {
       expect(panel).toContain(`id="${id}"`);
     }
     // The control: the ids the reviewer DID find are in the same slice, so a
     // mis-sliced panel cannot pass this by matching nothing.
-    expect(panel).toContain('id="hub-done-filter"');
+    expect(panel).toContain('id="board-done-filter"');
   });
 
   it('mounts it and refreshes it when the panel opens', () => {

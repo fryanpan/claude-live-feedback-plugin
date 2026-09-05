@@ -14,9 +14,9 @@
  * half-typed goal surviving one — must drive `boardData` directly instead. A
  * remount rebuilds everything, which is the property they exist to disprove.
  */
-import { type BoardHandlers, boardData, mountBoardIsland } from '../../src/hub/board-island.tsx';
-import type { BoardSection } from '../../src/hub/hub-board-model.ts';
-import type { HubPane } from '../../src/hub/hub-presence-model.ts';
+import { type BoardHandlers, boardData, mountBoardIsland } from '../../src/board/board-island.tsx';
+import type { BoardSection } from '../../src/board/board-model.ts';
+import type { BoardPane } from '../../src/board/board-presence-model.ts';
 
 /** The two per-paint values that used to ride inside the handlers object and
  *  now ride the signal. Accepted here so ported cases read as they did. */
@@ -31,7 +31,7 @@ export function renderBoard(
   container: HTMLElement,
   sections: BoardSection[],
   handlers: ShimHandlers,
-  pane: HubPane = 'board',
+  pane: BoardPane = 'board',
 ): void {
   boardData.value = {
     sections,

@@ -13,26 +13,26 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { type ParallelismCap, mountParallelismCap } from '../src/hub/parallelism-cap.ts';
-import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
+import { type ParallelismCap, mountParallelismCap } from '../src/board/parallelism-cap.ts';
+import { BOARD_BOOT_SOURCES } from './support/board-boot-sources.ts';
 
 function dom() {
   document.body.innerHTML = `
-    <div class="hub-settings-row hub-settings-row--cap">
-      <label class="hub-settings-label" for="hub-parallelism-cap">Parallelism cap
-        <small id="hub-parallelism-cap-note" class="hub-settings-note"></small>
+    <div class="board-settings-row board-settings-row--cap">
+      <label class="board-settings-label" for="board-parallelism-cap">Parallelism cap
+        <small id="board-parallelism-cap-note" class="board-settings-note"></small>
       </label>
-      <input type="number" id="hub-parallelism-cap" class="hub-cap-input" />
-      <div class="hub-criteria-actions">
-        <button type="button" id="hub-parallelism-cap-save" class="hub-btn"></button>
-        <button type="button" id="hub-parallelism-cap-default" class="hub-btn"></button>
+      <input type="number" id="board-parallelism-cap" class="board-cap-input" />
+      <div class="board-criteria-actions">
+        <button type="button" id="board-parallelism-cap-save" class="board-btn"></button>
+        <button type="button" id="board-parallelism-cap-default" class="board-btn"></button>
       </div>
     </div>`;
   return {
-    box: document.getElementById('hub-parallelism-cap') as HTMLInputElement,
-    note: document.getElementById('hub-parallelism-cap-note') as HTMLElement,
-    save: document.getElementById('hub-parallelism-cap-save') as HTMLButtonElement,
-    useDefault: document.getElementById('hub-parallelism-cap-default') as HTMLButtonElement,
+    box: document.getElementById('board-parallelism-cap') as HTMLInputElement,
+    note: document.getElementById('board-parallelism-cap-note') as HTMLElement,
+    save: document.getElementById('board-parallelism-cap-save') as HTMLButtonElement,
+    useDefault: document.getElementById('board-parallelism-cap-default') as HTMLButtonElement,
   };
 }
 
@@ -199,25 +199,25 @@ describe('the parallelism cap field', () => {
  * not just that the field behaves correctly in isolation.
  */
 describe('the settings panel carries the field', () => {
-  const shell = HUB_BOOT_SOURCES.map((m) =>
-    readFileSync(resolve(import.meta.dirname, `../src/hub/${m}.ts`), 'utf8'),
+  const shell = BOARD_BOOT_SOURCES.map((m) =>
+    readFileSync(resolve(import.meta.dirname, `../src/board/${m}.ts`), 'utf8'),
   ).join('\n');
 
   it('has the input, its note and both buttons inside the settings panel', () => {
     const panel = shell.slice(
-      shell.indexOf('id="hub-settings-panel"'),
-      shell.indexOf('id="hub-connection"'),
+      shell.indexOf('id="board-settings-panel"'),
+      shell.indexOf('id="board-connection"'),
     );
     expect(panel).not.toBe('');
     for (const id of [
-      'hub-parallelism-cap',
-      'hub-parallelism-cap-note',
-      'hub-parallelism-cap-save',
-      'hub-parallelism-cap-default',
+      'board-parallelism-cap',
+      'board-parallelism-cap-note',
+      'board-parallelism-cap-save',
+      'board-parallelism-cap-default',
     ]) {
       expect(panel).toContain(`id="${id}"`);
     }
-    expect(panel).toContain('id="hub-review-criteria"');
+    expect(panel).toContain('id="board-review-criteria"');
   });
 
   it('mounts it and refreshes it when the panel opens', () => {

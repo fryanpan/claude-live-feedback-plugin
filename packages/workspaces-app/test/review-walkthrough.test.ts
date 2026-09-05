@@ -1,10 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  type ReviewStripHandlers,
-  homeReviewData,
-  mountHomeReviewIsland,
-} from '../src/hub/home-review-island.tsx';
-import { CHORES_ID, type HubTask } from '../src/hub/hub-board-model.ts';
+import { type BoardTask, CHORES_ID } from '../src/board/board-model.ts';
 import {
   type ReviewItem,
   type ReviewThreadItem,
@@ -12,14 +7,19 @@ import {
   decisionRows,
   reviewQueue,
   walkPosition,
-} from '../src/hub/hub-review-model.ts';
+} from '../src/board/board-review-model.ts';
+import {
+  type ReviewStripHandlers,
+  homeReviewData,
+  mountHomeReviewIsland,
+} from '../src/board/home-review-island.tsx';
 import {
   type WalkProgress,
   type WalkthroughHandlers,
   type WalkthroughView,
   mountWalkthroughIsland,
   walkthroughData,
-} from '../src/hub/walkthrough-island.tsx';
+} from '../src/board/walkthrough-island.tsx';
 import { refreshMarkdownComposer } from '../src/md-composer.ts';
 import { renderedHtml, surfaceOf } from './support/composer.ts';
 import { renderTaskDetail } from './support/task-detail.ts';
@@ -29,7 +29,7 @@ import { renderTaskDetail } from './support/task-detail.ts';
 const NOW = 1_700_000_000_000;
 
 let seq = 0;
-function task(overrides: Partial<HubTask> = {}): HubTask {
+function task(overrides: Partial<BoardTask> = {}): BoardTask {
   seq += 1;
   return {
     id: `t-${seq}`,
@@ -48,7 +48,7 @@ function task(overrides: Partial<HubTask> = {}): HubTask {
   };
 }
 
-function decision(overrides: Partial<HubTask> = {}): HubTask {
+function decision(overrides: Partial<BoardTask> = {}): BoardTask {
   return task({ assignee: 'human', needs: 'decision', ...overrides });
 }
 
@@ -97,7 +97,7 @@ function note(over: Partial<ReviewThreadItem> = {}): ReviewThreadItem {
 }
 
 /** The queue with no threads in it — most cases here are about decisions. */
-const q0 = (tasks: HubTask[]) => reviewQueue(tasks, [], NOW);
+const q0 = (tasks: BoardTask[]) => reviewQueue(tasks, [], NOW);
 
 function strip(over: Partial<ReviewStripHandlers> = {}): ReviewStripHandlers {
   return {
@@ -217,9 +217,9 @@ describe('renderHomeReview — the ranked list (mockup anatomy)', () => {
     const onReview = vi.fn();
     const d = decision({ title: 'Ship now or wait?' });
     renderHomeReview(root, q0([d, task({ after: [d.id] })]), strip({ onWalkthrough, onReview }));
-    (root.querySelector('.hub-review-go') as HTMLElement).click();
+    (root.querySelector('.board-review-go') as HTMLElement).click();
     expect(onWalkthrough).toHaveBeenCalledTimes(1);
-    const row = root.querySelector('.hub-review-row') as HTMLElement;
+    const row = root.querySelector('.board-review-row') as HTMLElement;
     expect(row.textContent).toContain('Ship now or wait?');
     // Derived urgency still travels with the row — "blocks" reads off the
     // edges into the hover title, since the mockup row carries no third line.
@@ -244,7 +244,7 @@ describe('renderHomeReview — the ranked list (mockup anatomy)', () => {
       NOW,
     );
     renderHomeReview(root, queue, strip({ onReview, onOpen }));
-    const rows = Array.from(root.querySelectorAll<HTMLElement>('.hub-review-row'));
+    const rows = Array.from(root.querySelectorAll<HTMLElement>('.board-review-row'));
     expect(rows).toHaveLength(2);
     rows[1]?.click();
     // The item AND where it stands, so the card opens on the row that was
@@ -267,7 +267,7 @@ describe('renderHomeReview — the ranked list (mockup anatomy)', () => {
       since: NOW - 3_600_000,
     };
     renderHomeReview(root, q0([]), strip({ onReview, onOpen }), [answered], NOW);
-    (root.querySelector('.hub-review-row-done') as HTMLElement).click();
+    (root.querySelector('.board-review-row-done') as HTMLElement).click();
     expect(onOpen).toHaveBeenCalledWith(answered);
     expect(onReview).not.toHaveBeenCalled();
   });
@@ -275,10 +275,10 @@ describe('renderHomeReview — the ranked list (mockup anatomy)', () => {
   it('an empty queue renders no rows and says so plainly (Home is a page, not a strip)', () => {
     // Presence first: the section carries rows with one decision.
     renderHomeReview(root, q0([decision()]), strip());
-    expect(root.querySelectorAll('.hub-review-row').length).toBeGreaterThan(0);
+    expect(root.querySelectorAll('.board-review-row').length).toBeGreaterThan(0);
     renderHomeReview(root, q0([task()]), strip());
-    expect(root.querySelectorAll('.hub-review-row')).toHaveLength(0);
-    expect(root.querySelector('.hub-home-quiet')?.textContent).toContain(
+    expect(root.querySelectorAll('.board-review-row')).toHaveLength(0);
+    expect(root.querySelector('.board-home-quiet')?.textContent).toContain(
       'Nothing is waiting for your review',
     );
   });
@@ -305,14 +305,14 @@ describe('renderHomeReview — the ranked list (mockup anatomy)', () => {
       NOW,
     );
     renderHomeReview(root, queue, strip());
-    const rows = Array.from(root.querySelectorAll<HTMLElement>('.hub-review-row'));
+    const rows = Array.from(root.querySelectorAll<HTMLElement>('.board-review-row'));
     expect(
-      rows.map((c) => c.className.match(/hub-review-(?:decision|task-thread|doc-thread)/)?.[0]),
-    ).toEqual(['hub-review-decision', 'hub-review-task-thread', 'hub-review-doc-thread']);
-    expect(rows[1]?.querySelector('.hub-review-row-title')?.textContent).toBe(
+      rows.map((c) => c.className.match(/board-review-(?:decision|task-thread|doc-thread)/)?.[0]),
+    ).toEqual(['board-review-decision', 'board-review-task-thread', 'board-review-doc-thread']);
+    expect(rows[1]?.querySelector('.board-review-row-title')?.textContent).toBe(
       'Which repo does this land in?',
     );
-    expect(rows[2]?.querySelector('.hub-review-row-title')?.textContent).toBe(
+    expect(rows[2]?.querySelector('.board-review-row-title')?.textContent).toBe(
       'Is this claim still true?',
     );
   });
@@ -325,13 +325,13 @@ describe('renderHomeReview — the ranked list (mockup anatomy)', () => {
     expect(queue.total).toBe(2);
     expect(queue.blocking).toBe(1);
     renderHomeReview(root, queue, strip());
-    expect(root.querySelectorAll('.hub-review-row')).toHaveLength(2);
+    expect(root.querySelectorAll('.board-review-row')).toHaveLength(2);
   });
 });
 
 describe('a blocker is task state — off Home, out of the walkthrough (design point 5)', () => {
   /** A human task with `n` open tasks waiting on it. */
-  function blocked(over: Partial<HubTask> = {}, n = 1): HubTask[] {
+  function blocked(over: Partial<BoardTask> = {}, n = 1): BoardTask[] {
     const gate = task({ assignee: 'human', title: 'Turn on the tunnel', ...over });
     const waits = Array.from({ length: n }, (_, i) =>
       task({ title: `Waiting ${i + 1}`, after: [gate.id] }),
@@ -346,11 +346,11 @@ describe('a blocker is task state — off Home, out of the walkthrough (design p
     // Positive control in the same render: a decision row still appears.
     const d = decision({ title: 'Blue or green?' });
     renderHomeReview(root, q0([...blocked({}, 2), d]), strip());
-    const rows = Array.from(root.querySelectorAll<HTMLElement>('.hub-review-row'));
+    const rows = Array.from(root.querySelectorAll<HTMLElement>('.board-review-row'));
     expect(rows).toHaveLength(1);
     expect(rows[0]?.textContent).toContain('Blue or green?');
     expect(root.textContent).not.toContain('Turn on the tunnel');
-    expect(root.querySelector('.hub-review-blocker')).toBeNull();
+    expect(root.querySelector('.board-review-blocker')).toBeNull();
   });
 
   it('does not count a blocker in the blocking number or the total', () => {
@@ -370,13 +370,13 @@ describe('a blocker is task state — off Home, out of the walkthrough (design p
     expect(q.items).toHaveLength(1);
     renderReviewWalkthrough(root, q, 0, walk());
     // The one card is the decision — there is no blocker card to step onto.
-    expect(root.querySelector('.hub-walk-card')?.className).toContain('hub-walk-decision');
-    expect(root.querySelector('.hub-walk-blocker')).toBeNull();
-    expect(root.querySelector('.hub-walk-open')).toBeNull();
+    expect(root.querySelector('.board-walk-card')?.className).toContain('board-walk-decision');
+    expect(root.querySelector('.board-walk-blocker')).toBeNull();
+    expect(root.querySelector('.board-walk-open')).toBeNull();
     // A board holding ONLY a blocker walks straight to the done state.
     renderReviewWalkthrough(root, q0(blocked({}, 2)), 0, walk());
-    expect(root.querySelector('.hub-walk-card')).toBeNull();
-    expect(root.querySelector('.hub-walk-done')).not.toBeNull();
+    expect(root.querySelector('.board-walk-card')).toBeNull();
+    expect(root.querySelector('.board-walk-done')).not.toBeNull();
   });
 });
 
@@ -396,8 +396,8 @@ describe('renderTaskDetail — the same options, from the other entrance', () =>
     };
     renderTaskDetail(root, d, handlers);
     // Presence first: the free-text form is there either way.
-    expect(root.querySelector('.hub-answer-form')).not.toBeNull();
-    const opt = root.querySelector('.hub-decide-option') as HTMLElement;
+    expect(root.querySelector('.board-answer-form')).not.toBeNull();
+    const opt = root.querySelector('.board-decide-option') as HTMLElement;
     expect(opt.textContent).toContain('Ship it blue');
     opt.click();
     expect(onAnswer).toHaveBeenCalledWith(d, 'Ship it blue', 'o-1');
@@ -405,7 +405,7 @@ describe('renderTaskDetail — the same options, from the other entrance', () =>
     // A decision with no options renders none — the block is conditional, not
     // an empty shell.
     renderTaskDetail(root, decision({ title: 'Rename the tab?' }), handlers);
-    expect(root.querySelector('.hub-decide-option')).toBeNull();
+    expect(root.querySelector('.board-decide-option')).toBeNull();
   });
 });
 
@@ -432,28 +432,28 @@ describe('the walkthrough matches the approved mockup', () => {
     // the way out is a link rather than a dismiss.
     expect(root.querySelector('[role="dialog"]')).toBeNull();
     expect(root.querySelector('[aria-modal]')).toBeNull();
-    const home = root.querySelector('.hub-walk-home') as HTMLElement;
+    const home = root.querySelector('.board-walk-home') as HTMLElement;
     expect(home.textContent).toBe('‹ Back to Home');
     home.click();
     expect(onClose).toHaveBeenCalledTimes(1);
     // "Review", with the ‹ N of M › stepper beside it.
-    expect((root.querySelector('.hub-walk-heading') as HTMLElement).textContent).toBe('Review');
-    expect((root.querySelector('.hub-walk-back') as HTMLElement).textContent).toBe('‹');
-    expect((root.querySelector('.hub-walk-pos') as HTMLElement).textContent).toBe('1 of 1');
-    expect((root.querySelector('.hub-walk-skip') as HTMLElement).textContent).toBe('›');
+    expect((root.querySelector('.board-walk-heading') as HTMLElement).textContent).toBe('Review');
+    expect((root.querySelector('.board-walk-back') as HTMLElement).textContent).toBe('‹');
+    expect((root.querySelector('.board-walk-pos') as HTMLElement).textContent).toBe('1 of 1');
+    expect((root.querySelector('.board-walk-skip') as HTMLElement).textContent).toBe('›');
   });
 
   it('badges the kind and puts the asked-by meta in the head — no goal chip', () => {
     renderReviewWalkthrough(root, blockingDecision(), 0, walk(), { cleared: 0, last: null }, NOW);
-    const badge = root.querySelector('.hub-walk-k-decision') as HTMLElement;
+    const badge = root.querySelector('.board-walk-k-decision') as HTMLElement;
     expect(badge.textContent).toBe('Decision');
     // The goal chip is gone (Bryan, 2026-08-26: "remove the goal showing in
     // the top right, it takes up too much space") — the head is badge,
     // headline, meta, nothing else.
-    expect(root.querySelector('.hub-walk-k-count')).toBeNull();
+    expect(root.querySelector('.board-walk-k-count')).toBeNull();
     // The head's top-right meta is the one provenance line the card carries:
     // "Asked by <who> N days ago" — never the bare "waiting" wording.
-    const wait = root.querySelector('.hub-walk-wait') as HTMLElement;
+    const wait = root.querySelector('.board-walk-wait') as HTMLElement;
     expect(wait.textContent).not.toContain('waiting');
     // The fixture's decision has no recorded actor, so the meta states the
     // clock without inventing a name.
@@ -464,18 +464,20 @@ describe('the walkthrough matches the approved mockup', () => {
     // on — the same words a declared decision on a task would carry. The label
     // is 'Question' since Bryan's 2026-08-21 rename; the tone token (and so
     // the class name) deliberately stays 'review'.
-    expect((root.querySelector('.hub-walk-k-review') as HTMLElement).textContent).toBe('Question');
+    expect((root.querySelector('.board-walk-k-review') as HTMLElement).textContent).toBe(
+      'Question',
+    );
   });
 
   it('says Send and Skip for now, on both card kinds', () => {
     for (const queue of [blockingDecision(), reviewQueue([], [threadItem()], NOW)]) {
       renderReviewWalkthrough(root, queue, 0, walk());
-      const send = root.querySelector('.hub-walk-answer .hub-btn') as HTMLElement;
+      const send = root.querySelector('.board-walk-answer .board-btn') as HTMLElement;
       expect(send.textContent).toBe('Send');
       // Ink-dark like the mockup's `.btn.primary`, not the accent blue the
       // rejected build used.
-      expect(send.className).toContain('hub-btn-ink');
-      expect((root.querySelector('.hub-walk-skip-link') as HTMLElement).textContent).toBe(
+      expect(send.className).toContain('board-btn-ink');
+      expect((root.querySelector('.board-walk-skip-link') as HTMLElement).textContent).toBe(
         'Skip for now',
       );
     }
@@ -484,7 +486,7 @@ describe('the walkthrough matches the approved mockup', () => {
   it('Skip for now steps to the next item', () => {
     const onStep = vi.fn();
     renderReviewWalkthrough(root, blockingDecision(), 0, walk({ onStep }));
-    (root.querySelector('.hub-walk-skip-link') as HTMLElement).click();
+    (root.querySelector('.board-walk-skip-link') as HTMLElement).click();
     expect(onStep).toHaveBeenCalledWith(1);
   });
 });
@@ -513,11 +515,11 @@ describe('renderReviewWalkthrough — decisions', () => {
   it('shows where you are and the body, with no provenance block in between', () => {
     const { q } = queueOfThree();
     renderReviewWalkthrough(root, q, 0, walk());
-    expect((root.querySelector('.hub-walk-pos') as HTMLElement).textContent).toBe('1 of 3');
+    expect((root.querySelector('.board-walk-pos') as HTMLElement).textContent).toBe('1 of 3');
     // The left-bordered ctx block is gone — one head row, one body (approved
     // design). What the decision blocks still reads off the Home row's title.
-    expect(root.querySelector('.hub-walk-ctx')).toBeNull();
-    expect((root.querySelector('.hub-walk-body') as HTMLElement).innerHTML).toContain(
+    expect(root.querySelector('.board-walk-ctx')).toBeNull();
+    expect((root.querySelector('.board-walk-body') as HTMLElement).innerHTML).toContain(
       '<strong>colour</strong>',
     );
   });
@@ -529,9 +531,9 @@ describe('renderReviewWalkthrough — decisions', () => {
     const onOpenItem = vi.fn();
     const { q } = queueOfThree();
     renderReviewWalkthrough(root, q, 0, walk({ onOpenItem }));
-    const where = root.querySelector('.hub-walk-where') as HTMLElement;
+    const where = root.querySelector('.board-walk-where') as HTMLElement;
     expect(where.textContent).toContain('Task:');
-    const open = root.querySelector('.hub-walk-where-link') as HTMLElement;
+    const open = root.querySelector('.board-walk-where-link') as HTMLElement;
     // The subject IS the question on a decision, so naming it would print the
     // same words the headline already carries — the link says what it does.
     expect(open.textContent).toContain('Open the task');
@@ -543,7 +545,7 @@ describe('renderReviewWalkthrough — decisions', () => {
     const onAnswer = vi.fn();
     const { q } = queueOfThree();
     renderReviewWalkthrough(root, q, 0, walk({ onAnswer }));
-    const opts = root.querySelectorAll<HTMLElement>('.hub-walk-option');
+    const opts = root.querySelectorAll<HTMLElement>('.board-walk-option');
     expect(opts).toHaveLength(2);
     expect(opts[0]?.textContent).toContain('Ship it blue');
     expect(opts[0]?.textContent).toContain('Matches the rest of the board');
@@ -551,7 +553,7 @@ describe('renderReviewWalkthrough — decisions', () => {
     // The verbatim answer is still recorded — the option id rides along with it.
     expect(onAnswer).toHaveBeenCalledWith(taskAt(q, 0), 'Ship it green', 'o-2');
 
-    const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
+    const form = root.querySelector('.board-walk-answer') as HTMLFormElement;
     const ta = form.querySelector('textarea') as HTMLTextAreaElement;
     ta.value = 'Neither — use the accent colour';
     form.dispatchEvent(new Event('submit', { cancelable: true }));
@@ -563,8 +565,8 @@ describe('renderReviewWalkthrough — decisions', () => {
     const { q } = queueOfThree();
     const i = q.items.findIndex((r) => r.title === 'Rename the tab?');
     renderReviewWalkthrough(root, q, i, walk({ onAnswer }));
-    expect(root.querySelectorAll('.hub-walk-option')).toHaveLength(0);
-    const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
+    expect(root.querySelectorAll('.board-walk-option')).toHaveLength(0);
+    const form = root.querySelector('.board-walk-answer') as HTMLFormElement;
     (form.querySelector('textarea') as HTMLTextAreaElement).value = 'Yes, rename it';
     form.dispatchEvent(new Event('submit', { cancelable: true }));
     expect(onAnswer).toHaveBeenCalledWith(taskAt(q, i), 'Yes, rename it');
@@ -577,16 +579,16 @@ describe('renderReviewWalkthrough — decisions', () => {
   it('the "Tell me more" box is gone from the decision card', () => {
     const { q } = queueOfThree();
     renderReviewWalkthrough(root, q, 0, walk());
-    expect(root.querySelector('.hub-walk-info')).toBeNull();
-    expect(root.querySelector('.hub-walk-more')).toBeNull();
-    expect(root.querySelector('.hub-walk-answer')).not.toBeNull();
+    expect(root.querySelector('.board-walk-info')).toBeNull();
+    expect(root.querySelector('.board-walk-more')).toBeNull();
+    expect(root.querySelector('.board-walk-answer')).not.toBeNull();
   });
 
   it('an empty answer submits nothing', () => {
     const h = walk();
     const { q } = queueOfThree();
     renderReviewWalkthrough(root, q, 0, h);
-    const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
+    const form = root.querySelector('.board-walk-answer') as HTMLFormElement;
     (form.querySelector('textarea') as HTMLTextAreaElement).value = '   ';
     form.dispatchEvent(new Event('submit', { cancelable: true }));
     expect(h.onAnswer).not.toHaveBeenCalled();
@@ -600,10 +602,10 @@ describe('renderReviewWalkthrough — decisions', () => {
     it('a decision answer survives a re-render', async () => {
       const { q } = queueOfThree();
       renderReviewWalkthrough(root, q, 0, walk());
-      const ta = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
+      const ta = root.querySelector('.board-walk-answer textarea') as HTMLTextAreaElement;
       ta.value = 'Neither — half-typed thought';
       await repaint();
-      const after = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
+      const after = root.querySelector('.board-walk-answer textarea') as HTMLTextAreaElement;
       // The island's whole point, and the reason no `restoreFields` pass is
       // left on this surface: the box KEEPS ITS NODE, so the draft is not put
       // back — it was never taken away. Under the vanilla renderer this
@@ -615,10 +617,10 @@ describe('renderReviewWalkthrough — decisions', () => {
     it('a thread reply survives a re-render', async () => {
       const q = reviewQueue([], [threadItem()], NOW);
       renderReviewWalkthrough(root, q, 0, walk());
-      const ta = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
+      const ta = root.querySelector('.board-walk-answer textarea') as HTMLTextAreaElement;
       ta.value = 'Green, because';
       await repaint();
-      expect((root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement).value).toBe(
+      expect((root.querySelector('.board-walk-answer textarea') as HTMLTextAreaElement).value).toBe(
         'Green, because',
       );
     });
@@ -626,11 +628,12 @@ describe('renderReviewWalkthrough — decisions', () => {
     it('a draft never follows the reader onto a different card', async () => {
       const { q } = queueOfThree();
       renderReviewWalkthrough(root, q, 0, walk());
-      (root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement).value = 'For card A';
+      (root.querySelector('.board-walk-answer textarea') as HTMLTextAreaElement).value =
+        'For card A';
       // Stepping on is a repaint like any other — what stops the draft
       // following is the card's KEY changing, which unmounts it.
       await repaint({ index: 1 });
-      expect((root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement).value).toBe(
+      expect((root.querySelector('.board-walk-answer textarea') as HTMLTextAreaElement).value).toBe(
         '',
       );
     });
@@ -640,12 +643,12 @@ describe('renderReviewWalkthrough — decisions', () => {
     const onStep = vi.fn();
     const { q } = queueOfThree();
     renderReviewWalkthrough(root, q, 0, walk({ onStep }));
-    expect((root.querySelector('.hub-walk-back') as HTMLButtonElement).disabled).toBe(true);
-    (root.querySelector('.hub-walk-skip') as HTMLElement).click();
+    expect((root.querySelector('.board-walk-back') as HTMLButtonElement).disabled).toBe(true);
+    (root.querySelector('.board-walk-skip') as HTMLElement).click();
     expect(onStep).toHaveBeenCalledWith(1);
 
     renderReviewWalkthrough(root, q, 1, walk({ onStep }));
-    const back = root.querySelector('.hub-walk-back') as HTMLButtonElement;
+    const back = root.querySelector('.board-walk-back') as HTMLButtonElement;
     expect(back.disabled).toBe(false);
   });
 
@@ -653,7 +656,7 @@ describe('renderReviewWalkthrough — decisions', () => {
     const { a, b, c } = queueOfThree();
     a.infoRequests = [{ text: 'What does green cost us?', by: 'Bryan', ts: NOW }];
     renderReviewWalkthrough(root, q0([a, b, c]), 0, walk());
-    expect((root.querySelector('.hub-walk-asked') as HTMLElement).textContent).toContain(
+    expect((root.querySelector('.board-walk-asked') as HTMLElement).textContent).toContain(
       'What does green cost us?',
     );
   });
@@ -663,20 +666,20 @@ describe('renderReviewWalkthrough — decisions', () => {
     // Presence first: with items left, the done panel is absent and a card shows.
     const { q } = queueOfThree();
     renderReviewWalkthrough(root, q, 0, walk({ onClose }));
-    expect(root.querySelector('.hub-walk-done')).toBeNull();
-    expect(root.querySelector('.hub-walk-card')).not.toBeNull();
+    expect(root.querySelector('.board-walk-done')).toBeNull();
+    expect(root.querySelector('.board-walk-card')).not.toBeNull();
 
     renderReviewWalkthrough(root, q0([task()]), 0, walk({ onClose }));
-    expect(root.querySelector('.hub-walk-done')).not.toBeNull();
-    expect(root.querySelector('.hub-walk-card')).toBeNull();
-    (root.querySelector('.hub-walk-done button') as HTMLElement).click();
+    expect(root.querySelector('.board-walk-done')).not.toBeNull();
+    expect(root.querySelector('.board-walk-card')).toBeNull();
+    (root.querySelector('.board-walk-done button') as HTMLElement).click();
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('walking past the end lands on the done state rather than rendering nothing', () => {
     const { q } = queueOfThree();
     renderReviewWalkthrough(root, q, 3, walk());
-    expect(root.querySelector('.hub-walk-done')).not.toBeNull();
+    expect(root.querySelector('.board-walk-done')).not.toBeNull();
   });
 
   it('a negative index means closed — the container hides', () => {
@@ -688,7 +691,7 @@ describe('renderReviewWalkthrough — decisions', () => {
     // Not `root.children`: the island owns a wrapper inside the container and
     // the container is the shell's, so "nothing rendered" is read off what the
     // island drew rather than off the host's child count.
-    expect(root.querySelector('.hub-walk-panel')).toBeNull();
+    expect(root.querySelector('.board-walk-panel')).toBeNull();
     expect(root.textContent).toBe('');
   });
 
@@ -703,7 +706,7 @@ describe('renderReviewWalkthrough — decisions', () => {
     expect(decisionRows([a, b, c]).map((t) => t.id)).toEqual([a.id, b.id, c.id]);
     expect(a.order).toBeLessThan(c.order);
     renderReviewWalkthrough(root, q, 0, walk());
-    expect((root.querySelector('.hub-walk-title') as HTMLElement).textContent).toBe(
+    expect((root.querySelector('.board-walk-title') as HTMLElement).textContent).toBe(
       'Blue or green?',
     );
     // The whole queue is still the strip's, so the count and the cards cannot
@@ -722,21 +725,21 @@ describe('renderReviewWalkthrough — comments', () => {
     renderReviewWalkthrough(root, queueOf(threadItem({ direct: true })), 0, walk());
     // The card's heading is the QUESTION (mockup: the card title is the ask);
     // the thing it was asked ON is the Task link below it.
-    expect((root.querySelector('.hub-walk-title') as HTMLElement).textContent).toBe(
+    expect((root.querySelector('.board-walk-title') as HTMLElement).textContent).toBe(
       'Green or blue?',
     );
-    expect((root.querySelector('.hub-walk-where') as HTMLElement).textContent).toContain(
+    expect((root.querySelector('.board-walk-where') as HTMLElement).textContent).toContain(
       'Ship the widget',
     );
     // A one-line question fits in the heading, so the card does not also quote
     // it underneath — that is the same words twice on a small screen.
-    expect(root.querySelector('.hub-walk-ask')).toBeNull();
-    const meta = root.querySelector('.hub-walk-wait') as HTMLElement;
+    expect(root.querySelector('.board-walk-ask')).toBeNull();
+    const meta = root.querySelector('.board-walk-wait') as HTMLElement;
     expect(meta.textContent).toContain('Asked by Helper');
     // The decision-only furniture is absent: there is no options block and no
     // "not enough to decide" form on a comment.
-    expect(root.querySelector('.hub-walk-info')).toBeNull();
-    expect(root.querySelector('.hub-walk-options')).toBeNull();
+    expect(root.querySelector('.board-walk-info')).toBeNull();
+    expect(root.querySelector('.board-walk-options')).toBeNull();
   });
 
   // A typed question is regularly a paragraph. The mockup's card is a SHORT
@@ -754,12 +757,12 @@ describe('renderReviewWalkthrough — comments', () => {
     expect(queue.items).toHaveLength(1);
     expect(queue.total).toBe(1);
     renderReviewWalkthrough(root, queue, 0, walk());
-    const title = (root.querySelector('.hub-walk-title') as HTMLElement).textContent ?? '';
+    const title = (root.querySelector('.board-walk-title') as HTMLElement).textContent ?? '';
     expect(title.length).toBeLessThan(ask.length);
     expect(title.startsWith('The card head puts the wait')).toBe(true);
     // Nothing is lost: the quote is verbatim, and the two really do differ, so
     // this is not the same string rendered twice.
-    expect((root.querySelector('.hub-walk-ask') as HTMLElement).textContent).toBe(ask);
+    expect((root.querySelector('.board-walk-ask') as HTMLElement).textContent).toBe(ask);
     expect(title).not.toBe(ask);
   });
 
@@ -774,13 +777,13 @@ describe('renderReviewWalkthrough — comments', () => {
     const undeclared = reviewQueue([], [note({ ask: 'Merged and deployed.' })], NOW);
     expect(undeclared.items).toHaveLength(1);
     renderReviewWalkthrough(root, undeclared, 0, walk());
-    const meta = root.querySelector('.hub-walk-wait') as HTMLElement;
+    const meta = root.querySelector('.board-walk-wait') as HTMLElement;
     expect(meta.textContent).toContain('Posted by Helper');
     expect(meta.textContent).not.toMatch(/asked/i);
 
     // The declared twin of the same words says Asked — declaring is asking.
     renderReviewWalkthrough(root, queueOf(threadItem({ ask: 'Merged and deployed.' })), 0, walk());
-    expect((root.querySelector('.hub-walk-wait') as HTMLElement).textContent).toContain(
+    expect((root.querySelector('.board-walk-wait') as HTMLElement).textContent).toContain(
       'Asked by Helper',
     );
   });
@@ -792,7 +795,7 @@ describe('renderReviewWalkthrough — comments', () => {
     const item = threadItem();
     const queue = queueOf(item);
     renderReviewWalkthrough(root, queue, 0, walk({ onReply }));
-    const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
+    const form = root.querySelector('.board-walk-answer') as HTMLFormElement;
     const ta = form.querySelector('textarea') as HTMLTextAreaElement;
     ta.value = '   ';
     form.dispatchEvent(new Event('submit', { cancelable: true }));
@@ -808,8 +811,8 @@ describe('renderReviewWalkthrough — comments', () => {
     renderReviewWalkthrough(root, queue, 0, walk({ onOpenItem }));
     // Mockup: the link is the thing itself — `Task: <title> ↗` — so the
     // surface is named by the label and the destination by the link.
-    expect((root.querySelector('.hub-walk-where') as HTMLElement).textContent).toContain('Task:');
-    const open = root.querySelector('.hub-walk-where-link') as HTMLElement;
+    expect((root.querySelector('.board-walk-where') as HTMLElement).textContent).toContain('Task:');
+    const open = root.querySelector('.board-walk-where-link') as HTMLElement;
     expect(open.textContent).toContain('Ship the widget');
     open.click();
     expect(onOpenItem).toHaveBeenCalledWith(queue.items[0]);
@@ -820,14 +823,14 @@ describe('renderReviewWalkthrough — comments', () => {
       0,
       walk({ onOpenItem }),
     );
-    expect((root.querySelector('.hub-walk-where') as HTMLElement).textContent).toContain('Doc:');
-    expect((root.querySelector('.hub-walk-where-link') as HTMLElement).textContent).toContain(
+    expect((root.querySelector('.board-walk-where') as HTMLElement).textContent).toContain('Doc:');
+    expect((root.querySelector('.board-walk-where-link') as HTMLElement).textContent).toContain(
       'Launch plan',
     );
-    // Not `.hub-walk-open` — that class left with the blocker card, and this
+    // Not `.board-walk-open` — that class left with the blocker card, and this
     // link keeps its own class so a shared selector cannot come back and turn
     // the button into bare text again (measured on staging at 430px).
-    expect(root.querySelector('.hub-walk-open')).toBeNull();
+    expect(root.querySelector('.board-walk-open')).toBeNull();
   });
 
   // This card used to render no way out at all, on the grounds that naming the
@@ -837,7 +840,7 @@ describe('renderReviewWalkthrough — comments', () => {
     const onOpenItem = vi.fn();
     const queue = queueOf(threadItem({ title: 'Green or blue?', ask: 'Green or blue?' }));
     renderReviewWalkthrough(root, queue, 0, walk({ onOpenItem }));
-    const open = root.querySelector('.hub-walk-where-link') as HTMLElement;
+    const open = root.querySelector('.board-walk-where-link') as HTMLElement;
     expect(open.textContent).toContain('Open the task');
     open.click();
     expect(onOpenItem).toHaveBeenCalledWith(queue.items[0]);
@@ -855,11 +858,11 @@ describe('renderReviewWalkthrough — comments', () => {
     );
     renderReviewWalkthrough(root, queue, 1, walk({ onStep }));
     // Presence first: the card under the nav really is the comment one.
-    expect(root.querySelector('.hub-walk-card')?.className).toContain('hub-walk-task-thread');
-    expect((root.querySelector('.hub-walk-back') as HTMLButtonElement).disabled).toBe(false);
-    (root.querySelector('.hub-walk-skip') as HTMLElement).click();
+    expect(root.querySelector('.board-walk-card')?.className).toContain('board-walk-task-thread');
+    expect((root.querySelector('.board-walk-back') as HTMLButtonElement).disabled).toBe(false);
+    (root.querySelector('.board-walk-skip') as HTMLElement).click();
     expect(onStep).toHaveBeenCalledWith(2);
-    (root.querySelector('.hub-walk-back') as HTMLElement).click();
+    (root.querySelector('.board-walk-back') as HTMLElement).click();
     expect(onStep).toHaveBeenLastCalledWith(0);
   });
 });
@@ -881,11 +884,11 @@ describe('renderReviewWalkthrough — saying that the advance happened', () => {
 
   it('says nothing about progress before anything has been cleared', () => {
     renderReviewWalkthrough(root, twoDecisions(), 0, walk());
-    expect(root.querySelector('.hub-walk-advanced')).toBeNull();
-    expect(root.querySelector('.hub-walk-cleared')).toBeNull();
+    expect(root.querySelector('.board-walk-advanced')).toBeNull();
+    expect(root.querySelector('.board-walk-cleared')).toBeNull();
     // Positive control: the card IS rendered, so the two absences above are
     // about progress rather than about an empty panel.
-    expect(root.querySelector('.hub-walk-title')?.textContent).toBe('Blue or green?');
+    expect(root.querySelector('.board-walk-title')?.textContent).toBe('Blue or green?');
   });
 
   it('names what was just finished, above the item that replaced it', () => {
@@ -895,20 +898,20 @@ describe('renderReviewWalkthrough — saying that the advance happened', () => {
       cleared: 1,
       last: queue.items[0] as ReviewItem,
     });
-    const banner = root.querySelector('.hub-walk-advanced') as HTMLElement;
+    const banner = root.querySelector('.board-walk-advanced') as HTMLElement;
     expect(banner).toBeTruthy();
     expect(banner.textContent).toContain('Answered');
     expect(banner.textContent).toContain('Blue or green?');
     // And the new card is underneath it, not replaced by it.
-    expect(root.querySelector('.hub-walk-title')?.textContent).toBe('Ship Friday?');
+    expect(root.querySelector('.board-walk-title')?.textContent).toBe('Ship Friday?');
   });
 
   it('counts up as the queue counts down, so one number says you moved', () => {
     const done = reviewQueue([decision({ title: 'Ship Friday?' })], [], NOW);
     renderReviewWalkthrough(root, done, 0, walk(), { cleared: 3, last: null });
-    const pos = root.querySelector('.hub-walk-pos') as HTMLElement;
+    const pos = root.querySelector('.board-walk-pos') as HTMLElement;
     expect(pos.textContent).toContain('1 of 1');
-    expect((root.querySelector('.hub-walk-cleared') as HTMLElement).textContent).toContain('3');
+    expect((root.querySelector('.board-walk-cleared') as HTMLElement).textContent).toContain('3');
   });
 
   it('reads a reply differently from an answer — it was not a decision', () => {
@@ -917,7 +920,7 @@ describe('renderReviewWalkthrough — saying that the advance happened', () => {
       cleared: 1,
       last: queue.items[0] as ReviewItem,
     });
-    expect((root.querySelector('.hub-walk-advanced') as HTMLElement).textContent).toContain(
+    expect((root.querySelector('.board-walk-advanced') as HTMLElement).textContent).toContain(
       'Replied on',
     );
   });
@@ -937,7 +940,7 @@ describe('renderReviewWalkthrough — saying that the advance happened', () => {
       cleared: 1,
       last: answered,
     });
-    (root.querySelector('.hub-walk-advanced-back') as HTMLElement).click();
+    (root.querySelector('.board-walk-advanced-back') as HTMLElement).click();
     expect(onOpenItem).toHaveBeenCalledWith(answered);
     // Not a step: the answered item is not at index -1 or anywhere else in
     // this queue, so a positional move could not have reached it.
@@ -946,9 +949,11 @@ describe('renderReviewWalkthrough — saying that the advance happened', () => {
 
   it('finishes with a count, so the end of a sitting is an ending', () => {
     renderReviewWalkthrough(root, reviewQueue([], [], NOW), 0, walk(), { cleared: 4, last: null });
-    const done = root.querySelector('.hub-walk-done') as HTMLElement;
+    const done = root.querySelector('.board-walk-done') as HTMLElement;
     expect(done.textContent).toContain('All caught up');
-    expect((root.querySelector('.hub-walk-done-tally') as HTMLElement).textContent).toContain('4');
+    expect((root.querySelector('.board-walk-done-tally') as HTMLElement).textContent).toContain(
+      '4',
+    );
   });
 
   /**
@@ -964,17 +969,17 @@ describe('renderReviewWalkthrough — saying that the advance happened', () => {
       cleared: 1,
       last: answered,
     });
-    expect(root.querySelector('.hub-walk-done')).toBeTruthy();
-    const banner = root.querySelector('.hub-walk-advanced') as HTMLElement;
+    expect(root.querySelector('.board-walk-done')).toBeTruthy();
+    const banner = root.querySelector('.board-walk-advanced') as HTMLElement;
     expect(banner.textContent).toContain('Blue or green?');
-    (root.querySelector('.hub-walk-advanced-back') as HTMLElement).click();
+    (root.querySelector('.board-walk-advanced-back') as HTMLElement).click();
     expect(onOpenItem).toHaveBeenCalledWith(answered);
   });
 
   it('a sitting that cleared nothing does not claim a tally', () => {
     renderReviewWalkthrough(root, reviewQueue([], [], NOW), 0, walk());
-    expect(root.querySelector('.hub-walk-done')).toBeTruthy();
-    expect(root.querySelector('.hub-walk-done-tally')).toBeNull();
+    expect(root.querySelector('.board-walk-done')).toBeTruthy();
+    expect(root.querySelector('.board-walk-done-tally')).toBeNull();
   });
 });
 
@@ -988,7 +993,7 @@ describe('the walkthrough composer — one answer per tap, and no lost words', (
     let release: (ok: boolean) => void = () => {};
     const onAnswer = vi.fn(() => new Promise<boolean>((r) => (release = r)));
     renderReviewWalkthrough(root, reviewQueue([decision()], [], NOW), 0, walk({ onAnswer }));
-    const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
+    const form = root.querySelector('.board-walk-answer') as HTMLFormElement;
     const ta = form.querySelector('textarea') as HTMLTextAreaElement;
     ta.value = 'Blue.';
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
@@ -1006,7 +1011,7 @@ describe('the walkthrough composer — one answer per tap, and no lost words', (
     const onAnswer = vi.fn(() => new Promise<boolean>((r) => (release = r)));
     const q = reviewQueue([decision()], [], NOW);
     renderReviewWalkthrough(root, q, 0, walk({ onAnswer }));
-    const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
+    const form = root.querySelector('.board-walk-answer') as HTMLFormElement;
     const ta = form.querySelector('textarea') as HTMLTextAreaElement;
     ta.value = 'Blue.';
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
@@ -1015,7 +1020,7 @@ describe('the walkthrough composer — one answer per tap, and no lost words', (
     // must still not reappear as a draft, because a box holding words the
     // reader can send again is a duplicate-answer path whichever node it is.
     await repaint();
-    const rebuilt = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
+    const rebuilt = root.querySelector('.board-walk-answer textarea') as HTMLTextAreaElement;
     expect(rebuilt.value).toBe('');
     release(true);
     await new Promise((r) => setTimeout(r, 0));
@@ -1027,9 +1032,9 @@ describe('the walkthrough composer — one answer per tap, and no lost words', (
     const onAnswer = vi.fn(() => new Promise<boolean>((r) => (release = r)));
     const q = reviewQueue([decision()], [], NOW);
     renderReviewWalkthrough(root, q, 0, walk({ onAnswer }));
-    const ta = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
+    const ta = root.querySelector('.board-walk-answer textarea') as HTMLTextAreaElement;
     ta.value = 'Blue.';
-    (root.querySelector('.hub-walk-answer') as HTMLFormElement).dispatchEvent(
+    (root.querySelector('.board-walk-answer') as HTMLFormElement).dispatchEvent(
       new Event('submit', { bubbles: true, cancelable: true }),
     );
     await repaint();
@@ -1039,7 +1044,7 @@ describe('the walkthrough composer — one answer per tap, and no lost words', (
     // keeps the node, that is this same element — the assertion read
     // `not.toBe` while a repaint replaced it, and the guarantee it pins (the
     // reader can see and resend what was refused) is unchanged.
-    const rebuilt = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
+    const rebuilt = root.querySelector('.board-walk-answer textarea') as HTMLTextAreaElement;
     expect(rebuilt).toBe(ta);
     expect(rebuilt.value).toBe('Blue.');
   });
@@ -1049,12 +1054,12 @@ describe('the walkthrough composer — one answer per tap, and no lost words', (
     const onAnswer = vi.fn(() => new Promise<boolean>((r) => (release = r)));
     const q = reviewQueue([decision()], [], NOW);
     renderReviewWalkthrough(root, q, 0, walk({ onAnswer }));
-    (root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement).value = 'Blue.';
-    (root.querySelector('.hub-walk-answer') as HTMLFormElement).dispatchEvent(
+    (root.querySelector('.board-walk-answer textarea') as HTMLTextAreaElement).value = 'Blue.';
+    (root.querySelector('.board-walk-answer') as HTMLFormElement).dispatchEvent(
       new Event('submit', { bubbles: true, cancelable: true }),
     );
     await repaint();
-    const rebuilt = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
+    const rebuilt = root.querySelector('.board-walk-answer textarea') as HTMLTextAreaElement;
     rebuilt.value = 'Actually, green';
     release(false);
     await new Promise((r) => setTimeout(r, 0));
@@ -1064,9 +1069,9 @@ describe('the walkthrough composer — one answer per tap, and no lost words', (
   it('keeps the words when the write REJECTS, not only when it is refused', async () => {
     const onAnswer = vi.fn(() => Promise.reject(new Error('network')));
     renderReviewWalkthrough(root, reviewQueue([decision()], [], NOW), 0, walk({ onAnswer }));
-    const ta = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
+    const ta = root.querySelector('.board-walk-answer textarea') as HTMLTextAreaElement;
     ta.value = 'Green, because the tunnel is up.';
-    (root.querySelector('.hub-walk-answer') as HTMLFormElement).dispatchEvent(
+    (root.querySelector('.board-walk-answer') as HTMLFormElement).dispatchEvent(
       new Event('submit', { bubbles: true, cancelable: true }),
     );
     await new Promise((r) => setTimeout(r, 0));
@@ -1077,7 +1082,7 @@ describe('the walkthrough composer — one answer per tap, and no lost words', (
   it('keeps the words when the write is refused', async () => {
     const onAnswer = vi.fn(() => Promise.resolve(false));
     renderReviewWalkthrough(root, reviewQueue([decision()], [], NOW), 0, walk({ onAnswer }));
-    const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
+    const form = root.querySelector('.board-walk-answer') as HTMLFormElement;
     const ta = form.querySelector('textarea') as HTMLTextAreaElement;
     ta.value = 'Green, because the tunnel is up.';
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
@@ -1096,7 +1101,7 @@ describe('the walkthrough composer — one answer per tap, and no lost words', (
 describe('the walkthrough composers are markdown editors', () => {
   it('the answer box edits what you type as markdown', () => {
     renderReviewWalkthrough(root, reviewQueue([decision()], [], NOW), 0, walk());
-    const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
+    const form = root.querySelector('.board-walk-answer') as HTMLFormElement;
     const ta = form.querySelector('textarea') as HTMLTextAreaElement;
     expect(surfaceOf(ta)?.querySelector('.ProseMirror')).not.toBeNull();
     ta.value = '**two hops**';
@@ -1107,7 +1112,7 @@ describe('the walkthrough composers are markdown editors', () => {
   it('a successful send empties the editor along with the box', async () => {
     const onAnswer = vi.fn(() => Promise.resolve(true));
     renderReviewWalkthrough(root, reviewQueue([decision()], [], NOW), 0, walk({ onAnswer }));
-    const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
+    const form = root.querySelector('.board-walk-answer') as HTMLFormElement;
     const ta = form.querySelector('textarea') as HTMLTextAreaElement;
     ta.value = 'Blue, **final**.';
     refreshMarkdownComposer(ta);
@@ -1128,11 +1133,11 @@ describe('the walkthrough composers are markdown editors', () => {
    */
   it('keeps the live editor across a repaint', async () => {
     renderReviewWalkthrough(root, reviewQueue([decision()], [], NOW), 0, walk());
-    const ta = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
+    const ta = root.querySelector('.board-walk-answer textarea') as HTMLTextAreaElement;
     const wrap = ta.parentElement;
     expect(wrap?.classList.contains('md-composer')).toBe(true);
     await repaint();
-    const after = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
+    const after = root.querySelector('.board-walk-answer textarea') as HTMLTextAreaElement;
     expect(after).toBe(ta);
     expect(after.parentElement).toBe(wrap);
     expect(surfaceOf(after)?.querySelector('.ProseMirror')).not.toBeNull();
@@ -1145,7 +1150,7 @@ describe('the walkthrough composers are markdown editors', () => {
   it('a declared item card gets the same composer', () => {
     const q = reviewQueue([task({ id: 't-1' })], [threadItem()], NOW);
     renderReviewWalkthrough(root, q, 0, walk());
-    const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
+    const form = root.querySelector('.board-walk-answer') as HTMLFormElement;
     const ta = form.querySelector('textarea') as HTMLTextAreaElement;
     expect(surfaceOf(ta)?.querySelector('.ProseMirror')).not.toBeNull();
   });
@@ -1173,7 +1178,7 @@ describe('walkPosition — an index is not a position on a list that shrinks', (
     // card, and the reader would never learn that the one they were reading
     // moved rather than vanished.
     const after = reviewQueue(
-      [before.items[1]?.decision?.task as HubTask, before.items[2]?.decision?.task as HubTask],
+      [before.items[1]?.decision?.task as BoardTask, before.items[2]?.decision?.task as BoardTask],
       [],
       NOW,
     );
@@ -1207,7 +1212,7 @@ describe('advanceWalk — landing on the NEXT request, not the one after it', ()
     /** The queue without its item at `i` — what answering that one leaves. */
     const without = (i: number) =>
       reviewQueue(
-        queue.items.filter((_, n) => n !== i).map((it) => it.decision?.task as HubTask),
+        queue.items.filter((_, n) => n !== i).map((it) => it.decision?.task as BoardTask),
         [],
         NOW,
       );
@@ -1240,7 +1245,7 @@ describe('advanceWalk — landing on the NEXT request, not the one after it', ()
 
   it('holds the gap when a peer takes the next one too', () => {
     const { queue, keyAt } = three();
-    const after = reviewQueue([queue.items[2]?.decision?.task as HubTask], [], NOW);
+    const after = reviewQueue([queue.items[2]?.decision?.task as BoardTask], [], NOW);
     expect(advanceWalk(after, 0, keyAt(0), keyAt(1))).toBe(0);
   });
 });
@@ -1272,16 +1277,16 @@ describe('renderReviewWalkthrough — a declared review item', () => {
   // order they wrote it, and nothing reorders or labels it.
   it('renders head row plus one markdown body — no labelled sub-blocks', () => {
     renderReviewWalkthrough(root, queueOf(declared()), 0, walk());
-    expect((root.querySelector('.hub-walk-title') as HTMLElement).textContent).toBe(
+    expect((root.querySelector('.board-walk-title') as HTMLElement).textContent).toBe(
       'Where should the trial banner live?',
     );
     // The old furniture is gone outright.
-    expect(root.querySelector('.hub-walk-why')).toBeNull();
-    expect(root.querySelector('.hub-walk-ctx')).toBeNull();
-    expect(root.querySelector('.hub-walk-lookfor')).toBeNull();
-    expect(root.querySelector('.hub-walk-review-detail')).toBeNull();
+    expect(root.querySelector('.board-walk-why')).toBeNull();
+    expect(root.querySelector('.board-walk-ctx')).toBeNull();
+    expect(root.querySelector('.board-walk-lookfor')).toBeNull();
+    expect(root.querySelector('.board-walk-review-detail')).toBeNull();
     // One body, markdown-rendered, in the author's own order.
-    const body = root.querySelector('.hub-walk-body') as HTMLElement;
+    const body = root.querySelector('.board-walk-body') as HTMLElement;
     const text = body.textContent ?? '';
     const first = text.indexOf('Blocks the onboarding rework');
     const second = text.indexOf('Whether moving it below the fold hides the price.');
@@ -1293,10 +1298,10 @@ describe('renderReviewWalkthrough — a declared review item', () => {
     expect(body.querySelector('strong')?.textContent).toBe('sign-up');
     // The rest of the walkthrough pattern is untouched: options, composer,
     // stepper, skip.
-    expect(root.querySelectorAll('.hub-walk-option')).toHaveLength(2);
-    expect(root.querySelector('.hub-walk-answer')).not.toBeNull();
-    expect(root.querySelector('.hub-walk-skip')).not.toBeNull();
-    expect(root.querySelector('.hub-walk-skip-link')).not.toBeNull();
+    expect(root.querySelectorAll('.board-walk-option')).toHaveLength(2);
+    expect(root.querySelector('.board-walk-answer')).not.toBeNull();
+    expect(root.querySelector('.board-walk-skip')).not.toBeNull();
+    expect(root.querySelector('.board-walk-skip-link')).not.toBeNull();
   });
 
   it("the head's meta reads Asked by <who> N days ago, singular and plural", () => {
@@ -1308,7 +1313,7 @@ describe('renderReviewWalkthrough — a declared review item', () => {
       { cleared: 0, last: null },
       NOW,
     );
-    expect((root.querySelector('.hub-walk-wait') as HTMLElement).textContent).toBe(
+    expect((root.querySelector('.board-walk-wait') as HTMLElement).textContent).toBe(
       'Asked by Harbor agent 2 days ago',
     );
     renderReviewWalkthrough(
@@ -1319,7 +1324,7 @@ describe('renderReviewWalkthrough — a declared review item', () => {
       { cleared: 0, last: null },
       NOW,
     );
-    expect((root.querySelector('.hub-walk-wait') as HTMLElement).textContent).toBe(
+    expect((root.querySelector('.board-walk-wait') as HTMLElement).textContent).toBe(
       'Asked by Harbor agent 1 day ago',
     );
   });
@@ -1331,13 +1336,13 @@ describe('renderReviewWalkthrough — a declared review item', () => {
       review: { shape: 'review', headline: 'Read the copy', detail: 'It ships Tuesday.' },
     });
     renderReviewWalkthrough(root, queueOf(bare), 0, walk());
-    expect((root.querySelector('.hub-walk-body') as HTMLElement).textContent).toBe(
+    expect((root.querySelector('.board-walk-body') as HTMLElement).textContent).toBe(
       'It ships Tuesday.',
     );
 
     const nothing = threadItem({ review: { shape: 'review', headline: 'Read the copy' } });
     renderReviewWalkthrough(root, queueOf(nothing), 0, walk());
-    expect(root.querySelector('.hub-walk-body')).toBeNull();
+    expect(root.querySelector('.board-walk-body')).toBeNull();
   });
 
   // One reply path. A tap and typed words must reach the thread the same way,
@@ -1346,8 +1351,8 @@ describe('renderReviewWalkthrough — a declared review item', () => {
     const onReply = vi.fn();
     const queue = queueOf(declared());
     renderReviewWalkthrough(root, queue, 0, walk({ onReply }));
-    const opts = [...root.querySelectorAll<HTMLElement>('.hub-walk-option')];
-    expect(opts.map((o) => o.querySelector('.hub-walk-option-label')?.textContent)).toEqual([
+    const opts = [...root.querySelectorAll<HTMLElement>('.board-walk-option')];
+    expect(opts.map((o) => o.querySelector('.board-walk-option-label')?.textContent)).toEqual([
       'Keep above',
       'Move below',
     ]);
@@ -1355,7 +1360,7 @@ describe('renderReviewWalkthrough — a declared review item', () => {
     // The LABEL is the verbatim reply; the id says which candidate it was.
     expect(onReply).toHaveBeenCalledWith(queue.items[0], 'Move below', 'below');
 
-    const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
+    const form = root.querySelector('.board-walk-answer') as HTMLFormElement;
     const ta = form.querySelector('textarea') as HTMLTextAreaElement;
     ta.value = 'Neither — put it in the sign-up flow.';
     form.dispatchEvent(new Event('submit', { cancelable: true }));
@@ -1374,8 +1379,8 @@ describe('renderReviewWalkthrough — a declared review item', () => {
     const onReply = vi.fn();
     const queue = queueOf(threadItem({ review: { shape: 'review', headline: 'Read the copy' } }));
     renderReviewWalkthrough(root, queue, 0, walk({ onReply }));
-    expect(root.querySelectorAll('.hub-walk-option')).toHaveLength(0);
-    const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
+    expect(root.querySelectorAll('.board-walk-option')).toHaveLength(0);
+    const form = root.querySelector('.board-walk-answer') as HTMLFormElement;
     (form.querySelector('textarea') as HTMLTextAreaElement).value = 'Reads fine.';
     form.dispatchEvent(new Event('submit', { cancelable: true }));
     expect(onReply).toHaveBeenCalledWith(queue.items[0], 'Reads fine.');
@@ -1389,7 +1394,7 @@ describe('renderReviewWalkthrough — a declared review item', () => {
       review: { shape: 'decision', headline: 'Ship v2 now. Or wait for the rebuild?' },
     });
     renderReviewWalkthrough(root, queueOf(item), 0, walk());
-    expect((root.querySelector('.hub-walk-title') as HTMLElement).textContent).toBe(
+    expect((root.querySelector('.board-walk-title') as HTMLElement).textContent).toBe(
       'Ship v2 now. Or wait for the rebuild?',
     );
   });
@@ -1418,31 +1423,31 @@ describe('renderReviewWalkthrough — a long detail clamps with an explicit expa
 
   it('puts the FULL detail in the body — the card and the thread say the same words', () => {
     renderReviewWalkthrough(root, queueOf(longItem()), 0, walk());
-    const body = root.querySelector('.hub-walk-body') as HTMLElement;
+    const body = root.querySelector('.board-walk-body') as HTMLElement;
     expect(body.textContent).toContain('word0');
     expect(body.textContent).toContain('word299');
   });
 
   it('clamps a long body and expands it on the affordance, which then leaves', async () => {
     renderReviewWalkthrough(root, queueOf(longItem()), 0, walk());
-    const body = root.querySelector('.hub-walk-body') as HTMLElement;
-    expect(body.classList.contains('hub-walk-body-clamp')).toBe(true);
-    const expand = root.querySelector('.hub-walk-body-expand') as HTMLButtonElement;
+    const body = root.querySelector('.board-walk-body') as HTMLElement;
+    expect(body.classList.contains('board-walk-body-clamp')).toBe(true);
+    const expand = root.querySelector('.board-walk-body-expand') as HTMLButtonElement;
     expect(expand).not.toBeNull();
     expand.click();
     await tick();
     // The SAME node, unclamped in place — the expansion is state on a keyed
     // card, so opening it does not rebuild the body it opens.
-    expect(root.querySelector('.hub-walk-body')).toBe(body);
-    expect(body.classList.contains('hub-walk-body-clamp')).toBe(false);
-    expect(root.querySelector('.hub-walk-body-expand')).toBeNull();
+    expect(root.querySelector('.board-walk-body')).toBe(body);
+    expect(body.classList.contains('board-walk-body-clamp')).toBe(false);
+    expect(root.querySelector('.board-walk-body-expand')).toBeNull();
   });
 
   it('a body within the target gets no clamp and no affordance', () => {
     renderReviewWalkthrough(root, queueOf(threadItem()), 0, walk());
-    const body = root.querySelector('.hub-walk-body') as HTMLElement;
-    expect(body.classList.contains('hub-walk-body-clamp')).toBe(false);
-    expect(root.querySelector('.hub-walk-body-expand')).toBeNull();
+    const body = root.querySelector('.board-walk-body') as HTMLElement;
+    expect(body.classList.contains('board-walk-body-clamp')).toBe(false);
+    expect(root.querySelector('.board-walk-body-expand')).toBeNull();
   });
 
   /**
@@ -1459,13 +1464,13 @@ describe('renderReviewWalkthrough — a long detail clamps with an explicit expa
   it('stays expanded across the repaint a background event fires', async () => {
     const q = queueOf(longItem());
     renderReviewWalkthrough(root, q, 0, walk());
-    (root.querySelector('.hub-walk-body-expand') as HTMLButtonElement).click();
+    (root.querySelector('.board-walk-body-expand') as HTMLButtonElement).click();
     // The board event lands: same queue, same position, a repaint.
     await tick();
     await repaint();
-    const body = root.querySelector('.hub-walk-body') as HTMLElement;
-    expect(body.classList.contains('hub-walk-body-clamp')).toBe(false);
-    expect(root.querySelector('.hub-walk-body-expand')).toBeNull();
+    const body = root.querySelector('.board-walk-body') as HTMLElement;
+    expect(body.classList.contains('board-walk-body-clamp')).toBe(false);
+    expect(root.querySelector('.board-walk-body-expand')).toBeNull();
   });
 
   // The clamp is per-item, so moving on must not carry the last card's
@@ -1479,12 +1484,12 @@ describe('renderReviewWalkthrough — a long detail clamps with an explicit expa
     });
     const q = queueOf(first, second);
     renderReviewWalkthrough(root, q, 0, walk());
-    (root.querySelector('.hub-walk-body-expand') as HTMLButtonElement).click();
+    (root.querySelector('.board-walk-body-expand') as HTMLButtonElement).click();
     await tick();
     await repaint({ index: 1 });
-    const body = root.querySelector('.hub-walk-body') as HTMLElement;
-    expect(body.classList.contains('hub-walk-body-clamp')).toBe(true);
-    expect(root.querySelector('.hub-walk-body-expand')).not.toBeNull();
+    const body = root.querySelector('.board-walk-body') as HTMLElement;
+    expect(body.classList.contains('board-walk-body-clamp')).toBe(true);
+    expect(root.querySelector('.board-walk-body-expand')).not.toBeNull();
   });
 });
 
@@ -1505,29 +1510,29 @@ describe('the walkthrough island contract', () => {
 
   it('keeps the card as the IDENTICAL node across a repaint of the same item', async () => {
     renderReviewWalkthrough(root, oneDecision(), 0, walk());
-    const card = root.querySelector('.hub-walk-card');
+    const card = root.querySelector('.board-walk-card');
     expect(card).not.toBeNull();
     await repaint();
     // Same item, same card. The clock in the head moved, which is what makes
     // this a repaint that really re-rendered rather than a no-op.
-    expect(root.querySelector('.hub-walk-card')).toBe(card);
+    expect(root.querySelector('.board-walk-card')).toBe(card);
   });
 
   it('replaces the card when the reader moves to another item', async () => {
     const a = decision({ title: 'Blue or green?' });
     const b = decision({ title: 'Ship Friday?' });
     renderReviewWalkthrough(root, q0([a, b]), 0, walk());
-    const first = root.querySelector('.hub-walk-card');
+    const first = root.querySelector('.board-walk-card');
     await repaint({ index: 1 });
     // The other half of the guarantee: a different key is a different card, so
     // nothing the last one was holding can follow the reader onto this one.
-    expect(root.querySelector('.hub-walk-card')).not.toBe(first);
-    expect(root.querySelector('.hub-walk-title')?.textContent).toBe('Ship Friday?');
+    expect(root.querySelector('.board-walk-card')).not.toBe(first);
+    expect(root.querySelector('.board-walk-title')?.textContent).toBe('Ship Friday?');
   });
 
   it('leaves the caret where the reader left it across a repaint', async () => {
     renderReviewWalkthrough(root, oneDecision(), 0, walk());
-    const ta = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
+    const ta = root.querySelector('.board-walk-answer textarea') as HTMLTextAreaElement;
     ta.value = 'Blue, because';
     ta.focus();
     ta.setSelectionRange(4, 4);
