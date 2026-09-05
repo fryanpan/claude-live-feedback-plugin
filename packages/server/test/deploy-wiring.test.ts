@@ -39,7 +39,7 @@ async function withServer(
       dataDir,
       ...extraArgs,
     ],
-    { cwd: repoRoot, stdio: 'ignore', env: { ...process.env, LF_SUMMARIES: '0' } },
+    { cwd: repoRoot, stdio: 'ignore', env: { ...process.env, CW_SUMMARIES: '0' } },
   );
   const headers = { host: `localhost:${port}`, 'content-type': 'application/json' };
   try {

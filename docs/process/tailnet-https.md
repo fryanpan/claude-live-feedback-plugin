@@ -27,14 +27,14 @@ Note the third row is the control: it must NOT move. If the plain-http origin
 stops answering, `serve` has been pointed at the wrong target rather than
 added alongside.
 
-**Setting `LF_PUBLIC_BASE_URL` by hand in the installed plist is a stopgap, not
+**Setting `CW_PUBLIC_BASE_URL` by hand in the installed plist is a stopgap, not
 step 2.** It does take effect at the next restart from any cause, but
 `install.sh` regenerates the plist from its template on every run, so a
 hand-written value is silently discarded the next time anyone reinstalls. The
 canonical form is below, and it ends in `launchctl bootstrap`:
 
 ```bash
-LF_PUBLIC_BASE_URL=https://<tailnet-name> ./scripts/launchd/install.sh
+CW_PUBLIC_BASE_URL=https://<tailnet-name> ./scripts/launchd/install.sh
 ```
 
 That restart is also the **client deploy** — the server rebuilds the bundles
@@ -118,11 +118,11 @@ tailscale serve status
 Reinstall the launchd agent with the origin in its environment:
 
 ```bash
-LF_PUBLIC_BASE_URL=https://<tailnet-name> scripts/launchd/install.sh
+CW_PUBLIC_BASE_URL=https://<tailnet-name> scripts/launchd/install.sh
 ```
 
 This rewrites `~/Library/LaunchAgents/com.fryanpan.claude-workspaces.plist` with
-`LF_PUBLIC_BASE_URL` set and restarts the service. The value is validated at
+`CW_PUBLIC_BASE_URL` set and restarts the service. The value is validated at
 boot: a malformed one is a startup failure with a named error, not a silent
 fallback.
 
@@ -195,7 +195,7 @@ because the plist is regenerated from the template each time):
 scripts/launchd/install.sh
 ```
 
-Rolling back only the frontend while leaving `LF_PUBLIC_BASE_URL` set is the
+Rolling back only the frontend while leaving `CW_PUBLIC_BASE_URL` set is the
 one bad combination: the server would hand out `https://` links to an origin
 that no longer answers. Undo them together, frontend last.
 
