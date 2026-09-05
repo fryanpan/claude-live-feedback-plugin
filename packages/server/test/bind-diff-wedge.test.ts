@@ -98,12 +98,19 @@ describe('binding a diff over a tree that has stopped answering', () => {
   it('parks the file that will not answer and leaves the server answering', async () => {
     handle = createServer({ port: 0, dataDir, requireSignInToWrite: false });
     const base = `http://localhost:${handle.port}`;
+    // Warm the route first. The very first request to a fresh server pays for
+    // module loading and route compilation, and a budget this tight would
+    // otherwise be measuring that rather than the event loop.
+    expect((await fetch(`${base}/api/docs`)).status).toBe(200);
 
+    // Caught, not bare: if the assertion below fails, `afterEach` stops the
+    // server while this is still in flight, and a bare rejection would be
+    // reported against whichever test runs next.
     const bind = fetch(`${base}/api/diffs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ repo, base: 'HEAD' }),
-    });
+    }).catch((err: unknown) => err as Error);
 
     // The assertion the incident is about. Nothing in this request touches the
     // review; if the bind is holding the only thread that runs JavaScript, it
@@ -111,6 +118,7 @@ describe('binding a diff over a tree that has stopped answering', () => {
     expect(await healthAnswers(base)).toBe('answered:200');
 
     const res = await bind;
+    if (res instanceof Error) throw res;
     expect(res.status).toBeLessThan(500);
     const body = (await res.json()) as {
       ok?: boolean;

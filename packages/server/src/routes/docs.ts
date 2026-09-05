@@ -263,7 +263,12 @@ export async function handleDocCreateListRoutes(
       // binding, so branch churn from here on follows the branch.
       if (derivedHome) rooms.setDocHome(canonicalId, derivedHome);
     } else if (type === 'code' && sourceUrl) {
-      attached = rooms.attachReadonlyFile(canonicalId, sourceUrl);
+      // The pool door, like the markdown branch above it. `sourceUrl` is
+      // whatever the caller put in the body, so this is the same class of
+      // path — a synchronous read of one that has stopped answering parks
+      // the process, and being the code branch rather than the prose one
+      // makes no difference to that.
+      attached = await rooms.attachReadonlyFileAsync(canonicalId, sourceUrl);
       if (!attached.ok) return j(409, { error: 'attach_failed', attached });
     }
     // Capture at bind, not merely on first serve: a mock that is bound

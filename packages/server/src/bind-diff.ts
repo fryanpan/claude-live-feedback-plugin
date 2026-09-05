@@ -7,7 +7,7 @@
  * getOrCreate + attach) and their writers, and the writers now live in
  * `bind-meta.ts` so neither file owns the other's rules.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join, relative, resolve as resolvePath, sep } from 'node:path';
 import { type DocMeta, type DocType, reviewIdOf } from '@feedback/core';
 import {
@@ -38,6 +38,7 @@ import {
   showFile,
   textLooksBinary,
 } from './git-diff.ts';
+import { boundFiles } from './slow-fs.ts';
 
 export interface BindDiffOpts {
   repoPath: string;
@@ -121,7 +122,7 @@ export type BindDiffResult =
  * with a different range is rejected (threads anchor into the pinned
  * content).
  */
-export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
+export async function bindDiff(host: BindHost, opts: BindDiffOpts): Promise<BindDiffResult> {
   // The review id is the `groupId` half of every member docId this bind is
   // about to mint, so a reserved one mints reserved rooms: `reviewId: 'task'`
   // over a folder with a README produced a real `task:README.md`. The seam in
@@ -178,7 +179,7 @@ export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
       scanned.find((r) => r.toLowerCase().endsWith('.md')) ??
       scanned[0];
     if (!entryRel) return { ok: false, error: 'empty-diff' };
-    const opened = host.openContextFile(reviewId, entryRel);
+    const opened = await host.openContextFile(reviewId, entryRel);
     // First open must create workspace meta from nothing — openContextFile
     // derives root from members, so seed the entry doc directly here.
     if (!opened.ok) {
@@ -196,8 +197,8 @@ export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
         title: opts.title ?? entryRel,
         producedBy: opts.producedBy,
       });
-      if (isMd) host.attachFile(docId, abs);
-      else host.attachReadonlyFile(docId, abs);
+      if (isMd) await host.attachFileAsync(docId, abs);
+      else await host.attachReadonlyFileAsync(docId, abs);
     }
     const entryDocId = memberDocId(reviewId, entryRel);
     // The workspace has no registry — its members ARE the record, so the
@@ -271,12 +272,19 @@ export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
       if (target) {
         text = showFile(root, target, entry.relPath) ?? '';
       } else {
-        try {
-          text = readFileSync(join(root, entry.relPath), 'utf8');
-        } catch {
+        // Working-tree content comes off the thread pool, under a deadline.
+        // This loop runs once per changed file in a repository the caller
+        // named, so a single file in a cloud-sync folder that has stopped
+        // answering used to park the whole server here — one bind, N chances
+        // to do it. A file that will not answer is skipped like an unreadable
+        // one and the review is built from the rest; `keep: false` because
+        // these bytes are this loop's, not a later hydrate's.
+        const read = await boundFiles.read(join(root, entry.relPath), { keep: false });
+        if (read.status !== 'ok' || !read.exists) {
           skipped.push({ path: entry.relPath, reason: 'read-failed' });
           continue;
         }
+        text = read.text;
       }
     }
     if (text.length > MAX_REVIEW_FILE_BYTES) {
@@ -365,7 +373,7 @@ export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
       // companion prose doc, and a second writer on the same file would
       // race it.
       const isMd = entry.relPath.toLowerCase().endsWith('.md');
-      host.attachFlatFile(docId, join(root, entry.relPath), { writeBack: !isMd });
+      await host.attachFlatFileAsync(docId, join(root, entry.relPath), { writeBack: !isMd });
     }
     out.push({
       docId,
