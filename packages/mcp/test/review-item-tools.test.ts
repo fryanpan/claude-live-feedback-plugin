@@ -633,7 +633,7 @@ describe('what the tool schemas tell an agent', () => {
 });
 
 describe('the shipped guidance describes the entity, not the old model', () => {
-  // These literals used to live in a `running-a-workspace-hub` skill. The
+  // These literals used to live in a `running-a-workspace-board` skill. The
   // skill is gone: a tool's own description is read at the moment the tool is
   // about to be called, which is when this matters, and it costs nothing on
   // every other turn. The pin follows the content to the surviving home.
@@ -673,7 +673,7 @@ describe('the shipped guidance describes the entity, not the old model', () => {
       'utf8',
     );
     for (const gone of [
-      'running-a-workspace-hub',
+      'running-a-workspace-board',
       'handling-a-goal-change',
       'reviewing-task-shape',
     ]) {

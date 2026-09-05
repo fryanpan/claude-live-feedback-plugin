@@ -28,7 +28,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { memberDocId } from '../src/binds.ts';
 import { DocStore } from '../src/doc-store.ts';
-import { SseHub } from '../src/sse.ts';
+import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 import { waitFor } from './wait-for.ts';
 
@@ -47,7 +47,7 @@ describe('evicting an idle doc', () => {
   function makeDocStore(dir: string): DocStore {
     return new DocStore({
       dataDir: dir,
-      sse: new SseHub(),
+      sse: new SseBus(),
       webhooks: createWebhookDispatcher({ onLog: () => {} }),
       now: () => clock,
     });
@@ -381,7 +381,7 @@ describe('booting against docs that are not loaded', () => {
   const make = (dir: string) =>
     new DocStore({
       dataDir: dir,
-      sse: new SseHub(),
+      sse: new SseBus(),
       webhooks: createWebhookDispatcher({ onLog: () => {} }),
     });
 

@@ -8,7 +8,7 @@
  * just wrote. The wake carries zero information and the cost scales with post
  * length, so a long review comment is thousands of wasted tokens.
  *
- * The hub half of this rule already existed — `emitHubChannelMessage` drops a
+ * The board half of this rule already existed — `emitBoardChannelMessage` drops a
  * `task.*` / `decision.*` frame whose `actor.id` is this agent. The doc-shaped
  * half (`thread.*`) had no such gate, which is the defect.
  *
@@ -202,6 +202,6 @@ describe('garbage in never suppresses', () => {
  * question three regexes over `mcp.ts` could only approximate. They are gone
  * rather than kept beside it — a source read passes on a handler that was
  * deleted and fails on a rename that kept the feature working, and the two
- * halves of the rule (the doc gate and the hub actor check) are both driven
+ * halves of the rule (the doc gate and the board actor check) are both driven
  * there now.
  */

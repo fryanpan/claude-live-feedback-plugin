@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import { DOC_STORE_TIMINGS } from '../src/doc-store-timings.ts';
 import { DocStore } from '../src/doc-store.ts';
 import { classifyExternalContent } from '../src/git-provenance.ts';
-import { SseHub } from '../src/sse.ts';
+import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 import { waitFor, waitForFile } from './wait-for.ts';
 
@@ -103,7 +103,7 @@ describe('git operations against a bound doc', () => {
 
     docStore = new DocStore({
       dataDir,
-      sse: new SseHub(),
+      sse: new SseBus(),
       webhooks: createWebhookDispatcher({ onLog: () => {} }),
       decorateDocMeta: (m) => ({ ...m, reviewUrl: `http://test/review/${m.docId}` }),
     });
@@ -413,7 +413,7 @@ describe('a flush inside the read debounce cannot overwrite unread bytes', () =>
     clock = Date.now();
     docStore = new DocStore({
       dataDir,
-      sse: new SseHub(),
+      sse: new SseBus(),
       webhooks: createWebhookDispatcher({ onLog: () => {} }),
       decorateDocMeta: (m) => ({ ...m, reviewUrl: `http://test/review/${m.docId}` }),
       // The touch path's rate limit runs on this clock, so stepping it is

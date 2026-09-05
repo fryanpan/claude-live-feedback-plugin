@@ -33,7 +33,7 @@ import { type Task, legacyDecisionItem, taskAskedBy } from './tasks.ts';
  *
  * What that settles, deliberately: a body room never gets a second, prettier
  * name, so the alias layer that generated DOC ids need does not extend here.
- * `isHubOwnedDoc` (doc-store.ts) is already the prefix authority; making the
+ * `isBoardOwnedDoc` (doc-store.ts) is already the prefix authority; making the
  * prefixes unwritable by an outside caller belongs with the doc-id half of
  * this work, and is noted there rather than claimed here.
  */
@@ -265,7 +265,7 @@ export function projectTask(
     ...(task.answer !== undefined ? { answer: task.answer } : {}),
     // Narrowed to the declared shape, never spread: the pre-fix writer
     // stamped the ENTIRE workspace goal text into this marker, and 187 rows
-    // on the live hub board still carry ~3KB each — 546KB of the board ydoc
+    // on the live board still carry ~3KB each — 546KB of the board ydoc
     // shipped to every reader on every open. The store
     // keeps whatever the sidecar recorded; the wire gets { goalId, ts } —
     // same precedent as `evidence` two fields down.

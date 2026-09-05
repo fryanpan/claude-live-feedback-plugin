@@ -3,7 +3,7 @@
  * server relay.
  *
  * WHY AUDIO GETS ITS OWN SOCKET AND THE WORDS COME BACK DOWN IT. Doc events
- * already have a push channel — the SSE hub — but it keeps a replay buffer
+ * already have a push channel — the SSE bus — but it keeps a replay buffer
  * of the last 200 events per channel so a reconnecting client can catch up.
  * A word-by-word transcript emits at conversational speed, which would evict
  * every real doc event from that buffer within a minute of a meeting. So the

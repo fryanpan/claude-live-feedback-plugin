@@ -61,7 +61,7 @@ import {
 } from './task-persistence.ts';
 
 /**
- * The hub task store: server-owned state for Workspace Hub workspaces and
+ * The board task store: server-owned state for Workspace Board workspaces and
  * their tasks (plan §3.2/§3.3).
  *
  * Words people write together live in CRDTs; facts the system is accountable
@@ -76,9 +76,9 @@ import {
  * authoritative on hydrate; the ydoc projection (a later commit) is a
  * read-only mirror of it, never a source.
  *
- * A hub Workspace is a NEW first-class entity: today's `workspaceId` on
+ * A board Workspace is a NEW first-class entity: today's `workspaceId` on
  * DocMeta is only a review tag minted by folder binds / diff reviews.
- * `attachDoc` LINKS existing docs and reviews to a hub workspace — nothing
+ * `attachDoc` LINKS existing docs and reviews to a board workspace — nothing
  * is migrated, and docs keep working at their current URLs.
  *
  * WHAT IS STILL HERE. The row verbs themselves are not: they moved to five
@@ -287,7 +287,7 @@ export interface ParallelismCapChange {
 export type { NestedGoalInput } from './task-helpers.ts';
 export { flattenNestedGoals } from './task-helpers.ts';
 
-export interface HubWorkspace {
+export interface BoardWorkspace {
   /** Crypto-random and unguessable — URLs hang off it (§3.2). */
   id: string;
   name: string;
@@ -387,7 +387,7 @@ export interface HubWorkspace {
 }
 
 /** A workspace's default location for planning notes — see
- *  `HubWorkspace.notesHome`. `dir` is relative to the repo root, same
+ *  `BoardWorkspace.notesHome`. `dir` is relative to the repo root, same
  *  traversal rules as a doc home's relPath. */
 export interface WorkspaceNotesHome {
   repoRoot: string;
@@ -1398,7 +1398,7 @@ export { legacyTriageSidecarPaths } from './task-persistence.ts';
 export type SetLeadAgentResult =
   | {
       ok: true;
-      workspace: HubWorkspace;
+      workspace: BoardWorkspace;
       /** False when the named agent already held the seat, and false when the
        *  seat was left alone because a live agent is in it (`declined`). */
       changed: boolean;
@@ -1498,7 +1498,7 @@ export type SetTaskGoalResult =
 export type SetGoalListResult =
   | {
       ok: true;
-      workspace: HubWorkspace;
+      workspace: BoardWorkspace;
       /** False when the new list deep-equals the old — no event, no moves. */
       changed: boolean;
       /** Goals this call CREATED, in submission order, with the id the
@@ -1548,7 +1548,7 @@ export interface SameNamedWorkspace {
 export type SetWorkspaceRetiredResult =
   | {
       ok: true;
-      workspace: HubWorkspace;
+      workspace: BoardWorkspace;
       /** False when the board was already in the requested state — no event,
        *  and the original `retiredAt` is left alone rather than restamped. */
       changed: boolean;
@@ -1558,7 +1558,7 @@ export type SetWorkspaceRetiredResult =
 export type RenameWorkspaceResult =
   | {
       ok: true;
-      workspace: HubWorkspace;
+      workspace: BoardWorkspace;
       /** False when the trimmed name already matched — no event. */
       changed: boolean;
       /**
@@ -1575,7 +1575,7 @@ export type RenameWorkspaceResult =
 export type RenameGoalResult =
   | {
       ok: true;
-      workspace: HubWorkspace;
+      workspace: BoardWorkspace;
       /** False when the title (and dueAt) already matched — no event. */
       changed: boolean;
       /** The row as it now stands. */
@@ -1586,7 +1586,7 @@ export type RenameGoalResult =
 export type AddGoalResult =
   | {
       ok: true;
-      workspace: HubWorkspace;
+      workspace: BoardWorkspace;
       /** The band that now exists, with the id the server minted for it. */
       goal: { id: string; title: string; dueAt?: number };
     }
@@ -1601,7 +1601,7 @@ export type AddGoalResult =
 export type ReorderGoalsResult =
   | {
       ok: true;
-      workspace: HubWorkspace;
+      workspace: BoardWorkspace;
       /** False when `order` already matched — no event, nothing written. */
       changed: boolean;
       /** The order now in effect at the requested scope. */
@@ -1651,7 +1651,7 @@ export interface ListTasksFilter {
 }
 
 export interface WorkspaceState {
-  workspace: HubWorkspace;
+  workspace: BoardWorkspace;
   tasks: Map<string, Task>;
   /**
    * Goal rows, keyed by goal id — SEPARATE from `tasks`, and that separation
@@ -1853,7 +1853,7 @@ export class TaskStore {
 
   /**
    * Wire (or clear) the check for "is anyone on the channel". `server.ts`
-   * installs the SSE-hub-backed one; left unwired the store answers yes and
+   * installs the SSE-board-backed one; left unwired the store answers yes and
    * behaves exactly as it did before, which is what keeps every store-only
    * test honest without teaching it about a transport.
    */
@@ -1936,11 +1936,11 @@ export class TaskStore {
   // signatures because 35 files import this class and none of them should
   // have to learn that a delete now crosses a file boundary.
 
-  createWorkspace(name: string, opts?: { leadAgentId?: string }): HubWorkspace {
+  createWorkspace(name: string, opts?: { leadAgentId?: string }): BoardWorkspace {
     return this.workspaceStore.createWorkspace(name, opts);
   }
 
-  getWorkspace(id: string): HubWorkspace | undefined {
+  getWorkspace(id: string): BoardWorkspace | undefined {
     return this.workspaceStore.getWorkspace(id);
   }
 
@@ -1959,7 +1959,7 @@ export class TaskStore {
     return this.workspaceStore.deleteWorkspace(workspaceId, opts);
   }
 
-  listWorkspaces(): HubWorkspace[] {
+  listWorkspaces(): BoardWorkspace[] {
     return this.workspaceStore.listWorkspaces();
   }
 
@@ -2505,7 +2505,7 @@ export class TaskStore {
     home: WorkspaceNotesHome | undefined,
     _opts: { actor: { id: string; name: string; kind?: string } },
   ):
-    | { ok: true; workspace: HubWorkspace; notesHome?: WorkspaceNotesHome }
+    | { ok: true; workspace: BoardWorkspace; notesHome?: WorkspaceNotesHome }
     | { ok: false; error: 'workspace-not-found' } {
     const state = this.workspaces.get(workspaceId);
     if (!state) return { ok: false, error: 'workspace-not-found' };
@@ -2517,7 +2517,7 @@ export class TaskStore {
   /**
    * What this board's ticket-effort scorer weighs: the owner's own text, or
    * the default when nobody has written any. The ONE reader of
-   * `HubWorkspace.effortEstimatePrompt`, the same shape and the same
+   * `BoardWorkspace.effortEstimatePrompt`, the same shape and the same
    * reasoning as `reviewItemCriteria` above. `undefined` for a board that
    * does not exist — distinct from a board on the default.
    */
@@ -2540,7 +2540,7 @@ export class TaskStore {
     prompt: string | undefined,
     _opts: { actor: { id: string; name: string; kind?: string } },
   ):
-    | { ok: true; workspace: HubWorkspace; prompt: { value: string; isDefault: boolean } }
+    | { ok: true; workspace: BoardWorkspace; prompt: { value: string; isDefault: boolean } }
     | { ok: false; error: 'workspace-not-found' } {
     const state = this.workspaces.get(workspaceId);
     if (!state) return { ok: false, error: 'workspace-not-found' };
@@ -2559,7 +2559,7 @@ export class TaskStore {
   /**
    * How many builders this board's lead may dispatch at once: the owner's own
    * number, or `DEFAULT_PARALLELISM_CAP` when nobody has set one. The ONE
-   * reader of `HubWorkspace.parallelismCap`, the same shape and reasoning as
+   * reader of `BoardWorkspace.parallelismCap`, the same shape and reasoning as
    * `reviewItemCriteria` above. `undefined` for a board that does not exist —
    * distinct from a board on the default.
    */
@@ -2595,7 +2595,7 @@ export class TaskStore {
     cap: number | undefined,
     opts: { actor: { id: string; name: string; kind?: string } },
   ):
-    | { ok: true; changed: boolean; workspace: HubWorkspace; parallelismCap: ParallelismCapRead }
+    | { ok: true; changed: boolean; workspace: BoardWorkspace; parallelismCap: ParallelismCapRead }
     | { ok: false; error: 'workspace-not-found' } {
     const state = this.workspaces.get(workspaceId);
     if (!state) return { ok: false, error: 'workspace-not-found' };
@@ -2898,7 +2898,7 @@ export class TaskStore {
       - Persisted `riskTier` values are left alone. Nothing reads them; a
         migration that rewrote everyone's rows would be the riskier change. */
 
-  goalIdExists(workspace: HubWorkspace, goalId: string): boolean {
+  goalIdExists(workspace: BoardWorkspace, goalId: string): boolean {
     if (isReservedGoalId(goalId)) return true;
     return workspace.goals.some((g) => g.id === goalId);
   }

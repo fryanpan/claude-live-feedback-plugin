@@ -5,13 +5,13 @@ import { join } from 'node:path';
 import * as Y from 'yjs';
 import { getProseFragment, headingLevelOf } from '../../core/src/prose.ts';
 import { DocStore } from '../src/doc-store.ts';
-import { SseHub } from '../src/sse.ts';
+import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 
 function makeDocStore(dataDir: string): DocStore {
   return new DocStore({
     dataDir,
-    sse: new SseHub(),
+    sse: new SseBus(),
     webhooks: createWebhookDispatcher({ onLog: () => {} }),
     decorateDocMeta: (m) => ({ ...m, reviewUrl: `http://test/review/${m.docId}` }),
   });

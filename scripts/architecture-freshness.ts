@@ -8,7 +8,7 @@
  * one — a module gets extracted, a directory gets added, a file moves from
  * `server/src` into `server/src/routes`, and the diagram silently describes a
  * layout that no longer exists. The overview was 241 lines of exactly that
- * before this gate: it named `hub/hub-model.ts`, three files by then, and drew
+ * before this gate: it named `board/board-model.ts`, three files by then, and drew
  * `server` as one box after eight subsystems had been lifted out of it.
  *
  * WHAT A TOP-LEVEL MODULE IS, precisely, because the whole gate turns on it:

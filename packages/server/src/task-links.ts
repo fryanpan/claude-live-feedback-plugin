@@ -229,7 +229,7 @@ export class TaskLinksStore {
    * Every task that references `ref` — via `links` or via its promotion
    * `origin` (a task promoted from a thread references that thread without
    * anyone calling link_refs). Exact-ref matching; spans all workspaces,
-   * because refs do (a task may cite a doc that lives outside its hub
+   * because refs do (a task may cite a doc that lives outside its board
    * workspace). Deterministic order: creation time, then id.
    */
   backlinksFor(ref: Ref): Task[] {

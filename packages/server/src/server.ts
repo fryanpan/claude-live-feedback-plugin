@@ -18,7 +18,7 @@ import {
   createLegacyAgentWarner,
   agentTokenKey as deriveAgentTokenKey,
 } from './auth/agent-token.ts';
-import { DEFAULT_HUB_WORKSPACE_NAME, createBoardMembership } from './board-membership.ts';
+import { DEFAULT_BOARD_WORKSPACE_NAME, createBoardMembership } from './board-membership.ts';
 import { type BrowserSentryConfig } from './browser-sentry.ts';
 import { ChatAudit } from './chat-audit.ts';
 import { maybeCompress, maybeNotModified } from './compress.ts';
@@ -106,7 +106,7 @@ import { Shares } from './share/shares.ts';
 import { SharingGate } from './share/sharing-gate.ts';
 import { type UpgradeData, createSocketHandlers } from './socket-handlers.ts';
 import { claimReplayMarks, saveReplayMarks } from './sse-marks.ts';
-import { HTTP_IDLE_TIMEOUT_SEC, SseHub } from './sse.ts';
+import { HTTP_IDLE_TIMEOUT_SEC, SseBus } from './sse.ts';
 import { createStallWiring } from './stall-wiring.ts';
 import { TaskProjection, taskBodyDocId } from './task-projection.ts';
 import { type FiredOccurrence, createTaskScheduler } from './task-scheduler.ts';
@@ -135,12 +135,12 @@ const ANONYMOUS_ACTOR: User = {
   color: '#8a8a8a',
 };
 
-import { HUB_FEEDBACK_DOC_ID } from './doc-ids.ts';
+import { BOARD_FEEDBACK_DOC_ID } from './doc-ids.ts';
 import {
   HTML_SHELL_HEADERS,
   appCacheControl,
   readAppAssetManifest,
-  renderHubShell,
+  renderBoardShell,
   renderSigninShell,
   serveStaticUnder,
 } from './shells.ts';
@@ -153,10 +153,10 @@ import {
  */
 export {
   HTML_SHELL_HEADERS,
-  HUB_FEEDBACK_DOC_ID,
+  BOARD_FEEDBACK_DOC_ID,
   appCacheControl,
   readAppAssetManifest,
-  renderHubShell,
+  renderBoardShell,
   renderSigninShell,
   serveStaticUnder,
 };
@@ -196,7 +196,7 @@ function parseRevisedRange(
 export interface ServerHandle {
   port: number;
   docStore: DocStore;
-  /** The hub task store — workspaces, tasks, the transition gate. */
+  /** The board task store — workspaces, tasks, the transition gate. */
   tasks: TaskStore;
   /** The ydoc projection of the task store (ws:<id> board rooms + task
    *  body rooms). Exposed so tests can force a reassert. */
@@ -299,7 +299,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     isBoard: (workspaceId) => taskStore.getWorkspace(workspaceId) !== undefined,
   });
 
-  const sse = new SseHub();
+  const sse = new SseBus();
   // Pick up where the last clean shutdown left off, so a deploy is silent on
   // every channel nothing happened on. Discarded automatically if that process
   // died instead of stopping — see sse-marks.ts for why that direction is the
@@ -383,7 +383,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             }
             if (linked.changed) taskProjection.ensureWorkspace(linked.task.workspaceId);
           },
-          // A huddle doc is HELD by a hub workspace rather than owned by one
+          // A huddle doc is HELD by a board workspace rather than owned by one
           // (no `setId`), which is where "create a task" said aloud used to
           // go quiet: the capture had no board. The doc's back-target is the
           // same answer the doc page's back arrow gives.
@@ -405,7 +405,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           },
         })
       : null,
-    // Lifecycle only. The words never touch this hub — see meeting-protocol.
+    // Lifecycle only. The words never touch this bus — see meeting-protocol.
     broadcast: (docId, payload) => sse.broadcast(docId, payload),
   });
   /**
@@ -434,9 +434,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     client: opts.meetingBot ?? null,
     unreachable: recallUnreachable,
     broadcast: (docId, payload) => sse.broadcast(docId, payload),
-    // The bot's words DO touch this hub — unlike the microphone's — because a
+    // The bot's words DO touch this bus — unlike the microphone's — because a
     // bot has no socket to any browser. Transient: live fan-out, no buffer,
-    // no id, so the replay window stays the doc's (see SseHub).
+    // no id, so the replay window stays the doc's (see SseBus).
     broadcastTransient: (docId, payload) => sse.broadcastTransient(docId, payload),
   });
   /**
@@ -476,21 +476,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     onRoomEvent: (docId, payload) => onDocRoomEvent?.(docId, payload),
     ...(summarizer ? { summarizer } : {}),
   });
-  // Materialize the shared hub-feedback doc at startup rather than letting
+  // Materialize the shared board-feedback doc at startup rather than letting
   // the first widget connection conjure it. A room created by a `/y/<id>`
   // connect has no title and no type, so it reads as a ghost in list_docs —
   // and this one is meant to be found and watched by an agent that never
-  // visited a hub.
-  docStore.getOrCreate(HUB_FEEDBACK_DOC_ID, {
+  // visited a board.
+  docStore.getOrCreate(BOARD_FEEDBACK_DOC_ID, {
     type: 'mockup',
-    title: 'Hub feedback (all workspaces)',
+    title: 'Board feedback (all workspaces)',
   });
   // Server-side half of the double-submit fix: the doc composer's in-flight
   // guard stops ONE call site from ever sending the repeat, this catches
   // whatever gets through anyway (a request that landed but read as a
   // client-side failure, a future caller that reintroduces the race).
   const threadRequestDedup = new ThreadRequestDedup<Thread | null>();
-  // The hub task store (plan §3.2/§3.3): server-owned workspaces + tasks,
+  // The board task store (plan §3.2/§3.3): server-owned workspaces + tasks,
   // persisted as per-workspace sidecars under <dataDir>/workspaces/.
   const taskStore = new TaskStore({
     dataDir,
@@ -507,7 +507,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
   /**
    * A watch key is live when the thing it names still exists: a doc room, or
-   * for `ws:<id>` a hub workspace / review. Anything else is a subscription
+   * for `ws:<id>` a board workspace / review. Anything else is a subscription
    * the child would open against a 404 forever.
    *
    * Closure-level rather than route-local because two routes need the same
@@ -592,7 +592,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // A dispatch on a task that is `done` or archived is over, whatever the
   // registry's own evidence says — the builder's checkout often lingers on
   // disk after its PR merges, so the path check alone kept counting slots
-  // for finished work (hub, 2026-08-31: `inUse 12 / free 0`, all twelve
+  // for finished work (board, 2026-08-31: `inUse 12 / free 0`, all twelve
   // holders done). The predicate is handed to the registry rather than
   // applied here so EVERY reader — the cap view, the dispatch refusal, the
   // stall gate's watching set, `/api/dispatches` — sees the same pruned set;
@@ -898,7 +898,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   //
   // Composed HERE, above the stall wiring, because everything it reads is
   // already built — `docStore`, both stores, and the access deps at the top of
-  // this function. That is what lets `hubBoardsForDoc` and `backTargetFor` go
+  // this function. That is what lets `boardsForDoc` and `backTargetFor` go
   // into the wiring below as VALUES rather than as thunks over a block
   // declared later in the file.
   const {
@@ -906,15 +906,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     collabMemberOf,
     shareLinkMemberOf,
     redeemShareLink,
-    hubBoardsForDoc,
+    boardsForDoc,
     boardIndexForListing,
-    hubBoardsForDocIndexed,
+    boardsForDocIndexed,
     homeForDocIndexed,
     watchCoverageFor,
     backTargetFor,
-    fileUnderHubWorkspace,
+    fileUnderBoardWorkspace,
     unfileFromDefault,
-    unlinkFromEveryHubWorkspace,
+    unlinkFromEveryBoardWorkspace,
   } = createBoardMembership({
     docStore,
     taskStore,
@@ -940,7 +940,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // and hoisting it to satisfy a declaration order would trade one ordering
   // constraint for a worse one.
   //
-  // `hubBoardsForDoc` and `backTargetFor` used to be thunks for the same
+  // `boardsForDoc` and `backTargetFor` used to be thunks for the same
   // reason and are now values: the membership map they come from is composed
   // above this line, so there is nothing left to defer.
   const stallWiring = createStallWiring({
@@ -953,7 +953,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     dataDir,
     parallelismCapView,
     capSummary,
-    hubBoardsForDoc,
+    boardsForDoc,
     backTargetFor,
     reviseCallFor: (address) => reviseCallFor(address),
     ...(opts.readyNudgeIdleMs !== undefined ? { readyNudgeIdleMs: opts.readyNudgeIdleMs } : {}),
@@ -1269,7 +1269,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   });
 
   /**
-   * File every review that predates `fileUnderHubWorkspace` onto a workspace,
+   * File every review that predates `fileUnderBoardWorkspace` onto a workspace,
    * once per boot and never twice. See review-backfill.ts for why this is
    * needed and why it is safe to re-run; the short version is that 20 of the
    * 23 reviews in the live data dir were created before filing existed, and a
@@ -1279,7 +1279,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     const res = backfillReviewFiling({
       docs: () => docStore.list(),
       isFiled: (reviewId) => taskStore.workspaceOfDoc(reviewId) !== null,
-      file: (reviewId) => fileUnderHubWorkspace(reviewId),
+      file: (reviewId) => fileUnderBoardWorkspace(reviewId),
     });
     if (res.filed.length > 0) {
       console.log(
@@ -1425,7 +1425,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     withReviewUrl,
     reviewItemsFor,
     homeQueueTotal,
-    defaultHubWorkspaceName: DEFAULT_HUB_WORKSPACE_NAME,
+    defaultBoardWorkspaceName: DEFAULT_BOARD_WORKSPACE_NAME,
   });
 
   /**
@@ -1464,7 +1464,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     requireSignInToWrite,
     isValidDocId,
     canonicalDocId,
-    fileUnderHubWorkspace,
+    fileUnderBoardWorkspace,
     j,
     requestAddress: (req) => server.requestIP(req)?.address,
     agentTokenKey: agentTokenKeyFor,
@@ -1513,7 +1513,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     dataDir,
     j,
     safeJson,
-    unlinkFromEveryHubWorkspace,
+    unlinkFromEveryBoardWorkspace,
     canonicalDocId,
   };
   const { deleteReview, handleArchiveRoutes } = createArchiveRoutes(archiveRoutesCtx);
@@ -1552,7 +1552,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     dataDir,
     j,
     isValidDocId,
-    fileUnderHubWorkspace,
+    fileUnderBoardWorkspace,
   };
 
   /**
@@ -1578,10 +1578,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     resolveWorkspaceForDoc,
     withReviewUrl,
     boardIndexForListing,
-    hubBoardsForDocIndexed,
+    boardsForDocIndexed,
     homeForDocIndexed,
-    fileUnderHubWorkspace,
-    unlinkFromEveryHubWorkspace,
+    fileUnderBoardWorkspace,
+    unlinkFromEveryBoardWorkspace,
     threadUrl,
     fileReviewRequest,
     judgeThreadReview,
@@ -1613,7 +1613,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     requireEmailAuth,
     requireSignInToWrite,
     emailCodeSignIn,
-    defaultHubWorkspaceName: DEFAULT_HUB_WORKSPACE_NAME,
+    defaultBoardWorkspaceName: DEFAULT_BOARD_WORKSPACE_NAME,
     // The operator allowlist doubles as the audience a `share_link` with no
     // `allowDomains` admits. Same list, same source; see the field's doc.
     defaultShareAudience: [...proxiedTrustedEmails],
@@ -1648,7 +1648,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     boardIndexForListing,
     heldFields,
     holdersClause,
-    hubBoardsForDocIndexed,
+    boardsForDocIndexed,
     judgeReviewItem,
     judgeTaskDecision,
     mergedHold,
@@ -1683,7 +1683,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     reviewItemsFor,
     parallelismCapView,
     resolveWorkspaceForDoc,
-    fileUnderHubWorkspace,
+    fileUnderBoardWorkspace,
     unfileFromDefault,
     workspacesOfDoc: shareWorkspacesOf,
     watchKeyExists,

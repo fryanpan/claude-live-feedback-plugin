@@ -51,7 +51,7 @@
   /* Previously fallback-only names (every call site wrote
      `var(--name, #literal)` and no stylesheet defined the name). Defining
      them here lands each on the same scale as the token it accompanies —
-     the hub-chrome rationalization half of the trial. */
+     the board-chrome rationalization half of the trial. */
   --bg-subtle: var(--gray-0); /* fallback #fafafa → #f8f9fa */
   --warn-wash: var(--orange-0); /* fallback #fff4e5 → #fff4e6 */
   --accent-line: var(--blue-1); /* fallback #cfe2f7 → #d0ebff */

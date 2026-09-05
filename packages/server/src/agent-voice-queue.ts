@@ -154,7 +154,7 @@ export class AgentVoiceQueue {
     }
   }
 
-  /** Read the queue without draining it (the hub could render a badge). */
+  /** Read the queue without draining it (the board could render a badge). */
   listQueuedVoice(workspaceId: string): QueuedVoiceRequest[] {
     const path = voiceQueuePath(this.p.dataDir(), workspaceId);
     if (!existsSync(path)) return [];

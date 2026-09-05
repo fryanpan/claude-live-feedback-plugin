@@ -24,11 +24,11 @@ import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-
 
 let cleanup = () => {};
 beforeEach(() => {
-  // The doc page loads styles.css; the board loads hub.css before it (see
-  // `renderHubShell`). tokens.css is deliberately absent — the served sheet is
+  // The doc page loads styles.css; the board loads board.css before it (see
+  // `renderBoardShell`). tokens.css is deliberately absent — the served sheet is
   // the Open Props subset concatenated with src/tokens.css, and the mapping
   // layer alone resolves to nothing.
-  cleanup = installSheets('hub.css', 'styles.css');
+  cleanup = installSheets('board.css', 'styles.css');
 });
 afterEach(() => {
   cleanup();

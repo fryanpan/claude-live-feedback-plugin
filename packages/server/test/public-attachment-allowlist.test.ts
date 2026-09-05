@@ -5,7 +5,7 @@
  * It used to destructure `endpoint` out and spread the rest, which means a
  * field added to `AgentAttachment` later shipped to visitors by default and
  * stayed there until somebody noticed. Every neighbouring visitor projection
- * — `redactMetaForVisitor`, `redactHubWorkspaceForVisitor` — was rewritten to
+ * — `redactMetaForVisitor`, `redactBoardWorkspaceForVisitor` — was rewritten to
  * the opposite rule after a leak, each with a header saying why; this was the
  * last one still built the old way.
  *

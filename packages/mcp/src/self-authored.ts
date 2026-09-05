@@ -17,7 +17,7 @@
  *  1. The same frame rides several transports — the doc's own channel, each
  *     board's `ws~<id>` channel, and the REPLAY buffer a reconnecting stream
  *     drains. One gate at the render point covers all of them; a per-sink
- *     filter in `SseHub.broadcast` would cover the live sends and leak the
+ *     filter in `SseBus.broadcast` would cover the live sends and leak the
  *     replay straight back, because a broadcast frame is buffered once with
  *     no addressee and replayed to everyone.
  *  2. `/events/<docId>` carries no `agentId` at all — only the workspace
@@ -41,7 +41,7 @@
  * author id, a non-string id, an event with no attribution rule, a shared
  * identity — resolves to delivering.
  *
- * The hub half of this rule already existed (`emitHubChannelMessage` drops a
+ * The board half of this rule already existed (`emitBoardChannelMessage` drops a
  * frame whose `actor.id` is this agent). This is its doc-shaped companion.
  */
 

@@ -1,6 +1,6 @@
 /**
  * Deploy readiness (plan §3.12 commit 11): uptime measured from the
- * per-workspace events.jsonl — "the hub is up when you pull out your phone"
+ * per-workspace events.jsonl — "the board is up when you pull out your phone"
  * (goal 4.4, 99% target) becomes a number computed from the same audit log
  * every subscriber already sees.
  *

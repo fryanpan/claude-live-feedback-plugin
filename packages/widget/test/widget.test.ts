@@ -312,10 +312,10 @@ describe('widget', () => {
 
   /**
    * On a third-party page the widget is a guest and must keep its identity in
-   * its own `cfw:` namespace. On OUR hub the page has already asked the reader
+   * its own `cfw:` namespace. On OUR board the page has already asked the reader
    * their name — two namespaces there means the presence strip greets the
    * reader by that name while every comment the widget posts is signed
-   * "Anonymous <animal>". Observed on a live hub before this was fixed.
+   * "Anonymous <animal>". Observed on a live board before this was fixed.
    */
   describe('identity scope', () => {
     beforeEach(() => localStorage.clear());

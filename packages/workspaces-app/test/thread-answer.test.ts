@@ -375,7 +375,7 @@ describe('the reply composer is a markdown editor', () => {
   });
 
   it('a refused send puts the words back — a retry must not mean retyping', async () => {
-    // Every hub composer restores the text verbatim when the server refuses;
+    // Every board composer restores the text verbatim when the server refuses;
     // this box was the one composer that cleared first and toasted 'try
     // again' over an empty textarea.
     const { panel, container } = mountPanel({ onReply: () => Promise.resolve(false) });

@@ -188,10 +188,10 @@ describe('tokens.css mapping layer', () => {
     // The other half of the retired "invents no new name" check, from the
     // side that can be observed: a remapped token has to reach real elements,
     // or the mapping is a private dictionary. Two call sites, two sheets.
-    installApp('hub.css', 'styles.css');
+    installApp('board.css', 'styles.css');
     installBuiltTokens();
     setViewport(IPAD);
-    expect(styleOf(attach('hub-btn', { tag: 'button' })).borderTopColor).toBe(token('--border'));
+    expect(styleOf(attach('board-btn', { tag: 'button' })).borderTopColor).toBe(token('--border'));
     expect(styleOf(attach('voice-indicator')).color).toBe(token('--fg'));
     expect(token('--fg')).toBe(token('--gray-9'));
   });

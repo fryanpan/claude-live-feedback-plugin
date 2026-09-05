@@ -1,18 +1,18 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
+import { BOARD_BOOT_SOURCES } from './support/board-boot-sources.ts';
 
 // The board's load time was a memory ("10+ seconds on the iPad")
 // until the server grew /load-reports. This is the client half: after boot the
 // board reports how long its own first paint and first ydoc projection took,
 // once per page load, so slowness is a recorded fact with phase attribution.
-// Pinned on the source: the board's boot is driveable (hub-boot.test.ts),
+// Pinned on the source: the board's boot is driveable (board-boot.test.ts),
 // but what this asserts is which PHASES the beacon reports, and a report
 // that names them is easier to read off the call than to reconstruct.
 describe('the board reports its own load time', () => {
-  const src = HUB_BOOT_SOURCES.map((m) =>
-    readFileSync(join(__dirname, '..', 'src', 'hub', `${m}.ts`), 'utf8'),
+  const src = BOARD_BOOT_SOURCES.map((m) =>
+    readFileSync(join(__dirname, '..', 'src', 'board', `${m}.ts`), 'utf8'),
   ).join('\n');
 
   it('posts one report to the load-reports route', () => {

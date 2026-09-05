@@ -246,7 +246,14 @@ export async function handleDocsTool(
       return ok(res);
     }
     case 'create_review_doc': {
-      const { docId, path, title, setId, hubWorkspaceId, producedBy } = a as {
+      const {
+        docId,
+        path,
+        title,
+        setId,
+        hubWorkspaceId: boardWorkspaceId,
+        producedBy,
+      } = a as {
         docId: string;
         path: string;
         title?: string;
@@ -261,7 +268,7 @@ export async function handleDocsTool(
         owner: process.cwd(),
         ...(title ? { title } : {}),
         ...(setId ? { setId } : {}),
-        ...(hubWorkspaceId ? { hubWorkspaceId } : {}),
+        ...(boardWorkspaceId ? { hubWorkspaceId: boardWorkspaceId } : {}),
         ...(producedBy ? { producedBy } : {}),
       });
       return ok(res);
@@ -303,7 +310,12 @@ export async function handleDocsTool(
     // only — one name for one thing in the table an agent reads.
     case 'bind_mock':
     case 'attach_mockup': {
-      const { docId, sourceHtmlPath, title, hubWorkspaceId } = a as {
+      const {
+        docId,
+        sourceHtmlPath,
+        title,
+        hubWorkspaceId: boardWorkspaceId,
+      } = a as {
         docId: string;
         sourceHtmlPath?: string;
         title?: string;
@@ -318,7 +330,7 @@ export async function handleDocsTool(
         owner: process.cwd(),
         ...(sourceHtmlPath ? { sourceUrl: sourceHtmlPath } : {}),
         ...(title ? { title } : {}),
-        ...(hubWorkspaceId ? { hubWorkspaceId } : {}),
+        ...(boardWorkspaceId ? { hubWorkspaceId: boardWorkspaceId } : {}),
       });
       return ok(res);
     }
@@ -327,7 +339,7 @@ export async function handleDocsTool(
       const {
         folderPath,
         workspaceId,
-        hubWorkspaceId,
+        hubWorkspaceId: boardWorkspaceId,
         title,
         include,
         exclude,
@@ -351,7 +363,7 @@ export async function handleDocsTool(
         ...(workspaceId ? { workspaceId } : {}),
         // The BOARD, next to the review id above. Two ids, two meanings,
         // one payload — which is why they are spelled apart.
-        ...(hubWorkspaceId ? { hubWorkspaceId } : {}),
+        ...(boardWorkspaceId ? { hubWorkspaceId: boardWorkspaceId } : {}),
         ...(title ? { title } : {}),
         ...(include ? { include } : {}),
         ...(exclude ? { exclude } : {}),
@@ -371,7 +383,7 @@ export async function handleDocsTool(
         base,
         target,
         reviewId,
-        hubWorkspaceId,
+        hubWorkspaceId: boardWorkspaceId,
         title,
         exclude,
         groups,
@@ -399,7 +411,7 @@ export async function handleDocsTool(
         ...(reviewId ? { reviewId } : {}),
         // The BOARD, next to the review id above. Two ids, two meanings,
         // one payload — which is why they are spelled apart.
-        ...(hubWorkspaceId ? { hubWorkspaceId } : {}),
+        ...(boardWorkspaceId ? { hubWorkspaceId: boardWorkspaceId } : {}),
         ...(title ? { title } : {}),
         ...(exclude ? { exclude } : {}),
         ...(groups ? { groups } : {}),

@@ -62,7 +62,7 @@ describe('a grouping cannot be shared on its own', () => {
   let bindGroupingId: string;
   /** A diff-review grouping id. */
   let diffGroupingId: string;
-  /** A real hub board — the only shareable thing. */
+  /** A real board — the only shareable thing. */
   let boardId: string;
   /** A doc that is a member of the diff review filed on `boardId`. */
   let diffMemberDocId: string;

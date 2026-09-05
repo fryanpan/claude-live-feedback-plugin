@@ -6,7 +6,7 @@
  * feedback widget's shadow root arrives at a `document` listener with `target`
  * set to the `<claude-feedback-widget>` HOST element. So `target.closest(
  * 'input, textarea')` matches nothing, and every global hotkey fires while the
- * user types. #116 put that widget on every hub, which turned two long-standing
+ * user types. #116 put that widget on every board, which turned two long-standing
  * latent bugs into daily ones: the board's j/k/o/s/a/? fired mid-sentence, and
  * a space typed into the feedback box started a voice recording.
  *

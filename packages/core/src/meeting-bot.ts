@@ -17,7 +17,7 @@
  * every viewer of the doc already holds that stream, and a second socket per
  * tab for a bot that has no browser of its own would be a socket nothing
  * else needs — but they are TRANSIENT: fanned out live and never buffered.
- * The hub keeps 200 events per channel for replay and a conversation says
+ * The bus keeps 200 events per channel for replay and a conversation says
  * that many words in about a minute, so a buffered word ticker would evict
  * every real doc event within a minute of the bot joining. A transient frame
  * carries no SSE id, so a reconnecting tab's cursor never points at one; the

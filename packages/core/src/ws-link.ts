@@ -27,7 +27,7 @@ export type WorkspaceLink =
   | { kind: 'mockup'; workspaceId: string | null; docId: string }
   | { kind: 'review'; workspaceId: string; reviewId: string };
 
-// The optional suffix is the hub's nav destinations: the board keeps its
+// The optional suffix is the board's nav destinations: the board keeps its
 // panel params on every nav page, so a link copied from `/home` addresses
 // the same task a link copied from the bare path does.
 const WS_PATH = /^\/workspaces\/([^/?#]+)(?:\/(?:home|tasks|mine|activity))?\/?$/;

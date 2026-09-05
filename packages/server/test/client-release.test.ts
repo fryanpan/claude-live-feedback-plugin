@@ -42,7 +42,7 @@ function fakeBuild(marker: string): { dir: string; widget: string; markdownApp: 
   writeFileSync(join(widget, 'widget.iife.js'), `//${marker}\n`);
   writeFileSync(join(widget, 'widget.esm.js'), `//${marker}\n`);
   writeFileSync(join(markdownApp, 'app.js'), `//${marker}\n`);
-  writeFileSync(join(markdownApp, 'hub.js'), `//${marker}\n`);
+  writeFileSync(join(markdownApp, 'board.js'), `//${marker}\n`);
   writeFileSync(join(markdownApp, 'index.html'), `<!--${marker}-->\n`);
   writeFileSync(join(markdownApp, 'styles.css'), `/*${marker}*/\n`);
   writeFileSync(join(markdownApp, 'BUILD_INFO.txt'), `built ${marker}\n`);

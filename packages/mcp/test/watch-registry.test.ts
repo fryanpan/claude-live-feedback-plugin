@@ -386,13 +386,13 @@ describe('coverage is never fabricated out of a failed request', () => {
           coverage: {
             agentId: AUTHOR.id,
             workspaces: [],
-            unattachedBoards: [{ workspaceId: 'w1', name: 'Hub', queuedTotal: 2 }],
+            unattachedBoards: [{ workspaceId: 'w1', name: 'Board', queuedTotal: 2 }],
           },
         };
       },
     });
     const cov = await registry.refreshCoverage();
-    expect(cov?.unattachedBoards).toEqual([{ workspaceId: 'w1', name: 'Hub', queuedTotal: 2 }]);
+    expect(cov?.unattachedBoards).toEqual([{ workspaceId: 'w1', name: 'Board', queuedTotal: 2 }]);
     expect(asked).toEqual([`GET ${WATCHES_PATH}`]);
   });
 

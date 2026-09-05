@@ -2,9 +2,9 @@
  * A review filed on a shared board is reachable from that board — and only
  * from that board.
  *
- * PR #131 files every group bind (diff review / folder bind) on a hub
+ * PR #131 files every group bind (diff review / folder bind) on a board
  * workspace, so sharing a board makes the review row appear on it. Nothing
- * behind the row resolved: the share is scoped to the HUB id, while both the
+ * behind the row resolved: the share is scoped to the BOARD id, while both the
  * grouping's own endpoints and every member doc answer with the GROUPING id.
  * Two exact-equality comparisons refused everything.
  *

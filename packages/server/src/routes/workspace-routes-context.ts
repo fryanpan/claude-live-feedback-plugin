@@ -4,9 +4,9 @@ import type { DocStore } from '../doc-store.ts';
 import type { HomeBriefStore } from '../home-brief.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
 import type { ReviewItemRow } from '../review-queue.ts';
-import type { SseHub } from '../sse.ts';
+import type { SseBus } from '../sse.ts';
 import type { TaskProjection } from '../task-projection.ts';
-import type { HubWorkspace, TaskStore } from '../tasks.ts';
+import type { BoardWorkspace, TaskStore } from '../tasks.ts';
 import type { VoiceRouter } from '../voice.ts';
 import type { ParallelismCapView } from './task-routes-context.ts';
 
@@ -20,15 +20,15 @@ import type { ParallelismCapView } from './task-routes-context.ts';
  * carries the doc store and the release directory the task side never needed.
  */
 export interface WorkspaceRoutesContext {
-  /** The hub store — boards, their goals, their tasks and their agents. */
+  /** The board store — boards, their goals, their tasks and their agents. */
   taskStore: TaskStore;
   /** The ydoc projection of the store, refreshed by hand after the writes
    *  that emit no store event (attach, unfile, archive-in-place). */
   taskProjection: TaskProjection;
   /** Doc store — a board's attached docs, its huddles and its diff reviews. */
   docStore: DocStore;
-  /** The server-sent-event hub a voice frame is pushed down. */
-  sse: SseHub;
+  /** The server-sent-event bus a voice frame is pushed down. */
+  sse: SseBus;
   /** Per-person Home briefs and the read markers under them. */
   homeBriefs: HomeBriefStore;
   /** What each agent has asked to be told about. */
@@ -69,9 +69,9 @@ export interface WorkspaceRoutesContext {
   ) => T & { reviewUrl?: string };
   /** One person's Home read: their brief, their queue and its coverage.
    *  Typed loosely because the routes only ever hand it straight to `j`. */
-  homePayload: (workspace: HubWorkspace, person: string, now: number) => unknown;
+  homePayload: (workspace: BoardWorkspace, person: string, now: number) => unknown;
   /** The review items on a board, in the order Home shows them. */
-  reviewItemsFor: (workspace: HubWorkspace) => ReviewItemRow[];
+  reviewItemsFor: (workspace: BoardWorkspace) => ReviewItemRow[];
   /** How many builders the board may run, and who is holding the slots. */
   parallelismCapView: (
     workspaceId: string,
@@ -81,9 +81,9 @@ export interface WorkspaceRoutesContext {
   resolveWorkspaceForDoc: (docId: string) => string | null;
   /** File a doc under a board — the requested one, else the default — and
    *  answer which board it landed on. */
-  fileUnderHubWorkspace: (attachmentId: string, requested?: string) => string;
+  fileUnderBoardWorkspace: (attachmentId: string, requested?: string) => string;
   /** Take a doc back off the default holding board once a real one has it. */
-  unfileFromDefault: (attachmentId: string, keptHubWorkspaceId: string) => void;
+  unfileFromDefault: (attachmentId: string, keptBoardWorkspaceId: string) => void;
   /**
    * EVERY workspace an id belongs to, most specific first — the same resolver
    * the host guard's share scoping reads (`shareWorkspacesOf`).

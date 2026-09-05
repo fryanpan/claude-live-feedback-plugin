@@ -4,7 +4,7 @@ import { extname, join } from 'node:path';
  * Every HTML page this server renders itself, and the static serving under
  * them.
  *
- * Five shells and one file server. The shells — hub, sign-in, landing,
+ * Five shells and one file server. The shells — board, sign-in, landing,
  * project page, and the three "not found" pages — are what a browser gets
  * before any bundle runs, so each is a complete document with its own
  * `<style>`: nothing here may depend on an asset that has not loaded yet.
@@ -34,7 +34,7 @@ import {
   parseAssetManifest,
 } from '@feedback/core/asset-manifest';
 import { type BrowserSentryConfig, sentryHeadTags } from './browser-sentry.ts';
-import { HUB_FEEDBACK_DOC_ID } from './doc-ids.ts';
+import { BOARD_FEEDBACK_DOC_ID } from './doc-ids.ts';
 import type { DocStore, WorkspaceDirNode, WorkspaceFileNode } from './doc-store.ts';
 import type {
   LandingModel,
@@ -43,7 +43,7 @@ import type {
   LandingWorkspaceRow,
 } from './landing.ts';
 import { isWithinRoot } from './safe-path.ts';
-import { type HubWorkspace, type TaskStore, isRetired } from './tasks.ts';
+import { type BoardWorkspace, type TaskStore, isRetired } from './tasks.ts';
 
 /** The content type a static file is served with, by extension. */
 const CT: Record<string, string> = {
@@ -191,24 +191,24 @@ to an HTML file. Once bound, the file is served here without any symlink dance.<
 }
 
 /**
- * The hub page shell (§3.9). Tab title is `<workspace> · Workspaces` — the
+ * The board page shell (§3.9). Tab title is `<workspace> · Workspaces` — the
  * browser tab is a workspace switcher, so the WORKSPACE leads and the product
- * name trails, where truncation can take it. (`hub-app.ts` extends the same
+ * name trails, where truncation can take it. (`board-app.ts` extends the same
  * title with the open pane once the bundle runs.) Everything dynamic renders
  * client-side from the ws:<id> ydoc projection + REST; the shell only names
  * the workspace and loads the bundle.
  *
  * `feedback` embeds the comment widget, pointed at ONE well-known doc
- * (`HUB_FEEDBACK_DOC_ID`) rather than at a per-workspace one — feedback about
- * the hub UI is about the product, not about the workspace you happened to be
- * standing in, so it should reach the same place from every hub. The widget
+ * (`BOARD_FEEDBACK_DOC_ID`) rather than at a per-workspace one — feedback about
+ * the board UI is about the product, not about the workspace you happened to be
+ * standing in, so it should reach the same place from every board. The widget
  * auto-captures `location` as the anchor url, so the comment already says
- * which hub it came from; `view` adds the workspace NAME so the thread reads
+ * which board it came from; `view` adds the workspace NAME so the thread reads
  * without anyone resolving an id.
  *
  * `identity-scope="host"` is what makes the feedback ATTRIBUTED. The widget
  * normally keeps its identity under a `cfw:` prefix so it cannot touch a
- * third-party host page's storage — but this page is ours, and the hub has
+ * third-party host page's storage — but this page is ours, and the board has
  * already asked the reader their name (`ensureUserIdentity`, unprefixed keys).
  * Without this attribute the same page holds two identities for one human: the
  * presence strip greets the reader by the name they gave, while every comment
@@ -220,7 +220,7 @@ to an HTML file. Once bound, the file is served here without any symlink dance.<
  * `init` would run before the module that defines it. The element upgrades on
  * parse and reads its own attributes.
  */
-export function renderHubShell(
+export function renderBoardShell(
   workspaceId: string,
   name: string,
   opts: {
@@ -250,24 +250,24 @@ export function renderHubShell(
   // manifest (an unbuilt dist, or one from before hashing landed) these fall
   // back to the plain names, which is exactly what the shell said before.
   const assets = opts.assets ?? {};
-  const hubJs = assetHref(assets, 'hub.js');
+  const boardJs = assetHref(assets, 'board.js');
   const stylesCss = assetHref(assets, 'styles.css');
-  const hubCss = assetHref(assets, 'hub.css');
+  const boardCss = assetHref(assets, 'board.css');
   const tokensCss = assetHref(assets, 'tokens.css');
   const safeName = escape(name);
   const safeId = escape(workspaceId);
   const sentryTags = sentryHeadTags(opts.sentry ?? null, 'board', assets);
   const sentryMeta = sentryTags ? `\n    ${sentryTags}` : '';
   // Deliberately NOT rendered for a share visitor. Every peer on a Yjs doc
-  // syncs the whole doc, so one shared feedback doc would hand every hub
-  // visitor every other workspace's feedback threads — including the hub
+  // syncs the whole doc, so one shared feedback doc would hand every board
+  // visitor every other workspace's feedback threads — including the board
   // paths and quoted UI text they were anchored to. Same lesson as the
   // DocMeta sidecar: a field that must not reach a visitor cannot live in a
   // CRDT they sync. Keeping the widget off their page keeps them off the doc.
   const widget = opts.feedback
     ? `
     <script type="module" src="/widget.esm.js"></script>
-    <claude-feedback-widget doc-id="${escape(HUB_FEEDBACK_DOC_ID)}" view="${safeName}" identity-scope="host"></claude-feedback-widget>`
+    <claude-feedback-widget doc-id="${escape(BOARD_FEEDBACK_DOC_ID)}" view="${safeName}" identity-scope="host"></claude-feedback-widget>`
     : '';
   return `<!doctype html>
 <html lang="en">
@@ -283,25 +283,25 @@ export function renderHubShell(
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="theme-color" content="#2e7dd7" />${sentryMeta}
     <!-- The board's own rules load FIRST, and the order is load-bearing. The
-         hub block sat about a twelfth of the way into styles.css, so most of
+         board block sat about a twelfth of the way into styles.css, so most of
          that file came AFTER it and won every equal-specificity tie. Loading
-         hub.css last reverses ~30 of those; loading it first reverses one,
-         which a .hub-topbar .back-link:hover rule in hub.css now pins. -->
-    <link rel="stylesheet" href="${hubCss}" />
+         board.css last reverses ~30 of those; loading it first reverses one,
+         which a .board-topbar .back-link:hover rule in board.css now pins. -->
+    <link rel="stylesheet" href="${boardCss}" />
     <link rel="stylesheet" href="${stylesCss}" />
     <!-- Open Props trial layer — after styles.css on purpose; see
          packages/workspaces-app/index.html. -->
     <link rel="stylesheet" href="${tokensCss}" />
   </head>
-  <body class="hub-body">
-    <div id="hub-root" data-workspace-id="${safeId}"${opts.visitor ? ' data-visitor="1"' : ''}></div>
-    <script type="module" src="${hubJs}"></script>${widget}
+  <body class="board-body">
+    <div id="board-root" data-workspace-id="${safeId}"${opts.visitor ? ' data-visitor="1"' : ''}></div>
+    <script type="module" src="${boardJs}"></script>${widget}
   </body>
 </html>`;
 }
 
 /**
- * The sign-in page shell. Same pattern as the hub shell — server-rendered so
+ * The sign-in page shell. Same pattern as the board shell — server-rendered so
  * the route answers whether or not the app bundle is built, all behavior in
  * the bundle (`/app/signin.js`), the app's own stylesheet so the page looks
  * like the product it signs you into.
@@ -337,14 +337,14 @@ export function renderSigninShell(
 </html>`;
 }
 
-export function renderHubNotFound(workspaceId: string): string {
+export function renderBoardNotFound(workspaceId: string): string {
   const safe = escape(workspaceId);
   return `<!doctype html><meta charset="utf-8"><title>Workspace not found · Workspaces</title>
 <style>body{font:15px/1.55 system-ui, sans-serif;margin:60px auto;max-width:560px;color:#222;padding:0 20px}
 h1{font-size:22px}code{background:#f3f3f3;padding:1px 5px;border-radius:3px;font-size:90%}
 small{color:#777}</style>
 <h1>Workspace not found</h1>
-<p>No hub workspace exists for <code>${safe}</code>. Hub workspaces are
+<p>No board workspace exists for <code>${safe}</code>. Board workspaces are
 created by an agent calling <code>create_workspace</code> (or
 <code>POST /api/workspaces</code> with a name).</p>
 <p><small><a href="/">all docs</a></small></p>`;
@@ -439,7 +439,7 @@ export function collectLandingWorkspaces(
   // The landing route passes Home's own counter here (`reviewItemsFor` +
   // `homeQueueTotal`, both closure-bound in createServer), so the chip and
   // the queue it opens are one computation, not two that can drift.
-  waitingOf?: (ws: HubWorkspace) => number,
+  waitingOf?: (ws: BoardWorkspace) => number,
 ): LandingWorkspaceInput[] {
   return taskStore.listWorkspaces().map((ws) => {
     let last = ws.createdAt;
@@ -480,7 +480,7 @@ export function collectLandingProjects(
     // Infrastructure, not review content: the shared hub-feedback doc exists
     // on every install from startup, and `ws:`/`task:` rooms are surfaces the
     // server owns for the boards the page already lists.
-    if (meta.docId === HUB_FEEDBACK_DOC_ID) continue;
+    if (meta.docId === BOARD_FEEDBACK_DOC_ID) continue;
     if (meta.docId.startsWith('ws:') || meta.docId.startsWith('task:')) continue;
     owners.add(meta.owner || 'ungrouped');
   }
@@ -507,7 +507,7 @@ export function buildProjectArtifacts(
   const artifacts: LandingArtifact[] = [];
 
   for (const meta of docStore.list()) {
-    if (meta.docId === HUB_FEEDBACK_DOC_ID) continue;
+    if (meta.docId === BOARD_FEEDBACK_DOC_ID) continue;
     if (meta.docId.startsWith('ws:') || meta.docId.startsWith('task:')) continue;
     if ((meta.owner || 'ungrouped') !== owner) continue;
 

@@ -60,7 +60,7 @@ describe('plugin drift over the attachment routes', () => {
   });
 
   it('carries the reported version through attach and back out of the list', async () => {
-    const wsId = await makeWorkspace('drift-hub');
+    const wsId = await makeWorkspace('drift-board');
     const r = await post(`/api/workspaces/${wsId}/attachments`, {
       agentId: 'agent-quill',
       runtime: 'claude-code-local',
@@ -76,7 +76,7 @@ describe('plugin drift over the attachment routes', () => {
   });
 
   it('reports what the deploy source would install, and who is behind it', async () => {
-    const wsId = await makeWorkspace('drift-hub-2');
+    const wsId = await makeWorkspace('drift-board-2');
     // The released version is read from this checkout's own manifest, so the
     // test asserts a RELATIONSHIP against that manifest rather than a literal
     // — a literal would go red on every routine patch bump.
@@ -105,7 +105,7 @@ describe('plugin drift over the attachment routes', () => {
   it('counts a session that reports no version at all', async () => {
     // The version field ships in the release that reads it, so a peer on any
     // older bundle sends nothing. That silence is the fleet-wide drift.
-    const wsId = await makeWorkspace('drift-hub-3');
+    const wsId = await makeWorkspace('drift-board-3');
     await post(`/api/workspaces/${wsId}/attachments`, {
       agentId: 'agent-silent',
       runtime: 'claude-code-local',
@@ -119,7 +119,7 @@ describe('plugin drift over the attachment routes', () => {
     // Attachments live in a sidecar, not in a ydoc. A version that only
     // existed in memory would read as "everyone is behind" after every
     // server restart, i.e. after every deploy.
-    const wsId = await makeWorkspace('drift-hub-4');
+    const wsId = await makeWorkspace('drift-board-4');
     await post(`/api/workspaces/${wsId}/attachments`, {
       agentId: 'agent-persisted',
       runtime: 'claude-code-local',

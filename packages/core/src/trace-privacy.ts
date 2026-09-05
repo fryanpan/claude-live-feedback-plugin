@@ -161,7 +161,7 @@ const ROUTE_TEMPLATES: readonly (readonly string[])[] = [
   ['api', 'reviews', ':id', 'archive'],
   ['api', 'reviews', ':id', 'unarchive'],
   // reviewApi(sub): `/api/(?:reviews|workspaces)/:id/<sub>` — a review or a
-  // hub workspace can be addressed under either prefix (compat for
+  // board workspace can be addressed under either prefix (compat for
   // long-running sessions and open tabs; see the reviewApi comment in
   // server.ts), so every one of these 8 subroutes needs BOTH prefixes.
   ['api', 'reviews', ':id', 'refresh'],

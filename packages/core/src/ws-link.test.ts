@@ -5,7 +5,7 @@ import { parseWorkspaceLink } from './ws-link.ts';
 const HOST = 'http://reviewhost.example:8787';
 
 describe('parseWorkspaceLink', () => {
-  it('parses a workspace hub URL', () => {
+  it('parses a workspace board URL', () => {
     expect(parseWorkspaceLink(`${HOST}/workspaces/w-abc123`)).toEqual({
       kind: 'workspace',
       workspaceId: 'w-abc123',

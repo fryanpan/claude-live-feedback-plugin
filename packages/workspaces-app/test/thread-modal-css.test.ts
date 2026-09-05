@@ -28,11 +28,11 @@ import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-
 
 let cleanup = () => {};
 beforeEach(() => {
-  // The board's real cascade order — `renderHubShell`, packages/server/src/
-  // shells.ts loads hub.css BEFORE styles.css. tokens.css stays out: the
+  // The board's real cascade order — `renderBoardShell`, packages/server/src/
+  // shells.ts loads board.css BEFORE styles.css. tokens.css stays out: the
   // served sheet is the vendored Open Props subset concatenated with
   // src/tokens.css, and the mapping layer alone resolves to nothing.
-  cleanup = installSheets('hub.css', 'styles.css', 'doc.css');
+  cleanup = installSheets('board.css', 'styles.css', 'doc.css');
 });
 afterEach(() => {
   cleanup();
@@ -176,7 +176,7 @@ describe('the mic no longer stands down under an open card', () => {
     // The reason the hide is safe to drop got stronger: the top-bar overhaul
     // retired the doc's hold-to-talk mic entirely (the Record Audio button
     // owns everything audio on that screen), so there is no doc mic for a
-    // card to cover. The hub's docked mic (`.hub-nav-dock`) stays.
+    // card to cover. The board's docked mic (`.board-nav-dock`) stays.
     setViewport(IPAD);
     const loose = styleOf(attach('voice-mic', { tag: 'button' })).position;
     expect(loose).toBe('fixed');
@@ -187,12 +187,12 @@ describe('the mic no longer stands down under an open card', () => {
       parent: attach('doc-nav-dock'),
     });
     expect(styleOf(inDocDock).position).toBe('fixed');
-    // Control: the hub's dock DOES take the mic out of the fixed layer, so the
+    // Control: the board's dock DOES take the mic out of the fixed layer, so the
     // line above is the absence of `.doc-nav-dock` rules and not of the sheet.
-    const inHubDock = attach('voice-mic', {
+    const inBoardDock = attach('voice-mic', {
       tag: 'button',
-      parent: attach('hub-nav-dock'),
+      parent: attach('board-nav-dock'),
     });
-    expect(styleOf(inHubDock).position).toBe('static');
+    expect(styleOf(inBoardDock).position).toBe('static');
   });
 });

@@ -65,7 +65,7 @@ export interface PushSubscriptionInput {
 }
 
 export interface StoredSubscription extends PushSubscriptionInput {
-  /** Who this device belongs to, as the hub knows them. */
+  /** Who this device belongs to, as the board knows them. */
   userId: string;
   userName: string;
   createdAt: number;

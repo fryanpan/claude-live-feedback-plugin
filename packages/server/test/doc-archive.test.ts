@@ -23,7 +23,7 @@ import {
   listArchivedReviews,
   readDocArchiveManifest,
 } from '../src/review-archive.ts';
-import { SseHub } from '../src/sse.ts';
+import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 import { waitForFile } from './wait-for.ts';
 
@@ -36,7 +36,7 @@ const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 260));
 function makeDocStore(dataDir: string): DocStore {
   return new DocStore({
     dataDir,
-    sse: new SseHub(),
+    sse: new SseBus(),
     webhooks: createWebhookDispatcher({ onLog: () => {} }),
     decorateDocMeta: (m) => ({ ...m, reviewUrl: `http://test/review/${m.docId}` }),
   });
@@ -248,7 +248,7 @@ describe('DocStore.archiveDoc / unarchiveDoc', () => {
       docStore.getOrCreate(docId, { type: 'markdown' }, { authority: 'server' });
       const res = docStore.archiveDoc(docId, { archivedBy: 'Tester' });
       expect(res.ok).toBe(false);
-      if (!res.ok) expect(res.error).toBe('hub-owned');
+      if (!res.ok) expect(res.error).toBe('board-owned');
       expect(docStore.get(docId)).toBeDefined();
     }
     // Let these rooms' debounced first save land before the temp dir goes, so

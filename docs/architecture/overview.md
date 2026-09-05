@@ -11,7 +11,7 @@ arranged. Read it before non-trivial work.
 ```mermaid
 flowchart TB
   subgraph browser[Browser]
-    app["workspaces-app<br/>5 bundles: doc · hub · signin · landing · sentry"]
+    app["workspaces-app<br/>5 bundles: doc · board · signin · landing · sentry"]
     wid["widget<br/>injectable web component"]
   end
   plug["plugin<br/>skills · hooks · bundled mcp"]
@@ -100,8 +100,8 @@ value. *SSE* pushes changes to anyone holding no Yjs socket for them.
 | *Composition root* | `bin.ts`, `server-config.ts`, `server-deps.ts` | Reads the environment once, builds adapters, wires services. Beside the stack, not on top of it. |
 
 `workspaces-app` layers the same way — entries, controllers, views, models,
-transport — and its models are DOM-free, which is what lets `hub/hub-board-model.ts`,
-`hub/hub-review-model.ts` and `hub/hub-presence-model.ts` be tested without a
+transport — and its models are DOM-free, which is what lets `board/board-model.ts`,
+`board/board-review-model.ts` and `board/board-presence-model.ts` be tested without a
 document. `notes-link-affordance.ts` joins the editor tier beside
 `task-link-chips.ts`, and is the one plugin there that WRITES: the chips are
 render-time and change nothing, while accepting a note's suggestion or undoing
@@ -119,7 +119,7 @@ flowchart LR
   subgraph f1["A comment: browser → .ydoc → agent"]
     B1[Browser] -->|Yjs update over WS| R1["Room ydoc<br/>doc-store.ts"]
     R1 -->|debounced persist| Y1[(".ydoc · bound .md")]
-    R1 -->|thread event| S1["SSE hub<br/>sse.ts · sse-mux.ts"]
+    R1 -->|thread event| S1["SSE bus<br/>sse.ts · sse-mux.ts"]
     S1 -->|channel frame| A1["Agent<br/>mcp watch_doc"]
   end
   subgraph f2["A task: MCP tool → board"]

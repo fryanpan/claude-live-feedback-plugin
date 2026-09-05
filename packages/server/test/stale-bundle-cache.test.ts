@@ -5,7 +5,7 @@
  * Reload, and the banner came straight back. The banner was right. The tab
  * really was still on the old build after the reload, and the reason is that
  * nothing the server sent could make it otherwise: every entry bundle lived at
- * a PERMANENT url (`/app/hub.js`), so whether a reload picked up new bytes was
+ * a PERMANENT url (`/app/board.js`), so whether a reload picked up new bytes was
  * a decision only the browser's cache made. `Cache-Control: no-cache` asks for
  * revalidation; it does not compel it. And the shell naming those urls went
  * out with no cache directives and no validator at all, which makes it
@@ -83,11 +83,11 @@ describe('a reload cannot return the old bundle', () => {
 
   const v = (n: number): Record<string, string> => ({
     'app.js': `export const build = ${n};\n`,
-    'hub.js': `export const hub = ${n};\n`,
+    'board.js': `export const board = ${n};\n`,
     'landing.js': `export const landing = ${n};\n`,
     'signin.js': `export const signin = ${n};\n`,
     'styles.css': `body{--v:${n}}\n`,
-    'hub.css': `.hub-board{--v:${n}}\n`,
+    'board.css': `.board{--v:${n}}\n`,
     'signin.css': `.signin-card{--v:${n}}\n`,
     'tokens.css': `:root{--t:${n}}\n`,
   });
@@ -148,9 +148,9 @@ describe('a reload cannot return the old bundle', () => {
     for (const ref of refs) expect(hashed.has(ref)).toBe(true);
     // Said the other way round, against the exact urls that used to be here.
     for (const permanent of [
-      '/app/hub.js',
+      '/app/board.js',
       '/app/styles.css',
-      '/app/hub.css',
+      '/app/board.css',
       '/app/signin.css',
       '/app/tokens.css',
     ]) {
@@ -192,7 +192,7 @@ describe('a reload cannot return the old bundle', () => {
       string
     >;
 
-    const hashed = await local(`/app/${manifest['hub.js']}`);
+    const hashed = await local(`/app/${manifest['board.js']}`);
     expect(hashed.status).toBe(200);
     expect(hashed.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
 
@@ -201,7 +201,7 @@ describe('a reload cannot return the old bundle', () => {
     // blank page, which is worse than the banner. It keeps `no-cache`:
     // `immutable` on a name whose bytes can change would be the original bug
     // with the revalidation removed.
-    const permanent = await local('/app/hub.js');
+    const permanent = await local('/app/board.js');
     expect(permanent.status).toBe(200);
     expect(permanent.headers.get('cache-control')).toBe('no-cache');
   });
@@ -224,7 +224,7 @@ describe('a reload cannot return the old bundle', () => {
     // names, which is exactly what it did before.
     rmSync(join(dist, 'asset-manifest.json'));
     const refs = appRefs(await (await local(`/workspaces/${wsId}`)).text());
-    expect(refs).toContain('/app/hub.js');
+    expect(refs).toContain('/app/board.js');
     expect(refs).toContain('/app/styles.css');
   });
 });

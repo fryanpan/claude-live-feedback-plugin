@@ -8,7 +8,7 @@ import type { ReviewPayload } from './review-item.ts';
  *  - diff: one changed file of a git diff review (base..target). Content is
  *    the file at the TARGET commit — immutable, so anchors never drift; the
  *    diff itself is a client-side rendering against the base text.
- *  - workspace: a hub workspace's board room (`ws:<workspaceId>`). Carries
+ *  - workspace: a board workspace's board room (`ws:<workspaceId>`). Carries
  *    no LF-held content surface of its own — its `tasks`/`workspace` maps
  *    are a server-written projection of the task store (see the server's
  *    task-projection module), never edited through a content editor.
@@ -167,7 +167,7 @@ export interface DocMeta {
    * This doc is a HUDDLE — a live conversation over a doc, started from the
    * Board before there is a task. Set at creation by the huddle route and
    * never cleared: when the mic stops the doc stays as the record, still a
-   * huddle, still listed among the board's docs. The hub reads it to dress
+   * huddle, still listed among the board's docs. The board reads it to dress
    * the row and the editor; nothing else branches on it. In the CRDT meta
    * (not the private sidecar): it describes the document, not the host, and
    * a share visitor rendering the doc may see it.

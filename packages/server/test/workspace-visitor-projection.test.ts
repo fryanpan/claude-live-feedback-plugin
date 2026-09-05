@@ -2,7 +2,7 @@
  * `GET /api/workspaces/<id>` answers a share visitor with a PROJECTION.
  *
  * The route is on the share allowlist, documented there as "workspace name +
- * goal text", and it used to return the stored `HubWorkspace` verbatim. That
+ * goal text", and it used to return the stored `BoardWorkspace` verbatim. That
  * record is partly a description of the HOST: `notesHome.repoRoot` is an
  * absolute path on this machine, and `retiredBy` carries an actor id that
  * every neighbouring visitor surface strips. A visitor handed one link was

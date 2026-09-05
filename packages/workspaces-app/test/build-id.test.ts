@@ -20,10 +20,10 @@ describe('computeBuildId', () => {
   it('does not depend on the order the assets are handed over', () => {
     const a = computeBuildId([
       { name: 'app.js', bytes: 'x' },
-      { name: 'hub.js', bytes: 'y' },
+      { name: 'board.js', bytes: 'y' },
     ]);
     const b = computeBuildId([
-      { name: 'hub.js', bytes: 'y' },
+      { name: 'board.js', bytes: 'y' },
       { name: 'app.js', bytes: 'x' },
     ]);
     expect(a).toBe(b);

@@ -12,15 +12,15 @@
  *
  *  2. Behavior parity with the vanilla renderer it replaces — same heading,
  *     Review All entry, row anatomy, empty state, settled rows. These are the
- *     renderHomeReview tests from hub-render.test.ts, re-aimed at the island.
+ *     renderHomeReview tests from board-render.test.ts, re-aimed at the island.
  */
 import { describe, expect, it, vi } from 'vitest';
+import type { ReviewItem, ReviewQueue } from '../src/board/board-review-model.ts';
 import {
   type ReviewStripHandlers,
   homeReviewData,
   mountHomeReviewIsland,
-} from '../src/hub/home-review-island.tsx';
-import type { ReviewItem, ReviewQueue } from '../src/hub/hub-review-model.ts';
+} from '../src/board/home-review-island.tsx';
 
 const NOW = 1_700_000_000_000;
 
@@ -86,7 +86,7 @@ describe('home-review island contract', () => {
     const b = item({ key: 'k-b', ask: 'Second question?' });
     const { host, unmount } = mount([a, b]);
 
-    const rows = host.querySelectorAll('.hub-review-row');
+    const rows = host.querySelectorAll('.board-review-row');
     expect(rows).toHaveLength(2);
     const rowB = rows[1] as HTMLElement;
 
@@ -98,8 +98,8 @@ describe('home-review island contract', () => {
     };
     await tick();
 
-    const after = host.querySelectorAll('.hub-review-row');
-    expect(after[0]?.querySelector('.hub-review-row-title')?.textContent).toBe(
+    const after = host.querySelectorAll('.board-review-row');
+    expect(after[0]?.querySelector('.board-review-row-title')?.textContent).toBe(
       'First question, reworded?',
     );
     // The identity property the migration exists for: same object, not a
@@ -114,7 +114,7 @@ describe('home-review island contract', () => {
     const b = item({ key: 'k-b' });
     const { host, unmount } = mount([a, b]);
 
-    const rowB = host.querySelectorAll('.hub-review-row')[1] as HTMLButtonElement;
+    const rowB = host.querySelectorAll('.board-review-row')[1] as HTMLButtonElement;
     rowB.focus();
     expect(document.activeElement).toBe(rowB);
 
@@ -144,7 +144,7 @@ describe('home-review island contract', () => {
 
     const wrapper = host.querySelector('[data-preact-island="home-review"]');
     expect(wrapper).not.toBeNull();
-    expect(wrapper?.querySelector('.hub-home-review-card')).not.toBeNull();
+    expect(wrapper?.querySelector('.board-home-review-card')).not.toBeNull();
     expect(host.firstChild).toBe(vanillaChild);
 
     unmount();
@@ -174,10 +174,10 @@ describe('home-review island contract', () => {
 describe('home-review island parity', () => {
   it('heads the section "For Your Review" with the dark Review All button that starts the walkthrough', () => {
     const { host, h, unmount } = mount([item()]);
-    expect(host.querySelector('.hub-home-heading')?.textContent).toBe('For Your Review');
-    const go = host.querySelector('.hub-review-go') as HTMLButtonElement;
+    expect(host.querySelector('.board-home-heading')?.textContent).toBe('For Your Review');
+    const go = host.querySelector('.board-review-go') as HTMLButtonElement;
     expect(go.textContent).toBe('Review All');
-    expect(go.className).toContain('hub-btn-ink');
+    expect(go.className).toContain('board-btn-ink');
     expect(go.getAttribute('aria-label')).toBe('Go through these one at a time');
     go.click();
     expect(h.onWalkthrough).toHaveBeenCalledTimes(1);
@@ -210,14 +210,16 @@ describe('home-review island parity', () => {
       review: { shape: 'decision', headline: 'Which cache do we keep?' },
     });
     const { host, unmount } = mount([ticket]);
-    const row = host.querySelector('.hub-review-row') as HTMLElement;
+    const row = host.querySelector('.board-review-row') as HTMLElement;
 
     // The rendered row: two spans, neither of them the why.
-    expect(row.querySelector('.hub-review-row-title')?.textContent).toBe('Which cache do we keep?');
-    expect(row.querySelector('.hub-review-row-sub')?.textContent).toBe(
+    expect(row.querySelector('.board-review-row-title')?.textContent).toBe(
+      'Which cache do we keep?',
+    );
+    expect(row.querySelector('.board-review-row-sub')?.textContent).toBe(
       'Asked by Helper 2 days ago',
     );
-    expect(row.querySelector('.hub-review-row-why')).toBeNull();
+    expect(row.querySelector('.board-review-row-why')).toBeNull();
 
     // The hover title stops at the ask — no orphaned separator behind it.
     const hover = row.getAttribute('title') ?? '';
@@ -232,17 +234,19 @@ describe('home-review island parity', () => {
     const first = item({ ask: 'Ship now or wait?' });
     const second = item({ ask: 'Which repo does this land in?' });
     const { host, h, unmount } = mount([first, second]);
-    const rows = [...host.querySelectorAll('.hub-review-row')];
+    const rows = [...host.querySelectorAll('.board-review-row')];
     expect(rows).toHaveLength(2);
-    expect(rows[0]?.querySelector('.hub-review-row-title')?.textContent).toBe('Ship now or wait?');
-    expect(rows[1]?.querySelector('.hub-review-row-title')?.textContent).toBe(
+    expect(rows[0]?.querySelector('.board-review-row-title')?.textContent).toBe(
+      'Ship now or wait?',
+    );
+    expect(rows[1]?.querySelector('.board-review-row-title')?.textContent).toBe(
       'Which repo does this land in?',
     );
-    expect(rows[1]?.querySelector('.hub-review-row-sub')?.textContent).toBe(
+    expect(rows[1]?.querySelector('.board-review-row-sub')?.textContent).toBe(
       'Asked by Helper 2 days ago',
     );
     // No separate why line — the body lives in the card (approved design).
-    expect(rows[0]?.querySelector('.hub-review-row-why')).toBeNull();
+    expect(rows[0]?.querySelector('.board-review-row-why')).toBeNull();
     // The hover title carries kind, subject and ask, as before.
     expect(rows[1]?.getAttribute('title')).toContain('Task comment');
     (rows[1] as HTMLElement).click();
@@ -254,20 +258,20 @@ describe('home-review island parity', () => {
 
   it('highlights the top live row — the one the walkthrough would open on', () => {
     const { host, unmount } = mount([item(), item()]);
-    const rows = [...host.querySelectorAll('.hub-review-row')];
-    expect(rows[0]?.className).toContain('hub-review-row-current');
-    expect(rows[1]?.className).not.toContain('hub-review-row-current');
+    const rows = [...host.querySelectorAll('.board-review-row')];
+    expect(rows[0]?.className).toContain('board-review-row-current');
+    expect(rows[1]?.className).not.toContain('board-review-row-current');
     unmount();
     host.remove();
   });
 
   it('empty queue says so plainly and offers no Review All', () => {
     const { host, unmount } = mount([]);
-    expect(host.querySelector('.hub-home-quiet')?.textContent).toBe(
+    expect(host.querySelector('.board-home-quiet')?.textContent).toBe(
       'Nothing is waiting for your review right now.',
     );
-    expect(host.querySelector('.hub-review-go')).toBeNull();
-    expect(host.querySelectorAll('.hub-review-row')).toHaveLength(0);
+    expect(host.querySelector('.board-review-go')).toBeNull();
+    expect(host.querySelectorAll('.board-review-row')).toHaveLength(0);
     unmount();
     host.remove();
   });
@@ -284,11 +288,11 @@ describe('home-review island parity', () => {
     };
     const { host, h, unmount } = mount([stillLive], handlers(), [stillLive, settledGone]);
     // The still-open item renders once, as a live row — not twice.
-    const titles = [...host.querySelectorAll('.hub-review-row-title')].map((n) => n.textContent);
+    const titles = [...host.querySelectorAll('.board-review-row-title')].map((n) => n.textContent);
     expect(titles.filter((t) => t === 'Still open?')).toHaveLength(1);
-    const done = host.querySelector('.hub-review-row-done') as HTMLElement;
+    const done = host.querySelector('.board-review-row-done') as HTMLElement;
     expect(done.textContent).toContain('Already answered one');
-    expect(done.querySelector('.hub-review-row-sub')?.textContent).toContain(
+    expect(done.querySelector('.board-review-row-sub')?.textContent).toContain(
       'answered this sitting',
     );
     // A done row is still the way back to the thing just answered.
@@ -302,13 +306,13 @@ describe('home-review island parity', () => {
     const a = item({ key: 'k-a' });
     const b = item({ key: 'k-b' });
     const { host, unmount } = mount([a, b]);
-    expect(host.querySelectorAll('.hub-review-row')).toHaveLength(2);
+    expect(host.querySelectorAll('.board-review-row')).toHaveLength(2);
 
     homeReviewData.value = { queue: queueOf([b]), settled: [], now: NOW };
     await tick();
-    const rows = host.querySelectorAll('.hub-review-row');
+    const rows = host.querySelectorAll('.board-review-row');
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.querySelector('.hub-review-row-title')?.textContent).toBe(b.ask);
+    expect(rows[0]?.querySelector('.board-review-row-title')?.textContent).toBe(b.ask);
     unmount();
     host.remove();
   });

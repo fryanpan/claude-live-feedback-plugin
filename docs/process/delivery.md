@@ -272,7 +272,7 @@ modified path, not only the ones that set the suffix. So a clean `sourceRef`
 sitting next to `dirtyPaths: ["docs/product/plans/…"]` reads as a decision
 rather than an oversight, and a `-dirty` one names the file that earned it.
 
-The workspace hub's presence strip reads that, next to the plugin-drift notice,
+The workspace board's presence strip reads that, next to the plugin-drift notice,
 and says how old the served client is, how long the build has been failing, and
 that the fix ends in a restart. **It arms on two failed starts in a row, or one
 over a client already older than a day** — a single failed start over a client

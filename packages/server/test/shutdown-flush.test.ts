@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DocStore } from '../src/doc-store.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { SseHub } from '../src/sse.ts';
+import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 import { waitFor } from './wait-for.ts';
 
@@ -25,7 +25,7 @@ import { waitFor } from './wait-for.ts';
 function makeDocStore(dataDir: string): DocStore {
   return new DocStore({
     dataDir,
-    sse: new SseHub(),
+    sse: new SseBus(),
     webhooks: createWebhookDispatcher({ onLog: () => {} }),
   });
 }

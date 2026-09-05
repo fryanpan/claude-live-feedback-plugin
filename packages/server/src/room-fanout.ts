@@ -16,7 +16,7 @@
  * building, so a lookup-by-id version would re-resolve the room several
  * times per broadcast and could disagree with the caller about which one it
  * has. `RoomFanoutHost` carries only what a frame cannot get from the room
- * itself — the SSE hub and webhook dispatcher, the persist debounce, the
+ * itself — the SSE bus and webhook dispatcher, the persist debounce, the
  * companion/review projections, and the resident room map the share sweeps
  * walk.
  *
@@ -42,7 +42,7 @@ import { DOC_STORE_TIMINGS } from './doc-store-timings.ts';
 import type { DocRoom, FeedbackWs, ShareAuthorizedSocket } from './doc-store.ts';
 import { newEventId } from './event-id.ts';
 import { isPrivateMetaKey } from './private-meta.ts';
-import type { SseHub } from './sse.ts';
+import type { SseBus } from './sse.ts';
 import type { ThreadSummarizer } from './summarize.ts';
 import type { WebhookDispatcher } from './webhooks.ts';
 
@@ -169,7 +169,7 @@ export function maintainAwareness(aw: awarenessProtocol.Awareness, now = Date.no
 export interface RoomFanoutHost {
   /** Every RESIDENT room — the set the share-socket sweeps walk. */
   residentRooms(): Iterable<DocRoom>;
-  sse(): SseHub;
+  sse(): SseBus;
   webhooks(): WebhookDispatcher;
   /** `DocStoreConfig.decorateDocMeta`, already defaulted to identity. */
   decorate(meta: DocMeta): DocMeta;

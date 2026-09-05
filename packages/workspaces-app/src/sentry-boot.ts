@@ -6,7 +6,7 @@ import { scrubBrowserEvent } from '@feedback/core/trace-privacy';
  * src="/app/sentry.js">` that a shell emits ONLY when the box has a DSN
  * configured. `packages/server/src/browser-sentry.ts` is the other half and
  * carries the reasoning: why it is a separate script rather than an
- * `import()` inside app.js / hub.js / the widget, and why the page type is a
+ * `import()` inside app.js / board.js / the widget, and why the page type is a
  * TAG rather than something read back off the URL.
  *
  * It is a side-effecting module on purpose. There is no export anything else
@@ -61,7 +61,7 @@ if (dsn) {
     beforeSend: (event) => scrubBrowserEvent(event) as typeof event,
     beforeSendTransaction: (event) => scrubBrowserEvent(event) as typeof event,
   });
-  // How `hub-app.ts` reaches the SDK for its own load-phase measurements
+  // How `board-app.ts` reaches the SDK for its own load-phase measurements
   // without importing (and so bundling) it a second time. See sentry-page.ts.
   (window as unknown as Record<string, unknown>).__cwSentry = Sentry;
 }

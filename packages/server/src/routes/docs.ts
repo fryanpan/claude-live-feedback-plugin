@@ -110,9 +110,9 @@ export async function handleDocCreateListRoutes(
     isValidDocId,
     withReviewUrl,
     boardIndexForListing,
-    hubBoardsForDocIndexed,
+    boardsForDocIndexed,
     homeForDocIndexed,
-    fileUnderHubWorkspace,
+    fileUnderBoardWorkspace,
   } = ctx;
   const { req, url, pathname } = rq;
 
@@ -250,7 +250,7 @@ export async function handleDocCreateListRoutes(
     // point, and the 409 below returns early — filing afterwards would
     // leave a failed bind as the one doc this route can still strand
     // outside a workspace.
-    const hubWorkspaceId = fileUnderHubWorkspace(
+    const boardWorkspaceId = fileUnderBoardWorkspace(
       canonicalId,
       body?.hubWorkspaceId as string | undefined,
     );
@@ -312,7 +312,7 @@ export async function handleDocCreateListRoutes(
       meta: withReviewUrl(room.meta),
       // Where the doc landed, in the same call that created it — a
       // caller who supplied no workspace still learns which one it got.
-      hubWorkspaceId,
+      hubWorkspaceId: boardWorkspaceId,
       ...(attached ? { attached } : {}),
     });
   }
@@ -321,8 +321,8 @@ export async function handleDocCreateListRoutes(
     // list_docs accepted the param and silently answered a board-scoped
     // question with every doc on the server. It matches either kind of
     // id a caller holds under the name "workspace": the review tag in
-    // meta (folder binds, diff reviews) or a hub board the doc is filed
-    // under — resolved via hubBoardsForDoc so the answer is the same
+    // meta (folder binds, diff reviews) or a board the doc is filed
+    // under — resolved via boardsForDoc so the answer is the same
     // set the event fan-out and coverage readout already use.
     //
     // `?setId=` scopes it to one REVIEW instead. It exists because the
@@ -355,7 +355,7 @@ export async function handleDocCreateListRoutes(
     const byWorkspace = workspaceId
       ? all.filter(
           (m) =>
-            m.workspaceId === workspaceId || hubBoardsForDocIndexed(boardIndex, m).has(workspaceId),
+            m.workspaceId === workspaceId || boardsForDocIndexed(boardIndex, m).has(workspaceId),
         )
       : all;
     const bySet = setId ? byWorkspace.filter((m) => reviewIdOf(m) === setId) : byWorkspace;

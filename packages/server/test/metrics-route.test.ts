@@ -84,9 +84,9 @@ describe('GET /api/metrics', () => {
     // The positive control: the numbers MOVE. A route hard-wired to zero, or
     // reading a DocStore that is not the serving one, would pass every shape
     // assertion below and fail this one.
-    // Five docs plus the hub workspace room they get filed under, so the
+    // Five docs plus the board workspace room they get filed under, so the
     // room count moves by more than five — but the BINDING count is exact:
-    // a hub-owned room is never file-bound.
+    // a board-owned room is never file-bound.
     expect(after.rooms).toBeGreaterThanOrEqual(before.rooms + 5);
     expect(after.bindings).toBe(before.bindings + 5);
     // Creating a doc reaches for it, so those five are in the fast lane; the

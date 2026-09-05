@@ -40,7 +40,7 @@ it needs three things, and the marker is only one of them:
    so deleting the real marker from a harness moved no count at all because
    the module's header paragraph said the words.
 2. every exported value carrying an explicit type or return annotation. No
-   annotation is no evidence: `export const HUB_TEXT = TEXT['hub.css'];` is a
+   annotation is no evidence: `export const BOARD_TEXT = TEXT['board.css'];` is a
    one-line hole that inference fills with `string` while a regex sees
    nothing.
 3. none of those annotations naming `string`.

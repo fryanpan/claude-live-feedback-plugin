@@ -10,7 +10,7 @@ import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-
  *  1. A rule that moved still reaches its element on the review editor's
  *     page, which loads `styles.css` then `doc.css`.
  *  2. A rule that moved reaches NOTHING on the board, which loads
- *     `hub.css` then `styles.css` and never names `doc.css` — with a
+ *     `board.css` then `styles.css` and never names `doc.css` — with a
  *     positive control, because an element no rule reaches satisfies almost
  *     any negative on its own.
  *  3. The link ORDER is load-bearing. `doc.css` sat interleaved through
@@ -99,8 +99,8 @@ describe('the editor page keeps every surface that moved', () => {
 
 describe('the board never loads doc.css, and loses nothing by it', () => {
   beforeEach(() => {
-    // The order `renderHubShell` links them (packages/server/src/shells.ts).
-    cleanup = installSheets('hub.css', 'styles.css');
+    // The order `renderBoardShell` links them (packages/server/src/shells.ts).
+    cleanup = installSheets('board.css', 'styles.css');
     setViewport(IPAD);
   });
 
@@ -124,7 +124,7 @@ describe('the board never loads doc.css, and loses nothing by it', () => {
   it('paints a pending suggestion, because the board mounts the same editor', () => {
     // The converse of the negatives above, and the check that would have
     // caught this: the board's task-body editor IS `createEditor` over the
-    // `task:<id>` room (hub/task-body-editor.ts), and editor.ts registers
+    // `task:<id>` room (board/task-body-editor.ts), and editor.ts registers
     // SuggestInsert, SuggestDelete and SuggestionChips in the BASE extension
     // list with no review-surface condition. So an agent's pending suggestion
     // on a task description renders here, and its rules have to be in the
@@ -155,7 +155,7 @@ describe('the board never loads doc.css, and loses nothing by it', () => {
   it('keeps .thread-line in the shared base, because the board renders it too', () => {
     // The chip is authored beside the diff nav that mints it, so the obvious
     // split sends it to doc.css. The board puts the same chip on a task
-    // discussion (`thread-line` in hub.js), which is how B2 lost
+    // discussion (`thread-line` in board.js), which is how B2 lost
     // `.signin-bar` for a release — a rule can sit under one page's banner
     // and be reached by another.
     const chip = attach('thread-line', { tag: 'span' });
@@ -233,11 +233,11 @@ describe('the mobile chip: the board is unmoved, the editor follows placement', 
   };
 
   it('the board never shows it, whatever the body says', () => {
-    expect(readChip(['hub.css', 'styles.css'])).toEqual({ ipad: 'none', phone: 'none' });
+    expect(readChip(['board.css', 'styles.css'])).toEqual({ ipad: 'none', phone: 'none' });
     // The attribute the editor keys on, on a page whose sheets do not carry
     // the rule that reads it. This is the case that fails if the reveal is
     // ever moved back into the base stylesheet.
-    expect(readChip(['hub.css', 'styles.css'], 'inline')).toEqual({
+    expect(readChip(['board.css', 'styles.css'], 'inline')).toEqual({
       ipad: 'none',
       phone: 'none',
     });

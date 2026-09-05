@@ -413,7 +413,7 @@ describe('triage shaping', () => {
   });
 
   it('reaches the board room, which is the only thing the browser reads', async () => {
-    // The hub renders from `ws:<id>` and nothing else, so a shaped title the
+    // The board renders from `ws:<id>` and nothing else, so a shaped title the
     // projection never refreshes for is one no reviewer can see — and nothing
     // goes red, because the store, the route and the REST read are all
     // correct while the board keeps showing the clipped fragment. `/title`
