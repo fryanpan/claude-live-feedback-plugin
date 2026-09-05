@@ -11,6 +11,28 @@ removed), #406 (20-minute threshold), #407 (board-level wake dedupe),
 summary; the design reasoning lives in the file headers of
 `packages/server/src/stall-gate.ts` and `stall-nudge.ts`.
 
+## Shape
+
+```mermaid
+flowchart TB
+  W["stall-wiring.ts<br/>snapshots · both nudgers · composition"]
+  W --> KM["keep-moving.ts<br/>shared row classifier"]
+  W --> RN["ready-nudge.ts + ready-gate.ts<br/>the ready-work half"]
+  KM --> G["stall-gate.ts<br/>stalled · unfiled · undetermined"]
+  W --> G
+  G --> NA["note-ask.ts + note-ask-judge.ts<br/>ask prefilter, then Haiku confirmation"]
+  G --> RJ["review-judge.ts<br/>Haiku judge (prompt in core)"]
+  G --> N["stall-nudge.ts<br/>stamps · told-times · wakes"]
+  LP["lead-presence.ts<br/>is the seat still listening"] --> N
+  N --> ST[("stall-nudge-stamps.json")]
+  N -->|wake frame| NL["mcp/nudge-line.ts → lead agent"]
+  N -->|"told, and still a finding an hour later"| ESC["stall-escalation.ts<br/>+ stall-escalations.json"]
+  ESC --> Q["One review item on the reader's Home queue"]
+```
+
+Every module is named again, with what it owns, under
+[Where things live](#where-things-live) at the foot of this page.
+
 ## What counts as a finding
 
 The loop runs every 60s and sorts every open row into three lists, one
