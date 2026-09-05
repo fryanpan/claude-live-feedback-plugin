@@ -1187,13 +1187,14 @@ describe('share links over HTTP', () => {
         });
         expect([403, 404], `${seg} status`).toContain(r.status);
         // Also on the board prefix and the goal prefix, which read their own
-        // tables the same way.
-        const board2 = await onShareHost(
-          `/api/reviews/${encodeURIComponent(board)}/${seg}`,
+        // tables the same way. Both are spelled under the board now — the
+        // goal one especially, since `/api/goals/<id>` named no board at all.
+        const board2 = await onShareHost(`/workspaces/${encodeURIComponent(board)}/${seg}`, member);
+        expect([403, 404], `board ${seg} status`).toContain(board2.status);
+        const goal = await onShareHost(
+          `/workspaces/${encodeURIComponent(board)}/goals/${rowId}/${seg}`,
           member,
         );
-        expect([403, 404], `board ${seg} status`).toContain(board2.status);
-        const goal = await onShareHost(`/api/goals/${rowId}/${seg}`, member);
         expect([403, 404], `goal ${seg} status`).toContain(goal.status);
       }
 
