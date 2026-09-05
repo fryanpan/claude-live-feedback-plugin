@@ -178,7 +178,7 @@ describe('the canonical routes, over HTTP', () => {
 
   it('refuses every collection on a board id nothing answers to', async () => {
     for (const [method, sub, body] of COLLECTIONS) {
-      const r = await local(`/workspaces/w-not-a-board/${sub}`, {
+      const r = await local(`/workspaces/no-such-board/${sub}`, {
         method,
         ...(body === undefined
           ? {}

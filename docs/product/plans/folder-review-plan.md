@@ -32,9 +32,9 @@ The unifying vision: from one Claude Code session, a reviewer can use live‑fee
   - `workspaceRoot?: string` — absolute folder root (stored on every member so the tree is derivable without a registry).
 - Persist exactly like `setId`/`owner` today (`initDocMeta`/`readDocMeta`). No separate workspace registry in M1 — derive workspaces from member docs (mirrors how the landing page derives its list from `rooms.list()`).
 
-### 2. Folder binding — `attach_folder` (MCP) + `POST /workspaces`
+### 2. Folder binding — `attach_folder` (MCP) + `POST /api/workspaces`
 - **MCP tool** `attach_folder(folderPath, workspaceId?, title?, include?, maxFiles?, subscribe?)` in `packages/mcp/src/mcp.ts` (mirror the `create_review_doc` case). After binding, it loops the returned files and `watch_doc`s markdown+code docs (cap by `maxFiles`).
-- **Server route** `POST /workspaces` → new `rooms.bindFolder(...)` in `packages/server/src/rooms.ts`.
+- **Server route** `POST /api/workspaces` → new `rooms.bindFolder(...)` in `packages/server/src/rooms.ts`.
 - **Scan strategy** (established `spawnSync` pattern already used in keychain.ts/public-host.ts):
   1. If folder is in a git repo: `git -C <folder> ls-files --cached --others --exclude-standard` → respects `.gitignore` for free (skips `node_modules`/`dist`/etc).
   2. Else: recursive `readdirSync(..., {withFileTypes:true})` with a hardcoded skip set (`.git`, `node_modules`, `dist`, `build`, `.next`, `coverage`, dotdirs).
@@ -67,7 +67,7 @@ Load the source file into the schema's flat `content` Y.Text (read‑only) and *
 - `reconcileFromDisk`/`reparseFromDisk` branch on `type`: for code, `currentSerialized = content.toString()` and on `apply` do `content.delete(0,len); content.insert(0, disk)` under a `'file-watch'` transact. `decideReconcile` (pure string compare) is reused as‑is; the `conflict` branch is effectively unreachable (no live edits) but harmless.
 - `wireEvents`/`hydrateFromDisk` branch on `type` (call `autoReanchorCodeDoc`; rebind `code` rooms whose `sourceUrl` exists, like markdown today).
 
-### 6. File tree UI + counts — `GET /api/reviews/:id/tree`
+### 6. File tree UI + counts — `GET /api/workspaces/:id/tree`
 - New endpoint generalizes the landing count logic into a reusable `buildWorkspaceTree(rooms, workspaceId)`: filter `rooms.list()` by `workspaceId`; per file compute `openCount = listThreads(docId,{status:'open'}).length`; build a nested dir tree from `relPath`; folders carry rolled‑up `openCount`; each file carries `{docId, name, relPath, fileType, openCount, threadCount, reviewUrl, missing?, lastActivityAt}`. Sort folders‑first, then open‑count desc.
 - **`renderSetNav` (`app.ts`)** branches on `meta.workspaceId`: fetch the tree endpoint and render a **collapsible tree** into `#set-pane` using native `<details>/<summary>` (open/closed persisted in `localStorage` per `workspaceId:relPath`). File rows = `<a href={reviewUrl}>` + an open‑count badge (reuse the landing `.badge-open` pill); active = current docId; carry `?as=…` params. The flat `setId` path stays for legacy hand‑grouped sets. Reuse the `body.has-set` 240px grid unchanged.
 - Counts are a navigation‑time snapshot in M1: refetch the tree on window focus and a ~30s interval (live per‑file push deferred).
@@ -85,7 +85,7 @@ Load the source file into the schema's flat `content` Y.Text (read‑only) and *
 - `packages/core/src/schema.ts` — read/init the new meta fields.
 - `packages/core/src/prose.ts` — add `autoReanchorCodeDoc` (flat‑text snippet sweep).
 - `packages/server/src/rooms.ts` — `bindFolder`, `attachReadonlyFile`, type‑branches in `attachFile`/`reconcile`/`wireEvents`/`hydrate`; pass new meta through `getOrCreate`.
-- `packages/server/src/server.ts` — `POST /workspaces`, `GET /api/reviews/:id/tree`; accept `type='code'` in the `/y/` WS + `POST /api/docs` attach branch; `withReviewUrl` for code.
+- `packages/server/src/server.ts` — `POST /api/workspaces`, `GET /api/workspaces/:id/tree`; accept `type='code'` in the `/y/` WS + `POST /api/docs` attach branch; `withReviewUrl` for code.
 - `packages/mcp/src/mcp.ts` — `attach_folder` tool def + dispatcher case + post‑bind `watch_doc` loop.
 - `packages/markdown-app/src/app.ts` — editor‑type branch (Tiptap vs CodeMirror); `renderSetNav` tree branch.
 - `packages/markdown-app/index.html` — `#set-pane` content → file tree container.
@@ -100,12 +100,12 @@ Land the whole milestone as **one PR** (Bryan's call), built in this internal or
 1. **Core model** — `DocType 'code'` + `DocMeta` fields + schema read/init (+ tests).
 2. **Read‑only code doc plumbing** — `attachReadonlyFile`, reconcile/wireEvents/hydrate branches, `autoReanchorCodeDoc`, `type='code'` accepted by server/WS (+ server tests). Verifiable via API before any UI.
 3. **Code surface in the SPA** — CodeMirror read‑only editor + languages + `app.ts` type branch + gutter/anchor; deps + `splitting:true` (validate chunk serving first). Verify a single `.ts`/`.json` file renders highlighted with line comments.
-4. **Folder bind** — `bindFolder` + `attach_folder` MCP + `POST /workspaces` (+ tests, guardrails).
+4. **Folder bind** — `bindFolder` + `attach_folder` MCP + `POST /api/workspaces` (+ tests, guardrails).
 5. **File tree UI** — `GET …/tree` + `renderSetNav` tree + styles.
 
 CI green + full verification (below) before requesting review; deploy via server restart after merge.
 
-**Milestone 2 (fast follow, not in this plan's scope):** redesign the landing page into project → artifacts (folder/file/mockup/dev) with counts; `delete_workspace` MCP tool + `DELETE /workspaces/:id` (loop `deleteDoc` with the per‑file open‑thread guardrail); update `doc-triage-prompt.md` to treat a workspace as one cleanup unit (until then, triage will list code/folder docs per file — acceptable interim).
+**Milestone 2 (fast follow, not in this plan's scope):** redesign the landing page into project → artifacts (folder/file/mockup/dev) with counts; `delete_workspace` MCP tool + `DELETE /api/workspaces/:id` (loop `deleteDoc` with the per‑file open‑thread guardrail); update `doc-triage-prompt.md` to treat a workspace as one cleanup unit (until then, triage will list code/folder docs per file — acceptable interim).
 
 ---
 

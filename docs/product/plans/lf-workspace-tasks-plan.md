@@ -573,8 +573,8 @@ Prototyped in the hub mockup. Holding Space doesn't trigger the mic while you're
 | MCP     | `import_tasks_markdown(workspaceId, path)`                   | group headings + tables; dry-run returns the mapping first; a successful import stamps the source file with a banner + hub link, so the old tracker can't quietly stay a second source of truth |
 | MCP     | `grant_workspace_access(workspaceId, grantees, scope?, expiresDays?)` → join URL · `revoke_workspace_access` · `list_grants` | grantees: email[] · @domain · "*" (expiresDays required)     |
 | MCP     | `attach_agent(workspaceId, runtime, capabilities)` · `heartbeat` · `list_agents` | §4                                                           |
-| REST    | `GET/POST /workspaces/:id/tasks` · `POST /api/tasks/:id/transition` · `.../answer` · `.../links` · `PUT /workspaces/:id/goal` | Each route hand-copies fields from the request, and a field that isn't copied is silently discarded while the request still returns success. Every new parameter gets a test that goes through the real route |
-| REST    | `POST /workspaces/:id/voice`                             | transcript in, route decision + ack out                      |
+| REST    | `GET/POST /api/workspaces/:id/tasks` · `POST /api/tasks/:id/transition` · `.../answer` · `.../links` · `PUT /api/workspaces/:id/goal` | Each route hand-copies fields from the request, and a field that isn't copied is silently discarded while the request still returns success. Every new parameter gets a test that goes through the real route |
+| REST    | `POST /api/workspaces/:id/voice`                             | transcript in, route decision + ack out                      |
 | REST    | `GET /api/me/workspaces`                                     | live invites for the authenticated email                     |
 | REST    | `GET /join/:slug`                                            | invite claim + login redirect                                |
 | Events  | see §3.6                                                     | on the workspace watch channel                               |
