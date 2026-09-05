@@ -460,6 +460,14 @@ export class Rooms {
   /** docId → last time anything reached for this doc (see `touchDoc`). */
   private lastTouchedAt = new Map<string, number>();
 
+  /**
+   * Set by `stop()`. A deferred bind is the one piece of work that can land
+   * after this Rooms is finished with — the pool read outlives the call that
+   * started it — and binding then is never right: it re-hydrates a doc into
+   * an instance nobody holds, schedules a persist into a data dir a test has
+   * already removed, and can re-attach a file the next instance now owns.
+   */
+  private stopped = false;
   private memoryTicker: ReturnType<typeof setInterval> | null = null;
   private evictTicker: ReturnType<typeof setInterval> | null = null;
   /**
@@ -693,6 +701,11 @@ export class Rooms {
    * a shutdown stops sweeping before `flush` runs.
    */
   stop(): void {
+    this.stopped = true;
+    // In-flight pool reads cannot be cancelled, so their landings are ignored
+    // instead (`bindAfterRead`). Clearing the set lets a later instance over
+    // the same data dir start its own read for the same doc.
+    this.deferredBinds.clear();
     if (this.memoryTicker) clearInterval(this.memoryTicker);
     this.memoryTicker = null;
     if (this.evictTicker) clearInterval(this.evictTicker);
@@ -1222,7 +1235,10 @@ export class Rooms {
    * hydration exists to prevent — so a second, drifting copy of this logic is
    * the thing most worth not having.
    */
-  private hydrateDoc(docId: string, opts: { blocking?: boolean } = {}): boolean {
+  private hydrateDoc(
+    docId: string,
+    opts: { blocking?: boolean; liveWins?: boolean } = {},
+  ): boolean {
     // Whether this hydrate may read its bound file on the main thread.
     //
     // This used to be the other way round — a `defer` opt the fan-outs passed
@@ -1252,7 +1268,12 @@ export class Rooms {
     const src = room.meta.sourceUrl;
     // The index row remembers a write-back that had not landed at shutdown:
     // the doc holds content the file does not, whatever the two mtimes say.
-    const liveWins = this.docIndex.get(docId)?.pendingFileWrite === true;
+    //
+    // `opts.liveWins` is the same claim from the other direction: a DEFERRED
+    // bind whose doc was edited while the read was in flight (see
+    // `bindAfterRead`). Both say "the live doc holds content disk has never
+    // held", which is the one thing an mtime comparison cannot see.
+    const liveWins = opts.liveWins === true || this.docIndex.get(docId)?.pendingFileWrite === true;
     // A hub-owned room is never file-bound (§3.3), so a sourceUrl on one
     // can only have arrived from a peer's ydoc write. Refusing to bind
     // here is the second, independent stop behind `guardPrivateMeta` —
@@ -1409,17 +1430,38 @@ export class Rooms {
    * cannot start a second read of its own.
    */
   private bindAfterRead(docId: string, path: string): void {
+    if (this.stopped) return;
     if (this.deferredBinds.has(docId)) return;
     this.deferredBinds.add(docId);
+    // The doc is READABLE while the read runs — that is the point of the
+    // deferral — so a person or an agent can edit it in the gap. `attachFile`
+    // then finds a doc that differs from disk with no write-back bookkeeping
+    // to explain it, and with nothing else to go on arbitrates by mtime,
+    // where a `.md` and a `.ydoc` written in the same millisecond hand the
+    // round to disk: the edit made in the gap is reverted and any suggestion
+    // it touched is dropped as an "external edit". The blocking hydrate never
+    // met this because it left no gap to edit in.
+    //
+    // So remember whether an AUTHORING edit lands while we wait.
+    // `lastContentChangeAt` is stamped only for a person's websocket or an
+    // `agent…` origin (`isAuthoringOrigin`), which is exactly the question:
+    // a `file-watch` apply or a meta write must NOT count, or a restart that
+    // picks up an edit made while the server was down would reassert the
+    // stale doc over it.
+    const editedBefore = this.rooms.get(docId)?.lastContentChangeAt;
     void boundFiles
       .read(path)
       .then(() => {
+        // The instance this read belongs to is done; see `stopped`.
+        if (this.stopped) return;
         // Evicted while the read ran, or bound by somebody else — either way
         // there is nothing here to do, and re-hydrating an evicted doc would
         // pull it back into memory as a side effect of a read it never asked
         // for.
         if (!this.rooms.has(docId) || this.bindings.has(docId)) return;
-        this.hydrateDoc(docId);
+        const editedAfter = this.rooms.get(docId)?.lastContentChangeAt;
+        const editedInGap = editedAfter !== undefined && editedAfter !== editedBefore;
+        this.hydrateDoc(docId, editedInGap ? { liveWins: true } : {});
       })
       .catch((err) => {
         console.error(`[rooms] ${docId}: deferred bind failed:`, err);
