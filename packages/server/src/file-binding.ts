@@ -45,7 +45,7 @@ import {
   normalizeDocHome,
   resolveHomeCheckout,
   verifyPathInHome,
-} from './doc-home.ts';
+} from './doc-origin-repo.ts';
 import { isBoardOwnedDoc } from './doc-ids.ts';
 import { DOC_STORE_TIMINGS } from './doc-store-timings.ts';
 import type { DocRoom } from './doc-store.ts';

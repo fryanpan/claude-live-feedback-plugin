@@ -10,7 +10,7 @@ export * from './meeting-timing.ts';
 export * from './redline.ts';
 export * from './note-suggestion.ts';
 export * from './related-work.ts';
-export * from './review.ts';
+export * from './attachment.ts';
 export * from './review-item.ts';
 export * from './review-item-id.ts';
 export * from './review-judge-prompt.ts';

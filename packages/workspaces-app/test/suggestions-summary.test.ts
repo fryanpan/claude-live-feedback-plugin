@@ -2,7 +2,7 @@ import { prose, suggestOps } from '@feedback/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import { MountScope } from '../src/mount-scope.ts';
-import { mountSuggestionsSummary } from '../src/redline/suggestions-summary.ts';
+import { mountSuggestionsSummary } from '../src/suggestions/suggestions-summary.ts';
 
 /**
  * The doc-level "N pending suggestions" affordance (redline-suggestions

@@ -16,7 +16,7 @@ import { getMarkdownMount } from '../surface-registry.ts';
 import { createLiveRedlineEditor } from './live-redline-editor.ts';
 import { type MarkupMarginHandle, mountMarkupMargin } from './markup-margin.ts';
 import { createRedlineEditor } from './redline-editor.ts';
-import { mountSuggestionsSummary } from './suggestions-summary.ts';
+import { mountSuggestionsSummary } from '../suggestions/suggestions-summary.ts';
 
 /**
  * Mount the Word-style redline surface for a markdown file in a diff review.

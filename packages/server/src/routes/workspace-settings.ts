@@ -6,7 +6,7 @@ import { DEFAULT_REVIEW_ITEM_CRITERIA } from '@feedback/core/review-judge-prompt
  * Lifted verbatim out of `createServer`'s request closure; the handlers
  * read their collaborators off `WorkspaceRoutesContext` instead of the scope.
  */
-import { canonicalRepoRoot, normalizeDocHome } from '../doc-home.ts';
+import { canonicalRepoRoot, normalizeDocHome } from '../doc-origin-repo.ts';
 import { redactCapChangeForVisitor } from '../share/redact-workspace.ts';
 import { PARALLELISM_CAP_MAX, PARALLELISM_CAP_MIN, type WorkspaceNotesHome } from '../tasks.ts';
 import { parseVoiceContext } from '../voice.ts';

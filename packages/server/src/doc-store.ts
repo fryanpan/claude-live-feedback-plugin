@@ -77,7 +77,7 @@ import {
   refreshWorkspace as refreshWorkspaceImpl,
   setWorkspaceGroups as setWorkspaceGroupsImpl,
 } from './binds.ts';
-import { resolveHomeCheckout } from './doc-home.ts';
+import { resolveHomeCheckout } from './doc-origin-repo.ts';
 import {
   type DocIdAuthority,
   ReservedDocIdError,
