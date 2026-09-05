@@ -1,6 +1,6 @@
 # Diff-Review Live Editors — Plan
 
-Bryan's requests (2026-08-03, via Quick Build review + direct):
+Bryan's requests (2026-08-03, via a peer's diff review + direct):
 
 1. "In a file view of a multi-file diff for a markdown file, I expect the
    usual markdown editor where I can also make live edits."
@@ -165,9 +165,9 @@ report.
 - Unit: fence detector cases; languages map; flat write-back debounce/
   conflict/backup; companion-doc idempotency + traversal guard + pinned 409.
 - HTTP-level: one test through the real route per new param (learnings rule).
-- E2E on the deployed server against the live Quick Build review
-  (`quickbuild~core~README.md`) and the `mermaid-fence-repro` doc; ping the
-  Quick Build peer to verify, then delete the repro doc.
+- E2E on the deployed server against a peer's live diff review (one of its
+  `~core~README.md` file docs) and the `mermaid-fence-repro` doc; ping that
+  peer to verify, then delete the repro doc.
 - Deploy: standard — merge, pull on the box, `bun run build:all`,
   `launchctl kickstart`. markdown-app dist is rebuilt at deploy (untracked);
   no MCP schema changes expected (no new agent tools), so no bundle rebuild
