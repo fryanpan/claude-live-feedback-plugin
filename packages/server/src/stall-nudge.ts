@@ -321,6 +321,22 @@ export interface StallNudgerOptions {
   /** Where the armed stamps are kept between runs. Omitted → memory only,
    *  which is what every test that is not about persistence wants. */
   stampFile?: string;
+  /**
+   * The second addressee, run once per board per tick after the wake
+   * decision: the board going over the lead's head when a row it was already
+   * told about has still not moved (`stall-escalation.ts`).
+   *
+   * It hangs here rather than on a timer of its own because the thing it
+   * needs — WHEN each row was told — is this object's memory and nobody
+   * else's, and because a second loop over every board would read the same
+   * snapshot twice a minute to answer one more question about it.
+   *
+   * Called for every live board, including one with nothing wrong: a board
+   * that recovered is exactly when a filed item has to be taken back.
+   * Omitted → nothing escalates, which is the behaviour this option
+   * replaced.
+   */
+  escalate?: (board: StallSnapshot, toldAt: ReadonlyMap<string, number>, now: number) => void;
 }
 
 /** The stamp file's shape. Versioned so a later format change can recognise an
@@ -332,6 +348,14 @@ interface StampFile {
   stamps: Record<string, string>;
   /** workspaceId → rowId → the bucket the row was last named under. */
   told?: Record<string, Record<string, string>>;
+  /**
+   * workspaceId → rowId → when the lead was told. A SECOND map rather than a
+   * richer value in `told`, so a build that predates it reads the file it
+   * always read instead of skipping every row as the wrong type — the cost of
+   * that would be one wake per board on a rollback, and this feature is not
+   * worth billing anybody for going backwards.
+   */
+  toldAt?: Record<string, Record<string, number>>;
 }
 
 const STAMP_FORMAT_VERSION = 1;
@@ -363,6 +387,19 @@ interface ToldRow {
    *  list, wake or no wake, because the question this answers is how long the
    *  row has been off the list, not how long since anyone was told. */
   seenAt: number;
+  /**
+   * When the lead was first told about this stretch of stuckness — set on a
+   * DELIVERED wake and never refreshed while the row stays remembered, which
+   * is the whole difference between it and `seenAt` above.
+   *
+   * It exists for the escalation (`stall-escalation.ts`), whose question is
+   * the one nothing here could answer: how long ago was somebody told. A row
+   * that leaves the list for a whole repeat window is forgotten with its
+   * stamp, so a row that recovers and stalls again starts the clock afresh —
+   * which is right: that is a new stretch, and nobody has been told about it
+   * yet.
+   */
+  toldAt?: number;
 }
 
 /** The distinct reasons a pass could not evaluate rows, sorted so the same
@@ -471,6 +508,10 @@ export class StallNudger {
     for (const board of boards) {
       live.add(board.workspaceId);
       this.considerBoard(board, now);
+      // After the wake, so a row told for the first time on this very tick is
+      // measured from now and cannot escalate in the same pass. Isolated: a
+      // filer that throws must cost its own board, never the boards behind it.
+      this.escalate(board, now);
     }
     // Forget boards that are gone, so neither map outlives what it describes.
     // The pruning has to reach the FILE too, or the durable copy grows for the
@@ -506,6 +547,31 @@ export class StallNudger {
    *  pruning above — a map that grows forever is invisible otherwise. */
   armedCount(): number {
     return this.armed.size;
+  }
+
+  /**
+   * When this board's lead was told about each row it still remembers.
+   *
+   * Rows with no recorded time are omitted rather than defaulted: "we do not
+   * know when you were told" and "you were told just now" lead to opposite
+   * escalations, and only one of them is a guess.
+   */
+  toldAtFor(workspaceId: string): ReadonlyMap<string, number> {
+    const out = new Map<string, number>();
+    for (const [id, row] of this.told.get(workspaceId) ?? []) {
+      if (row.toldAt !== undefined) out.set(id, row.toldAt);
+    }
+    return out;
+  }
+
+  private escalate(board: StallSnapshot, now: number): void {
+    const hook = this.opts.escalate;
+    if (!hook) return;
+    try {
+      hook(board, this.toldAtFor(board.workspaceId), now);
+    } catch (err) {
+      console.error('[stall] escalation failed:', err);
+    }
   }
 
   private considerBoard(board: StallSnapshot, now: number): void {
@@ -600,7 +666,11 @@ export class StallNudger {
     // held no stream must stay news, or the lead comes back to a board that
     // has decided it told them.
     for (const row of [...board.stalled, ...board.unfiled]) {
-      memory.rows.set(row.id, { bucket: row.bucket, seenAt: now });
+      // `toldAt` carries over from the row's existing memory: this is when
+      // the lead was told about THIS stretch, and a second wake naming the
+      // same row does not restart the escalation clock.
+      const toldAt = memory.rows.get(row.id)?.toldAt ?? now;
+      memory.rows.set(row.id, { bucket: row.bucket, seenAt: now, toldAt });
     }
     // A held item's TICKET counts as told, under no bucket in particular:
     // the lead has been handed that ticket, so the same ticket later going
@@ -610,7 +680,7 @@ export class StallNudger {
     // move.
     for (const item of held) {
       if (!memory.rows.has(item.id))
-        memory.rows.set(item.id, { bucket: UNKNOWN_BUCKET, seenAt: now });
+        memory.rows.set(item.id, { bucket: UNKNOWN_BUCKET, seenAt: now, toldAt: now });
     }
     this.capTold(memory.rows);
   }
@@ -988,9 +1058,17 @@ export class StallNudger {
       if (told && typeof told === 'object') {
         for (const [workspaceId, rows] of Object.entries(told)) {
           if (!rows || typeof rows !== 'object') continue;
+          const stamps = parsed.toldAt?.[workspaceId];
           const map = new Map<string, ToldRow>();
           for (const [id, bucket] of Object.entries(rows)) {
-            if (typeof bucket === 'string') map.set(id, { bucket, seenAt: now });
+            if (typeof bucket !== 'string') continue;
+            // A row stored before told-times existed is given this moment,
+            // not left blank: an escalation that can never fire for a row
+            // the lead was told about is the worse failure, and the cost is
+            // that such a row escalates one window after the restart rather
+            // than from when it was really told.
+            const at = stamps?.[id];
+            map.set(id, { bucket, seenAt: now, toldAt: typeof at === 'number' ? at : now });
           }
           if (map.size > 0) this.told.set(workspaceId, map);
         }
@@ -1002,7 +1080,7 @@ export class StallNudger {
         if (this.told.has(workspaceId)) continue;
         const map = new Map<string, ToldRow>();
         for (const id of parseStamp(stamp).ids)
-          map.set(id, { bucket: UNKNOWN_BUCKET, seenAt: now });
+          map.set(id, { bucket: UNKNOWN_BUCKET, seenAt: now, toldAt: now });
         if (map.size > 0) this.told.set(workspaceId, map);
       }
       this.lastPersisted = this.serializeStamps();
@@ -1020,14 +1098,24 @@ export class StallNudger {
       stamps[key] = this.armed.get(key) as string;
     }
     const told: Record<string, Record<string, string>> = {};
+    const toldAt: Record<string, Record<string, number>> = {};
     for (const key of Array.from(this.told.keys()).sort()) {
       const rows = this.told.get(key);
       if (!rows || rows.size === 0) continue;
       const out: Record<string, string> = {};
-      for (const id of Array.from(rows.keys()).sort()) out[id] = (rows.get(id) as ToldRow).bucket;
+      const at: Record<string, number> = {};
+      for (const id of Array.from(rows.keys()).sort()) {
+        const row = rows.get(id) as ToldRow;
+        out[id] = row.bucket;
+        // Written only where it is known, and it only ever CHANGES when a
+        // row is first told — so this stays byte-stable between ticks and
+        // the unchanged-file check above still saves the write.
+        if (row.toldAt !== undefined) at[id] = row.toldAt;
+      }
       told[key] = out;
+      if (Object.keys(at).length > 0) toldAt[key] = at;
     }
-    const file: StampFile = { version: STAMP_FORMAT_VERSION, stamps, told };
+    const file: StampFile = { version: STAMP_FORMAT_VERSION, stamps, told, toldAt };
     return `${JSON.stringify(file, null, 2)}\n`;
   }
 
