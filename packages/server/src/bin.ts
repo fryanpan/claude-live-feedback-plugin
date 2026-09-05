@@ -70,6 +70,7 @@ const {
   stallBuilderSilentMultiplier,
   stallNudgeRepeatMs,
   heldReviewItemMs,
+  stallEscalateMs,
 } = cfg;
 
 if (sentryDsn) {
@@ -238,6 +239,7 @@ while (!handle) {
       ...(stallBuilderSilentMultiplier !== undefined ? { stallBuilderSilentMultiplier } : {}),
       ...(stallNudgeRepeatMs !== undefined ? { stallNudgeRepeatMs } : {}),
       ...(heldReviewItemMs !== undefined ? { heldReviewItemMs } : {}),
+      ...(stallEscalateMs !== undefined ? { stallEscalateMs } : {}),
       ...(reviewJudge ? { reviewJudge } : {}),
       ...(noteAskJudge ? { noteAskJudge } : {}),
       ...(effortEstimator ? { effortEstimator } : {}),
