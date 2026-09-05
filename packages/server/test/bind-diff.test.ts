@@ -128,22 +128,18 @@ describe('Rooms.bindDiff', () => {
     rmSync(fixture.repo, { recursive: true, force: true });
   });
 
-  it('errors on a missing repo and on bad refs', async () => {
-    const miss = await rooms.bindDiff({
-      repoPath: join(fixture.repo, 'nope'),
-      base: 'a',
-      target: 'b',
-    });
+  it('errors on a missing repo and on bad refs', () => {
+    const miss = rooms.bindDiff({ repoPath: join(fixture.repo, 'nope'), base: 'a', target: 'b' });
     expect(miss.ok).toBe(false);
     if (!miss.ok) expect(miss.error).toBe('not-found');
 
-    const badRef = await rooms.bindDiff({ repoPath: fixture.repo, base: 'nope', target: 'HEAD' });
+    const badRef = rooms.bindDiff({ repoPath: fixture.repo, base: 'nope', target: 'HEAD' });
     expect(badRef.ok).toBe(false);
     if (!badRef.ok) expect(badRef.error).toBe('bad-ref');
   });
 
-  it('creates one diff doc per changed text file, seeded with target content', async () => {
-    const res = await rooms.bindDiff({
+  it('creates one diff doc per changed text file, seeded with target content', () => {
+    const res = rooms.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       target: fixture.target,
@@ -187,15 +183,15 @@ describe('Rooms.bindDiff', () => {
     expect(goneRoom?.ydoc.getText('content').toString()).toBe('');
   });
 
-  it('is idempotent for the same range and rejects a different range', async () => {
-    const a = await rooms.bindDiff({
+  it('is idempotent for the same range and rejects a different range', () => {
+    const a = rooms.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       target: fixture.target,
     });
     expect(a.ok).toBe(true);
     if (!a.ok) return;
-    const b = await rooms.bindDiff({
+    const b = rooms.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       target: fixture.target,
@@ -205,7 +201,7 @@ describe('Rooms.bindDiff', () => {
     expect(b.reviewId).toBe(a.reviewId);
     expect(b.files.map((f) => f.docId).sort()).toEqual(a.files.map((f) => f.docId).sort());
 
-    const conflict = await rooms.bindDiff({
+    const conflict = rooms.bindDiff({
       repoPath: fixture.repo,
       base: fixture.target, // swapped — different range, same derived id? no:
       target: fixture.base, // derived id differs, so pin it explicitly:
@@ -216,7 +212,7 @@ describe('Rooms.bindDiff', () => {
   });
 
   it('threads survive a re-bind (deterministic docIds)', async () => {
-    const a = await rooms.bindDiff({
+    const a = rooms.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       target: fixture.target,
@@ -246,7 +242,7 @@ describe('Rooms.bindDiff', () => {
     );
     expect(rooms.listThreads(docId)).toHaveLength(1);
 
-    const b = await rooms.bindDiff({
+    const b = rooms.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       target: fixture.target,
@@ -256,7 +252,7 @@ describe('Rooms.bindDiff', () => {
   });
 
   it('create_thread by_find works on diff docs (flat content, line-snapped)', async () => {
-    const res = await rooms.bindDiff({
+    const res = rooms.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       target: fixture.target,
@@ -302,8 +298,8 @@ describe('Rooms.bindDiff', () => {
     if (!miss.ok) expect(miss.error).toBe('no-match');
   });
 
-  it('applies exclude path prefixes', async () => {
-    const res = await rooms.bindDiff({
+  it('applies exclude path prefixes', () => {
+    const res = rooms.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       target: fixture.target,
@@ -315,8 +311,8 @@ describe('Rooms.bindDiff', () => {
     expect(res.skipped.filter((s) => s.reason === 'excluded')).toHaveLength(4);
   });
 
-  it('enforces maxFiles', async () => {
-    const res = await rooms.bindDiff({
+  it('enforces maxFiles', () => {
+    const res = rooms.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       target: fixture.target,
@@ -329,8 +325,8 @@ describe('Rooms.bindDiff', () => {
     }
   });
 
-  it('rejects an empty diff', async () => {
-    const res = await rooms.bindDiff({
+  it('rejects an empty diff', () => {
+    const res = rooms.bindDiff({
       repoPath: fixture.repo,
       base: fixture.target,
       target: fixture.target,
@@ -344,7 +340,7 @@ describe('Rooms.bindDiff', () => {
     writeFileSync(join(fixture.repo, 'src', 'kept.ts'), 'line1\nline2 WORKTREE\nline3\n');
     writeFileSync(join(fixture.repo, 'src', 'untracked.ts'), 'not yet added\n');
 
-    const res = await rooms.bindDiff({ repoPath: fixture.repo, base: fixture.base });
+    const res = rooms.bindDiff({ repoPath: fixture.repo, base: fixture.base });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.target).toBeNull();
@@ -382,7 +378,7 @@ describe('Rooms.bindDiff', () => {
     expect(threads).toHaveLength(1);
 
     // Re-bind refreshes derived counts idempotently.
-    const again = await rooms.bindDiff({ repoPath: fixture.repo, base: fixture.base });
+    const again = rooms.bindDiff({ repoPath: fixture.repo, base: fixture.base });
     expect(again.ok).toBe(true);
     if (!again.ok) return;
     expect(again.reviewId).toBe(res.reviewId);
@@ -392,9 +388,9 @@ describe('Rooms.bindDiff', () => {
     expect(keptAgain?.additions).toBe(2);
   });
 
-  it('working-tree and pinned reviews of the same repo coexist under different ids', async () => {
-    const live = await rooms.bindDiff({ repoPath: fixture.repo, base: fixture.base });
-    const pinned = await rooms.bindDiff({
+  it('working-tree and pinned reviews of the same repo coexist under different ids', () => {
+    const live = rooms.bindDiff({ repoPath: fixture.repo, base: fixture.base });
+    const pinned = rooms.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       target: fixture.target,
@@ -406,7 +402,7 @@ describe('Rooms.bindDiff', () => {
   });
 
   it('listWorkspaceThreads aggregates threads across a review with doc context', async () => {
-    const res = await rooms.bindDiff({
+    const res = rooms.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       target: fixture.target,
@@ -439,9 +435,9 @@ describe('Rooms.bindDiff', () => {
     expect(rooms.listWorkspaceThreads(res.reviewId, { status: 'open' })).toHaveLength(1);
   });
 
-  it('groups changed files: explicit groups win, heuristic falls back', async () => {
+  it('groups changed files: explicit groups win, heuristic falls back', () => {
     // Heuristic: src files group by top segment; nothing test/doc-ish here.
-    const auto = await rooms.bindDiff({ repoPath: fixture.repo, base: fixture.base });
+    const auto = rooms.bindDiff({ repoPath: fixture.repo, base: fixture.base });
     expect(auto.ok).toBe(true);
     if (!auto.ok) return;
     expect(new Set(auto.files.map((f) => f.group))).toEqual(new Set(['src']));
@@ -454,7 +450,7 @@ describe('Rooms.bindDiff', () => {
     expect([...names].sort((a, b) => a.localeCompare(b))).toEqual(names);
 
     // Explicit groups: agent-supplied titles + ordering; unlisted → Other.
-    const explicit = await rooms.bindDiff({
+    const explicit = rooms.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       reviewId: 'explicit-groups',
@@ -470,9 +466,9 @@ describe('Rooms.bindDiff', () => {
     expect(g2.groups[0]?.files[0]?.relPath).toBe('src/kept.ts');
   });
 
-  it('group paths match directories as prefixes; re-binds preserve explicit groups', async () => {
+  it('group paths match directories as prefixes; re-binds preserve explicit groups', () => {
     // Directory prefix claims everything under it.
-    const a = await rooms.bindDiff({
+    const a = rooms.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       reviewId: 'prefix-groups',
@@ -483,7 +479,7 @@ describe('Rooms.bindDiff', () => {
     expect(new Set(a.files.map((f) => f.group))).toEqual(new Set(['All source']));
 
     // A group-less refresh re-bind must NOT clobber the explicit groups.
-    const b = await rooms.bindDiff({
+    const b = rooms.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       reviewId: 'prefix-groups',
@@ -493,7 +489,7 @@ describe('Rooms.bindDiff', () => {
     expect(grouped.groups.map((g) => g.title)).toEqual(['All source']);
 
     // Passing groups again DOES reassign (explicit wins).
-    const c = await rooms.bindDiff({
+    const c = rooms.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       reviewId: 'prefix-groups',
@@ -504,8 +500,8 @@ describe('Rooms.bindDiff', () => {
     expect(regrouped.groups.map((g) => g.title)).toEqual(['Renamed only', 'Other']);
   });
 
-  it('per-group details reach listGroupedDiff and survive a group-less refresh', async () => {
-    const res = await rooms.bindDiff({
+  it('per-group details reach listGroupedDiff and survive a group-less refresh', () => {
+    const res = rooms.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       reviewId: 'details-groups',
@@ -522,7 +518,7 @@ describe('Rooms.bindDiff', () => {
     expect(byTitle.get('Everything else')?.details).toBe('The remaining source churn.');
 
     // A group-less refresh re-bind preserves the details (not clobbered).
-    const refresh = await rooms.bindDiff({
+    const refresh = rooms.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       reviewId: 'details-groups',
@@ -534,8 +530,8 @@ describe('Rooms.bindDiff', () => {
     );
   });
 
-  it('rejects a bind whose group details exceed the 500-char cap (no truncation)', async () => {
-    const res = await rooms.bindDiff({
+  it('rejects a bind whose group details exceed the 500-char cap (no truncation)', () => {
+    const res = rooms.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       reviewId: 'details-too-long',
@@ -553,8 +549,8 @@ describe('Rooms.bindDiff', () => {
     expect(rooms.listGroupedDiff('details-too-long').groups).toHaveLength(0);
   });
 
-  it('listRepoFiles marks changed files; openContextFile lazily binds the rest', async () => {
-    const res = await rooms.bindDiff({ repoPath: fixture.repo, base: fixture.base });
+  it('listRepoFiles marks changed files; openContextFile lazily binds the rest', () => {
+    const res = rooms.bindDiff({ repoPath: fixture.repo, base: fixture.base });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
 
@@ -567,7 +563,7 @@ describe('Rooms.bindDiff', () => {
 
     // Open unchanged note.md for context → EDITABLE markdown doc in the
     // same workspace (md routes to the WYSIWYG surface; code stays flat).
-    const opened = await rooms.openContextFile(res.reviewId, 'note.md');
+    const opened = rooms.openContextFile(res.reviewId, 'note.md');
     expect(opened.ok).toBe(true);
     if (!opened.ok) return;
     const room = rooms.get(opened.docId);
@@ -581,9 +577,9 @@ describe('Rooms.bindDiff', () => {
     expect(grouped.groups.flatMap((g) => g.files).some((f) => f.relPath === 'note.md')).toBe(false);
 
     // Idempotent re-open; traversal rejected.
-    const again = await rooms.openContextFile(res.reviewId, 'note.md');
+    const again = rooms.openContextFile(res.reviewId, 'note.md');
     expect(again.ok && again.docId === opened.docId).toBe(true);
-    const evil = await rooms.openContextFile(res.reviewId, '../outside.txt');
+    const evil = rooms.openContextFile(res.reviewId, '../outside.txt');
     expect(evil.ok).toBe(false);
     if (!evil.ok) expect(evil.error).toBe('bad-path');
   });
@@ -649,8 +645,8 @@ describe('Rooms.bindDiff', () => {
     }
   });
 
-  it('browse mode (no base): entry doc only, README preferred, no diff members', async () => {
-    const res = await rooms.bindDiff({ repoPath: fixture.repo });
+  it('browse mode (no base): entry doc only, README preferred, no diff members', () => {
+    const res = rooms.bindDiff({ repoPath: fixture.repo });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.browse).toBe(true);
@@ -668,7 +664,7 @@ describe('Rooms.bindDiff', () => {
     const httpDataDir = mkdtempSync(join(tmpdir(), 'bd-ws-sse-'));
     const handle = createServer({ port: 0, dataDir: httpDataDir });
     try {
-      const bound = await handle.rooms.bindDiff({
+      const bound = handle.rooms.bindDiff({
         repoPath: fixture.repo,
         base: fixture.base,
         reviewId: 'sse-ws',
@@ -706,8 +702,8 @@ describe('Rooms.bindDiff', () => {
     }
   });
 
-  it('builds a workspace tree with diff badges', async () => {
-    const res = await rooms.bindDiff({
+  it('builds a workspace tree with diff badges', () => {
+    const res = rooms.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       target: fixture.target,
@@ -726,8 +722,8 @@ describe('Rooms.bindDiff', () => {
     expect(kept.diffDeletions).toBe(1);
   });
 
-  it('reparseFromDisk re-seeds diff content from the pinned commit', async () => {
-    const res = await rooms.bindDiff({
+  it('reparseFromDisk re-seeds diff content from the pinned commit', () => {
+    const res = rooms.bindDiff({
       repoPath: fixture.repo,
       base: fixture.base,
       target: fixture.target,

@@ -16,7 +16,6 @@ import type {
   ReviewItemRevision,
   TaskReviewItem,
 } from './review-item.ts';
-import type { TaskSchedule } from './task-schedule.ts';
 
 /** What a caller DECLARED the assignee to be. Two values on purpose: the
  *  third state the board can show (`unknown`) is something the server
@@ -409,38 +408,6 @@ export interface Task {
    *  a blanket refusal rule would block legitimate work). */
   afterEnforce?: string[];
   dueAt?: number;
-  /**
-   * The rule that says when this row's work should START, plus the
-   * scheduler's own bookkeeping about what it has already fired
-   * (`TaskSchedule`).
-   *
-   * A ROW WITH A SCHEDULE IS NOT ITSELF THE WORK. It is the rule; each
-   * occurrence creates a live INSTANCE — an ordinary task in the rule's own
-   * goal band, marked with `recurrenceOf`. That is why this is a field on a
-   * task rather than a fifth status: a schedule is a property of a row, and
-   * folding it into the status enum would make a row that has never run read
-   * as one somebody is doing.
-   *
-   * Absent means unscheduled, which is every row on every board written
-   * before this field. No reader may treat absence as "scheduled but never
-   * fired" — `schedule.state` answers that, and only for rows that have one.
-   *
-   * Deliberately NOT `dueAt`: a due date is when work should be FINISHED and
-   * has no recurrence, no timezone and no fired-cursor. The two coexist on a
-   * row without either meaning the other.
-   */
-  schedule?: TaskSchedule;
-  /**
-   * The recurrence mark: this row is one OCCURRENCE of a scheduled rule, not
-   * a row somebody filed. Present iff the scheduler created it.
-   *
-   * `occurrenceAt` is the occurrence's own instant, which is NOT when the row
-   * was created — a catch-up after downtime creates the instance long after
-   * the moment it stands for, and the board has to be able to say so.
-   * `missed` counts the earlier occurrences this one stands in for, absent
-   * when it stands only for itself.
-   */
-  recurrenceOf?: { taskId: string; occurrenceAt: number; missed?: number };
   /**
    * When this row was archived — the board's ONLY removal, and a soft one.
    *

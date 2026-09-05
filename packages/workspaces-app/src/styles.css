@@ -685,35 +685,6 @@ body.is-reading-width #editor > .ProseMirror {
 #editor > .ProseMirror a:hover {
   text-decoration-color: currentColor;
 }
-/* A note's QUESTION about a board row — "related: <title>?", an ordinary
-   link whose href carries `suggest=1` (core/note-suggestion.ts) — drawn
-   apart from a citation the matcher was sure of. A fresh-eyes walk could not
-   tell the two apart: same blue, same underline, same status chip, and the
-   "?" read as part of the title. Same family as the unsure speaker tag
-   above: keyed off the href, so no plugin and no bundle; the colour and the
-   broken underline say "not settled", and a tap settles it. */
-#editor > .ProseMirror a[href*="suggest=1"] {
-  color: var(--warn-fg, #b25e09);
-  text-decoration-style: dashed;
-  text-decoration-color: color-mix(in srgb, var(--warn-fg, #b25e09) 55%, transparent);
-  text-underline-offset: 0.18em;
-}
-#editor > .ProseMirror a[href*="suggest=1"]:hover {
-  color: var(--warn-fg, #b25e09);
-  text-decoration-color: currentColor;
-}
-@media (pointer: coarse) {
-  #editor > .ProseMirror a[href*="suggest=1"] {
-    position: relative;
-  }
-  #editor > .ProseMirror a[href*="suggest=1"]::after {
-    content: "";
-    position: absolute;
-    /* The same ±10px the speaker tag takes: ~20px of ink becomes a ~40px hit
-       box on a touch pointer without moving a character. */
-    inset: -10px -3px;
-  }
-}
 /* Speaker tags: who said the note, rendered as a quiet chip rather than as
    the link it is made of. The href names a VOICE (`speaker:B`), so it is not
    somewhere to go — no underline, no accent colour, nothing that invites the

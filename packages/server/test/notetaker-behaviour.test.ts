@@ -16,11 +16,6 @@
  * composer with its URL. Each of these fails on the behaviour that shipped
  * before this change.
  *
- * The DECIDABLE half — the functions the eval scores with, driven on notes
- * nobody wrote — is `notes-quality.test.ts`. It moved out when this file
- * crossed the five-hundred-line bar, and the split is the right one anyway:
- * those tests need no pipeline and this file is nothing but pipeline.
- *
  * All fixtures are synthetic. The repo is public.
  */
 
@@ -29,11 +24,14 @@ import { buildNotesPrompt } from '../src/meeting-notes-composer.ts';
 import type { NotesComposeInput } from '../src/meeting-notes.ts';
 import {
   MAX_BULLET_WORDS,
-  MAX_FLAT_RUN_BULLETS,
   allBullets,
+  bulletWords,
+  decisionsWithoutSpeaker,
   duplicateTopics,
-  longFlatRuns,
+  overlongBullets,
   parseNotesTopics,
+  unlinkedReferences,
+  verbatimBullets,
 } from '../src/notes-quality.ts';
 import { createNotesTickHarness } from './notes-tick-harness.ts';
 import type { TickSnapshot } from './notes-tick-harness.ts';
@@ -107,36 +105,6 @@ describe('the notetaking instructions', () => {
     // which is the behaviour this row was filed to replace.
     expect(system).toMatch(/Rewrite, merge, split and MOVE your own earlier bullets/);
     expect(system).not.toMatch(/never to restructure/);
-  });
-
-  it("keep a person's line out of the groups a regroup makes", () => {
-    // The pipeline refuses to REWRITE their line, and that guarantee does not
-    // reach a regroup that nests a copy of it under a lead bullet: the copy
-    // arrives as new writing of the note-taker's own and is accepted, leaving
-    // their line and a duplicate of it side by side. So the instruction says
-    // not to, and `meeting-notes-merge.ts` is where the guarantee is owed.
-    expect(system).toContain('LEAVE THEIR LINES AT THE TOP LEVEL');
-    expect(system).toMatch(/never restate it inside a\s+group/);
-  });
-
-  it('ask for a topic past the bar to be regrouped, and on every later tick', () => {
-    // Both halves matter and only the first is obvious. A note-taker told to
-    // structure a topic "as you write it" structures the topic it opens and
-    // never revisits the one that crossed the bar three ticks ago, which is
-    // the wall this row was filed about.
-    expect(system).toContain('COUNT THE BULLETS UNDER EACH HEADING BEFORE YOU ANSWER');
-    expect(system).toContain(`More than\n  ${MAX_FLAT_RUN_BULLETS} under one heading`);
-    expect(system).toMatch(/nested under it as\s+sub-bullets/);
-    expect(system).toMatch(/EVERY time you write, not only when a topic is new/);
-    // And again as the last thing said before the output rule. Twice is not
-    // redundancy: with the rule stated only inside HOW TO ORGANISE, the smoke
-    // slice came back with six flat bullets under one heading, then five. It
-    // is a check the writer runs at the END, so it is asked for at the end.
-    expect(system).toMatch(/BEFORE YOU ANSWER\n- Count the bullets under each heading/);
-    // Grouping, not deleting. The revision that added the final check passed
-    // by dropping a point to get under the number, which trades a wall for a
-    // note nobody wrote.
-    expect(system).toMatch(/GROUPING, never by dropping a point/);
   });
 
   it("let it move a person's line but never rewrite one", () => {
@@ -306,60 +274,6 @@ describe('a bullet a person wrote', () => {
     expect(buildNotesPrompt(composeInput(second)).user).toContain('Written by a person');
   });
 
-  it('survives the regroup that breaks a long topic up around it', async () => {
-    // The row this covers: a topic past four bullets is regrouped into
-    // sub-bullets, and the regroup happens around a line a person typed. It
-    // may gather ITS OWN points into groups; the person's line stays where
-    // they put it, in their words, once.
-    const harness = createNotesTickHarness({
-      doc: `## Meeting notes\n\n${humanLine}\n`,
-      compose: (_input, tick) =>
-        tick === 1
-          ? [
-              '## Meeting notes',
-              '',
-              '### Export range',
-              '',
-              humanLine,
-              '- The dialog forgets the range between sessions.',
-              '- Presets would cover most of the cases.',
-              '- The CSV path uses a different dialog entirely.',
-              '- Nobody owns the export code today.',
-              '- A fix lands after the sync work.',
-            ].join('\n')
-          : [
-              '## Meeting notes',
-              '',
-              '### Export range',
-              '',
-              humanLine,
-              '- What the dialog gets wrong',
-              '  - The dialog forgets the range between sessions.',
-              '  - The CSV path uses a different dialog entirely.',
-              '  - Presets would cover most of the cases.',
-              '- Owner and timing',
-              '  - Nobody owns the export code today.',
-              '  - A fix lands after the sync work.',
-            ].join('\n'),
-    });
-    const first = await harness.speak('The export dialog forgets the range.');
-    // The shape the regrouping rule exists to remove: one run past the bar.
-    expect(longFlatRuns(first.notes).map((r) => r.bullets.length)).toEqual([6]);
-
-    const second = await harness.speak('Nobody owns it, and it lands after the sync work.');
-    await harness.end();
-
-    // Their words, character for character and exactly once — a regroup that
-    // restated the line inside a group would read as two notes, not one.
-    expect(second.notes).toContain('I think this predates the 0.4 rollout');
-    expect(allBullets(second.notes).filter((b) => b.includes('predates'))).toHaveLength(1);
-    // And the regroup itself landed: no run past the bar any more, and the
-    // points the model gathered really are nested rather than flattened out.
-    expect(longFlatRuns(second.notes)).toEqual([]);
-    expect(second.notes).toMatch(/\n\s+- The dialog forgets the range between sessions\./);
-    expect(harness.errors).toEqual([]);
-  });
-
   it('is not duplicated when the compose returns it in a new position', async () => {
     const harness = createNotesTickHarness({
       doc: `## Meeting notes\n\n${humanLine}\n`,
@@ -382,5 +296,80 @@ describe('a bullet a person wrote', () => {
     const second = await harness.speak('About the rollout.');
     await harness.end();
     expect(allBullets(second.notes).filter((b) => b.includes('predates'))).toHaveLength(1);
+  });
+});
+
+/* ===== The decidable checks the eval scores with ===== */
+
+describe('the programmatic judges', () => {
+  const notes = [
+    '### Sync wakes too often',
+    '',
+    '- [@Priya](speaker:A) The sync wakes on a ninety-second retry loop.',
+    '- [@Marcus](speaker:B) Decided: cap the backoff at ten minutes.',
+    '- The team agreed to ship it Thursday.',
+    '- Possibly related to the 0.4 rollout (unconfirmed).',
+    '',
+    '### Export range',
+    '',
+    '- The dialog forgets the range, which is a long-standing complaint that several people in the room repeated at some length again today.',
+  ].join('\n');
+
+  it('read topics and bullets out of a notes section', () => {
+    expect(parseNotesTopics(notes).map((t) => t.heading)).toEqual([
+      'Sync wakes too often',
+      'Export range',
+    ]);
+    expect(allBullets(notes)).toHaveLength(5);
+  });
+
+  it('count a link by its label and a speaker tag not at all', () => {
+    // The instructions promise the tag is free of the twenty-word budget, so
+    // the judge that enforces the budget must not charge for it. Counting it
+    // failed a nineteen-word bullet at 21 words on the first real eval run,
+    // for carrying the attribution those same instructions demand.
+    expect(bulletWords('[@Priya](speaker:A) The sync wakes on a ninety-second retry loop.')).toBe(
+      8,
+    );
+    expect(bulletWords('The sync wakes on a ninety-second retry loop.')).toBe(8);
+    // A citation still costs its title, and never its URL.
+    expect(bulletWords('Fixed in [Retry loop wakes the sync](/workspaces/w-1?task=t-3).')).toBe(7);
+  });
+
+  it('find the bullet that ran past the bar and only that one', () => {
+    const over = overlongBullets(notes);
+    expect(over).toHaveLength(1);
+    expect(over[0]?.bullet).toContain('long-standing complaint');
+    expect(over[0]?.words).toBeGreaterThan(MAX_BULLET_WORDS);
+  });
+
+  it('find a decision written without the voice that made it', () => {
+    const missing = decisionsWithoutSpeaker(notes);
+    expect(missing).toEqual(['The team agreed to ship it Thursday.']);
+  });
+
+  it('see a second heading for a topic that already had one', () => {
+    expect(duplicateTopics(notes)).toEqual([]);
+    expect(duplicateTopics(`${notes}\n\n### export range!\n\n- More.`)).toEqual([
+      'Sync wakes too often'.replace('Sync wakes too often', 'Export range'),
+    ]);
+  });
+
+  it('see a row the notes name in prose without linking', () => {
+    const board = [{ title: 'Export range', url: '/workspaces/w-1?task=t-7' }];
+    expect(unlinkedReferences(notes, board)).toEqual(['Export range']);
+    const linked = notes.replace(
+      '### Export range',
+      '### [Export range](/workspaces/w-1?task=t-7)',
+    );
+    expect(unlinkedReferences(linked, board)).toEqual([]);
+  });
+
+  it('see a bullet that copied the transcript instead of paraphrasing it', () => {
+    const transcript =
+      'so the sync wakes on a ninety second retry loop and it has done that for weeks';
+    const copied = '- so the sync wakes on a ninety second retry loop';
+    expect(verbatimBullets(copied, transcript)).toHaveLength(1);
+    expect(verbatimBullets('- The sync retries too eagerly.', transcript)).toEqual([]);
   });
 });

@@ -10,12 +10,10 @@ import type { User } from '@feedback/core';
  * is serving. They were written as one if-chain inside `createServer` and the
  * sequence was kept exactly through the move.
  *
- * FOUR entry points because the family sits in four places. `/api/metrics`
- * and `POST /api/summaries/backfill` run high in the chain, above the doc
- * routes; the plugin/push/deploy block runs far below, between the chat-audit
- * routes and the agent attachments; and `/api/webhooks/log` runs lower still,
- * under the doc resource routes. Each is called from the position its routes
- * occupied.
+ * TWO entry points because the block sits in two places. `/api/metrics` runs
+ * high in the chain, above the doc routes; everything else runs far below,
+ * between the chat-audit routes and the agent attachments. Each is called
+ * from the position its routes occupied.
  *
  * There is no `/api/uptime` and no `/api/release`: uptime is a field on the
  * metrics reply and the release is a field on `GET /api/deploy`, which is
@@ -36,7 +34,6 @@ import type { PluginRefresher } from '../plugin-refresh.ts';
 import type { PushNotifier } from '../push-notify.ts';
 import type { PushStore } from '../push-store.ts';
 import type { Rooms } from '../rooms.ts';
-import type { WebhookLogEntry } from '../webhooks.ts';
 
 /** The long-lived collaborators these routes need, built once per server. */
 export interface OpsRoutesContext {
@@ -51,9 +48,6 @@ export interface OpsRoutesContext {
   pushStore: PushStore;
   /** The push sender, built lazily because it needs the VAPID keys. */
   pushNotifier: () => Promise<PushNotifier | null>;
-  /** The ring of recent webhook deliveries. Read live rather than copied —
-   *  the array is appended to for the life of the process. */
-  webhookLog: WebhookLogEntry[];
 
   /** JSON response helper — status plus body, no CORS (the per-request
    *  wrapper in createServer adds that, because it knows the Origin). */
@@ -88,50 +82,6 @@ export function handleOpsMetricsRoute(
     if (visitor) return j(403, { error: 'not available to share visitors' });
     const stats = rooms.stats();
     return j(200, { ...stats, uptimeSec: Math.round(process.uptime()) });
-  }
-  return undefined;
-}
-
-/**
- * `POST /api/summaries/backfill` — run the one-shot summary backfill NOW.
- *
- * It used to be reachable only by restarting the server with
- * CW_SUMMARY_BACKFILL=1, which made a piece of catch-up work into a reason to
- * bounce the process — the opposite of what a cheap boot is for. It is the
- * same sweep with the same pacing and the same skip-if-summarized rule; what
- * changed is that asking for it no longer costs a restart.
- *
- * Still deliberate rather than automatic: the backlog is hundreds of billed
- * calls, so nothing schedules this. Somebody asks.
- */
-export async function handleSummaryBackfillRoute(
-  ctx: OpsRoutesContext,
-  rq: OpsRouteRequest,
-): Promise<Response | undefined> {
-  const { rooms, j, safeJson } = ctx;
-  const { req, pathname, visitor } = rq;
-
-  if (pathname === '/api/summaries/backfill' && req.method === 'POST') {
-    if (visitor) return j(403, { error: 'not available to share visitors' });
-    const body = await safeJson(req);
-    const minutes = Number(body?.windowMinutes ?? 15);
-    const windowMs = (Number.isFinite(minutes) && minutes > 0 ? minutes : 15) * 60_000;
-    const { queued, open, resolved } = rooms.backfillSummaries({ windowMs });
-    return j(200, { ok: true, queued, open, resolved, windowMs });
-  }
-  return undefined;
-}
-
-/** `GET /api/webhooks/log` — the last 100 webhook deliveries this process
- *  attempted. It runs low in the chain, under the doc resource routes, where
- *  it always has. */
-export function handleWebhookLogRoute(
-  ctx: OpsRoutesContext,
-  rq: OpsRouteRequest,
-): Response | undefined {
-  const { webhookLog, j } = ctx;
-  if (rq.pathname === '/api/webhooks/log') {
-    return j(200, { log: webhookLog.slice(-100) });
   }
   return undefined;
 }

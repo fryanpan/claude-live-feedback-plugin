@@ -343,14 +343,14 @@ export class FileBindings {
    * A file that cannot be read is not an error here: the attach is refused,
    * the doc keeps its `.ydoc` content, and the caller sees `read-failed`.
    *
-   * `attachFlatFileAsync` and `attachReadonlyFileAsync` sit beside it now.
-   * They deliberately did not, for as long as every flat (code / diff-member)
-   * attach was reached from a synchronous caller: an async door with no
-   * caller is worse than none, because it reads like coverage the flat path
-   * does not have. The two callers that made the flat path blocking — the
-   * bind loop in `bind-diff` and the member opens in `rooms-workspaces` —
-   * are async now and come through these, so the doors have callers and the
-   * flat path has the guarantee the prose one already had.
+   * There is deliberately no `attachFlatFileAsync` beside this. Every flat
+   * (code / diff-member) attach is reached from a synchronous caller — the
+   * folder-bind loop in `bind-diff`, a workspace member open, hydration —
+   * and an async door with no caller is worse than none, because it reads
+   * like coverage the flat path does not have. What `attachFlatFile` does
+   * have is the refusal guard, so a known-hostile path is never opened on
+   * the main thread; a first read of a healthy-but-slow file still blocks
+   * there. Giving those callers a real async door is its own change.
    */
   async attachFileAsync(
     docId: string,
@@ -360,36 +360,6 @@ export class FileBindings {
     const ready = await this.withPreread(filePath, opts);
     if (ready === 'unreadable') return { ok: false, error: 'read-failed' };
     return this.attachFile(docId, filePath, ready);
-  }
-
-  /**
-   * `attachFlatFile` with the file read on the thread pool first.
-   *
-   * The flat twin of `attachFileAsync`, and it exists for the same reason:
-   * the callers on the other side of it are a bind loop over every changed
-   * file in a repository and a click in the all-files sidebar. Both hand it
-   * whatever path the caller's tree holds, which is exactly the path a
-   * cloud-sync provider can refuse to answer for.
-   */
-  async attachFlatFileAsync(
-    docId: string,
-    filePath: string,
-    opts: AttachOpts & { writeBack?: boolean } = {},
-  ): Promise<ReturnType<FileBindings['attachFlatFile']>> {
-    const ready = await this.withPreread(filePath, opts);
-    if (ready === 'unreadable') return { ok: false, error: 'read-failed' };
-    return this.attachFlatFile(docId, filePath, ready);
-  }
-
-  /** `attachReadonlyFile` with the file read on the thread pool first. */
-  async attachReadonlyFileAsync(
-    docId: string,
-    filePath: string,
-    opts: AttachOpts = {},
-  ): Promise<ReturnType<FileBindings['attachReadonlyFile']>> {
-    const ready = await this.withPreread(filePath, opts);
-    if (ready === 'unreadable') return { ok: false, error: 'read-failed' };
-    return this.attachReadonlyFile(docId, filePath, ready);
   }
 
   /**
@@ -454,14 +424,6 @@ export class FileBindings {
     // behind, which is how a hostile file used to reach the blocking read
     // below anyway. Refusing costs a parked doc; not refusing costs the
     // process.
-    //
-    // What still reaches the blocking read below, now that the bind flows and
-    // the workspace member opens come through the async doors, is an
-    // in-process caller holding a path it supplied itself and needing the
-    // binding in the same turn. In production that is BOOT and nothing else:
-    // hydration passes a preread on every other path (`Rooms.prereadFor`),
-    // and no request handler reaches these two without one. The rest of the
-    // callers are the tests.
     if (!pre && (boundFiles.quarantined(abs) || boundFiles.busy())) {
       return { ok: false, error: 'read-failed' };
     }
@@ -608,9 +570,8 @@ export class FileBindings {
   attachReadonlyFile(
     docId: string,
     filePath: string,
-    opts: AttachOpts = {},
   ): { ok: boolean; error?: 'not-found' | 'path-empty' | 'read-failed'; resolvedPath?: string } {
-    return this.attachFlatFile(docId, filePath, opts);
+    return this.attachFlatFile(docId, filePath);
   }
 
   /**

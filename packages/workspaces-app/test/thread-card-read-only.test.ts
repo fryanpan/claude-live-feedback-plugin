@@ -1,6 +1,5 @@
 import type { Comment, ReviewPayload, Thread, User } from '@feedback/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { detachMarkdownComposer } from '../src/md-composer.ts';
 import { ThreadPanel } from '../src/threads.ts';
 
 /**
@@ -53,18 +52,6 @@ const question: ReviewPayload = {
   headline: 'Should the strip stay after the meeting ends?',
 };
 
-/**
- * Every card this file renders carries a reply composer, and every composer
- * is a real Tiptap editor — the suite hands `attachMarkdownComposer` the
- * chunk synchronously, so `renderThread` builds a ProseMirror view whether
- * the test looks at one or not. Removing the container is not enough to end
- * it: the view's `DOMObserver` schedules a 20ms flush on any mutation, and
- * nothing cancels that. A flush that lands after vitest has torn the
- * environment down reads `document` and takes the whole run with it,
- * reported as an unhandled `ReferenceError` against whichever file was
- * running at the time. Twenty solo runs of this file failed five times
- * before these editors were destroyed.
- */
 const cleanups: Array<() => void> = [];
 afterEach(() => {
   for (const f of cleanups.splice(0)) f();
@@ -73,10 +60,7 @@ afterEach(() => {
 function render(t: Thread, over: Record<string, unknown> = {}) {
   const container = document.createElement('div');
   document.body.appendChild(container);
-  cleanups.push(() => {
-    for (const ta of container.querySelectorAll('textarea')) detachMarkdownComposer(ta);
-    container.remove();
-  });
+  cleanups.push(() => container.remove());
   const onReply = vi.fn(() => true);
   const panel = new ThreadPanel({
     container,

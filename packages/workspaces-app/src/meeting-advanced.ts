@@ -97,12 +97,7 @@ const CONTROLS: Record<string, readonly AdvancedControl[]> = {
       label: 'Snappier finals (may split long sentences)',
       type: 'seg',
       choices: [0, 1, 2, 3].map((n) => ({ value: n, label: String(n) })),
-      // 2, not the vendor's 0: the server sends 2 on every Soniox session
-      // (DEFAULT_ENDPOINT_LATENCY_ADJUSTMENT, measured at ~274ms off the
-      // median wait). `def` means "what runs when the key is never sent", so
-      // it has to name what the SERVER supplies, or an untouched control
-      // would claim a setting no meeting actually uses.
-      def: 2,
+      def: 0,
     },
     {
       key: 'context_terms',

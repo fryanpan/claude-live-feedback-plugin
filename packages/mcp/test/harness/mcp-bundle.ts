@@ -16,7 +16,6 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from 'node:http';
 import { resolve } from 'node:path';
-import { isBackgroundRequest } from './background-requests.ts';
 
 const REPO = resolve(import.meta.dirname, '../../../..');
 const LAUNCHER = resolve(REPO, 'packages/plugin/bin/claude-workspaces-mcp.sh');
@@ -55,17 +54,8 @@ export type ToolDecl = {
 const RESTORE_GET = /^\/api\/agents\/[^/]+\/watches$/;
 const isRestore = (r: Recorded) => r.method === 'GET' && RESTORE_GET.test(r.path);
 
-/**
- * Everything the child does on its own clock, the restore included. `sent`
- * excludes all of it, because callers index into `sent` positionally
- * (`sent[0]`) and the event stream redials mid-call — see
- * `background-requests.ts` for the two CI failures that came of it.
- */
-const isBackground = (r: Recorded) => isBackgroundRequest(r);
-
 export type BundleHarness = {
-  /** Every request the bundle has made, oldest first — background traffic
-   *  (token mints, the event stream, the restore) included. */
+  /** Every request the bundle has made, oldest first. */
   requests: Recorded[];
   /** The declarations a real MCP client receives from the running bundle. */
   tools: ToolDecl[];
@@ -212,7 +202,7 @@ export async function startBundle(
           isError: true,
           text: JSON.stringify(reply.error),
           json: undefined,
-          sent: requests.slice(before).filter((r) => !isBackground(r)),
+          sent: requests.slice(before).filter((r) => !isRestore(r)),
         };
       }
       const result = reply.result as {
@@ -230,7 +220,7 @@ export async function startBundle(
         isError: result.isError === true,
         text,
         json,
-        sent: requests.slice(before).filter((r) => !isBackground(r)),
+        sent: requests.slice(before).filter((r) => !isRestore(r)),
       };
     },
     async stop() {

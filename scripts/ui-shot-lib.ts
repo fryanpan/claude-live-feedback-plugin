@@ -1,10 +1,9 @@
 /**
- * Pure logic for `scripts/ui-shot.ts`: flag parsing, viewport presets,
- * Chrome-binary resolution and throwaway-profile naming. Nothing here spawns a
- * process, so the unit tests run on a machine with no Chrome at all.
+ * Pure logic for `scripts/ui-shot.ts`: flag parsing, viewport presets and
+ * Chrome-binary resolution. Nothing here spawns a process, so the unit tests
+ * run on a machine with no Chrome at all.
  */
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
 
 /** Named viewports from docs/product/design-mobile.md. */
 export const PRESETS: Record<string, { width: number; height: number }> = {
@@ -237,101 +236,4 @@ export function resolveChromeBin(
     );
   }
   return chosen;
-}
-
-/* ===== Throwaway Chrome profiles ===== */
-
-/** Every throwaway profile lives under the OS temp dir with this prefix. */
-export const PROFILE_PREFIX = 'cw-ui-shot-';
-
-/**
- * Env var carrying a run id, which the full name stamps in:
- * `cw-ui-shot-<runId>-<mkdtemp suffix>`. The id is what makes a leftover
- * profile attributable. Without it the only available check is a count of
- * `cw-ui-shot-*`, and a count is wrong in both directions: a profile some
- * other agent leaked yesterday fails a clean run, and a run that starts while
- * yours is finishing hides your own leak.
- */
-export const RUN_ID_ENV = 'CW_UI_SHOT_RUN_ID';
-
-/** Past this age, the run that made a profile is long gone. */
-export const STALE_PROFILE_AGE_MS = 24 * 60 * 60 * 1000;
-
-/**
- * Alphanumerics only. The `-` before mkdtemp's random suffix is the boundary
- * of the run id, so an id may not contain one: with `-` allowed, run `ab`
- * would claim run `abc`'s directories as its own leaks.
- */
-export function sanitizeRunId(raw: string): string {
-  return raw.replace(/[^A-Za-z0-9]/g, '').slice(0, 24);
-}
-
-/** The env's run id if it survives sanitizing, else one derived from the pid. */
-export function resolveRunId(
-  env: Record<string, string | undefined> = process.env,
-  pid: number = process.pid,
-): string {
-  return sanitizeRunId(env[RUN_ID_ENV] ?? '') || `pid${pid}`;
-}
-
-/** The `mkdtemp` prefix for one run: `cw-ui-shot-<runId>-`. */
-export function profilePrefix(runId: string): string {
-  return `${PROFILE_PREFIX}${runId}-`;
-}
-
-/** The entries of `names` this run created — never anybody else's. */
-export function profilesOfRun(names: readonly string[], runId: string): string[] {
-  return names.filter((n) => n.startsWith(profilePrefix(runId)));
-}
-
-export interface StaleProfile {
-  name: string;
-  ageMs: number;
-}
-
-/**
- * Profiles in `dir` older than the cutoff, newest last. Injectable readers so
- * the unit tests need no clock tricks; `dir` is scanned, never modified.
- */
-export function findStaleProfiles(
-  dir: string,
-  opts: {
-    now?: number;
-    maxAgeMs?: number;
-    readdir?: (d: string) => string[];
-    mtimeMs?: (p: string) => number;
-  } = {},
-): StaleProfile[] {
-  const now = opts.now ?? Date.now();
-  const maxAgeMs = opts.maxAgeMs ?? STALE_PROFILE_AGE_MS;
-  const readdir = opts.readdir ?? ((d: string) => readdirSync(d));
-  const mtimeMs = opts.mtimeMs ?? ((p: string) => statSync(p).mtimeMs);
-  const out: StaleProfile[] = [];
-  for (const name of readdir(dir)) {
-    if (!name.startsWith(PROFILE_PREFIX)) continue;
-    let ageMs: number;
-    try {
-      ageMs = now - mtimeMs(join(dir, name));
-    } catch {
-      continue; // removed by its owner mid-scan; not our business either way
-    }
-    if (ageMs >= maxAgeMs) out.push({ name, ageMs });
-  }
-  return out.sort((a, b) => b.ageMs - a.ageMs);
-}
-
-/**
- * One line per stale profile, by NAME. A count tells whoever reads it nothing
- * they can act on, and this report is deliberately not a delete: a day-old
- * directory can still belong to a session that is still running, on a machine
- * where several agents drive this script at once.
- */
-export function describeStaleProfiles(stale: readonly StaleProfile[], dir: string): string {
-  if (stale.length === 0) return '';
-  const lines = stale.map((s) => `  ${s.name}  ${Math.floor(s.ageMs / 3_600_000)}h old`);
-  return [
-    `ui-shot: ${stale.length} stale Chrome profile(s) under ${dir}, left by runs that are gone.`,
-    'Not deleted — one may belong to a run still going. Remove by name once you have checked:',
-    ...lines,
-  ].join('\n');
 }

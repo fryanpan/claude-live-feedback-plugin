@@ -33,7 +33,6 @@ import {
   type HubReviewItem,
   type HubTask,
   type HubTransition,
-  type ScheduleWrite,
   TASK_STATUS_ORDER,
   type TaskStatus,
   ownerKindSuffix,
@@ -322,14 +321,6 @@ export interface DetailHandlers {
   onGoalSet?: (task: HubTask, goalId: string) => void;
   /** Set the due date, or clear it with `null`. */
   onDueSet?: (task: HubTask, dueAt: number | null) => void;
-  /**
-   * Arm or clear the row's SCHEDULE — the rule that says when its work
-   * starts, which is a different question from when it should be finished
-   * (`onDueSet`). Resolves to whether the write landed, so the editor can
-   * keep the reader's sentence in the box on a refusal. Absent on a surface
-   * that cannot arm one, and the section is not drawn at all.
-   */
-  onScheduleSet?: (task: HubTask, next: ScheduleWrite) => Promise<boolean>;
   /**
    * Take the task off the board, reversibly. THE PANEL IS THE ONLY PLACE THIS
    * LIVES (Bryan, on the design thread: *"Detail panel only… It's a secondary

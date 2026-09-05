@@ -13,7 +13,6 @@ import { mountPointerPillLayer } from './doc/doc-pointer-pill.ts';
 import { wireDocReady } from './doc/doc-ready.ts';
 import { mountDocSaveState } from './doc/doc-save-state.ts';
 import { mountDocSetNav } from './doc/doc-set-nav.ts';
-import { createNotesLinkRefs } from './doc/notes-link-refs.ts';
 import { wireEditViewport } from './edit-viewport.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
 import { wantsHuddleStart } from './huddle-entry.ts';
@@ -227,10 +226,6 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   // meeting strip mounts (it only exists on docs that can hold a meeting),
   // but the wash extension must be declared at editor construction.
   let liveZone: MeetingLiveZone | undefined;
-  // Which rows this doc is linked from, and the two writes that change it.
-  // Read once the document has synced (`wireDocReady`) — before that the
-  // notes are not on screen and there is nothing to draw a control beside.
-  const notesLinkRefs = createNotesLinkRefs(docId);
   const editor: EditorHandle = createEditor({
     parent: editorMount,
     ydoc,
@@ -243,13 +238,6 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     docLink: ctx.workspaceId
       ? { workspaceId: ctx.workspaceId, relPath: ctx.relPath, navigate: navigateTo }
       : undefined,
-    notesLinks: {
-      docId,
-      linkedTasks: () => notesLinkRefs.linked(),
-      link: (taskId) => notesLinkRefs.link(taskId),
-      unlink: (taskId) => notesLinkRefs.unlink(taskId),
-      onChanged: () => notesLinkRefs.refresh(),
-    },
     // Inert until the zone exists AND a meeting is (recently) live; the
     // zone's bot fallback rides the same signal.
     settleWash: {
@@ -472,7 +460,6 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     chrome: reviewChrome,
     editor,
     workspaceId: ctx.workspaceId,
-    notesLinkRefs,
     renderSetNav: () => setNav.render(),
     onFirstSync: revealLinkedThread,
   });

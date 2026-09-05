@@ -1,41 +1,23 @@
 /**
- * How long a finished sentence waits before it is in the notes — SPLIT into
- * the two waits that make it up, because they have different fixes.
+ * How long a finished sentence waits before it is in the notes.
  *
- *   endpoint lag  = the speaker stops → the engine emits the settled turn.
- *                   Paid inside the vendor's endpoint detector. Measured on
- *                   the real wire by `scripts/endpoint-latency-check.ts`; fed
- *                   in here as `--endpoint-lag`, because this harness has no
- *                   engine in it.
- *   compose lag   = settled turn → the note carrying it reaches the sink.
- *                   Paid by the notes clocks (quiet threshold and cadence
- *                   ceiling) and measured here, on a virtual clock.
- *   total         = the two together, which is the wait a person actually
- *                   feels and the only one worth quoting on its own.
+ * "The notes lag" is an impression; this prints a number instead. It drives a
+ * SCRIPTED transcript through the real `beginNotesSession` on a virtual clock
+ * — no microphone, no engine, no LLM, no wall-clock waiting — and measures,
+ * per sentence, the gap between the turn settling and the note carrying it
+ * reaching the sink.
  *
- * Splitting them is the point. The totals moved by tuning an endpoint
- * detector and by moving the notes clocks look identical in a single column,
- * and only one of those is on the table at any given moment — the clocks are
- * held at 4s quiet / 15s cadence deliberately (Bryan, 2026-09-04), so a
- * number that cannot say which half it came from cannot say whether the work
- * that was allowed to happen did anything.
- *
- * THE ENDPOINT LAG IS NOT MERELY ADDED ON. A turn that settles later also
- * starts the quiet timer later, so it can push the whole tick past a cadence
- * boundary. That is why it is modelled inside the script — the settled frame
- * is delivered to `beginNotesSession` at `speech end + endpoint lag` — rather
- * than added to the answer afterwards.
- *
- * It runs the same script under two endpoint lags, so the columns are a
- * before/after of an endpointing change with the notes clocks held still:
- *
- *   bun run scripts/notes-latency-check.ts [--minutes 3] [--json]
- *   bun run scripts/notes-latency-check.ts --endpoint-lag 485 --endpoint-lag-after 211
+ * It runs the same script twice: once with the cadence ceiling off
+ * (`cadenceMs: Infinity`), which is exactly how the composer behaved before
+ * the ceiling existed, and once with the shipped default. The difference
+ * between the two columns is the change's effect, measured on one input.
  *
  * WHY A VIRTUAL CLOCK RATHER THAN A REAL MEETING. A real meeting cannot be
  * replayed identically, so a before/after taken from two of them measures the
  * conversation as much as the code. Here the frame times are the script's, so
  * the two runs differ in one thing only.
+ *
+ *   bun run scripts/notes-latency-check.ts [--minutes 3] [--json]
  *
  * All speech in the script is synthetic. The repo is public.
  */
@@ -102,28 +84,7 @@ class VirtualClock implements TickScheduler {
 interface ScriptFrame {
   at: number;
   frame: EngineTurn;
-  /**
-   * On a settled frame, when the speaker actually stopped. The frame itself
-   * arrives one endpoint lag later; the difference is what this script
-   * exists to keep apart.
-   */
-  speechEndAt?: number;
 }
-
-/**
- * The two endpoint lags the columns are built from, both measured on the real
- * Soniox wire by `scripts/endpoint-latency-check.ts --fixture trailing`
- * (15 turns per setting, word recall 100% for both):
- *
- *   BEFORE — the vendor default the adapter used to leave alone.
- *   AFTER  — `endpoint_latency_adjustment_level: 2`, now sent on every
- *            session (`DEFAULT_ENDPOINT_LATENCY_ADJUSTMENT`).
- *
- * Medians, not p90: the p90 barely moved (503ms → 508ms), so quoting the tail
- * here would claim an improvement the wire did not show.
- */
-const ENDPOINT_LAG_BEFORE_MS = 485;
-const ENDPOINT_LAG_AFTER_MS = 211;
 
 const SENTENCES = [
   'The sync is the slowest thing on the page.',
@@ -147,7 +108,7 @@ const SENTENCES = [
  * One genuine pause is scripted in the middle, so the "before" column is not
  * flattered by a script that made a pause tick impossible.
  */
-function buildScript(durationMs: number, pauseAtMs: number, endpointLagMs: number): ScriptFrame[] {
+function buildScript(durationMs: number, pauseAtMs: number): ScriptFrame[] {
   const TURN_MS = 6_000;
   const PARTIAL_EVERY_MS = 400;
   const BREATH_MS = 300;
@@ -173,14 +134,8 @@ function buildScript(durationMs: number, pauseAtMs: number, endpointLagMs: numbe
       });
     }
     at += TURN_MS;
-    // The speaker stops HERE; the settled frame lands one endpoint lag later.
-    // The next speaker does not wait for it — a breath after the mouth
-    // closes, not after the engine agrees — so a long enough lag delivers a
-    // settled turn in the middle of the next person's partials, which is
-    // exactly what it does in a real meeting.
     frames.push({
-      at: at + endpointLagMs,
-      speechEndAt: at,
+      at,
       frame: { turn, text, final: true, speaker: turn % 2 === 0 ? 'A' : 'B' },
     });
     if (!pauseSpent && at >= pauseAtMs) {
@@ -191,34 +146,20 @@ function buildScript(durationMs: number, pauseAtMs: number, endpointLagMs: numbe
     }
     turn++;
   }
-  // The lag reorders the stream, so the driver's "advance to this time" loop
-  // needs it back in the order a socket would have delivered it.
-  return frames.sort((a, b) => a.at - b.at);
+  return frames;
 }
 
 interface RunResult {
   label: string;
   sentences: number;
   notesWritten: number;
-  /** Endpoint lag this run was driven with — an input, restated. */
-  endpointLagMs: number;
-  /** Settled turn → note written. What the notes clocks cost. */
-  composeMs: number[];
-  /** Speaker stopped → note written. What a person actually waits. */
-  totalMs: number[];
+  latenciesMs: number[];
 }
 
-async function run(
-  label: string,
-  script: ScriptFrame[],
-  cadenceMs: number,
-  endpointLagMs: number,
-): Promise<RunResult> {
+async function run(label: string, script: ScriptFrame[], cadenceMs: number): Promise<RunResult> {
   const clock = new VirtualClock();
   const settledAt = new Map<number, number>();
-  const spokeAt = new Map<number, number>();
-  const composeMs: number[] = [];
-  const totalMs: number[] = [];
+  const latenciesMs: number[] = [];
   let notesWritten = 0;
 
   const session = beginNotesSession(
@@ -231,21 +172,16 @@ async function run(
         notesWritten++;
         for (const t of update.tick.turns) {
           const settled = settledAt.get(t.turn);
-          if (settled !== undefined) composeMs.push(clock.now - settled);
-          const spoke = spokeAt.get(t.turn);
-          if (spoke !== undefined) totalMs.push(clock.now - spoke);
+          if (settled !== undefined) latenciesMs.push(clock.now - settled);
         }
       },
     },
     { docId: 'doc-latency', meetingId: 'm-latency' },
   );
 
-  for (const { at, frame, speechEndAt } of script) {
+  for (const { at, frame } of script) {
     await clock.advanceTo(at);
-    if (frame.final) {
-      settledAt.set(frame.turn, at);
-      if (speechEndAt !== undefined) spokeAt.set(frame.turn, speechEndAt);
-    }
+    if (frame.final) settledAt.set(frame.turn, at);
     session.onTurn(frame);
     // The compose chain is a promise chain; a tick that fired at this instant
     // must reach the sink before the clock moves on, or its latency would be
@@ -259,7 +195,7 @@ async function run(
   await session.end();
   await drain();
 
-  return { label, sentences: settledAt.size, notesWritten, endpointLagMs, composeMs, totalMs };
+  return { label, sentences: settledAt.size, notesWritten, latenciesMs };
 }
 
 function quantile(sorted: number[], q: number): number {
@@ -272,107 +208,47 @@ function quantile(sorted: number[], q: number): number {
   return a + (b - a) * (at - lo);
 }
 
-function summarize(xs: number[]) {
-  const sorted = [...xs].sort((a, b) => a - b);
+function stats(result: RunResult) {
+  const sorted = [...result.latenciesMs].sort((a, b) => a - b);
   return {
+    label: result.label,
+    sentences: result.sentences,
     measured: sorted.length,
+    notesWritten: result.notesWritten,
     medianMs: Math.round(quantile(sorted, 0.5)),
     p90Ms: Math.round(quantile(sorted, 0.9)),
     maxMs: Math.round(sorted[sorted.length - 1] ?? Number.NaN),
   };
 }
 
-function stats(result: RunResult) {
-  return {
-    label: result.label,
-    sentences: result.sentences,
-    notesWritten: result.notesWritten,
-    endpointLagMs: result.endpointLagMs,
-    compose: summarize(result.composeMs),
-    total: summarize(result.totalMs),
-  };
-}
-
-/** `--flag value` pairs; a flag naming no number keeps its default. */
-function numArg(args: readonly string[], flag: string, fallback: number): number {
-  const at = args.indexOf(flag);
-  if (at < 0) return fallback;
-  const value = Number(args[at + 1]);
-  if (!Number.isFinite(value) || value < 0) {
-    console.error(`${flag} must be a non-negative number of milliseconds`);
-    process.exit(2);
-  }
-  return value;
-}
-
 const args = process.argv.slice(2);
-const minutes = numArg(args, '--minutes', 3);
-if (minutes <= 0) {
+const minutesAt = args.indexOf('--minutes');
+const minutes = minutesAt >= 0 ? Number(args[minutesAt + 1]) : 3;
+if (!Number.isFinite(minutes) || minutes <= 0) {
   console.error('--minutes must be a positive number');
   process.exit(2);
 }
-const lagBefore = numArg(args, '--endpoint-lag', ENDPOINT_LAG_BEFORE_MS);
-const lagAfter = numArg(args, '--endpoint-lag-after', ENDPOINT_LAG_AFTER_MS);
-// The notes clocks are NOT the subject here and default to the shipped ones.
-// The ceiling stays overridable because turning it off is how this script
-// originally showed what adding it bought.
-const cadenceMs = args.includes('--cadence-off')
-  ? Number.POSITIVE_INFINITY
-  : numArg(args, '--cadence', DEFAULT_NOTES_CADENCE_MS);
 const asJson = args.includes('--json');
 
 const durationMs = minutes * 60_000;
+const script = buildScript(durationMs, durationMs / 2);
 
-const before = stats(
-  await run(
-    `endpoint ${lagBefore}ms (before)`,
-    buildScript(durationMs, durationMs / 2, lagBefore),
-    cadenceMs,
-    lagBefore,
-  ),
-);
+const before = stats(await run('pause only (before)', script, Number.POSITIVE_INFINITY));
 const after = stats(
-  await run(
-    `endpoint ${lagAfter}ms (after)`,
-    buildScript(durationMs, durationMs / 2, lagAfter),
-    cadenceMs,
-    lagAfter,
-  ),
+  await run(`cadence ${DEFAULT_NOTES_CADENCE_MS}ms (after)`, script, DEFAULT_NOTES_CADENCE_MS),
 );
 
 if (asJson) {
-  console.log(
-    JSON.stringify({ minutes, quietMs: DEFAULT_NOTES_QUIET_MS, cadenceMs, before, after }, null, 2),
-  );
+  console.log(JSON.stringify({ minutes, quietMs: DEFAULT_NOTES_QUIET_MS, before, after }, null, 2));
 } else {
   const secs = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
   console.log(`Scripted meeting: ${minutes} min, ${before.sentences} settled sentences,`);
-  console.log(
-    `notes clocks held at quiet ${secs(DEFAULT_NOTES_QUIET_MS)} / cadence ${
-      Number.isFinite(cadenceMs) ? secs(cadenceMs) : 'off'
-    }, one real pause mid-meeting.`,
-  );
-  console.log('\n  run                        notes  endpoint   settled→note        speech→note');
-  console.log(
-    '                                                p50     p90      p50     p90     max',
-  );
+  console.log(`quiet threshold ${secs(DEFAULT_NOTES_QUIET_MS)}, one real pause mid-meeting.`);
+  console.log('Sentence settled → note written:\n');
+  console.log('  run                          notes   median      p90      max');
   for (const row of [before, after]) {
     console.log(
-      `  ${row.label.padEnd(24)} ${String(row.notesWritten).padStart(5)}  ${secs(
-        row.endpointLagMs,
-      ).padStart(7)}  ${secs(row.compose.medianMs).padStart(7)} ${secs(row.compose.p90Ms).padStart(
-        7,
-      )}  ${secs(row.total.medianMs).padStart(7)} ${secs(row.total.p90Ms).padStart(7)} ${secs(
-        row.total.maxMs,
-      ).padStart(7)}`,
+      `  ${row.label.padEnd(26)} ${String(row.notesWritten).padStart(5)}  ${secs(row.medianMs).padStart(7)}  ${secs(row.p90Ms).padStart(7)}  ${secs(row.maxMs).padStart(7)}`,
     );
   }
-  const won = before.total.medianMs - after.total.medianMs;
-  console.log(
-    `\nEndpoint lag is ${((after.endpointLagMs / after.total.medianMs) * 100).toFixed(
-      0,
-    )}% of the wait after the change (${(
-      (before.endpointLagMs / before.total.medianMs) * 100
-    ).toFixed(0)}% before); the median speech→note wait moved by ${won}ms.`,
-  );
 }

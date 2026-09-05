@@ -107,34 +107,6 @@ vendor's raw audio into these same engines (see below), so the preference
 applies there too; it was never the vendor's transcript. Advanced Options
 stays, keyed on whichever engine will open.
 
-**Endpointing: one measured default, on the default engine** (2026-09-05).
-The adapters otherwise send no turn-detection tuning at all, on the principle
-that a default we never send is a default we can never get wrong. The single
-exception is Soniox's `endpoint_latency_adjustment_level`, which the adapter
-sends as **2** rather than the vendor's 0
-(`DEFAULT_ENDPOINT_LATENCY_ADJUSTMENT`). Measured with
-`scripts/endpoint-latency-check.ts --engine soniox --fixture trailing`, 15
-turns per rung on a built fixture of mid-thought stops:
-
-| level | speech end → settled turn, p50 | p90 | word recall |
-|---|---|---|---|
-| 0 (vendor default) | 485 ms | 503 ms | 100% |
-| 1 | 302 ms | — | 100% |
-| **2 (sent)** | **211 ms** | 508 ms | 100% |
-| 3 | 2508 ms | 2703 ms | 100%, with stray punctuation |
-
-Level 3 is not a further step in the same direction — it is five times slower
-and mangles the text — which is why the ladder was walked rather than jumped.
-A person who moves the control still wins: the sanitized tuning is spread
-after the fixed fields.
-
-**And this is a small share of the wait.** With the notes clocks at 4s quiet /
-15s cadence, `scripts/notes-latency-check.ts` puts the median speech →
-note-written wait at 9.2s before this change and 8.9s after. Endpoint
-detection was 5% of that wait and is now 2%; the rest is the notes clocks,
-which are deliberately unchanged. Anything that wants a materially shorter
-wait has to move them, not the engine.
-
 **Speaker labels** (added 2026-08-29): `speaker_labels=true` on the same
 streaming URL — supported on every streaming model, **+$0.12/hr** on top of
 the $0.15 base (docs: streaming/label-speakers-and-separate-channels for the
@@ -715,26 +687,6 @@ with headings"*):
   new material at the end, "never to restructure notes the new speech does not
   touch" — which produced a doc shaped like the clock, where the third mention
   of a topic sat nowhere near the first two.
-- **Regroup a topic that passes four bullets**, on every tick and not only on
-  the one that opened it: gather its points into two or three groups, each a
-  short lead bullet with its own points nested under it as sub-bullets. It is
-  said twice — once in HOW TO ORGANISE with a worked example, and once as the
-  last thing before the output rule, under **BEFORE YOU ANSWER**. That is not
-  redundancy but measurement: stated once, the smoke slice came back with six
-  flat bullets under one heading, and with the example added, five. Stated
-  again at the end it holds — and the closing clause "get under the number by
-  GROUPING, never by dropping a point" is there because the revision without
-  it passed by deleting a note instead. The
-  shape asked for is sub-bullets, which was once the only shape that survived
-  the merge and is now the cheaper of the two: a heading inside an existing
-  run of bullets used to arrive BELOW them as soon as one line in the section
-  was a person's, and the merge now makes room for it instead — see the
-  re-layout gate below. Nesting still re-creates no element a reader may have
-  commented on, so it stays what the instructions ask for. They also tell it
-  to leave a person's lines at the top level, and THAT one is a guarantee now
-  rather than a request: the ledger only stops it REWRITING their line, a copy
-  nested inside a group is new writing of its own, and `withoutPersonCopies`
-  takes such a copy back out before anything is written.
 - **Mark a guess.** Where the point rests on a garbled word, write the note
   and end it `(unconfirmed)`. A marked guess beats a confident wrong note and
   beats no note.
@@ -798,52 +750,6 @@ unformatted — punctuation and sentence casing arrive with `format_turns` when
 the turn settles — so there is no finished sentence inside a partial to cut
 at. A settled turn IS the unit of finished speech; the turn being spoken waits
 for the next tick rather than being written mid-clause.
-
-**Stopping is the third thing that fires a tick, and the only one that carries
-unfinished words.** Both clocks need the meeting to keep going: the sentence
-somebody is in the middle of when they press stop is waiting on a tick that
-never comes, and "wait for the next tick" is advice with no next tick behind
-it. So `end()` runs a final pass over everything the meeting has — the turns
-that settled since the last tick, and the latest partial of every turn that
-never settled, each flagged `partial` and ordered after the settled ones. The
-composer is TOLD they are fragments (`[unfinished — the recording stopped
-mid-sentence]` on the line), because the alternative to saying so is a
-note-taker reading a cut-off clause as a finished point. The record is
-unaffected: only settled turns reach the JSONL, so the durable transcript
-still keeps what a turn became rather than what it looked like mid-flight.
-
-Two engine behaviours already covered most of this and hid the gap. The
-microphone path's `close()` sends `Terminate` and waits for the flush, which
-settles the open turn before `notes.end()` runs, and the mock engine settles
-its open turn on close for the same reason. Neither is a guarantee: the flush
-has a timeout, a dropped socket has no flush at all, and the bot path's turns
-settle on a vendor event that a stop can precede. The final pass is what makes
-the last sentence survive all three.
-
-**Every meeting says what it came to, in one line.** At the stop the session
-reports `ticks`, `turnsSettled`, `turnsComposed` and `turnsLost` — settled
-turns no successful compose ever carried — and `meeting-notes-doc.ts` logs it
-(`console.error` when anything was lost, `console.log` otherwise). It exists
-because a meeting reported as "skipping chunks" left NOTHING in the log to
-check the claim against: the pipeline spoke only when a stage threw, so a
-meeting whose notes covered half of what was said read exactly like a healthy
-one, and the zero occurrences of every failure signal proved nothing about
-coverage. It is a summary and not a tick log on purpose — a line per tick is
-hundreds per meeting for a number nobody reads while the meeting is fine.
-`turnsComposed` may run one ahead of `turnsSettled`, because the final pass
-carries a sentence that by definition never settled.
-
-**What holds all of this is a coverage audit, not more unit tests.** The ways
-a meeting loses words are spread across the ticker's delta, the compose
-chain's carry, the composer's own reply, the ownership merge and the section
-finder, and each has tests that pass while the meeting as a whole drops a
-stretch of conversation. So `notes-turn-coverage.test.ts` runs a scripted
-three-minute meeting through the tick harness and asks of every settled turn
-whether the notes say anything about it: the script declares, per line, either
-the note it should produce or the reason it is filler, and a line with neither
-is a failure that names the sentence. The script ends mid-sentence, which is
-how a person stops a recording — so the audit reports the interrupted turn by
-name when the final pass regresses.
 
 **The write is a MERGE, and a person can type in the section while it runs**
 (owner, 2026-08-30: *"destroyed my notes"*). The old write deleted the whole
@@ -943,39 +849,6 @@ typed since the last one. Now (`meeting-notes-merge.ts`):
   of the agent's bullets orphans into the outdated-comment flow — which is
   why it fires on the tick that MOVES the furniture and never on a tick that
   merely adds a bullet under a heading that already exists.
-- **A section somebody has typed in is regrouped WITHOUT rebuilding it.** The
-  rule above says relayout needs a section that is entirely the agent's, and
-  for a while that was the end of it: one line of a person's turned the whole
-  thing off and every heading the composer wrote landed below the bullets it
-  was meant to group — in exactly the meetings people write in. The fix
-  rebuilds nothing. A heading can only land between two bullets of one list,
-  so the agent's OWN bullets are cleared out of that list first and the merge
-  is planned again against what is left; the composer returns the whole notes
-  every tick, so they come straight back around the headings. A person's items
-  are never deleted, keep their elements, their marks and their comment
-  anchors, and are anchored by the diff as usual. It costs exactly what
-  relayout costs and no more — a comment on one of the AGENT's bullets
-  orphans — and it is paid only on the tick that moves the furniture. The one
-  trap worth naming: the second plan's `basedOn` must lose the lines the clear
-  just took out, or it reads them as items a person deleted mid-compose and
-  withholds the composer's copy of every one of them, dropping the notes
-  instead of regrouping them.
-- **A person's line is theirs ONCE, and the ledger cannot say that on its
-  own.** The ledger stops the note-taker rewriting a line somebody typed: an
-  incoming entry that reads like one of theirs lands as a suggestion on it.
-  A regroup walks around that completely — a lead bullet with their line
-  nested underneath is not an item, it is part of the enclosing item's
-  markdown, so nothing in the plan ever compares it to anything, and it is
-  accepted as new writing of the agent's own. The reader is left with their
-  line and a copy of it saying one thing twice. `withoutPersonCopies` unwraps
-  it before the plan is made, on every path: a nested copy is removed with
-  whatever was nested under it, and a group whose LEAD is their line is SPLIT
-  instead — the head becomes an item of its own, which the merge already
-  recognises as theirs, and the group's points become items beside it. So no
-  point the composer wrote is lost on either shape. What counts as a copy is
-  `NOTES_REWRITE_SIMILARITY`, the module's own bar for "reads as the same
-  note", because a restatement of their point inside a group is the same
-  duplicate as a verbatim one and reads worse.
 - **"No proposal is pending" is a question for the DOC, not for the plan.**
   The first version of that gate asked `plan.suggestions.length === 0`, which
   counts only what THIS tick proposes. A proposal already sitting in the
@@ -1018,57 +891,6 @@ dialog's forgetting the chosen range".
 Four references per tick, at most. Rows the capture pass FILED from this
 speech arrive separately as `taskLinks`; these were merely mentioned, and most
 ticks name none.
-
-### "Link that to the existing task" — the loose matcher, and the question
-
-The precision bar above is right for a row nobody asked about, and wrong the
-moment somebody asks. "Link that to the existing task" is a person saying they
-know the row exists; answering "no contiguous run of significant words" to
-that is a refusal to look. And the ask is exactly when the description is
-loosest — a person who could quote the title would have quoted it.
-
-So there are two matchers with opposite bars, and which one is allowed to
-answer depends on whether anybody asked (`notes-link-intent.ts`, deterministic
-and testable with no model in the loop):
-
-- **Asked.** `detectLinkAsk` reads a link verb followed by a row noun
-  ("link that to the ticket", "hook this up to the card"), and refuses when
-  the noun is preceded by *new* / *another* / *separate* — "file a new ticket"
-  is the capture pass's job, not this one. The rest of the tick's words then
-  go through `scoreRelatedWork`, the SAME scorer behind the board's
-  `find_related_work` verb, over the row titles AND their bodies. The ask's
-  own vocabulary is blanked out of the query first, or a row called "Task
-  capture" outranks the subject in every sentence containing the word "task".
-  The top row is linked when it clears a low bar and beats the runner-up by a
-  margin; a near-tie is not guessed at, it is offered.
-- **Not asked.** The same scores, a much higher bar, and the answer is never a
-  link. At most two rows are written into the note as questions.
-
-**Neither branch is allowed to be silent.** An ask that finds nothing clear
-still leaves the shortlist in the note as questions, so the room can see what
-was considered. That is the difference from the strict matcher, which is
-silent by design.
-
-**A question is a link, not a caption.** It is written as ordinary markdown
-pointing at the row, with `suggest=1` on the href
-(`core/note-suggestion.ts`) and the words "related: <title>?". So it survives
-the `.md` on disk and a browser with no script running, it opens the right row
-either way, and in the editor one tap turns it into the citation it was asking
-about — the link the reader touched is the link they are left with, which is
-why it needs no chip and no confirm step. Suggestions are appended
-deterministically AFTER the composer returns, never asked of the model: a
-marker the model has to spell exactly is a marker it will eventually spell
-wrong.
-
-**Every link a tick writes is undoable.** A spoken link puts a
-`{kind:'doc'}` ref on the row (`spokenLinkRef`, the same shape the note's own
-undo control deletes), and the row's backlink is computed from that ref rather
-than stored beside it — so removing the ref removes both sides at once. The
-control sits beside the link in the notes and appears only where the doc
-actually holds a ref, which is why its presence always means there is
-something to take back. Undoing removes the link, not the words: the composer
-weaves a row's title into the middle of a sentence, and deleting the text
-would take a clause of somebody's meeting record with it.
 
 ### A rename reaches backwards (owner's call, 2026-08-29: "rewrite them")
 
@@ -1659,9 +1481,8 @@ failing on the meeting it was built for.
 
 **Two kinds of judge, and the split is the point.** Anything decidable is
 decided in code (`notes-quality.ts`, unit-tested): bullet length, a topic
-opened twice, a topic left running past four bullets with no nesting and no
-heading inside it, a decision with no voice on it, a named row left unlinked,
-a bullet copied verbatim out of the transcript, and the seeded human bullet
+opened twice, a decision with no voice on it, a named row left unlinked, a
+bullet copied verbatim out of the transcript, and the seeded human bullet
 still reading character for character. Only reading comprehension goes to a
 model (Sonnet): was the paraphrase faithful, does the note say what was
 decided and by whom, was that new heading really a new topic. A model
@@ -1733,14 +1554,6 @@ which measured **$0.016**. It is not a test and does not live in the suites: a
 check whose verdict depends on a model's mood must never take somebody else's
 CI red, which is why the CI job is `continue-on-error` and skips itself, out
 loud, when no key is configured.
-
-**The flat wall is the one verdict the smoke slice returns non-zero on.**
-Every rate in the report is a reading of a model's output and exits 0. A topic
-left running past four bullets with nothing inside it is not a reading: it is
-decidable, it is cheap to see, and it is the shape the notes are not allowed
-to have — so `--smoke` exits 1 on one, and the fix is to raise the structure
-rather than the threshold. The full run still only reports, per meeting, how
-many such topics the meeting ended with.
 
 ### Cost
 
@@ -2052,12 +1865,7 @@ latency measurement) · `scripts/room-labels-check.ts` +
 arithmetic, and the AMI corpus reference it scores against) ·
 `packages/server/src/notes-prompt-store.ts` (what the note-taker is told to
 do) + `notes-references.ts` (which board rows this tick's speech named) +
-`notes-link-intent.ts` (whether anybody ASKED for a link, and which row
-answers a loose description) + `notes-quality.ts` (the decidable half of "did
-it behave") · `packages/core/src/note-suggestion.ts` +
-`packages/workspaces-app/src/notes-link-affordance.ts` +
-`doc/notes-link-refs.ts` (how a written question is spelled, and the two taps
-that accept it or take it back) ·
+`notes-quality.ts` (the decidable half of "did it behave") ·
 `scripts/notes-eval.ts` + `notes-eval-fixtures.ts` +
 `packages/server/test/fixtures/ami-notes-eval/` (the behaviour eval, its
 corpus excerpts, and the CC BY 4.0 attribution they carry) ·

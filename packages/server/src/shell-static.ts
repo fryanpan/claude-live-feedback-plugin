@@ -35,19 +35,19 @@ import { existsSync, readFileSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import { reviewIdOf } from '@feedback/core';
 import type { DocType } from '@feedback/core';
-import type { BrowserSentryConfig, PageType } from '../browser-sentry.ts';
-import { injectSentryHead } from '../browser-sentry.ts';
-import { buildLandingModel } from '../landing.ts';
-import type { ShareTarget } from '../middleware/host-guard.ts';
+import type { BrowserSentryConfig, PageType } from './browser-sentry.ts';
+import { injectSentryHead } from './browser-sentry.ts';
+import { buildLandingModel } from './landing.ts';
+import type { ShareTarget } from './middleware/host-guard.ts';
 import {
   captureMockup,
   isHtmlMockupSource,
   readMockupCapture,
   readMockupHtml,
-} from '../mockup-capture.ts';
-import { injectWidget } from '../mockup-widget.ts';
-import type { ReviewItemRow } from '../review-queue.ts';
-import type { Rooms } from '../rooms.ts';
+} from './mockup-capture.ts';
+import { injectWidget } from './mockup-widget.ts';
+import type { ReviewItemRow } from './review-queue.ts';
+import type { Rooms } from './rooms.ts';
 import {
   HTML_SHELL_HEADERS,
   appCacheControl,
@@ -65,8 +65,8 @@ import {
   renderSigninShell,
   serveStatic,
   serveStaticUnder,
-} from '../shells.ts';
-import type { HubWorkspace, TaskStore } from '../tasks.ts';
+} from './shells.ts';
+import type { HubWorkspace, TaskStore } from './tasks.ts';
 
 /** Files the workspaces-app build emits that must ALSO answer at the root
  *  path. See the route for why each one is here rather than under /app/. */

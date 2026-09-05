@@ -27,21 +27,7 @@
 /** One thing on the board a note may link to. */
 export interface NoteReference {
   kind: 'task' | 'doc';
-  /**
-   * The row's or doc's own id. Optional because the strict title matcher
-   * never needed one — the URL was the whole of what a citation had to carry.
-   * The ASK path does need it: linking a row on a person's instruction writes
-   * a ref onto that row, and a ref names an id, not a URL.
-   */
-  id?: string;
   title: string;
-  /**
-   * The row's own prose, when it has any. Read only by the loose matcher
-   * (`notes-link-intent.ts`), which scores a body as well as a title — a
-   * spoken description far more often matches what somebody wrote INSIDE the
-   * ticket than the handful of words in its name. Never reaches a prompt.
-   */
-  body?: string;
   /** Root-relative, like `taskCaptureUrl` and `docLookupUrl` — it survives
    *  being read under whatever host the server is reached on. */
   url: string;

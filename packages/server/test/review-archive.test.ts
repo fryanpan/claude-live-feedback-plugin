@@ -40,15 +40,15 @@ function makeRooms(dataDir: string): Rooms {
 }
 
 /** Bind every file in the folder as a member doc (bindFolder binds lazily). */
-async function bindAllFiles(
+function bindAllFiles(
   rooms: Rooms,
   folderPath: string,
-): Promise<{ setId: string; docIds: string[]; byPath: Map<string, string> }> {
-  const bound = await rooms.bindFolder({ folderPath, owner: '/cwd' });
+): { setId: string; docIds: string[]; byPath: Map<string, string> } {
+  const bound = rooms.bindFolder({ folderPath, owner: '/cwd' });
   if (!bound.ok) throw new Error('bindFolder failed');
   const byPath = new Map<string, string>();
   for (const f of rooms.listRepoFiles(bound.workspaceId).files ?? []) {
-    const opened = await rooms.openContextFile(bound.workspaceId, f.relPath);
+    const opened = rooms.openContextFile(bound.workspaceId, f.relPath);
     if (opened.ok) byPath.set(f.relPath, opened.docId);
   }
   return { setId: bound.workspaceId, docIds: [...byPath.values()], byPath };
@@ -88,7 +88,7 @@ describe('Rooms.archiveReview / unarchiveReview', () => {
   });
 
   it('archives OVER open threads — that is the point of the verb', async () => {
-    const bound = await bindAllFiles(rooms, folder);
+    const bound = bindAllFiles(rooms, folder);
     const mdDocId = bound.byPath.get('README.md')!;
     await rooms.createThreadByFind(
       mdDocId,
@@ -115,7 +115,7 @@ describe('Rooms.archiveReview / unarchiveReview', () => {
   });
 
   it('moves the private-meta sidecar alongside the ydoc', async () => {
-    const bound = await bindAllFiles(rooms, folder);
+    const bound = bindAllFiles(rooms, folder);
     await settle();
     const sidecars = bound.docIds.filter((id) => existsSync(join(dataDir, `${id}.private.json`)));
     expect(sidecars.length).toBeGreaterThan(0);
@@ -126,8 +126,8 @@ describe('Rooms.archiveReview / unarchiveReview', () => {
     }
   });
 
-  it('records who archived it and why, and lists it as archived', async () => {
-    const bound = await bindAllFiles(rooms, folder);
+  it('records who archived it and why, and lists it as archived', () => {
+    const bound = bindAllFiles(rooms, folder);
     rooms.archiveReview(bound.setId, { archivedBy: 'Tester', reason: 'merged in #123' });
 
     const manifest = readArchiveManifest(dataDir, bound.setId);
@@ -141,8 +141,8 @@ describe('Rooms.archiveReview / unarchiveReview', () => {
     expect(listed.map((r) => r.setId)).toEqual([bound.setId]);
   });
 
-  it('appends an archive event to the activity log', async () => {
-    const bound = await bindAllFiles(rooms, folder);
+  it('appends an archive event to the activity log', () => {
+    const bound = bindAllFiles(rooms, folder);
     rooms.archiveReview(bound.setId, { archivedBy: 'Tester', reason: 'merged in #123' });
     const log = readFileSync(join(dataDir, 'activity.jsonl'), 'utf8');
     const archiveRows = log
@@ -160,7 +160,7 @@ describe('Rooms.archiveReview / unarchiveReview', () => {
   });
 
   it('unarchive brings the review back: rooms, threads and all', async () => {
-    const bound = await bindAllFiles(rooms, folder);
+    const bound = bindAllFiles(rooms, folder);
     const mdDocId = bound.byPath.get('README.md')!;
     await rooms.createThreadByFind(
       mdDocId,
@@ -194,7 +194,7 @@ describe('Rooms.archiveReview / unarchiveReview', () => {
   });
 
   it('refuses rather than overwrites when the id is ALREADY in _archive', async () => {
-    const bound = await bindAllFiles(rooms, folder);
+    const bound = bindAllFiles(rooms, folder);
     const mdDocId = bound.byPath.get('README.md')!;
     // An older snapshot of the same docId is already parked in _archive —
     // the state 5 docIds on the production box are in, from a hand-move in
@@ -217,8 +217,8 @@ describe('Rooms.archiveReview / unarchiveReview', () => {
     );
   });
 
-  it('refuses to unarchive onto a live doc of the same id', async () => {
-    const bound = await bindAllFiles(rooms, folder);
+  it('refuses to unarchive onto a live doc of the same id', () => {
+    const bound = bindAllFiles(rooms, folder);
     rooms.archiveReview(bound.setId, { archivedBy: 'Tester' });
     // Something re-minted one of the ids while the review was archived.
     const revived = bound.docIds[0]!;
@@ -256,7 +256,7 @@ describe('archived docs keep feeding activity-backfill', () => {
   });
 
   it('the backfilled stream over an archived review is BYTE-IDENTICAL', async () => {
-    const bound = await bindAllFiles(rooms, folder);
+    const bound = bindAllFiles(rooms, folder);
     const mdDocId = bound.byPath.get('README.md')!;
     const created = await rooms.createThreadByFind(
       mdDocId,
@@ -286,7 +286,7 @@ describe('archived docs keep feeding activity-backfill', () => {
     // The 174 ydocs moved into _archive by hand in June left their
     // `.private.json` sidecars behind in the data dir. Resolving the sidecar
     // next to the .ydoc must not blind the backfill to those.
-    const bound = await bindAllFiles(rooms, folder);
+    const bound = bindAllFiles(rooms, folder);
     const mdDocId = bound.byPath.get('README.md')!;
     await rooms.createThreadByFind(
       mdDocId,

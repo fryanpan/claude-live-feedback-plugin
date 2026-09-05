@@ -1,5 +1,4 @@
 import { newEventId } from './event-id.ts';
-import type { ReplayMarks } from './sse-marks.ts';
 
 /**
  * Anything broadcast over SSE: thread/suggestion webhook payloads and the
@@ -41,20 +40,6 @@ export const REPLAY_MAX_AGE_MS = 10 * 60_000;
  *  names that agent — everyone else's catch-up filters it out, exactly as
  *  their live feed never carried it. */
 type BufferedEvent = { id: string; at: number; payload: SsePayload; toAgent?: string };
-
-/**
- * One channel's completeness marks, split by AUDIENCE.
- *
- * `broadcast` is the newest id every subscriber's stream carried.
- * `addressedAfter` holds, per addressee, the newest frame addressed to it
- * SINCE that broadcast — and is cleared whenever a broadcast lands, because a
- * broadcast is visible to everyone and therefore supersedes every addressed
- * frame older than itself. That clearing is what removes any need to order two
- * marks against each other (event ids carry a per-process boot nonce and a
- * counter, and are not comparable across epochs), and it is what keeps the map
- * from growing with the number of agents that ever attached.
- */
-type ChannelMarks = { broadcast?: string; addressedAfter: Map<string, string> };
 
 /**
  * The keepalive period and the socket idle timeout are ONE decision, so they
@@ -126,39 +111,24 @@ export class SseHub {
   private lastSweepAt = 0;
 
   /**
-   * channel → the newest id each AUDIENCE on it saw, as far as this server
-   * knows: everything this process has sent, seeded at boot with what the
-   * previous clean shutdown recorded (`sse-marks.ts`).
+   * channel → the wire id of the NEWEST event ever broadcast on it, as far as
+   * this server knows: everything this process has sent, seeded at boot with
+   * what the previous clean shutdown recorded (`sse-marks.ts`).
    *
    * Deliberately NOT pruned alongside the buffer, because it answers the
    * question the buffer cannot once its contents age out — "is this cursor at
-   * the end of what MY stream carried, or behind it?". A couple of short
-   * strings per channel, held for the life of the process; the buffer is where
-   * the bytes are.
+   * the end of the channel, or behind it?". One string per channel, held for
+   * the life of the process; the buffer is where the bytes are.
    *
-   * This is the fix for a whole class of VACUOUS gap notices, in two rounds.
-   *
-   * Round one (field-measured 2026-08-21): `replayAfter` had one way to say
-   * no, and used it for the case where the answer is provably yes — a
-   * subscriber holding the last id a quiet channel ever carried missed
-   * nothing, whether the buffer aged out under it or the server restarted
-   * without that channel being touched. It showed up as waves of `replay.gap`
-   * across a session's whole watch set after every deploy, each followed by a
-   * refetch that found nothing.
-   *
-   * Round two: that mark was ONE id per channel, moved by addressed frames
-   * (`sendToAgent`) as well as broadcasts — while `replayAfter` filters
-   * addressed frames out of every other subscriber's catch-up, correctly,
-   * since their live feed never carried them. So a single tap on the lead
-   * moved the channel's notion of "newest" past every bystander's cursor, and
-   * ten quiet minutes later each of them read as a gap over a frame it was
-   * never entitled to see. Board channels are exactly where that bit: `ws:<id>`
-   * carries stall wakes, ready-work nudges and `workspace.review_item_held`,
-   * addressed frames on a channel whose bystanders are every other attached
-   * peer and every open tab. Splitting the mark by audience measures a cursor
-   * against the stream it actually belongs to.
+   * This is the fix for a whole class of VACUOUS gap notices. `replayAfter`
+   * used to have one way to say no, and used it for the case where the answer
+   * is provably yes: a subscriber holding the last id a quiet channel ever
+   * carried missed nothing, whether the buffer aged out under it or the server
+   * restarted without that channel being touched. Field-measured 2026-08-21 as
+   * waves of `replay.gap` across a session's whole watch set after every
+   * deploy, each followed by a refetch that found nothing.
    */
-  private channelMarks = new Map<string, ChannelMarks>();
+  private lastEver = new Map<string, string>();
 
   /** `now` is injectable so the age-bound behaviour can be tested without
    *  sleeping ten minutes. Production passes nothing. */
@@ -172,43 +142,15 @@ export class SseHub {
    * move the channel's notion of "newest" backwards, which is the direction
    * that turns a real gap into silence.
    */
-  restoreMarks(marks: ReplayMarks): void {
-    for (const [channel, mark] of Object.entries(marks)) {
-      if (this.channelMarks.has(channel)) continue;
-      const restored: ChannelMarks = { addressedAfter: new Map() };
-      if (typeof mark === 'string') {
-        restored.broadcast = mark;
-      } else {
-        if (mark.broadcast !== undefined) restored.broadcast = mark.broadcast;
-        for (const [agent, id] of Object.entries(mark.addressedAfter ?? {})) {
-          restored.addressedAfter.set(agent, id);
-        }
-      }
-      if (restored.broadcast === undefined && restored.addressedAfter.size === 0) continue;
-      this.channelMarks.set(channel, restored);
+  restoreMarks(marks: Record<string, string>): void {
+    for (const [channel, id] of Object.entries(marks)) {
+      if (!this.lastEver.has(channel)) this.lastEver.set(channel, id);
     }
   }
 
-  /**
-   * The channel marks, for the shutdown that hands them to the next boot.
-   *
-   * A channel with nothing but broadcasts — nearly all of them — serializes as
-   * the bare id it always did, so the file on disk is unchanged for those and
-   * an older server reading it loses nothing.
-   */
-  marks(): ReplayMarks {
-    const out: ReplayMarks = {};
-    for (const [channel, m] of this.channelMarks) {
-      if (m.addressedAfter.size === 0) {
-        if (m.broadcast !== undefined) out[channel] = m.broadcast;
-        continue;
-      }
-      out[channel] = {
-        ...(m.broadcast !== undefined ? { broadcast: m.broadcast } : {}),
-        addressedAfter: Object.fromEntries(m.addressedAfter),
-      };
-    }
-    return out;
+  /** The channel marks, for the shutdown that hands them to the next boot. */
+  marks(): Record<string, string> {
+    return Object.fromEntries(this.lastEver);
   }
 
   /**
@@ -305,7 +247,7 @@ export class SseHub {
    * leaves the client's `lastEventId` untouched. That is load-bearing, not
    * an omission: an id that was never buffered would, presented back on
    * reconnect, read as a gap and trigger a refetch that finds nothing — the
-   * vacuous-gap wave the channel marks exist to end. Words missed during a blip
+   * vacuous-gap wave `lastEver` exists to end. Words missed during a blip
    * are gone, exactly as they are on the microphone socket; the durable
    * transcript is the record either way.
    *
@@ -335,21 +277,8 @@ export class SseHub {
     }
     buf.push({ id, at: this.now(), payload, ...(toAgent !== undefined ? { toAgent } : {}) });
     // Outside the buffer and outside its pruning: this is what lets a cursor
-    // at the end of a quiet channel still be recognised as up to date. Split
-    // by audience — a broadcast everyone saw retires the addressed marks it
-    // came after; an addressed frame moves only its own addressee's mark, so
-    // it cannot make a bystander look behind.
-    let marks = this.channelMarks.get(docId);
-    if (!marks) {
-      marks = { addressedAfter: new Map() };
-      this.channelMarks.set(docId, marks);
-    }
-    if (toAgent === undefined) {
-      marks.broadcast = id;
-      marks.addressedAfter.clear();
-    } else {
-      marks.addressedAfter.set(toAgent, id);
-    }
+    // at the end of a quiet channel still be recognised as up to date.
+    this.lastEver.set(docId, id);
     this.prune(docId);
     // Idle channels never get touched by their own appends, so a cheap
     // global sweep rides along at most once a minute — it is what keeps a
@@ -382,22 +311,15 @@ export class SseHub {
    * to end — the client must be told to refetch instead.
    *
    * The one case that is NOT a gap despite missing the buffer: a cursor naming
-   * the newest event THIS SUBSCRIBER'S STREAM ever carried (`newestVisibleId`).
-   * Nothing it was entitled to see came after it, so nothing was missed — the
-   * buffer holding it merely aged out under a quiet channel, or this process
-   * restarted and recovered the channel's marks without yet broadcasting on
-   * it. That reading used to fall into `ok: false`, and it is where the
-   * field's vacuous-gap waves came from: most of a watch set is quiet most of
-   * the time, so most reconnects hit exactly this branch. Note the narrowing
-   * is symmetric — an id that is not the newest is still a gap, including the
-   * id one event behind it (the mark moves the moment anything visible to this
-   * subscriber is sent).
-   *
-   * Measured against the subscriber's own audience, not the channel's whole
-   * ledger, and the two differ exactly where the replay filter below does: a
-   * frame addressed to somebody else neither appears in this tail nor pushes
-   * this cursor out of date. Reading one mark for the whole channel is what
-   * made a single tap on the lead report a gap to every bystander on a board.
+   * the newest event a channel ever carried. Nothing came after it, so nothing
+   * was missed — the buffer holding it merely aged out under a quiet channel,
+   * or this process restarted and recovered the channel's mark without yet
+   * broadcasting on it. That reading used to fall into `ok: false`, and it is
+   * where the field's vacuous-gap waves came from: most of a watch set is
+   * quiet most of the time, so most reconnects hit exactly this branch. Note
+   * the narrowing is symmetric — an id that is not the newest is still a gap,
+   * including the id one event behind it (`lastEver` moves the moment anything
+   * is broadcast).
    *
    * `agentId` is the reconnecting stream's own identity (absent for browser
    * tabs and share visitors). It filters the tail to what THIS subscriber's
@@ -428,35 +350,10 @@ export class SseHub {
       }
     }
     // Not in the buffer. Nothing to replay is not the same as nothing
-    // provable — see the doc comment: a cursor at the end of THIS stream is a
+    // provable — see the doc comment: a cursor at the end of the channel is a
     // clean, empty catch-up rather than a gap.
-    const newest = this.newestVisibleId(docId, agentId);
-    if (newest !== undefined && newest === lastId) return { ok: true, events: [] };
+    if (this.lastEver.get(docId) === lastId) return { ok: true, events: [] };
     return { ok: false };
-  }
-
-  /**
-   * The newest frame this subscriber's own stream would have carried on a
-   * channel, or undefined if this server knows of none.
-   *
-   * The single place the completeness rule is spelled out, so the per-doc
-   * stream (`openSseStream`) and the multiplexed one (`sse-mux.ts`) cannot
-   * drift apart: both reach it through `replayAfter`.
-   *
-   * An addressed mark wins when it exists, because `buffer()` clears those the
-   * moment a broadcast lands — so a surviving one is by construction newer
-   * than the broadcast mark beside it. Anonymous streams (browser tabs, share
-   * visitors) are measured against broadcasts alone, exactly as their live
-   * feed was.
-   */
-  private newestVisibleId(docId: string, agentId?: string): string | undefined {
-    const marks = this.channelMarks.get(docId);
-    if (!marks) return undefined;
-    if (agentId !== undefined) {
-      const addressed = marks.addressedAfter.get(agentId);
-      if (addressed !== undefined) return addressed;
-    }
-    return marks.broadcast;
   }
 
   /** Wire id of the newest buffered event on a channel, if any. */

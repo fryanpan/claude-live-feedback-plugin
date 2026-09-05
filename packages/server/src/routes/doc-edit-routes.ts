@@ -20,7 +20,7 @@ import {
   parsePlacement,
   parseSuggestionAuthor,
   withSyncError,
-} from './docs-routes-context.ts';
+} from './docs.ts';
 
 /**
  * The content-edit routes: `content` POST, `reparse_from_disk`,

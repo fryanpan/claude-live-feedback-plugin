@@ -14,6 +14,8 @@
  *   `prose-edit.ts`      find-and-replace and anchored range rewrites.
  *   `prose-blocks.ts`    whole-block inserts and deletes, and the agent
  *                        anchors that name where.
+ *   `prose-integrity.ts` the post-write read that asks whether a doc now
+ *                        holds markdown syntax as literal characters.
  *
  * This file exports exactly what it exported when it was one 2,847-line
  * module, which is why the re-exports below are written out by name rather
@@ -49,6 +51,8 @@ export {
   headingLevelOf,
 } from './prose-fragment.ts';
 export type { TextSegment } from './prose-fragment.ts';
+export { detectLiteralMarkdown, literalMarkdownMessage } from './prose-integrity.ts';
+export type { LiteralMarkdownFinding, LiteralMarkdownKind } from './prose-integrity.ts';
 export {
   inlineMarksToDelta,
   normalizeHeadingLevels,

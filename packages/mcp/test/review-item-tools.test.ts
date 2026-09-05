@@ -22,13 +22,12 @@
  */
 import { type ChildProcess, spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { type Server, createServer, get as httpGet } from 'node:http';
+import { type Server, createServer } from 'node:http';
 import { type AddressInfo } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { threadReviewItemId } from '@feedback/core/review-item-id';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { isBackgroundRequest } from './harness/background-requests.ts';
 import { readMcpSource } from './harness/mcp-source.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -37,22 +36,8 @@ const BUNDLE = join(HERE, '../../plugin/mcp/index.js');
 
 type Recorded = { method: string; path: string; body: Record<string, unknown> };
 
-/**
- * What the TOOL CALLS asked the server for, oldest last. Every case below
- * reads the tail of this, so the child's own background traffic — the event
- * stream redialling, the token it mints to do so, the restore, the
- * fire-and-forget heartbeat — must not land in it. `isBackgroundRequest`
- * carries the list and the two CI failures that wrote it.
- */
 const seen: Recorded[] = [];
-/** Everything, in arrival order, background traffic included — the array the
- *  cases below USED to read. The control keeps it so the race it guards
- *  against is demonstrated rather than asserted. */
-const all: Recorded[] = [];
 let stub: Server;
-/** Where the stub listens, so the control can post the child's own background
- *  traffic at it on demand instead of waiting for the backoff to do it. */
-let stubBase = '';
 let child: ChildProcess;
 let nextId = 100;
 let pending = '';
@@ -141,20 +126,6 @@ function call(name: string, args: Record<string, unknown>): Promise<Record<strin
   });
 }
 
-/**
- * A bare GET against the stub, over `node:http` rather than `fetch`: this
- * suite runs under happy-dom, whose fetch refuses a cross-origin read.
- * Resolves once the response has been consumed, so the stub has recorded it.
- */
-function rawGet(url: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    httpGet(url, (res) => {
-      res.resume();
-      res.on('end', () => resolve());
-    }).on('error', reject);
-  });
-}
-
 /** The last request the stub saw — the assertion target for every case. */
 function last(): Recorded {
   const r = seen.at(-1);
@@ -176,16 +147,13 @@ beforeAll(async () => {
       } catch {
         body = {};
       }
-      const rec: Recorded = { method: req.method ?? '', path, body };
-      all.push(rec);
-      if (!isBackgroundRequest(rec)) seen.push(rec);
+      seen.push({ method: req.method ?? '', path, body });
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(replyFor(path)));
     });
   });
   await new Promise<void>((r) => stub.listen(0, '127.0.0.1', r));
   const port = (stub.address() as AddressInfo).port;
-  stubBase = `http://127.0.0.1:${port}`;
 
   child = spawn(process.execPath, [BUNDLE], {
     env: {
@@ -264,57 +232,6 @@ describe('the harness itself', () => {
     const reply = await call('list_docs', {});
     okReply(reply);
     expect(last().path).toContain('/api/docs');
-  });
-
-  /**
-   * THE CONTROL for every `last()` and `seen.at(-2)` below.
-   *
-   * The child redials its multiplexed event stream on a backoff nobody here
-   * controls, minting a token to do it, so those two requests can land
-   * between a tool's request and this file's assertion about it. That is not
-   * hypothetical: it turned this file red on PR 680 (`set_review_item_criteria`
-   * read `/events/agent/<id>` as its route) and again on PR 701 (a
-   * `request_more_info` case read `at(-2)` as POST because a trailing token
-   * GET had shoved its own POST back a slot). Both were green locally and on
-   * rerun.
-   *
-   * Rather than wait for the backoff, put exactly those two requests through
-   * the stub by hand, in the window where they did the damage. `all` is the
-   * unfiltered record the file used to read, and asserting on its tail is the
-   * OLD form: it names the injected stream, so the old assertion would fail
-   * here. `seen` is the filtered one, and it still names the tool's route.
-   */
-  it('survives a stream reconnect landing between a tool call and its assertion', async () => {
-    const reply = await call('answer_decision', {
-      taskId: 't-control',
-      text: 'Evict by LRU',
-      optionId: 'o-control',
-    });
-    okReply(reply);
-
-    // The child's own background traffic, in the order it makes it.
-    const agent = 'agent-index-keeper';
-    await rawGet(`${stubBase}/api/agents/${agent}/token`);
-    await rawGet(`${stubBase}/events/agent/${agent}`);
-
-    // The injection landed.
-    expect(all.map((r) => r.path)).toContain(`/events/agent/${agent}`);
-
-    // OLD form — positional over the unfiltered record. Its tail is now the
-    // child's own traffic rather than the verb, which is precisely the CI
-    // failure. Asserted as "background, not the verb" rather than as the
-    // exact injected path, because the real backoff may add one of its own
-    // behind ours and the point is that ANY of it displaces the answer.
-    const oldTail = all.at(-1);
-    expect(oldTail).toBeTruthy();
-    expect(isBackgroundRequest(oldTail as Recorded)).toBe(true);
-    expect(oldTail?.path).not.toBe('/api/tasks/t-control/answer');
-
-    // NEW form — the same positional read, over the foreground record. It
-    // still names the verb the case exercised.
-    expect(last().method).toBe('POST');
-    expect(last().path).toBe('/api/tasks/t-control/answer');
-    expect(last().body.optionId).toBe('o-control');
   });
 });
 

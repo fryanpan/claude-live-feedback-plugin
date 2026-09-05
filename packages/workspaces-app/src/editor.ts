@@ -25,7 +25,6 @@ import { workspaceIdFromPath } from './doc-path.ts';
 import { resolveDocLink, safeLinkHref } from './link-open.ts';
 import { ListBehavior } from './list-behavior.ts';
 import { MermaidCodeBlock } from './mermaid-code-block.ts';
-import { NotesLinkAffordance, type NotesLinkAffordanceOptions } from './notes-link-affordance.ts';
 import { PlanPlaceholder } from './plan-placeholder.ts';
 import { SuggestionChips } from './redline/suggestion-chips.ts';
 import type { InlineThreadCard } from './review-surface.ts';
@@ -76,13 +75,6 @@ export interface CreateEditorOpts {
    *  to a sibling file navigates in-SPA (via `navigate`) instead of opening
    *  a raw relative URL that 404s. Omit for standalone docs. */
   docLink?: { workspaceId: string; relPath: string; navigate: (url: string) => void };
-  /**
-   * The two taps a note's task links accept: turning the note-taker's
-   * "related: …?" question into a real link, and undoing one that was wrong
-   * (`notes-link-affordance.ts`). Omit and the plugin is not installed —
-   * every surface that is not a workspace doc.
-   */
-  notesLinks?: NotesLinkAffordanceOptions;
   /** Doc surface with a meeting strip: wash freshly arrived remote notes so
    *  the eye can follow the live transcript up into the note it became
    *  (settle-wash.ts). Absent = no plugin, nothing watched. */
@@ -167,10 +159,6 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
       // never written into the fragment. In the base list because every
       // prose surface may hold a task link (meeting notes are the driver).
       TaskLinkChips,
-      // Accept a suggested link, or take a wrong one back off. Configured or
-      // it installs no plugin at all, so it costs the redline and task-body
-      // surfaces nothing.
-      NotesLinkAffordance.configure(opts.notesLinks ?? {}),
       // Bullet-list ergonomics: Tab-indent for a first/sole list item and
       // auto-join of adjacent same-type lists. Deliberately NOT part of the
       // redline surface (redline-editor.ts builds its own Editor) — adjacent

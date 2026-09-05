@@ -75,8 +75,8 @@ export type BindFolderResult =
  * bound-docs count — the old eager-bind-everything path (and its 300-file
  * cap + per-file pollers) is gone.
  */
-export async function bindFolder(host: BindHost, opts: BindFolderOpts): Promise<BindFolderResult> {
-  const res = await bindDiff(host, {
+export function bindFolder(host: BindHost, opts: BindFolderOpts): BindFolderResult {
+  const res = bindDiff(host, {
     repoPath: opts.folderPath,
     reviewId: opts.setId,
     title: opts.title,

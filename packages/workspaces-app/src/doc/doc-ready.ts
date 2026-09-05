@@ -15,10 +15,8 @@ import { readDocMeta } from '@feedback/core';
 import type * as Y from 'yjs';
 import type { EditorHandle } from '../editor.ts';
 import type { MountScope } from '../mount-scope.ts';
-import { refreshNotesLinkAffordances } from '../notes-link-affordance.ts';
 import type { ReviewChrome } from '../review-chrome.ts';
 import { watchTaskLinkStatuses } from '../task-link-chips.ts';
-import type { NotesLinkRefs } from './notes-link-refs.ts';
 
 export interface DocReadyOptions {
   client: FeedbackClient;
@@ -29,10 +27,6 @@ export interface DocReadyOptions {
   /** The workspace the MountContext already named, if any. Falls back to the
    *  doc's own meta once that has synced. */
   workspaceId: string | undefined;
-  /** Which rows this doc is linked from — read once the document has arrived,
-   *  because it decides where an undo control is drawn and there is nothing
-   *  to draw beside until there are notes on screen. */
-  notesLinkRefs?: NotesLinkRefs;
   /** Re-render the sidebar / dropdown for this doc's set. */
   renderSetNav: () => Promise<void>;
   /** Run once, the first time the document's state arrives — the mount's own
@@ -42,7 +36,6 @@ export interface DocReadyOptions {
 
 export function wireDocReady(opts: DocReadyOptions): void {
   const { client, ydoc, scope, chrome, editor, workspaceId, renderSetNav, onFirstSync } = opts;
-  const notesLinkRefs = opts.notesLinkRefs;
 
   const meta = ydoc.getMap('meta');
   const onMeta = () => {
@@ -73,13 +66,6 @@ export function wireDocReady(opts: DocReadyOptions): void {
     if (!firstSyncDone) {
       firstSyncDone = true;
       onFirstSync?.();
-      // One read, on the same tick the chips start. Nothing polls it: every
-      // later change to the set is one somebody made in this editor, and the
-      // affordance tells itself about those.
-      void notesLinkRefs?.refresh().then(() => {
-        if (!scope.disposed)
-          refreshNotesLinkAffordances(editor.editor.view, notesLinkRefs.linked());
-      });
     }
     watchChips();
   });

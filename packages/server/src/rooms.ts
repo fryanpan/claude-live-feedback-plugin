@@ -106,7 +106,7 @@ import {
 import { type ArchivedDoc, type ArchivedReview } from './review-archive.ts';
 import { CONTENT_REVISION_ORIGIN, RoomFanout, type RoomFanoutHost } from './room-fanout.ts';
 import { ROOM_TIMINGS } from './room-timings.ts';
-import { boundFiles, redactBoundPath } from './slow-fs.ts';
+import { boundFiles } from './slow-fs.ts';
 import type { SseHub } from './sse.ts';
 import type { ScheduleArgs, ThreadSummarizer } from './summarize.ts';
 import type { WebhookDispatcher } from './webhooks.ts';
@@ -460,14 +460,6 @@ export class Rooms {
   /** docId → last time anything reached for this doc (see `touchDoc`). */
   private lastTouchedAt = new Map<string, number>();
 
-  /**
-   * Set by `stop()`. A deferred bind is the one piece of work that can land
-   * after this Rooms is finished with — the pool read outlives the call that
-   * started it — and binding then is never right: it re-hydrates a doc into
-   * an instance nobody holds, schedules a persist into a data dir a test has
-   * already removed, and can re-attach a file the next instance now owns.
-   */
-  private stopped = false;
   private memoryTicker: ReturnType<typeof setInterval> | null = null;
   private evictTicker: ReturnType<typeof setInterval> | null = null;
   /**
@@ -520,8 +512,8 @@ export class Rooms {
       room: (docId) => this.resolveRoom(docId),
       residentRoom: (docId) => this.rooms.get(docId),
       getOrCreate: (docId, init) => this.getOrCreate(docId, init),
-      attachFileAsync: (docId, filePath) => this.attachFileAsync(docId, filePath),
-      attachReadonlyFileAsync: (docId, filePath) => this.attachReadonlyFileAsync(docId, filePath),
+      attachFile: (docId, filePath) => this.attachFile(docId, filePath),
+      attachReadonlyFile: (docId, filePath) => this.attachReadonlyFile(docId, filePath),
       deleteDoc: (docId, opts) => this.deleteDoc(docId, opts),
       hydrateDoc: (docId) => this.hydrateDoc(docId),
       persistRoomNow: (room) => this.persistRoomNow(room),
@@ -701,11 +693,6 @@ export class Rooms {
    * a shutdown stops sweeping before `flush` runs.
    */
   stop(): void {
-    this.stopped = true;
-    // In-flight pool reads cannot be cancelled, so their landings are ignored
-    // instead (`bindAfterRead`). Clearing the set lets a later instance over
-    // the same data dir start its own read for the same doc.
-    this.deferredBinds.clear();
     if (this.memoryTicker) clearInterval(this.memoryTicker);
     this.memoryTicker = null;
     if (this.evictTicker) clearInterval(this.evictTicker);
@@ -797,11 +784,7 @@ export class Rooms {
     );
     for (const docId of pending) {
       try {
-        // Blocking on purpose: see `hydrateDoc`. The whole point of this pass
-        // is that the file write has to land before anything else can happen
-        // to the process, and a deferred bind would not be there for the next
-        // flush.
-        this.hydrateDoc(docId, { blocking: true });
+        this.hydrateDoc(docId);
       } catch (err) {
         console.error(`[rooms] could not reassert ${docId}:`, err);
       }
@@ -834,8 +817,7 @@ export class Rooms {
       const docId = file.slice(0, -'.ydoc'.length);
       if (!docId || this.docIndex.has(docId)) continue;
       try {
-        // Boot, and the row is written from the room in the same turn.
-        this.hydrateDoc(docId, { blocking: true });
+        this.hydrateDoc(docId);
         const room = this.rooms.get(docId);
         if (!room) continue;
         const entry = this.indexEntryFor(room);
@@ -1235,31 +1217,7 @@ export class Rooms {
    * hydration exists to prevent — so a second, drifting copy of this logic is
    * the thing most worth not having.
    */
-  private hydrateDoc(
-    docId: string,
-    opts: { blocking?: boolean; liveWins?: boolean } = {},
-  ): boolean {
-    // Whether this hydrate may read its bound file on the main thread.
-    //
-    // This used to be the other way round — a `defer` opt the fan-outs passed
-    // while `get`, eviction and boot all kept the blocking read, bounded by
-    // the per-path quarantine. That bound is EARNED: a path nobody has tried
-    // yet is not quarantined, so the first caller to touch a freshly-sick
-    // folder still parked the whole process, and every backoff expiry bought
-    // the next one another turn to do it again. Whoever reached the bad path
-    // first paid, and on a board that is a request handler.
-    //
-    // So the default is now the pool: a hydrate whose bytes are not already
-    // in hand hands the read off and binds when it lands (`bindAfterRead`),
-    // while the doc comes back from its `.ydoc` with its writes parked.
-    //
-    // BOOT is the exception, and the only one. Nothing is waiting on the loop
-    // there — the server is not listening yet — and the binding has to exist
-    // in the same turn, because the next thing that can happen to a process
-    // that has just booted is another shutdown: `reassertPendingWrites` opens
-    // the docs whose edit did not reach disk, and a flush that runs before the
-    // deferred bind lands would write nothing and lose the edit for good.
-    const blocking = opts.blocking === true;
+  private hydrateDoc(docId: string): boolean {
     // Server authority: hydration re-admits ids that ALREADY EXIST on disk,
     // including the `task:` and `ws:` rooms the projection wrote. Refusing
     // them here would not close a hole — the room is already persisted — it
@@ -1268,12 +1226,7 @@ export class Rooms {
     const src = room.meta.sourceUrl;
     // The index row remembers a write-back that had not landed at shutdown:
     // the doc holds content the file does not, whatever the two mtimes say.
-    //
-    // `opts.liveWins` is the same claim from the other direction: a DEFERRED
-    // bind whose doc was edited while the read was in flight (see
-    // `bindAfterRead`). Both say "the live doc holds content disk has never
-    // held", which is the one thing an mtime comparison cannot see.
-    const liveWins = opts.liveWins === true || this.docIndex.get(docId)?.pendingFileWrite === true;
+    const liveWins = this.docIndex.get(docId)?.pendingFileWrite === true;
     // A hub-owned room is never file-bound (§3.3), so a sourceUrl on one
     // can only have arrived from a peer's ydoc write. Refusing to bind
     // here is the second, independent stop behind `guardPrivateMeta` —
@@ -1296,7 +1249,7 @@ export class Rooms {
         );
         return false;
       }
-      const homePre = this.prereadFor(docId, placement.absPath, blocking);
+      const homePre = this.prereadFor(docId, placement.absPath);
       if (homePre === 'unavailable') return false;
       this.bindings.retargetHomeBinding(room, placement.absPath, {
         liveWins,
@@ -1305,12 +1258,8 @@ export class Rooms {
       return this.bindings.has(docId);
     }
     if (!src) return false;
-    const preread = this.prereadFor(docId, src, blocking);
+    const preread = this.prereadFor(docId, src);
     if (preread === 'unavailable') return false;
-    // With bytes in hand, existence is something we KNOW rather than something
-    // to ask the filesystem — `existsSync` on a path whose provider has
-    // stopped answering parks the loop exactly as a read does. The `existsSync`
-    // survives only on the boot branch, where `preread` is undefined.
     if (preread ? !preread.exists : !existsSync(src)) return false;
     const attachOpts: AttachOpts = { liveWins, ...(preread ? { preread } : {}) };
     if (contentKind(room.meta.type) === 'prose') {
@@ -1353,11 +1302,7 @@ export class Rooms {
    * are already parked in the pool with their threads unreturned, which is
    * the signature of a folder that has stopped answering.
    */
-  private prereadFor(
-    docId: string,
-    path: string,
-    blocking: boolean,
-  ): PrereadFile | 'unavailable' | undefined {
+  private prereadFor(docId: string, path: string): PrereadFile | 'unavailable' | undefined {
     const fresh = boundFiles.takeFresh(path);
     if (fresh) {
       return fresh.exists
@@ -1365,110 +1310,14 @@ export class Rooms {
         : { exists: false };
     }
     if (boundFiles.quarantined(path)) {
-      console.warn(
-        `[rooms] ${docId}: bound file is not answering; writes parked (${redactBoundPath(path)})`,
-      );
+      console.warn(`[rooms] ${docId}: bound file is not answering; writes parked (${path})`);
       return 'unavailable';
     }
     if (boundFiles.busy()) {
-      console.warn(
-        `[rooms] ${docId}: bound reads are backed up; writes parked (${redactBoundPath(path)})`,
-      );
+      console.warn(`[rooms] ${docId}: bound reads are backed up; writes parked (${path})`);
       return 'unavailable';
     }
-    // Nobody prewarmed this path, and that used to fall through to a
-    // BLOCKING read inside `attachFile`. That is the door the 2026-09-04
-    // outage came through, and closing only the request routes left it wide:
-    // the per-request prewarm reads docIds out of the URL, so a docId in a
-    // request BODY (`POST /api/docs`), a route that fans out over a board's
-    // docIds (`listThreads` from the home queue, the workspace listing, the
-    // archive route) and every background timer reached this line with
-    // nothing in hand and opened the file on the only thread that runs
-    // JavaScript.
-    //
-    // The fall-through survived one more round for `get` and eviction, on the
-    // argument that those need the binding in the same turn. What that missed
-    // is that the quarantine bounding them is EARNED: a path nobody has tried
-    // yet is not quarantined, so the first caller to touch a freshly-sick
-    // folder still parked the whole server, and every backoff expiry bought
-    // the next one another turn to do it again. A bound that only applies
-    // after the damage is not a bound.
-    //
-    // `blocking` is BOOT, and nothing else — see `hydrateDoc`. Everything
-    // with a caller waiting on the loop parks instead: the doc keeps its
-    // `.ydoc` content, takes no binding, writes over no bytes we have not
-    // read, and the read goes to the pool, which either brings it back and
-    // binds a moment later or quarantines the path and says so once.
-    if (blocking) return undefined;
-    this.bindAfterRead(docId, path);
-    return 'unavailable';
-  }
-
-  /**
-   * Docs whose binding is waiting on a pool read. One retry in flight per doc:
-   * a board's fan-out asks for the same doc from several callers in the same
-   * tick, and each of those must not start its own read.
-   */
-  private readonly deferredBinds = new Set<string>();
-
-  /**
-   * Read a doc's bound file off the main thread, then bind it.
-   *
-   * The asynchronous half of a hydrate that could not read its file inline.
-   * `hydrateDoc` is synchronous and stays that way — dozens of callers depend
-   * on `get` answering in one turn — so a doc whose bytes are not in hand
-   * comes back UNBOUND and binds a moment later, rather than blocking
-   * everything else while its file is opened.
-   *
-   * Re-running `hydrateDoc` is deliberate over re-implementing the attach
-   * here: it is the same code that decides doc-home placement, prose versus
-   * flat, and write-back eligibility, and a second copy of that decision is
-   * exactly the drift this method would be worth avoiding. The retry finds
-   * the bytes in `boundFiles.takeFresh` and binds; a read that failed left a
-   * quarantine mark instead, so the retry parks and schedules nothing. Either
-   * way `deferredBinds` still holds this docId while the retry runs, so it
-   * cannot start a second read of its own.
-   */
-  private bindAfterRead(docId: string, path: string): void {
-    if (this.stopped) return;
-    if (this.deferredBinds.has(docId)) return;
-    this.deferredBinds.add(docId);
-    // The doc is READABLE while the read runs — that is the point of the
-    // deferral — so a person or an agent can edit it in the gap. `attachFile`
-    // then finds a doc that differs from disk with no write-back bookkeeping
-    // to explain it, and with nothing else to go on arbitrates by mtime,
-    // where a `.md` and a `.ydoc` written in the same millisecond hand the
-    // round to disk: the edit made in the gap is reverted and any suggestion
-    // it touched is dropped as an "external edit". The blocking hydrate never
-    // met this because it left no gap to edit in.
-    //
-    // So remember whether an AUTHORING edit lands while we wait.
-    // `lastContentChangeAt` is stamped only for a person's websocket or an
-    // `agent…` origin (`isAuthoringOrigin`), which is exactly the question:
-    // a `file-watch` apply or a meta write must NOT count, or a restart that
-    // picks up an edit made while the server was down would reassert the
-    // stale doc over it.
-    const editedBefore = this.rooms.get(docId)?.lastContentChangeAt;
-    void boundFiles
-      .read(path)
-      .then(() => {
-        // The instance this read belongs to is done; see `stopped`.
-        if (this.stopped) return;
-        // Evicted while the read ran, or bound by somebody else — either way
-        // there is nothing here to do, and re-hydrating an evicted doc would
-        // pull it back into memory as a side effect of a read it never asked
-        // for.
-        if (!this.rooms.has(docId) || this.bindings.has(docId)) return;
-        const editedAfter = this.rooms.get(docId)?.lastContentChangeAt;
-        const editedInGap = editedAfter !== undefined && editedAfter !== editedBefore;
-        this.hydrateDoc(docId, editedInGap ? { liveWins: true } : {});
-      })
-      .catch((err) => {
-        console.error(`[rooms] ${docId}: deferred bind failed:`, err);
-      })
-      .finally(() => {
-        this.deferredBinds.delete(docId);
-      });
+    return undefined;
   }
 
   /**
@@ -1797,10 +1646,6 @@ export class Rooms {
     if (resident) return serialize(resident);
     if (!this.docExists(target)) return null;
     try {
-      // A body sweep reads the `.ydoc`, so it needs the doc in memory but not
-      // its file binding — and it runs over every doc in the corpus, which is
-      // the fan-out shape that must never open a bound file on the main
-      // thread. Every hydrate defers now, so there is nothing to ask for.
       this.hydrateDoc(target);
       const room = this.rooms.get(target);
       return room ? serialize(room) : null;
@@ -2047,14 +1892,6 @@ export class Rooms {
   }
 
   listThreads(docId: string, filter?: { status?: 'open' | 'resolved' }): Thread[] {
-    // Hydrate the doc ourselves first so the provider below finds it resident.
-    //
-    // Threads live in the `.ydoc`, so a parked binding costs this call
-    // nothing. And the callers are the fan-outs: the home queue, the
-    // workspace listing, the archive route and the stall scan each walk EVERY
-    // docId on a board, none of which reaches a URL for the request prewarm
-    // to find. One bad file among them used to park the whole server.
-    this.resolveRoom(docId);
     return this.docThreads.listThreads(docId, filter);
   }
 
@@ -2269,20 +2106,16 @@ export class Rooms {
   openContextFile(
     setId: string,
     relPath: string,
-  ): Promise<
+  ):
     | { ok: true; docId: string; meta: DocMeta }
-    | {
-        ok: false;
-        error: 'not-found' | 'bad-path' | 'not-listed' | 'attach-failed' | 'unavailable';
-      }
-  > {
+    | { ok: false; error: 'not-found' | 'bad-path' | 'not-listed' | 'attach-failed' } {
     return this.workspaces.openContextFile(setId, relPath);
   }
 
   openEditableFile(
     setId: string,
     relPath: string,
-  ): Promise<
+  ):
     | { ok: true; docId: string; meta: DocMeta }
     | {
         ok: false;
@@ -2292,10 +2125,8 @@ export class Rooms {
           | 'not-listed'
           | 'pinned'
           | 'not-markdown'
-          | 'attach-failed'
-          | 'unavailable';
-      }
-  > {
+          | 'attach-failed';
+      } {
     return this.workspaces.openEditableFile(setId, relPath);
   }
 
@@ -2403,13 +2234,12 @@ export class Rooms {
    * idempotent: the same file maps to the same docId, so threads survive.
    */
   /** Bind a whole folder/worktree for review — see binds.ts. */
-  bindFolder(opts: BindFolderOpts): Promise<BindFolderResult> {
+  bindFolder(opts: BindFolderOpts): BindFolderResult {
     return bindFolderImpl(this, opts);
   }
 
-  /** Bind a git diff (working-tree or pinned) for review — see binds.ts.
-   *  Async because a bind reads every member off the thread pool. */
-  bindDiff(opts: BindDiffOpts): Promise<BindDiffResult> {
+  /** Bind a git diff (working-tree or pinned) for review — see binds.ts. */
+  bindDiff(opts: BindDiffOpts): BindDiffResult {
     return bindDiffImpl(this, opts);
   }
 
@@ -2447,7 +2277,7 @@ export class Rooms {
 
   /** Re-reconcile a workspace against disk, keeping docIds (and therefore
    *  threads) stable — see binds.ts. */
-  refreshWorkspace(setId: string): Promise<RefreshWorkspaceResult> {
+  refreshWorkspace(setId: string): RefreshWorkspaceResult {
     return refreshWorkspaceImpl(this, setId);
   }
 
@@ -2493,25 +2323,6 @@ export class Rooms {
     opts: AttachOpts = {},
   ): ReturnType<FileBindings['attachFileAsync']> {
     return this.bindings.attachFileAsync(docId, filePath, opts);
-  }
-
-  /** `attachFlatFile` with the file read on the thread pool first — the
-   *  binding door for the diff bind and the workspace member opens. */
-  attachFlatFileAsync(
-    docId: string,
-    filePath: string,
-    opts: AttachOpts & { writeBack?: boolean } = {},
-  ): ReturnType<FileBindings['attachFlatFileAsync']> {
-    return this.bindings.attachFlatFileAsync(docId, filePath, opts);
-  }
-
-  /** `attachReadonlyFile` with the file read on the thread pool first. */
-  attachReadonlyFileAsync(
-    docId: string,
-    filePath: string,
-    opts: AttachOpts = {},
-  ): ReturnType<FileBindings['attachReadonlyFileAsync']> {
-    return this.bindings.attachReadonlyFileAsync(docId, filePath, opts);
   }
 
   /** Bind a READ-ONLY source file (type='code') for review — no write-back. */
@@ -2577,6 +2388,23 @@ export class Rooms {
   /** The doc's pending sync trouble, if any — conflicts, parse failures. */
   getSyncError(docId: string): { message: string; at: number } | undefined {
     return this.bindings.getSyncError(docId);
+  }
+
+  /**
+   * Does the doc now hold markdown syntax as literal characters?
+   *
+   * Read after a write, on the response the writer actually reads. The
+   * corruptions in this family all return ok and serialize back to a correct
+   * file, so nothing else in the system ever tells the writing agent that
+   * the live doc is broken. Only inspects a resident room — a doc nobody has
+   * open was not just written to.
+   */
+  literalMarkdownSyncError(docId: string): { message: string; at: number } | undefined {
+    const room = this.peek(docId);
+    if (!room || contentKind(room.meta.type) !== 'prose') return undefined;
+    const finding = prose.detectLiteralMarkdown(prose.getProseFragment(room.ydoc));
+    if (!finding) return undefined;
+    return { message: prose.literalMarkdownMessage(finding), at: Date.now() };
   }
 
   /** Bound documents whose write-back has been scheduled and has not fired —
@@ -3206,10 +3034,6 @@ export class Rooms {
   }
 
   private loadFromDisk(docId: string, ydoc: Y.Doc): void {
-    // The `.ydoc` in the server's own data dir, never a bound path — the
-    // synchronous read below is safe for the same reason every other data-dir
-    // read is: this process owns the directory, and no cloud-sync provider
-    // stands between it and the disk. Bound paths go through `slow-fs.ts`.
     const path = this.pathFor(docId);
     if (!existsSync(path)) return;
     try {

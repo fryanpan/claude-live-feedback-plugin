@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { reviewIdOf } from '@feedback/core';
 /**
@@ -17,7 +17,6 @@ import {
 } from '../huddle.ts';
 import { browserCannotBindBody, isBrowserRequest } from '../middleware/write-gate.ts';
 import { redactMetaForVisitor, relativeReviewUrl } from '../share/redact-meta.ts';
-import { boundFiles } from '../slow-fs.ts';
 import {
   applyImport,
   importBanner,
@@ -135,17 +134,8 @@ export async function handleWorkspaceContent(
     if (!author) return j(400, { error: 'author required' });
     const workspace = taskStore.getWorkspace(workspaceId);
     if (!workspace) return j(404, { error: 'workspace not found' });
-    // Off the main thread, under a deadline. The path here is whatever the
-    // caller typed, so it can be in a cloud-sync folder that has stopped
-    // answering — and a synchronous read of one of those parks the whole
-    // server, not just this request (see slow-fs.ts). A tracker import is
-    // rare and manual; wedging the event loop on it is not less bad for
-    // being rare.
-    const read = await boundFiles.read(path, { keep: false });
-    if (read.status !== 'ok' || !read.exists) {
-      return j(404, { error: 'file not found', path });
-    }
-    const markdown = read.text;
+    if (!existsSync(path)) return j(404, { error: 'file not found', path });
+    const markdown = readFileSync(path, 'utf8');
     const alreadyImported = importMarkerFor(markdown);
     const mapping = parseTrackerMarkdown(markdown, workspace);
     if (body?.apply !== true) {

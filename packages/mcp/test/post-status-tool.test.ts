@@ -24,7 +24,6 @@ import { type AddressInfo } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { isBackgroundRequest } from './harness/background-requests.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MCP_ENTRY = join(HERE, '../src/mcp.ts');
@@ -72,13 +71,8 @@ function payload(reply: Reply): Record<string, unknown> {
   return JSON.parse(reply.result?.content?.[0]?.text ?? '{}') as Record<string, unknown>;
 }
 
-/**
- * Only the note POSTs. The child also restores its watches against the stub
- * on initialize, redials its event stream on a backoff of its own, and fires
- * a heartbeat it does not await — all of which race a tool call. The recorder
- * drops that traffic (`background-requests.ts`); this narrows to the verb on
- * top of it.
- */
+/** Only the note POSTs — the child also restores its watches against the
+ *  stub on initialize, and that GET races the first tool call. */
 function notePosts(): Recorded[] {
   return seen.filter((r) => r.method === 'POST' && /\/(agent-)?notes$/.test(r.path));
 }
@@ -103,8 +97,7 @@ beforeAll(async () => {
       } catch {
         body = {};
       }
-      const rec = { method: req.method ?? '', path, body };
-      if (!isBackgroundRequest(rec)) seen.push(rec);
+      seen.push({ method: req.method ?? '', path, body });
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(replyFor(path)));
     });

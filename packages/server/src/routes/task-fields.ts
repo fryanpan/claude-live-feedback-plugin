@@ -4,7 +4,6 @@
  * Lifted verbatim out of `createServer`'s request closure; the handlers
  * read their collaborators off `TaskRoutesContext` instead of the scope.
  */
-import { parseSchedule } from '@feedback/core/task-schedule';
 import { parkNoteText } from '../park-note.ts';
 import { OUT_OF_SHARE_SCOPE, firstTaskIdOutOfScope } from '../share/ref-scope.ts';
 import {
@@ -16,7 +15,6 @@ import {
   resolveAssignee,
 } from '../task-owner.ts';
 import { taskBodyDocId } from '../task-projection.ts';
-import { setTaskSchedule } from '../task-scheduler.ts';
 import type { TaskRouteRequest, TaskRoutesContext } from './task-routes-context.ts';
 
 /** Answers the routes below, or `undefined` when the path is none of them. */
@@ -223,44 +221,6 @@ export async function handleTaskFields(
     const res = taskStore.setDueAt(taskId, dueAt, { actor: author });
     if (!res.ok) return j(404, res);
     if (!res.changed) taskProjection.ensureWorkspace(res.task.workspaceId);
-    return j(200, res);
-  }
-  // Set / clear the SCHEDULE — the rule that says when this row's work
-  // starts (docs/architecture/scheduled-tasks.md). Beside `/due` because it
-  // is the same kind of edit, and deliberately not the same field: a due
-  // date is when work should be FINISHED and happens once.
-  //
-  // The only door a rule reaches disk through, and the reason `parseSchedule`
-  // lives in core rather than here — the phrase editor validates what it is
-  // about to send with the SAME function that decides whether to store it, so
-  // a chip the browser accepted can never be a rule the server refuses to
-  // compute.
-  const taskScheduleMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/schedule$/);
-  if (taskScheduleMatch && req.method === 'POST') {
-    const taskId = decodeURIComponent(taskScheduleMatch[1] ?? '');
-    const body = await safeJson(req);
-    const author = authorFor(body?.author);
-    if (!author) return j(400, { error: 'author required' });
-    // `rule: null` clears. Same strictness as `/due`, for the same reason:
-    // an unreadable rule quietly read as "clear" would answer 200 while
-    // deleting the schedule the caller meant to change.
-    if (body?.rule === null) {
-      const cleared = setTaskSchedule(taskStore, taskId, null);
-      if (!cleared.ok) return j(404, cleared);
-      taskProjection.ensureWorkspace(cleared.task.workspaceId);
-      return j(200, cleared);
-    }
-    const parsed = parseSchedule(body);
-    if (!parsed.ok) return j(400, { error: parsed.error });
-    const res = setTaskSchedule(taskStore, taskId, {
-      rule: parsed.rule,
-      ...(parsed.timezone !== undefined ? { timezone: parsed.timezone } : {}),
-      ...(parsed.until !== undefined ? { until: parsed.until } : {}),
-      armedAt: Date.now(),
-      armedBy: author.name,
-    });
-    if (!res.ok) return j(404, res);
-    taskProjection.ensureWorkspace(res.task.workspaceId);
     return j(200, res);
   }
   // Block a row on another ticket — and, on its old payload, park it.

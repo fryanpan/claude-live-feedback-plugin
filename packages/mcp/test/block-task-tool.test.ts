@@ -21,7 +21,6 @@ import type { AddressInfo } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { isBackgroundRequest } from './harness/background-requests.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MCP_ENTRY = join(HERE, '../src/mcp.ts');
@@ -77,13 +76,7 @@ function payload(reply: Reply): Record<string, unknown> {
   return JSON.parse(reply.result?.content?.[0]?.text ?? '{}') as Record<string, unknown>;
 }
 
-/**
- * Only the park POSTs. Two layers keep this off the child's own clock: the
- * recorder already drops background traffic (see `background-requests.ts`),
- * and this narrows to the verb regardless. Either alone would do; both are
- * cheap, and a future case that reaches for `seen.at(-1)` gets the first one
- * for free.
- */
+/** Only the park POSTs — the child also restores watches on initialize. */
 function parkPosts(): Recorded[] {
   return seen.filter((r) => r.method === 'POST' && /\/park$/.test(r.path));
 }
@@ -108,8 +101,7 @@ beforeAll(async () => {
       } catch {
         body = {};
       }
-      const rec = { method: req.method ?? '', path, body };
-      if (!isBackgroundRequest(rec)) seen.push(rec);
+      seen.push({ method: req.method ?? '', path, body });
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(replyFor(path, body)));
     });

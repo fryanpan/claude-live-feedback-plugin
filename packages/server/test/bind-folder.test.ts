@@ -43,15 +43,15 @@ describe('Rooms.bindFolder (browse-mode alias)', () => {
     writeFileSync(join(folder, 'src', 'util.ts'), 'export const y = 2;\n');
   }
 
-  it('errors not-found for a missing folder', async () => {
-    const res = await rooms.bindFolder({ folderPath: join(folder, 'nope') });
+  it('errors not-found for a missing folder', () => {
+    const res = rooms.bindFolder({ folderPath: join(folder, 'nope') });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toBe('not-found');
   });
 
-  it('binds ONE entry doc (README preferred, editable markdown); fileCount is the scan count', async () => {
+  it('binds ONE entry doc (README preferred, editable markdown); fileCount is the scan count', () => {
     seedFolder();
-    const res = await rooms.bindFolder({ folderPath: folder, owner: '/cwd' });
+    const res = rooms.bindFolder({ folderPath: folder, owner: '/cwd' });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
 
@@ -67,20 +67,20 @@ describe('Rooms.bindFolder (browse-mode alias)', () => {
     expect(entry?.meta.type).toBe('markdown');
   });
 
-  it('remaining files open lazily with md → editable markdown, code → read-only', async () => {
+  it('remaining files open lazily with md → editable markdown, code → read-only', () => {
     seedFolder();
-    const res = await rooms.bindFolder({ folderPath: folder });
+    const res = rooms.bindFolder({ folderPath: folder });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
 
-    const code = await rooms.openContextFile(res.workspaceId, 'src/util.ts');
+    const code = rooms.openContextFile(res.workspaceId, 'src/util.ts');
     expect(code.ok).toBe(true);
     if (!code.ok) return;
     expect(rooms.get(code.docId)?.meta.type).toBe('code');
     expect(rooms.get(code.docId)?.ydoc.getText('content').toString()).toContain('const y = 2');
 
     // Re-open is idempotent.
-    const again = await rooms.openContextFile(res.workspaceId, 'src/util.ts');
+    const again = rooms.openContextFile(res.workspaceId, 'src/util.ts');
     expect(again.ok && again.docId === code.docId).toBe(true);
 
     // listRepoFiles surfaces everything, none marked changed (no diff).
@@ -94,18 +94,18 @@ describe('Rooms.bindFolder (browse-mode alias)', () => {
     expect((all.files ?? []).every((f) => !f.changed)).toBe(true);
   });
 
-  it('is idempotent — re-binding maps to the same workspace + entry doc', async () => {
+  it('is idempotent — re-binding maps to the same workspace + entry doc', () => {
     seedFolder();
-    const a = await rooms.bindFolder({ folderPath: folder });
-    const b = await rooms.bindFolder({ folderPath: folder });
+    const a = rooms.bindFolder({ folderPath: folder });
+    const b = rooms.bindFolder({ folderPath: folder });
     expect(a.ok && b.ok).toBe(true);
     if (!a.ok || !b.ok) return;
     expect(b.workspaceId).toBe(a.workspaceId);
     expect(b.files[0]?.docId).toBe(a.files[0]?.docId);
   });
 
-  it('empty folder is a degenerate success (no entry to bind)', async () => {
-    const res = await rooms.bindFolder({ folderPath: folder });
+  it('empty folder is a degenerate success (no entry to bind)', () => {
+    const res = rooms.bindFolder({ folderPath: folder });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.fileCount).toBe(0);
@@ -114,10 +114,10 @@ describe('Rooms.bindFolder (browse-mode alias)', () => {
 
   it('workspace tree still rolls up counts across lazily-opened members', async () => {
     seedFolder();
-    const res = await rooms.bindFolder({ folderPath: folder });
+    const res = rooms.bindFolder({ folderPath: folder });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    const opened = await rooms.openContextFile(res.workspaceId, 'src/util.ts');
+    const opened = rooms.openContextFile(res.workspaceId, 'src/util.ts');
     expect(opened.ok).toBe(true);
     if (!opened.ok) return;
     const created = await rooms.createThreadByFind(

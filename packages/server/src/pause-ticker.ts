@@ -12,15 +12,6 @@
  * It knows nothing about notes, docs or models — turns in, ticks out, and
  * every timer through an injectable seam so a test asserts a sequence rather
  * than waiting out real quiet.
- *
- * THE END TICK IS THE ONE THAT CARRIES UNSETTLED WORDS. Every other tick
- * takes settled turns only, because there is always a next tick for the
- * sentence still being spoken. At `end()` there is not: the meeting is over,
- * and a turn that never settled would otherwise be words nobody ever reads
- * in the notes. So the ticker keeps the latest partial of each turn it has
- * not seen settle, and hands them to the final tick marked `partial` — the
- * composer is told they are mid-sentence rather than being left to read
- * unformatted text as finished speech.
  */
 
 import type { NotesTurn } from './meeting-notes.ts';
@@ -37,12 +28,7 @@ export interface NotesTick {
   /** 1-based, per meeting. */
   tick: number;
   reason: NotesTickReason;
-  /**
-   * Settled turns since the previous tick, in the order they settled — plus,
-   * on an `end` tick and only there, the turns that were still being spoken
-   * when the meeting stopped, each flagged `partial` and ordered after the
-   * settled ones by turn number.
-   */
+  /** Settled turns since the previous tick, in the order they settled. */
   turns: NotesTurn[];
 }
 
@@ -105,11 +91,7 @@ export interface PauseTickerOpts {
 export interface PauseTicker {
   /** Every transcript frame, partials included — a partial defers the tick. */
   onTurn(turn: EngineTurn): void;
-  /**
-   * The meeting ended: flush any tail delta as a final `end` tick, including
-   * whatever was still being said. Nothing is scheduled afterwards, so this
-   * is the last chance the words have.
-   */
+  /** The meeting ended: flush any tail delta as a final `end` tick. */
   end(): void;
 }
 
@@ -122,16 +104,6 @@ export function createPauseTicker(opts: PauseTickerOpts): PauseTicker {
    */
   const seen = new Set<number>();
   let pending: NotesTurn[] = [];
-  /**
-   * The latest partial of each turn that has NOT settled yet.
-   *
-   * Every ordinary tick ignores this — a partial is unformatted, and the
-   * sentence has a next tick to settle into. `end()` is the exception: there
-   * is no next tick, so the words being spoken when the meeting stopped come
-   * out here or nowhere. Keyed by turn so a growing partial replaces its own
-   * earlier draft rather than stacking three prefixes of one sentence.
-   */
-  const unsettled = new Map<number, NotesTurn>();
   let timer: unknown = null;
   /**
    * The cadence countdown. Held separately from `timer` because the two
@@ -160,24 +132,10 @@ export function createPauseTicker(opts: PauseTickerOpts): PauseTicker {
   };
 
   const fire = (reason: NotesTickReason): void => {
-    // The words still being spoken ride the FINAL tick and no other: they
-    // are unformatted, and every earlier tick has a successor that will
-    // carry them properly once they settle.
-    const tail =
-      reason === 'end'
-        ? [...unsettled.values()]
-            .sort((a, b) => a.turn - b.turn)
-            .map((t): NotesTurn => ({ ...t, partial: true }))
-        : [];
     // Quiet with nothing new said is just quiet, not an empty tick.
-    if (pending.length === 0 && tail.length === 0) return;
-    const turns = [...pending, ...tail];
+    if (pending.length === 0) return;
+    const turns = pending;
     pending = [];
-    // Only the END tick consumes them. A pause or cadence tick that dropped
-    // them would throw away the sentence in progress on every quiet moment
-    // of the meeting, so the one turn this exists to save would be gone long
-    // before the stop that was supposed to save it.
-    if (tail.length > 0) unsettled.clear();
     // Whatever fired, the wait it was measuring is over: the next ceiling
     // starts from the next sentence to settle, not from this one.
     disarmCadence();
@@ -189,9 +147,6 @@ export function createPauseTicker(opts: PauseTickerOpts): PauseTicker {
     onTurn(turn: EngineTurn): void {
       if (ended) return;
       if (turn.final) {
-        // Whatever this turn last looked like mid-flight, the settled text
-        // supersedes it — and a turn that settles is never a tail.
-        unsettled.delete(turn.turn);
         if (seen.has(turn.turn)) {
           // A settled turn arriving AGAIN is the engine's end-of-session
           // speaker pass changing its mind. One still waiting to compose
@@ -234,15 +189,6 @@ export function createPauseTicker(opts: PauseTickerOpts): PauseTicker {
             }, cadenceMs);
           }
         }
-      } else if (turn.text.trim().length > 0 && !seen.has(turn.turn)) {
-        // A partial of a turn nobody has seen settle. Held only so `end()`
-        // has something to say about the sentence that was interrupted; an
-        // empty one says nothing and a turn already settled has better text.
-        unsettled.set(turn.turn, {
-          turn: turn.turn,
-          text: turn.text,
-          ...(turn.speaker !== undefined ? { speaker: turn.speaker } : {}),
-        });
       }
       // Any frame is speech: replace whatever countdown was running. Only
       // the quiet one — a partial says the sentences already settled have

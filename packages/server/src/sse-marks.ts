@@ -1,7 +1,6 @@
 /**
  * What the SSE replay buffer remembers across a restart: for each channel, the
- * newest wire id each AUDIENCE on it saw — the newest broadcast, plus the
- * frames addressed to one agent that came after it.
+ * wire id of the newest event this server ever broadcast on it.
  *
  * That one id per channel is the whole difference between a deploy that is
  * silent and a deploy that tells every subscriber to refetch. Event ids carry
@@ -39,48 +38,10 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-/**
- * One channel's marks.
- *
- * The bare string is the whole record for the overwhelmingly common channel —
- * broadcasts only — and it is also the shape every file written before
- * addressed marks existed carries, so an old file reads without a migration.
- * The object form appears only once a channel has an addressed frame with no
- * broadcast after it: `broadcast` is the newest id everyone saw, and
- * `addressedAfter` maps an addressee to the newest frame addressed to IT since
- * that broadcast. A broadcast is visible to every subscriber, so it retires
- * every addressed mark older than itself — which is why no ordering has to be
- * written down, and why this map cannot grow without bound.
- */
-export type ReplayMark = string | { broadcast?: string; addressedAfter?: Record<string, string> };
-
-/** channel → the newest wire id each audience on it saw. */
-export type ReplayMarks = Record<string, ReplayMark>;
+/** channel → wire id of the newest event broadcast on it. */
+export type ReplayMarks = Record<string, string>;
 
 type MarksFile = { open?: boolean; marks?: unknown };
-
-/**
- * Keep only what this module promises to hand back. A mark that survives here
- * is asserted to a subscriber as "you missed nothing", so anything malformed
- * is dropped rather than guessed at: the cost of dropping one is a single gap
- * notice, and the cost of trusting a bad one is events reported as delivered.
- */
-function sanitizeMark(value: unknown): ReplayMark | undefined {
-  if (typeof value === 'string') return value.length > 0 ? value : undefined;
-  if (!value || typeof value !== 'object') return undefined;
-  const raw = value as { broadcast?: unknown; addressedAfter?: unknown };
-  const out: { broadcast?: string; addressedAfter?: Record<string, string> } = {};
-  if (typeof raw.broadcast === 'string' && raw.broadcast.length > 0) out.broadcast = raw.broadcast;
-  if (raw.addressedAfter && typeof raw.addressedAfter === 'object') {
-    const addressed: Record<string, string> = {};
-    for (const [agent, id] of Object.entries(raw.addressedAfter as Record<string, unknown>)) {
-      if (agent.length > 0 && typeof id === 'string' && id.length > 0) addressed[agent] = id;
-    }
-    if (Object.keys(addressed).length > 0) out.addressedAfter = addressed;
-  }
-  if (out.broadcast === undefined && out.addressedAfter === undefined) return undefined;
-  return out;
-}
 
 export function replayMarksPath(dataDir: string): string {
   return join(dataDir, 'sse-replay-marks.json');
@@ -108,9 +69,8 @@ export function claimReplayMarks(dataDir: string): ReplayMarks {
   try {
     const parsed = JSON.parse(readFileSync(replayMarksPath(dataDir), 'utf8')) as MarksFile;
     if (parsed.open !== true && parsed.marks && typeof parsed.marks === 'object') {
-      for (const [channel, mark] of Object.entries(parsed.marks as Record<string, unknown>)) {
-        const clean = sanitizeMark(mark);
-        if (clean !== undefined) recovered[channel] = clean;
+      for (const [channel, id] of Object.entries(parsed.marks as Record<string, unknown>)) {
+        if (typeof id === 'string' && id.length > 0) recovered[channel] = id;
       }
     }
   } catch {

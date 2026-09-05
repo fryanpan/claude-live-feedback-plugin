@@ -72,36 +72,6 @@ const FLUSH_TIMEOUT_MS = 5_000;
 export const END_TOKEN = '<end>';
 
 /**
- * How hard the endpoint detector is pushed to call a turn over — Soniox's
- * `endpoint_latency_adjustment_level`, 0 to 3, vendor default 0.
- *
- * THE ONE ENDPOINTING KNOB THIS ADAPTER SENDS, and it is sent because it was
- * measured rather than read off a doc page. `scripts/endpoint-latency-check.ts
- * --engine soniox --fixture trailing`, 15 turns per setting on a built
- * fixture of mid-thought stops (the case the semantic detector is least sure
- * about, so the slowest one):
- *
- *   level 0 (vendor default)  485ms median, 503ms p90, word recall 100%
- *   level 1                   302ms median
- *   level 2                   211ms median, 508ms p90, word recall 100%
- *   level 3                  2508ms median — five times SLOWER, and it puts
- *                            stray punctuation in the text ("um,.")
- *
- * So level 2 takes ~274ms off the median wait between a person stopping and
- * the turn the notetaker consumes, with no measured accuracy cost, and level
- * 3 is not a further step in the same direction — it is a different and worse
- * behaviour, which is why the ladder was walked instead of jumping to the end.
- *
- * This deliberately breaks the "only modified values travel" rule the tuning
- * spec states (meeting-tuning.ts): an untouched knob is normally the ENGINE'S
- * default, so a default we never send is a default we can never get wrong.
- * The exception is bought with a measurement and costs nothing to withdraw —
- * and a person who moves the control still wins, because their sanitized
- * tuning is spread AFTER this.
- */
-export const DEFAULT_ENDPOINT_LATENCY_ADJUSTMENT = 2;
-
-/**
  * Resolve the key: explicit option, then the environment, then Keychain.
  * Same order as AssemblyAI's and for the same reason — the env var is the
  * deliberate per-launch override. Null is "this engine is not configured".
@@ -153,9 +123,6 @@ export function sonioxConfig(
     // The boundary this adapter turns into turns; without it nothing ever
     // finalizes until the speaker stops for the model's own long timeout.
     enable_endpoint_detection: true,
-    // How fast that boundary is called. Measured, not defaulted — see
-    // DEFAULT_ENDPOINT_LATENCY_ADJUSTMENT for the numbers and the ladder.
-    endpoint_latency_adjustment_level: DEFAULT_ENDPOINT_LATENCY_ADJUSTMENT,
     // Who said it. Priced into Soniox's rate rather than surcharged, but the
     // same rule as AssemblyAI holds: a session nobody called a conversation
     // does not ask, so a solo transcript never grows invented voices.

@@ -51,7 +51,6 @@ import {
   renameSpeakerTags,
   speakerDisplayName,
 } from '@feedback/core';
-import { appendSuggestions, resolveNoteLinks } from './notes-link-intent.ts';
 import { type NoteReference, matchReferences } from './notes-references.ts';
 import {
   DEFAULT_NOTES_CADENCE_MS,
@@ -80,35 +79,6 @@ export {
 
 export type { NoteReference } from './notes-references.ts';
 
-/**
- * What a whole meeting's notes came to: how much of what was said reached
- * them, and how much did not.
- *
- * `turnsLost` is the number the report is about. It counts turns the engine
- * settled that no successful compose ever carried — words in the transcript
- * and in no note. Zero is the healthy state and the usual one; anything else
- * names how much of the meeting the notes are missing.
- */
-export interface NotesMeetingSummary {
-  docId: string;
-  meetingId: string;
-  /** Ticks that fired, the final pass included. */
-  ticks: number;
-  /** Distinct turns the engine settled during the meeting. */
-  turnsSettled: number;
-  /**
-   * Distinct turns a successful compose carried. It can exceed
-   * `turnsSettled` by one: the final pass carries the sentence that was
-   * still being spoken, which by definition never settled.
-   */
-  turnsComposed: number;
-  /** Settled turns no successful compose ever carried. The number the
-   *  "the notes skipped chunks" report is about. */
-  turnsLost: number;
-  composeFailures: number;
-  refusedTooLong: number;
-}
-
 /** One settled turn as a tick's delta carries it. */
 export interface NotesTurn {
   turn: number;
@@ -131,16 +101,6 @@ export interface NotesTurn {
    * ticker, where `speaker` IS the label.
    */
   speakerLabel?: string;
-  /**
-   * This turn was still being spoken when the meeting stopped.
-   *
-   * Set on the `end` tick and nowhere else. The text is the engine's last
-   * partial: unformatted, unpunctuated, and possibly cut mid-word. It is
-   * carried anyway because the alternative is losing the last thing said —
-   * and it is FLAGGED so the composer is told what it is holding rather
-   * than reading a fragment as a finished sentence.
-   */
-  partial?: boolean;
 }
 
 /**
@@ -234,17 +194,6 @@ export interface NotesComposeInput {
    * touched: these were merely mentioned, and most ticks name none.
    */
   references?: readonly NoteReference[];
-  /**
-   * Rows this tick's speech probably concerns, which nobody explicitly asked
-   * to link — or the shortlist an ambiguous ask produced. NOT for the
-   * composer to weave in: these are written into the composed notes
-   * afterwards, deterministically, as the tappable question
-   * `notes-link-intent.ts` spells. They ride the input so a composer that
-   * wants them (the eval harness reads them to score the pass) can see what
-   * the tick decided; the real prompt is not given them, because a question
-   * whose marker has to be exact is not a thing to ask a model to spell.
-   */
-  suggestions?: readonly NoteReference[];
 }
 
 export interface NotesComposer {
@@ -490,39 +439,12 @@ export interface MeetingNotesDeps {
    */
   onCorrection?: (correction: NotesCorrection) => NotesCorrectionResult;
   /**
-   * A board row somebody asked, out loud, to link this meeting to — the ref
-   * side of the note's link.
-   *
-   * The NOTE carries the citation on its own; this is what gives the ROW its
-   * backlink, so the work can be found from either end and so unlinking has
-   * something to remove. Optional: a meeting on a doc with no board, and
-   * every test that only reads the notes, wires nothing and loses nothing but
-   * the backlink.
-   */
-  onTaskLinked?: (link: {
-    docId: string;
-    meetingId: string;
-    taskId: string;
-    title: string;
-  }) => void;
-  /**
    * Where the engine's late correction of who spoke goes. Optional on the
    * same terms as `onRelabel`: a session with no sink still corrects its own
    * `previous`, so nothing composed afterwards disagrees with the record.
    */
   onReattribute?: (reattribution: NotesReattribution) => void;
   onError?: (message: string) => void;
-  /**
-   * One line about the whole meeting, at `end()`.
-   *
-   * WHY THIS EXISTS. When a meeting is reported as having "skipped chunks",
-   * the only way to answer it is to know how many of the meeting's turns
-   * reached a note — and nothing on this path logged anything per tick, so
-   * the question was unanswerable after the fact. It is a summary rather
-   * than a tick log on purpose: a line per tick would be hundreds per
-   * meeting for a number nobody reads while the meeting is healthy.
-   */
-  onMeetingSummary?: (summary: NotesMeetingSummary) => void;
   /**
    * A new session is beginning on this doc — called synchronously from
    * `beginNotesSession`, before any tick can fire. The server sink releases
@@ -582,12 +504,7 @@ export interface MeetingNotesSession {
    * meeting, and nothing about them is visible in the doc — the words carry
    * forward and the notes just stop growing.
    */
-  stats(): {
-    composeFailures: number;
-    refusedTooLong: number;
-    turnsSettled: number;
-    turnsComposed: number;
-  };
+  stats(): { composeFailures: number; refusedTooLong: number };
 }
 
 /**
@@ -708,14 +625,6 @@ export function beginNotesSession(
    */
   let composeFailures = 0;
   let refusedTooLong = 0;
-  /**
-   * Which turns the engine settled, and which of them a compose actually
-   * carried. Sets rather than counters because a turn can reach the composer
-   * more than once — a failed tick carries its words into the next one — and
-   * the question is coverage, not attempts.
-   */
-  const settledTurns = new Set<number>();
-  const composedTurns = new Set<number>();
 
   const lifecycle = (phase: 'composing' | 'written' | 'failed', tick: number, turns: number[]) =>
     deps.onTickLifecycle?.({ docId: ids.docId, meetingId: ids.meetingId, tick, phase, turns });
@@ -742,21 +651,17 @@ export function beginNotesSession(
       // person in the room is still solo). Until a second voice has been
       // heard, the composer never learns who spoke, so it has nothing to tag.
       const multi = seen.size >= 2;
-      // The solo path drops the voice and keeps everything else — `partial`
-      // included, because whether the last sentence finished is a fact about
-      // the words, not about who said them.
-      const bare = (t: NotesTurn): NotesTurn => ({
-        turn: t.turn,
-        text: t.text,
-        ...(t.partial ? { partial: true } : {}),
-      });
-      const turns = multi ? raw.map(withNames) : raw.map(bare);
+      const turns = multi
+        ? raw.map(withNames)
+        : raw.map((t): NotesTurn => ({ turn: t.turn, text: t.text }));
       let taskLinks: readonly NoteTaskLink[] = [];
       let docLinks: readonly NoteDocLink[] = [];
       // Read before the pass, written after it: this tick's words are the
       // NEXT tick's overlap, never their own. Same multi gate as `turns`:
       // the capture pass must see exactly the window its guards see.
-      const priorTurns = multi ? priorRaw.map(withNames) : priorRaw.map(bare);
+      const priorTurns = multi
+        ? priorRaw.map(withNames)
+        : priorRaw.map((t): NotesTurn => ({ turn: t.turn, text: t.text }));
       priorRaw = raw;
       if (deps.captureIntents) {
         try {
@@ -800,34 +705,7 @@ export function beginNotesSession(
       // read at session start — no store call, no network, nothing that can
       // fail a tick — so it sits outside the try blocks the fallible stages
       // need.
-      const spokenText = turns.map((t) => t.text).join('\n');
-      const references = matchReferences(spokenText, catalogue);
-      // The loose half, run over the same words and the same catalogue: what
-      // an explicit "link that to the existing task" points at, and what is
-      // probably related whether or not anybody asked. Local and pure, like
-      // the strict matcher above it — nothing here can fail a tick.
-      const loose = resolveNoteLinks({ spokenText, catalogue, named: references });
-      // A row somebody ASKED to link is cited like a named one; the ask is
-      // what makes it a citation rather than a guess. Deduped by URL, because
-      // an ask that also NAMED its row comes back from both matchers — the
-      // strict one for the words, the loose one so the row gets its ref.
-      const cited = [...new Map([...references, ...loose.linked].map((r) => [r.url, r])).values()];
-      for (const link of loose.linked) {
-        if (link.kind !== 'task' || !link.id) continue;
-        try {
-          deps.onTaskLinked?.({
-            docId: ids.docId,
-            meetingId: ids.meetingId,
-            taskId: link.id,
-            title: link.title,
-          });
-        } catch (err) {
-          // The ref is what gives the row its backlink; the note carries the
-          // link either way. A store that refuses costs the backlink, never
-          // the tick.
-          deps.onError?.(err instanceof Error ? err.message : 'notes task link failed');
-        }
-      }
+      const references = matchReferences(turns.map((t) => t.text).join('\n'), catalogue);
       // Read INSIDE the chain, immediately before composing: the compose is
       // the thing that must not be written from stale text, and the chain is
       // what serializes it against the previous tick's write.
@@ -857,8 +735,7 @@ export function beginNotesSession(
         ...(context ? { context } : {}),
         ...(taskLinks.length > 0 ? { taskLinks } : {}),
         ...(docLinks.length > 0 ? { docLinks } : {}),
-        ...(cited.length > 0 ? { references: cited } : {}),
-        ...(loose.suggested.length > 0 ? { suggestions: loose.suggested } : {}),
+        ...(references.length > 0 ? { references } : {}),
       };
       try {
         const composed = await deps.composer.compose(input);
@@ -887,15 +764,7 @@ export function beginNotesSession(
               `${[...new Set(checked.unknown)].join(', ')} — no such voice in this meeting`,
           );
         }
-        // The questions, written after the model rather than by it: a
-        // suggestion is a decision this pipeline made deterministically, and
-        // a marker the client has to recognise exactly. Human lines are
-        // passed so none of them is appended to — a question added to
-        // somebody's own sentence reaches the doc as a proposed rewrite of
-        // it.
-        const notes = appendSuggestions(checked.markdown, loose.suggested, {
-          ...(input.humanNotes ? { protect: input.humanNotes } : {}),
-        });
+        const notes = checked.markdown;
         previous = notes;
         deps.onNotes({
           docId: ids.docId,
@@ -904,7 +773,6 @@ export function beginNotesSession(
           notes,
           ...(live ? { basedOn: live.items } : {}),
         });
-        for (const t of raw) composedTurns.add(t.turn);
         lifecycle(
           'written',
           tick.tick,
@@ -1000,7 +868,6 @@ export function beginNotesSession(
   return {
     onTurn: (turn) => {
       if (turn.speaker !== undefined) seen.add(turn.speaker);
-      if (turn.final) settledTurns.add(turn.turn);
       ticker.onTurn(turn);
     },
     nameSpeaker(speaker, name) {
@@ -1067,23 +934,7 @@ export function beginNotesSession(
             'notes composes were refused as too long — the notes stopped keeping up',
         );
       }
-      const turnsLost = [...settledTurns].filter((t) => !composedTurns.has(t)).length;
-      deps.onMeetingSummary?.({
-        docId: ids.docId,
-        meetingId: ids.meetingId,
-        ticks: lastTickNo,
-        turnsSettled: settledTurns.size,
-        turnsComposed: composedTurns.size,
-        turnsLost,
-        composeFailures,
-        refusedTooLong,
-      });
     },
-    stats: () => ({
-      composeFailures,
-      refusedTooLong,
-      turnsSettled: settledTurns.size,
-      turnsComposed: composedTurns.size,
-    }),
+    stats: () => ({ composeFailures, refusedTooLong }),
   };
 }

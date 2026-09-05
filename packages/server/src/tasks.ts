@@ -597,22 +597,6 @@ export interface CreateTaskOpts {
    * words only a person can add.
    */
   fileToTriage?: boolean;
-  /**
-   * File this row as one OCCURRENCE of a scheduled rule (`task-scheduler.ts`).
-   *
-   * Set by the scheduler and by nothing else. It carries two consequences the
-   * scheduler cannot get by any other route, which is why the occurrence is
-   * created through this door rather than by minting a row beside it:
-   *
-   *  - the row is marked `recurrenceOf`, so the board can say it is a run of
-   *    a rule rather than something somebody filed;
-   *  - the row lands in `todo`, not the `triage` an agent create normally
-   *    gets. The judgement triage exists to collect — is this ready to be
-   *    worked, and where does it belong — was already made on the RULE, and
-   *    an occurrence that had to be re-triaged every time would make a
-   *    recurring row worse than no recurrence at all.
-   */
-  recurrenceOf?: { taskId: string; occurrenceAt: number; missed?: number };
   /** Who is creating it, when the caller knows — attributed on the event
    *  and in the audit log. Optional: the create routes predate it and a
    *  missing author must not become an anonymous 400. */

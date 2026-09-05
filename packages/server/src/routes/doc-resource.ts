@@ -21,7 +21,7 @@ import { isCategoryAuthor } from '../task-owner.ts';
 import { taskIdOfBodyDoc } from '../task-projection.ts';
 import { clipToWordBoundary } from '../task-title.ts';
 import { type Task, taskChip } from '../tasks.ts';
-import type { DocResourceRouteRequest, DocRoutesContext } from './docs-routes-context.ts';
+import type { DocResourceRouteRequest, DocRoutesContext } from './docs.ts';
 
 /**
  * The doc's own routes: `''`, `threads` GET, `tasks`, `plan`,

@@ -272,37 +272,6 @@ function giveUp(field: Field): void {
   FIELDS.delete(field.ta);
 }
 
-/**
- * Destroy the editor behind this box and forget the field. No-op on a plain
- * textarea.
- *
- * `reap` is the collector for everything a repaint throws away, and it keys
- * on the textarea having LEFT the document. That cannot reach a composer the
- * document never held: `seen` only turns true while the box is connected, so
- * a card built and dropped before it was ever appended keeps a live
- * ProseMirror view — and a live view keeps a `DOMObserver` whose 20ms flush
- * is scheduled by any mutation and cancelled by nothing. A caller that knows
- * it is finished with a box says so here instead of waiting for a sweep that
- * will not come.
- */
-export function detachMarkdownComposer(ta: HTMLTextAreaElement): void {
-  const field = FIELDS.get(ta);
-  if (!field) return;
-  field.editor?.destroy();
-  LIVE.delete(field);
-  FIELDS.delete(ta);
-}
-
-/**
- * Destroy every composer editor still live. The suite's teardown hook: a test
- * file that mounted a card, a panel or a whole app mounted composers with it,
- * and `reap` cannot collect boxes the document never held. Not a production
- * path — the app's composers go away with the repaint that replaces them.
- */
-export function destroyLiveComposers(): void {
-  for (const field of [...LIVE]) detachMarkdownComposer(field.ta);
-}
-
 /** Re-seed a field from its textarea, for callers that hold the element
  *  rather than the refresh (`restoreFields`). No-op on a plain textarea. */
 export function refreshMarkdownComposer(ta: HTMLTextAreaElement): void {

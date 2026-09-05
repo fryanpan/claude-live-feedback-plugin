@@ -1001,45 +1001,6 @@ body.has-set .doc-switcher-caret {
    controls but the speaker tags — the controls live behind the button the
    strip grows out of. */
 
-/* The undo beside a linked row (src/notes-link-affordance.ts).
-
-   A note that cites a board row got that citation from a matcher reading a
-   loose spoken description, so some of them are wrong and every one of them
-   has to be removable. The control is drawn only where this doc actually
-   holds a ref, so its presence already means "there is something here to
-   undo" — which is why it carries a glyph and no words.
-
-   Sized to the 24px the surrounding prose can spare rather than to the 44px
-   a primary control takes: it sits inside a sentence, and a tap target that
-   pushed the line apart would cost every reader something to serve the few
-   who need it — the negative vertical margin keeps the 24px box from
-   growing the line. The name a screen reader announces is on the element. */
-.note-unlink {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  margin: -2px 0 -2px 2px;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  vertical-align: baseline;
-  background: transparent;
-  color: var(--muted);
-  font: 600 15px / 1 var(--sans);
-  cursor: pointer;
-  /* Never the thing the eye lands on: it is an exit, and the row's title and
-     its status chip are what the reader came to the line for. */
-  opacity: 0.55;
-}
-.note-unlink:hover,
-.note-unlink:focus-visible {
-  opacity: 1;
-  background: var(--panel-2, rgba(0, 0, 0, 0.06));
-  color: var(--text);
-}
-
 /* The lead banner (src/lead-banner.ts): a meeting doc's one standing line
    while nobody is listening. Sticky at the top of the scrolling editor so
    it is there whichever line the person is on, and gone — not dimmed — the

@@ -14,7 +14,6 @@
 import { describe, expect, it } from 'bun:test';
 import type { EngineSocket, EngineSocketArgs } from '../src/transcribe-assemblyai.ts';
 import {
-  DEFAULT_ENDPOINT_LATENCY_ADJUSTMENT,
   END_TOKEN,
   SONIOX_ENV_VAR,
   SONIOX_KEYCHAIN_SERVICE,
@@ -142,32 +141,7 @@ describe('soniox config frame', () => {
       sample_rate: 16_000,
       num_channels: 1,
       enable_endpoint_detection: true,
-      endpoint_latency_adjustment_level: DEFAULT_ENDPOINT_LATENCY_ADJUSTMENT,
     });
-  });
-
-  it('asks for the measured endpoint level rather than leaving the vendor default', () => {
-    // The one endpointing knob this adapter sends unasked. Spelled out here
-    // because it is not the vendor's default (0) and the reason it is not is
-    // a measurement — ~274ms off the median wait between a person stopping
-    // and the settled turn, at level 2, with word recall unchanged. Level 3
-    // measured five times SLOWER, so this is a chosen rung, not a maximum.
-    expect(DEFAULT_ENDPOINT_LATENCY_ADJUSTMENT).toBe(2);
-    expect(sonioxConfig(16_000, false).endpoint_latency_adjustment_level).toBe(2);
-  });
-
-  it('lets the person who moved the control win over that default', () => {
-    // The default is a starting point, not a ceiling on the Advanced Options
-    // panel: a sanitized tuning is spread AFTER the fixed fields, so someone
-    // who dislikes snappier finals can put it back to the vendor's 0.
-    expect(
-      sonioxConfig(16_000, false, { endpoint_latency_adjustment_level: 0 })
-        .endpoint_latency_adjustment_level,
-    ).toBe(0);
-    expect(
-      sonioxConfig(16_000, false, { endpoint_latency_adjustment_level: 3 })
-        .endpoint_latency_adjustment_level,
-    ).toBe(3);
   });
 
   it('asks for diarization only when the capture said conversation', () => {

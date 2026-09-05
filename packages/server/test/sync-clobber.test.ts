@@ -227,14 +227,7 @@ describe('sync-clobber regressions', () => {
       // non-empty fragment entirely and re-baseline the mtime poll — the
       // downtime edit was never seen, and the next flush overwrote it.
       const rooms2 = makeRooms(dataDir);
-      // The hydrate answers now and binds a moment later, off the thread pool
-      // (`Rooms.prereadFor`), and the attach-time reconcile this test is about
-      // happens with the bind. Waiting is the assertion: a hydrate that never
-      // picked disk up would never satisfy it.
-      await waitFor(
-        () => (rooms2.getDoc('d1')?.plainText ?? '').includes('edited while server was down'),
-        { describe: 'the restart hydrate to pick up the edit made while it was down' },
-      );
+      expect(rooms2.getDoc('d1')?.plainText).toContain('edited while server was down');
     });
 
     it('a restart inside the write-back window does not revert the un-flushed edit', async () => {
@@ -338,14 +331,6 @@ describe('sync-clobber regressions', () => {
       // timed: the .ydoc has to persist so the restart hydrate sees it as newer.
       await sleep(afterPersist());
       const rooms2 = makeRooms(dataDir); // suppression fires on hydrate
-      // Suppression fires when the deferred bind lands, not when `get`
-      // returns — see `Rooms.prereadFor`. Editing before it would be a
-      // different test (an edit into the attach gap), and the re-attach below
-      // is what this one is about.
-      expect(rooms2.get('r1')).toBeDefined();
-      await waitFor(() => rooms2.boundPathOf('r1') === p2, {
-        describe: 'the hydrate bind that suppresses the normalization drift',
-      });
       expect(
         rooms2.findAndReplace('r1', { find: 'first external edit', replace: 'edited live' }).ok,
       ).toBe(true);

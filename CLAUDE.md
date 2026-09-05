@@ -23,9 +23,7 @@ transcription + notes on a pause-or-cadence clock),
 [stall-detection](docs/architecture/stall-detection.md) (board wakes and
 their economics),
 [goal-projection](docs/architecture/goal-projection.md) (the goal bar, the
-remainder, and when a goal lands),
-[scheduled-tasks](docs/architecture/scheduled-tasks.md) (a row's rule for when
-its work starts, and the loop that files each occurrence) and
+remainder, and when a goal lands) and
 [security](docs/architecture/security.md) (trust boundaries, the gates that
 enforce them, where secrets live, the deploy and webhook surfaces). Read the
 relevant one before touching its subsystem.

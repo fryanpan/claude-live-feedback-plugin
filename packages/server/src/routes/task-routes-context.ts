@@ -3,7 +3,6 @@ import type { AgentNoteRing } from '../agent-notes.ts';
 import type { DispatchRegistry } from '../dispatch-registry.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
 import type { ReadyWorkNudger } from '../ready-nudge.ts';
-import type { ReviewGate } from '../review-gate-types.ts';
 import type { Rooms } from '../rooms.ts';
 import type { TaskProjection } from '../task-projection.ts';
 import type { ParallelismCapChange, Task, TaskStore } from '../tasks.ts';
@@ -11,14 +10,15 @@ import type { ParallelismCapChange, Task, TaskStore } from '../tasks.ts';
 /**
  * The review-item quality gate's verdict on one item — held, or through.
  *
- * Re-exported rather than declared: the gate that PRODUCES it is
- * `review-gate.ts`, a service, and a service may not import a type out of
- * `routes/`. It is re-exported here so a route still reads its vocabulary off
- * the context module it already imports. `heldFields` below is deliberately
- * typed to the narrower of the two verdict shapes, so a task route cannot
- * come to depend on the comment-borne `ThreadReviewGate`.
+ * It lives here rather than in the server closure because both sides of the
+ * split need it: `createServer` runs the judge and the routes report what it
+ * said. The comment-borne variant (`ThreadReviewGate`) stays in server.ts,
+ * and `heldFields` below is deliberately typed to the narrower of the two so
+ * a route cannot come to depend on the wider one.
  */
-export type { ReviewGate };
+export type ReviewGate =
+  | { held: false; item: TaskReviewItem }
+  | { held: true; item: TaskReviewItem; reason: string; message: string };
 
 /** The parallelism cap as a route reads it — the number, who is holding it,
  *  and who last moved it. `undefined` for a workspace that has none. */

@@ -36,31 +36,7 @@
  * consumed on first use, never served twice.
  */
 import { readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { basename, sep } from 'node:path';
 import { ROOM_TIMINGS } from './room-timings.ts';
-
-/**
- * Home-relative folders whose full paths must not reach a log line. The files
- * most likely to appear in a quarantine line live in a cloud-sync folder, and
- * these logs get pasted into tickets and PR bodies. Only these two are
- * redacted: a bound doc under a checkout is the ordinary case, and its path is
- * what makes the line useful.
- */
-const PRIVATE_ROOTS = ['Dropbox', 'Documents'];
-
-/**
- * A path safe to log: the basename alone under a private root, else the path.
- * Exported so the test runs the real function rather than a copy of its rule.
- */
-export function redactBoundPath(path: string): string {
-  const home = homedir();
-  for (const root of PRIVATE_ROOTS) {
-    const prefix = `${home}${sep}${root}${sep}`;
-    if (path.startsWith(prefix)) return `<${root}>/${basename(path)}`;
-  }
-  return path;
-}
 
 /**
  * The deadline and the backoff live in `room-timings.ts` with every other
@@ -129,11 +105,6 @@ export type BoundStatResult =
 function isEnoent(err: unknown): boolean {
   const code = (err as NodeJS.ErrnoException | undefined)?.code;
   return code === 'ENOENT' || code === 'ENOTDIR';
-}
-
-/** The errno of a failed syscall, for the quarantine line's reason. */
-function errnoOf(err: unknown): string | undefined {
-  return (err as NodeJS.ErrnoException | undefined)?.code;
 }
 
 /**
@@ -243,7 +214,7 @@ class BoundFileReader {
       // trouble as a timeout one step earlier, so they earn the same backoff
       // — otherwise a provider that errors fast gets retried as hard as the
       // reconnect loop can ask.
-      this.markStalled(path, errnoOf(raced.err) ?? 'read failed', raced.err);
+      this.markStalled(path, raced.err);
       return { status: 'unavailable', reason: 'error' };
     }
     const result: Extract<BoundReadResult, { status: 'ok' }> = {
@@ -348,7 +319,7 @@ class BoundFileReader {
         this.noteUnusable(path, raced.err, 'read');
         return { status: 'unavailable', reason: 'error' };
       }
-      this.markStalled(path, errnoOf(raced.err) ?? 'stat failed', raced.err);
+      this.markStalled(path, raced.err);
       return { status: 'unavailable', reason: 'error' };
     }
     return { status: 'ok', exists: true, mtimeMs: raced.value.mtimeMs };
@@ -403,31 +374,17 @@ class BoundFileReader {
         if (now - at >= RETRY_MS) this.unusableLoggedAt.delete(seen);
       }
     }
-    console.error(
-      `[slow-fs] ${redactBoundPath(path)} could not be ${verb}; the doc keeps its .ydoc content`,
-      err,
-    );
+    console.error(`[slow-fs] ${path} could not be ${verb}; the doc keeps its .ydoc content`, err);
   }
 
-  /**
-   * Quarantine a path, and say so once.
-   *
-   * `reason` is what the next incident is read back through: no answer means a
-   * download or a consent dialog, an errno means the provider answered badly,
-   * and the log line is the only place that distinction survives.
-   *
-   * The FIRST missed deadline quarantines — `BOUND_READ_MAX_OVERDUE` gates the
-   * whole pool, not this path, so a file that hangs once is skipped by every
-   * later caller rather than given three more chances to hold a thread.
-   */
-  private markStalled(path: string, reason: string, err?: unknown): void {
+  private markStalled(path: string, err?: unknown): void {
     const first = !this.stalledUntil.has(path);
     this.stalledUntil.set(path, Date.now() + RETRY_MS);
     // Once per stall, not once per attempt: the reconnect loop that exposed
     // this bug would otherwise write a log line per second per subscriber.
     if (first) {
       console.error(
-        `[slow-fs] quarantined ${redactBoundPath(path)} for ${Math.round(RETRY_MS / 1000)}s (${reason}); callers park their doc and keep its .ydoc content`,
+        `[slow-fs] ${path} did not answer within ${DEADLINE_MS}ms; parking it for ${Math.round(RETRY_MS / 1000)}s`,
         err ?? '',
       );
     }
@@ -488,7 +445,7 @@ class BoundFileReader {
         counted = true;
         this.leaked++;
       }
-      this.markStalled(path, `no answer in ${DEADLINE_MS}ms`);
+      this.markStalled(path);
     }
     return outcome;
   }

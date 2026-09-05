@@ -25,7 +25,6 @@ import {
   type HubTask,
   type HubWorkspaceInfo,
   type ReorderTarget,
-  type ScheduleWrite,
   cascadePhrase,
 } from './hub-board-model.ts';
 import type { RelatedEntry, TaskDiscussion } from './hub-detail-render.ts';
@@ -314,24 +313,6 @@ export function createHubActions(deps: HubActionDeps) {
     });
     if (!res.ok)
       showToast(dueAt === null ? 'Clearing the due date failed' : 'Setting the due date failed');
-  }
-
-  /**
-   * Arm or clear the row's schedule. `null` clears, read by the route as the
-   * explicit clear it is; anything else carries the rule, the zone its clock
-   * times mean and the optional end.
-   *
-   * Reports whether it landed, unlike `setTaskDue` next door: the phrase
-   * editor holds a sentence the reader typed, and a refusal that read as a
-   * success would blank it and lose their words.
-   */
-  async function setTaskSchedule(task: HubTask, next: ScheduleWrite): Promise<boolean> {
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/schedule`, 'POST', {
-      ...(next === null ? { rule: null } : next),
-      author,
-    });
-    if (!res.ok) showToast(next === null ? 'Clearing the schedule failed' : 'Scheduling failed');
-    return res.ok;
   }
 
   /**
@@ -748,7 +729,6 @@ export function createHubActions(deps: HubActionDeps) {
     assignTask,
     setTaskGoal,
     setTaskDue,
-    setTaskSchedule,
     addRelatedLink,
     removeRelatedLink,
     archiveTask,
