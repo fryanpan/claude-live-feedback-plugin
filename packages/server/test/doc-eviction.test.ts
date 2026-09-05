@@ -30,6 +30,7 @@ import { memberDocId } from '../src/binds.ts';
 import { Rooms } from '../src/rooms.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
+import { waitFor } from './wait-for.ts';
 
 const DAY = 24 * 60 * 60 * 1000;
 const HOUR = 60 * 60 * 1000;
@@ -288,7 +289,7 @@ describe('evicting an idle doc', () => {
     back.stop();
   });
 
-  it('re-attaches a re-opened doc so it still writes back', () => {
+  it('re-attaches a re-opened doc so it still writes back', async () => {
     const path = bound('rebind');
     rooms.flush();
     expect(rooms.evictRoom('rebind')).toBe(true);
@@ -296,7 +297,16 @@ describe('evicting an idle doc', () => {
 
     // Re-open, then edit. The 2026-05-09 bug is a doc that comes back
     // READABLE but never writes to disk again, which no read can detect.
+    //
+    // `get` answers in the same turn and the binding follows a moment later,
+    // off the thread pool: a hydrate stopped opening bound files on the main
+    // thread (`Rooms.prereadFor`), so the re-attach this test is about is
+    // something to wait for rather than something to assume. Waiting is also
+    // the assertion — a doc that never re-binds never satisfies it.
     expect(rooms.get('rebind')).toBeDefined();
+    await waitFor(() => rooms.boundPathOf('rebind') === path, {
+      describe: 're-opening an evicted doc to re-establish its file binding',
+    });
     expect(
       rooms.findAndReplace('rebind', { find: 'first line', replace: 'written after coming back' })
         .ok,
@@ -317,7 +327,7 @@ describe('evicting an idle doc', () => {
    * `lastMtimeMs` so the external edit reconciles as an APPLY rather than
    * being mistaken for the write we just made.
    */
-  it('keeps both edits when a doc is evicted mid-edit and then edited externally', () => {
+  it('keeps both edits when a doc is evicted mid-edit and then edited externally', async () => {
     const path = bound('both', '# Both\n\nbaseline\n');
     rooms.flush();
 
@@ -341,6 +351,11 @@ describe('evicting an idle doc', () => {
     // Re-open. The doc must reconcile FROM disk, not assert its own stale
     // copy — which is what a stale `lastMtimeMs` would make it do.
     expect(rooms.get('both')).toBeDefined();
+    // The re-attach — and with it the reconcile this test is about — lands
+    // with the deferred bind. See the note in the test above.
+    await waitFor(() => rooms.boundPathOf('both') === path, {
+      describe: 're-opening an evicted doc to re-establish its file binding',
+    });
     const text = rooms.getDoc('both')?.plainText ?? '';
     expect(text).toContain('from the editor');
     expect(text).toContain('from the filesystem');

@@ -784,7 +784,11 @@ export class Rooms {
     );
     for (const docId of pending) {
       try {
-        this.hydrateDoc(docId);
+        // Blocking on purpose: see `hydrateDoc`. The whole point of this pass
+        // is that the file write has to land before anything else can happen
+        // to the process, and a deferred bind would not be there for the next
+        // flush.
+        this.hydrateDoc(docId, { blocking: true });
       } catch (err) {
         console.error(`[rooms] could not reassert ${docId}:`, err);
       }
@@ -817,7 +821,8 @@ export class Rooms {
       const docId = file.slice(0, -'.ydoc'.length);
       if (!docId || this.docIndex.has(docId)) continue;
       try {
-        this.hydrateDoc(docId);
+        // Boot, and the row is written from the room in the same turn.
+        this.hydrateDoc(docId, { blocking: true });
         const room = this.rooms.get(docId);
         if (!room) continue;
         const entry = this.indexEntryFor(room);
@@ -1217,22 +1222,28 @@ export class Rooms {
    * hydration exists to prevent — so a second, drifting copy of this logic is
    * the thing most worth not having.
    */
-  private hydrateDoc(docId: string, opts: { defer?: boolean } = {}): boolean {
-    // Whether a path nobody prewarmed may be handed to the thread pool and
-    // the bind retried when it lands, INSTEAD of being read here on the main
-    // thread.
+  private hydrateDoc(docId: string, opts: { blocking?: boolean } = {}): boolean {
+    // Whether this hydrate may read its bound file on the main thread.
     //
-    // Off by default, because binding synchronously is a promise `get` makes:
-    // a doc that comes back from eviction unbound would read fine and never
-    // write back, which is the 2026-05-09 bug hydration exists to prevent.
-    // Boot, eviction and a direct `get` keep the blocking read, bounded by
-    // the per-path quarantine.
+    // This used to be the other way round — a `defer` opt the fan-outs passed
+    // while `get`, eviction and boot all kept the blocking read, bounded by
+    // the per-path quarantine. That bound is EARNED: a path nobody has tried
+    // yet is not quarantined, so the first caller to touch a freshly-sick
+    // folder still parked the whole process, and every backoff expiry bought
+    // the next one another turn to do it again. Whoever reached the bad path
+    // first paid, and on a board that is a request handler.
     //
-    // On for the callers that CANNOT prewarm and do not need the binding to
-    // answer: a thread list and a body sweep read the `.ydoc`, so parking the
-    // binding costs them nothing while the fan-out they sit in — every docId
-    // on a board, on a stall tick — is exactly what wedged production.
-    const defer = opts.defer === true;
+    // So the default is now the pool: a hydrate whose bytes are not already
+    // in hand hands the read off and binds when it lands (`bindAfterRead`),
+    // while the doc comes back from its `.ydoc` with its writes parked.
+    //
+    // BOOT is the exception, and the only one. Nothing is waiting on the loop
+    // there — the server is not listening yet — and the binding has to exist
+    // in the same turn, because the next thing that can happen to a process
+    // that has just booted is another shutdown: `reassertPendingWrites` opens
+    // the docs whose edit did not reach disk, and a flush that runs before the
+    // deferred bind lands would write nothing and lose the edit for good.
+    const blocking = opts.blocking === true;
     // Server authority: hydration re-admits ids that ALREADY EXIST on disk,
     // including the `task:` and `ws:` rooms the projection wrote. Refusing
     // them here would not close a hole — the room is already persisted — it
@@ -1264,7 +1275,7 @@ export class Rooms {
         );
         return false;
       }
-      const homePre = this.prereadFor(docId, placement.absPath, defer);
+      const homePre = this.prereadFor(docId, placement.absPath, blocking);
       if (homePre === 'unavailable') return false;
       this.bindings.retargetHomeBinding(room, placement.absPath, {
         liveWins,
@@ -1273,8 +1284,12 @@ export class Rooms {
       return this.bindings.has(docId);
     }
     if (!src) return false;
-    const preread = this.prereadFor(docId, src, defer);
+    const preread = this.prereadFor(docId, src, blocking);
     if (preread === 'unavailable') return false;
+    // With bytes in hand, existence is something we KNOW rather than something
+    // to ask the filesystem — `existsSync` on a path whose provider has
+    // stopped answering parks the loop exactly as a read does. The `existsSync`
+    // survives only on the boot branch, where `preread` is undefined.
     if (preread ? !preread.exists : !existsSync(src)) return false;
     const attachOpts: AttachOpts = { liveWins, ...(preread ? { preread } : {}) };
     if (contentKind(room.meta.type) === 'prose') {
@@ -1320,7 +1335,7 @@ export class Rooms {
   private prereadFor(
     docId: string,
     path: string,
-    defer: boolean,
+    blocking: boolean,
   ): PrereadFile | 'unavailable' | undefined {
     const fresh = boundFiles.takeFresh(path);
     if (fresh) {
@@ -1350,12 +1365,20 @@ export class Rooms {
     // nothing in hand and opened the file on the only thread that runs
     // JavaScript.
     //
-    // So there is no synchronous read left to fall through to. The doc parks
-    // exactly as it does for a quarantined path — content from its `.ydoc`,
-    // no binding, nothing written over bytes we have not read — and the read
-    // is handed to the pool, which either brings the bytes back and binds a
-    // moment later or quarantines the path and says so once.
-    if (!defer) return undefined;
+    // The fall-through survived one more round for `get` and eviction, on the
+    // argument that those need the binding in the same turn. What that missed
+    // is that the quarantine bounding them is EARNED: a path nobody has tried
+    // yet is not quarantined, so the first caller to touch a freshly-sick
+    // folder still parked the whole server, and every backoff expiry bought
+    // the next one another turn to do it again. A bound that only applies
+    // after the damage is not a bound.
+    //
+    // `blocking` is BOOT, and nothing else — see `hydrateDoc`. Everything
+    // with a caller waiting on the loop parks instead: the doc keeps its
+    // `.ydoc` content, takes no binding, writes over no bytes we have not
+    // read, and the read goes to the pool, which either brings it back and
+    // binds a moment later or quarantines the path and says so once.
+    if (blocking) return undefined;
     this.bindAfterRead(docId, path);
     return 'unavailable';
   }
@@ -1379,8 +1402,11 @@ export class Rooms {
    * Re-running `hydrateDoc` is deliberate over re-implementing the attach
    * here: it is the same code that decides doc-home placement, prose versus
    * flat, and write-back eligibility, and a second copy of that decision is
-   * exactly the drift this method would be worth avoiding. `defer: false`
-   * stops it scheduling another retry, so this runs at most once per hydrate.
+   * exactly the drift this method would be worth avoiding. The retry finds
+   * the bytes in `boundFiles.takeFresh` and binds; a read that failed left a
+   * quarantine mark instead, so the retry parks and schedules nothing. Either
+   * way `deferredBinds` still holds this docId while the retry runs, so it
+   * cannot start a second read of its own.
    */
   private bindAfterRead(docId: string, path: string): void {
     if (this.deferredBinds.has(docId)) return;
@@ -1393,7 +1419,7 @@ export class Rooms {
         // pull it back into memory as a side effect of a read it never asked
         // for.
         if (!this.rooms.has(docId) || this.bindings.has(docId)) return;
-        this.hydrateDoc(docId, { defer: false });
+        this.hydrateDoc(docId);
       })
       .catch((err) => {
         console.error(`[rooms] ${docId}: deferred bind failed:`, err);
@@ -1629,12 +1655,12 @@ export class Rooms {
    * mint an empty doc for an id nobody wrote, which is exactly what
    * `getOrCreate` would do for a stray index row with no file behind it.
    */
-  private resolveRoom(docId: string, opts: { defer?: boolean } = {}): DocRoom | undefined {
+  private resolveRoom(docId: string): DocRoom | undefined {
     const resident = this.peek(docId);
     if (resident) return resident;
     const target = this.aliases.get(docId) ?? docId;
     if (!existsSync(this.pathFor(target))) return undefined;
-    this.hydrateDoc(target, opts);
+    this.hydrateDoc(target);
     return this.rooms.get(target);
   }
 
@@ -1729,11 +1755,11 @@ export class Rooms {
     if (resident) return serialize(resident);
     if (!this.docExists(target)) return null;
     try {
-      // Deferred: a body sweep reads the `.ydoc`, so it needs the doc in
-      // memory but not its file binding — and it runs over every doc in the
-      // corpus, which is the fan-out shape that must never open a bound file
-      // on the main thread.
-      this.hydrateDoc(target, { defer: true });
+      // A body sweep reads the `.ydoc`, so it needs the doc in memory but not
+      // its file binding — and it runs over every doc in the corpus, which is
+      // the fan-out shape that must never open a bound file on the main
+      // thread. Every hydrate defers now, so there is nothing to ask for.
+      this.hydrateDoc(target);
       const room = this.rooms.get(target);
       return room ? serialize(room) : null;
     } catch (err) {
@@ -1979,15 +2005,14 @@ export class Rooms {
   }
 
   listThreads(docId: string, filter?: { status?: 'open' | 'resolved' }): Thread[] {
-    // Hydrate the doc ourselves first, with its file binding DEFERRED, so the
-    // provider below finds it resident and never takes the blocking path.
+    // Hydrate the doc ourselves first so the provider below finds it resident.
     //
     // Threads live in the `.ydoc`, so a parked binding costs this call
     // nothing. And the callers are the fan-outs: the home queue, the
     // workspace listing, the archive route and the stall scan each walk EVERY
     // docId on a board, none of which reaches a URL for the request prewarm
     // to find. One bad file among them used to park the whole server.
-    this.resolveRoom(docId, { defer: true });
+    this.resolveRoom(docId);
     return this.docThreads.listThreads(docId, filter);
   }
 
@@ -3139,6 +3164,10 @@ export class Rooms {
   }
 
   private loadFromDisk(docId: string, ydoc: Y.Doc): void {
+    // The `.ydoc` in the server's own data dir, never a bound path — the
+    // synchronous read below is safe for the same reason every other data-dir
+    // read is: this process owns the directory, and no cloud-sync provider
+    // stands between it and the disk. Bound paths go through `slow-fs.ts`.
     const path = this.pathFor(docId);
     if (!existsSync(path)) return;
     try {
