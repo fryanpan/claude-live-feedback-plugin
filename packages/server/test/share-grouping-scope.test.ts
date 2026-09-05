@@ -326,7 +326,7 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
       expect((await pub(`/workspaces/${boardB}`, visitorA)).status).toBe(403);
       expect((await pub(`/api/workspaces/${boardB}`, visitorA)).status).toBe(403);
       expect((await pub(`/y/ws%3A${boardB}`, visitorA)).status).toBe(403);
-      expect((await pub(`/events/workspace/${boardB}`, visitorA)).status).toBe(403);
+      expect((await pub(`/workspaces/${boardB}/events:stream`, visitorA)).status).toBe(403);
     });
 
     it('still refuses the operator surfaces on its OWN grouping', async () => {

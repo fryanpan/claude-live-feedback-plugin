@@ -157,7 +157,7 @@ describe('the owning session over the real routes', () => {
     // identity id, never its display name. The task below is owned by the
     // DISPLAY NAME, so this pair is the whole join under test.
     await jj(
-      await post(`/api/workspaces/${wsId}/attachments`, {
+      await post(`/workspaces/${wsId}/agents`, {
         agentId: 'agent-cartographer',
         runtime: 'claude-code-local',
         capabilities: ['tasks.write'],

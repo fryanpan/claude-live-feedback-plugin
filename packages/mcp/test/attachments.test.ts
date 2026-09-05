@@ -89,12 +89,12 @@ describe('a heartbeat goes out only when a board is due', () => {
     expect(h.sent).toEqual([
       {
         method: 'POST',
-        path: `/api/workspaces/w1/attachments/${SELF}/heartbeat`,
+        path: `/workspaces/w1/agents/${SELF}/heartbeat`,
         body: { toolCallAt: h.at() },
       },
       {
         method: 'POST',
-        path: `/api/workspaces/w%202/attachments/${SELF}/heartbeat`,
+        path: `/workspaces/w%202/agents/${SELF}/heartbeat`,
         body: { toolCallAt: h.at() },
       },
     ]);

@@ -174,7 +174,7 @@ export function wireBoardLive(deps: BoardLiveDeps): void {
 
   // SSE: agent presence + activity refresh. Board changes arrive via the
   // ydoc; SSE only nudges the REST-backed regions.
-  const es = new EventSource(`/events/workspace/${encodeURIComponent(workspaceId)}`);
+  const es = new EventSource(`/workspaces/${encodeURIComponent(workspaceId)}/events:stream`);
   for (const name of ['agent.attached', 'agent.detached', 'agent.heartbeat']) {
     es.addEventListener(name, () => void loadAgents());
   }

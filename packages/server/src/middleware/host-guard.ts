@@ -530,7 +530,6 @@ const BOARD_MEMBER_ROUTES: Readonly<Record<string, readonly string[]>> = {
   // Reads that predate membership — the workspace record, the presence strip,
   // and the review-item queue the strip's thread half arrives on.
   '': ['GET'],
-  attachments: ['GET'],
   'review-items': ['GET'],
   // The board's rows. GET is the list the Tasks pane pages through; POST is
   // filing one. The board room syncs the same rows, so the GET is a
@@ -791,6 +790,18 @@ export function shareScopeAllows(
         // The workspace page itself and its nav tabs. A named list — a tab
         // added later has to be added here too, on purpose.
         if (sub === '' || ['home', 'tasks', 'mine', 'activity'].includes(sub)) return true;
+        // Two board collections that are NOT panes, admitted by name for the
+        // grants they carried at their old addresses:
+        //   agents         the presence strip's read, which was
+        //                  `attachments: ['GET']` in BOARD_MEMBER_ROUTES.
+        //   events:stream  the live board feed, which was the
+        //                  `/events/workspace/<id>` allowance. Task events on
+        //                  it are redacted for visitors (actor display names
+        //                  only) before they reach the stream.
+        // GET only, which is the whole of what moved: attaching an agent,
+        // detaching one and forging a heartbeat were never a member's, and
+        // this block admits no other method.
+        if (sub === 'agents' || sub === 'events:stream') return true;
         // `<kind>/<id>` and nothing deeper. An id never contains a slash, so
         // a third segment is a typo or a probe either way.
         const cut = sub.indexOf('/');
@@ -807,12 +818,6 @@ export function shareScopeAllows(
     // visitor-contract projection; foreign writes are reverted server-side.
     if (pathname.startsWith('/y/') && safeDecode(pathname.slice('/y/'.length)) === `ws:${wsId}`) {
       return true;
-    }
-    // The workspace SSE feed. Task events on it are redacted for visitors
-    // (actor display names only) before they reach the stream.
-    if (pathname.startsWith('/events/workspace/')) {
-      const seg = pathname.slice('/events/workspace/'.length);
-      if (!seg.includes('/') && safeDecode(seg) === wsId) return true;
     }
     // The board's own REST surface, `<sub>` by `<sub>` and method by method:
     // BOARD_MEMBER_ROUTES. Everything not in that table is refused here, so a
@@ -847,9 +852,10 @@ export function shareScopeAllows(
     // holding a share link. The browser gate in front of it is not the answer
     // either — it refuses pages, and a member's non-browser client is not a
     // page. Nothing names a host path on a member's behalf.
-    // What stays off the table is the agent roster's own verbs — `attachments`
-    // POST, `agent-heartbeat`, `dispatches`, `agent-notes`: a seat on the
-    // board, not work on it. `voice` stays off too — it routes an utterance to
+    // What stays off the table is the agent roster's own verbs — the writes
+    // under `/workspaces/<id>/agents`, `dispatches`, `agent-notes`: a seat on
+    // the board, not work on it. The roster's READ moved with the route, to
+    // the `/workspaces/` block above. `voice` stays off too — it routes an utterance to
     // the owner's agents, which is spending the owner's machine rather than
     // working the board. Board lifecycle (`DELETE`, `rename`, `retired`,
     // `lead`) stays closed: a member was given a board to work on, not to
@@ -1138,7 +1144,7 @@ function pathWorkspaces(pathname: string, workspacesOf?: (id: string) => string[
   // Paths whose segment IS a workspace (or a review filed on one — the guard
   // accepts either through `inWorkspaceScope`). One candidate: the path spells
   // the workspace out, so there is nothing to resolve.
-  const named = seg('/events/workspace/') ?? seg('/workspaces/') ?? seg('/api/reviews/');
+  const named = seg('/workspaces/') ?? seg('/api/reviews/');
   if (named) return [named];
   // `/api/workspaces/` splits: `<id>/tree` names a workspace, and so does the
   // bare `<id>`; the LIST route has no segment and falls through to none.

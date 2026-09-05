@@ -288,13 +288,13 @@ describe('the cap through the server', () => {
     );
     const workspaceId = workspace.id;
     await jj(
-      await post(`/api/workspaces/${workspaceId}/attachments`, {
+      await post(`/workspaces/${workspaceId}/agents`, {
         agentId: LEAD.id,
         runtime: 'claude-code-local',
       }),
     );
     const leadRes = await fetch(
-      `${base}/events/workspace/${workspaceId}?agentId=${encodeURIComponent(LEAD.id)}`,
+      `${base}/workspaces/${workspaceId}/events:stream?agentId=${encodeURIComponent(LEAD.id)}`,
       { headers: { accept: 'text/event-stream' } },
     );
     return { workspaceId, lead: listenFrames(leadRes) };

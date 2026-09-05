@@ -450,7 +450,7 @@ describe('voice actions, hardened: end to end', () => {
     boardId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
     expect(
       (
-        await post(`/api/workspaces/${boardId}/attachments`, {
+        await post(`/workspaces/${boardId}/agents`, {
           agentId: 'agent-search-revamp',
           runtime: 'claude-code-local',
         })

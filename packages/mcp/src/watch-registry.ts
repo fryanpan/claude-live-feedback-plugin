@@ -295,7 +295,7 @@ async function watchWorkspace(
     open = await wireKey(
       deps,
       key,
-      `/events/workspace/${encodeURIComponent(workspaceId)}?agentId=${encodeURIComponent(deps.author.id)}`,
+      `/workspaces/${encodeURIComponent(workspaceId)}/events:stream?agentId=${encodeURIComponent(deps.author.id)}`,
     );
   } else if (usesMux(deps)) {
     open = deps.mux.isOpen();

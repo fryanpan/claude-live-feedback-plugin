@@ -2,12 +2,13 @@
  * ONE SSE stream per agent, carrying every key that agent watches.
  *
  * WHY THIS EXISTS. The MCP child opened one TCP socket per watched key —
- * `/events/<docId>` for each doc and `/events/workspace/<id>` for each board.
- * A lead session with 214 watches held 214 sockets, and on 2026-09-04 the
- * fleet reached 332 client sockets against this server (plus ~387 server-side
- * ends) and exhausted the kernel's socket memory. `netstat -m` recorded
- * "requests for memory denied"; the supervisor's connect-only bind probe then
- * failed, read the failure as "alive but unbound", and restarted the server —
+ * `/events/<docId>` for each doc and `/workspaces/<id>/events:stream` for
+ * each board. A lead session with 214 watches held 214 sockets, and on
+ * 2026-09-04 the fleet reached 332 client sockets against this server (plus
+ * ~387 server-side ends) and exhausted the kernel's socket memory.
+ * `netstat -m` recorded "requests for memory denied"; the supervisor's
+ * connect-only bind probe then failed, read the failure as "alive but
+ * unbound", and restarted the server —
  * whereupon every client reconnected every key at once on a fixed 1.5s
  * backoff and did it again. Twenty restarts in a day, and a reboot brought
  * the count back inside fifteen minutes because the watch set is persisted.

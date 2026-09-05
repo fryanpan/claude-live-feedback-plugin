@@ -182,7 +182,7 @@ describe('bin.ts --workspaces-app-dist / --widget-dist', () => {
       expect(workspaceId).not.toBeNull();
 
       const body = (await (
-        await fetch(`http://127.0.0.1:${port}/api/workspaces/${workspaceId}/attachments`, {
+        await fetch(`http://127.0.0.1:${port}/workspaces/${workspaceId}/agents`, {
           headers,
         })
       ).json()) as { clientRelease?: { stale: boolean; consecutiveFailures: number } };

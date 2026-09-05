@@ -73,14 +73,14 @@ describe("a linked doc's discussion counts too", () => {
     );
     for (const agent of [LEAD, BUILDER]) {
       await jj(
-        await post(`/api/workspaces/${workspace.id}/attachments`, {
+        await post(`/workspaces/${workspace.id}/agents`, {
           agentId: agent.id,
           runtime: 'claude-code-local',
         }),
       );
     }
     const leadRes = await fetch(
-      `${base}/events/workspace/${workspace.id}?agentId=${encodeURIComponent(LEAD.id)}`,
+      `${base}/workspaces/${workspace.id}/events:stream?agentId=${encodeURIComponent(LEAD.id)}`,
       { headers: { accept: 'text/event-stream' } },
     );
     return { workspaceId: workspace.id, lead: listenFrames(leadRes) };

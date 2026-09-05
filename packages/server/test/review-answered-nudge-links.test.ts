@@ -110,13 +110,13 @@ describe('the review_answered wake only sends its reader to links that exist', (
     workspaceId = workspace.id;
     expect(workspace.leadAgentId).toBe(LEAD.id);
     await jj(
-      await post(`/api/workspaces/${workspaceId}/attachments`, {
+      await post(`/workspaces/${workspaceId}/agents`, {
         agentId: LEAD.id,
         runtime: 'claude-code-local',
       }),
     );
     const leadRes = await fetch(
-      `${base}/events/workspace/${workspaceId}?agentId=${encodeURIComponent(LEAD.id)}`,
+      `${base}/workspaces/${workspaceId}/events:stream?agentId=${encodeURIComponent(LEAD.id)}`,
       { headers: { accept: 'text/event-stream' } },
     );
     lead = listenFrames(leadRes);

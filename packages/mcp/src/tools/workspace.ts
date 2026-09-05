@@ -342,25 +342,21 @@ export async function handleWorkspaceTool(
         capabilities?: string[];
         subscribe?: boolean;
       };
-      const res = (await http(
-        'POST',
-        `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`,
-        {
-          agentId: agentId ?? AUTHOR.id,
-          // Only when attaching as ITSELF: the roster row for somebody
-          // else's id must not be named after this session.
-          ...(agentId === undefined || agentId === AUTHOR.id ? { agentName: AUTHOR.name } : {}),
-          runtime: runtime ?? 'claude-code-local',
-          ...(capabilities !== undefined ? { capabilities } : {}),
-          // What this session can actually DO is decided by the bundle it
-          // loaded at launch, not by what its machine's cache holds now.
-          // Reporting it is what lets the board say a merge never arrived.
-          pluginVersion: PLUGIN_VERSION,
-          // Same-process re-attaches must not re-hand rows still in
-          // flight to this very process — see PROCESS_ID.
-          processId: PROCESS_ID,
-        },
-      )) as {
+      const res = (await http('POST', `/workspaces/${encodeURIComponent(workspaceId)}/agents`, {
+        agentId: agentId ?? AUTHOR.id,
+        // Only when attaching as ITSELF: the roster row for somebody
+        // else's id must not be named after this session.
+        ...(agentId === undefined || agentId === AUTHOR.id ? { agentName: AUTHOR.name } : {}),
+        runtime: runtime ?? 'claude-code-local',
+        ...(capabilities !== undefined ? { capabilities } : {}),
+        // What this session can actually DO is decided by the bundle it
+        // loaded at launch, not by what its machine's cache holds now.
+        // Reporting it is what lets the board say a merge never arrived.
+        pluginVersion: PLUGIN_VERSION,
+        // Same-process re-attaches must not re-hand rows still in
+        // flight to this very process — see PROCESS_ID.
+        processId: PROCESS_ID,
+      })) as {
         attachment?: { agentId?: string };
         gating?: unknown;
         untriaged?: string[];
@@ -480,7 +476,7 @@ export async function handleWorkspaceTool(
       };
       const res = (await http(
         'POST',
-        `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/${encodeURIComponent(agentId ?? AUTHOR.id)}/heartbeat`,
+        `/workspaces/${encodeURIComponent(workspaceId)}/agents/${encodeURIComponent(agentId ?? AUTHOR.id)}/heartbeat`,
         // The heartbeat call is itself a tool call — stamp the work clock
         // too unless the caller reports an explicit (earlier) time.
         { toolCallAt: toolCallAt ?? Date.now() },
@@ -561,10 +557,7 @@ export async function handleWorkspaceTool(
     }
     case 'list_attachments': {
       const { workspaceId } = a as { workspaceId: string };
-      const res = await http(
-        'GET',
-        `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`,
-      );
+      const res = await http('GET', `/workspaces/${encodeURIComponent(workspaceId)}/agents`);
       return ok(res);
     }
   }
