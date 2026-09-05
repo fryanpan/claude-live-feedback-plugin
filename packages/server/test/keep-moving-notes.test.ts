@@ -13,6 +13,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 import { type TaskRow, classifyOpenTasks } from '../src/keep-moving.ts';
+import { NoteAskClassifier } from '../src/note-ask.ts';
 
 const MIN = 60_000;
 const now = 1_000 * MIN;
@@ -82,5 +83,173 @@ describe('classifyOpenTasks — a note on the row is activity', () => {
     const [byNote] = classifyOpenTasks([noted], [], [], now, STALL, bands);
     expect(byNote?.sinceActivityMs).toBe(100 * MIN);
     expect(byNote?.stalled).toBe(true);
+  });
+});
+
+/**
+ * …and a note that says the agent is WAITING ON A PERSON is the opposite of
+ * movement: it is an ask that exists nowhere the person reads. Three rows sat
+ * that way for hours on 2026-09-04 while the loop called them ordinary
+ * in-progress work, because the note both hid the ask and reset the clock.
+ *
+ * Every assertion below is paired with the same row read WITHOUT the seam, so
+ * none of them can pass because the row was already going to be unfiled.
+ *
+ * Fixture texts follow the incident's shapes; the vocabulary table itself is
+ * `note-ask.test.ts`.
+ */
+const WAITING_NOTE =
+  'Waiting on Bryan: the four factual corrections sit in the doc as accept/reject suggestions, and the voice items above are his to make. Nothing for the agent to do.';
+const PARKED_NOTE =
+  "R12 std arm is parked on Bryan's (a) build-only / (b) rebuild with the install intent and rerun / (c) harness fix";
+const PROGRESS_NOTE = 'All three adversarial-review breaks verified real and fixed.';
+
+/** The prefilter alone — no judge, which is the state a box with no summary
+ *  key runs in, and the one this classification must work in. */
+function seam(): NoteAskClassifier {
+  return new NoteAskClassifier({ personNames: ['Bryan'] });
+}
+
+describe('classifyOpenTasks — a note that says the agent is waiting on a person', () => {
+  it('negative control: without the seam the same row is ordinary in-progress work', () => {
+    const noted = quietRow({
+      notes: [{ ts: now - 40 * MIN, kind: 'turn', text: WAITING_NOTE, agent: 'Beacon Bot' }],
+    });
+    const [row] = classifyOpenTasks([noted], [], [], now, STALL, bands);
+    expect(row?.bucket).toBe('in-progress');
+    expect(row?.unfiledAsk).toBe(false);
+    expect(row?.askedInNoteAt).toBeUndefined();
+  });
+
+  it('with the seam, the row is an unfiled ask dated to the note', () => {
+    const noted = quietRow({
+      notes: [{ ts: now - 40 * MIN, kind: 'turn', text: WAITING_NOTE, agent: 'Beacon Bot' }],
+    });
+    const [row] = classifyOpenTasks([noted], [], [], now, STALL, bands, undefined, seam());
+    expect(row?.bucket).toBe('blocked-on-owner-unfiled');
+    expect(row?.unfiledAsk).toBe(true);
+    expect(row?.askedInNoteAt).toBe(now - 40 * MIN);
+    // The note is still activity — the row is not silent, it is waiting.
+    expect(row?.sinceActivityMs).toBe(40 * MIN);
+    expect(row?.stalled).toBe(false);
+  });
+
+  it('a FILED ask beats the note: a pending review item is the protocol working', () => {
+    const noted = quietRow({
+      notes: [{ ts: now - 40 * MIN, kind: 'turn', text: WAITING_NOTE, agent: 'Beacon Bot' }],
+    });
+    const [row] = classifyOpenTasks(
+      [noted],
+      [],
+      [{ taskId: 't-1', askedAt: now - 30 * MIN }],
+      now,
+      STALL,
+      bands,
+      undefined,
+      seam(),
+    );
+    expect(row?.bucket).toBe('blocked-on-owner');
+    expect(row?.unfiledAsk).toBe(false);
+    expect(row?.askedInNoteAt).toBeUndefined();
+  });
+
+  it('the NEWEST note decides: a progress note after the ask means the agent moved on', () => {
+    const noted = quietRow({
+      notes: [
+        { ts: now - 40 * MIN, kind: 'turn', text: WAITING_NOTE, agent: 'Beacon Bot' },
+        { ts: now - 5 * MIN, kind: 'turn', text: PROGRESS_NOTE, agent: 'Beacon Bot' },
+      ],
+    });
+    const [row] = classifyOpenTasks([noted], [], [], now, STALL, bands, undefined, seam());
+    expect(row?.bucket).toBe('in-progress');
+    expect(row?.askedInNoteAt).toBeUndefined();
+  });
+
+  it('restating the ask does not re-date it — the run is walked back to where it began', () => {
+    const noted = quietRow({
+      notes: [
+        { ts: now - 90 * MIN, kind: 'turn', text: PARKED_NOTE, agent: 'Beacon Bot' },
+        { ts: now - 50 * MIN, kind: 'turn', text: WAITING_NOTE, agent: 'Beacon Bot' },
+        { ts: now - 2 * MIN, kind: 'turn', text: WAITING_NOTE, agent: 'Beacon Bot' },
+      ],
+    });
+    const [row] = classifyOpenTasks([noted], [], [], now, STALL, bands, undefined, seam());
+    expect(row?.askedInNoteAt).toBe(now - 90 * MIN);
+    // …and the ordinary activity clock still reads the newest note, so the
+    // two numbers stay different things (stall-gate.ts takes the longer).
+    expect(row?.sinceActivityMs).toBe(2 * MIN);
+  });
+
+  it('a progress note BREAKS the run, so the ask is dated from after it', () => {
+    const noted = quietRow({
+      notes: [
+        { ts: now - 90 * MIN, kind: 'turn', text: PARKED_NOTE, agent: 'Beacon Bot' },
+        { ts: now - 60 * MIN, kind: 'turn', text: PROGRESS_NOTE, agent: 'Beacon Bot' },
+        { ts: now - 30 * MIN, kind: 'turn', text: WAITING_NOTE, agent: 'Beacon Bot' },
+      ],
+    });
+    const [row] = classifyOpenTasks([noted], [], [], now, STALL, bands, undefined, seam());
+    expect(row?.askedInNoteAt).toBe(now - 30 * MIN);
+  });
+
+  it('notes are read newest-BY-CLOCK, not newest-appended', () => {
+    const noted = quietRow({
+      notes: [
+        { ts: now - 3 * MIN, kind: 'turn', text: PROGRESS_NOTE, agent: 'Beacon Bot' },
+        { ts: now - 45 * MIN, kind: 'turn', text: WAITING_NOTE, agent: 'Beacon Bot' },
+      ],
+    });
+    const [row] = classifyOpenTasks([noted], [], [], now, STALL, bands, undefined, seam());
+    expect(row?.bucket).toBe('in-progress');
+  });
+
+  it('a row a person already owns is unfiled whatever its notes say, and its notes go unread', () => {
+    let judged = 0;
+    const counting = new NoteAskClassifier({
+      personNames: ['Bryan'],
+      judge: async () => {
+        judged += 1;
+        return true;
+      },
+    });
+    const noted = quietRow({
+      ownerKind: 'person',
+      notes: [{ ts: now - 40 * MIN, kind: 'turn', text: WAITING_NOTE, agent: 'Beacon Bot' }],
+    });
+    const [row] = classifyOpenTasks([noted], [], [], now, STALL, bands, undefined, counting);
+    expect(row?.bucket).toBe('blocked-on-owner-unfiled');
+    // The board already says a person is waiting, so no verdict could move
+    // the bucket — and a call that cannot change anything is not made.
+    expect(row?.askedInNoteAt).toBeUndefined();
+    expect(judged).toBe(0);
+  });
+
+  it('a row with a FILED ask spends no confirmation either', () => {
+    let judged = 0;
+    const counting = new NoteAskClassifier({
+      personNames: ['Bryan'],
+      judge: async () => {
+        judged += 1;
+        return true;
+      },
+    });
+    const noted = quietRow({
+      notes: [{ ts: now - 40 * MIN, kind: 'turn', text: WAITING_NOTE, agent: 'Beacon Bot' }],
+    });
+    classifyOpenTasks(
+      [noted],
+      [],
+      [{ taskId: 't-1', askedAt: now - 30 * MIN }],
+      now,
+      STALL,
+      bands,
+      undefined,
+      counting,
+    );
+    expect(judged).toBe(0);
+    // Positive control: the same row with nothing filed DOES spend one, so
+    // the zero above is the gate and not a judge that never runs.
+    classifyOpenTasks([noted], [], [], now, STALL, bands, undefined, counting);
+    expect(judged).toBe(1);
   });
 });
