@@ -10,7 +10,15 @@
  *      launched nothing.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  utimesSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -19,11 +27,18 @@ import {
   DEFAULT_CHROME_BIN,
   MOBILE_TIER_MAX_WIDTH,
   PRESETS,
+  RUN_ID_ENV,
   UsageError,
+  describeStaleProfiles,
+  findStaleProfiles,
   parseArgs,
   parseSize,
+  profilePrefix,
+  profilesOfRun,
   resolveChromeBin,
   resolvePreset,
+  resolveRunId,
+  sanitizeRunId,
 } from './ui-shot-lib.ts';
 
 describe('ui-shot flag parsing', () => {
@@ -113,6 +128,70 @@ describe('ui-shot Chrome binary resolution', () => {
     expect(() => resolveChromeBin(undefined, { CW_CHROME_BIN: '/nope' }, exists([]))).toThrow(
       /CW_CHROME_BIN/,
     );
+  });
+});
+
+describe('ui-shot profile naming', () => {
+  it('stamps the run id into the directory name so a leak is attributable', () => {
+    expect(profilePrefix('shot7')).toBe('cw-ui-shot-shot7-');
+    expect(resolveRunId({}, 4242)).toBe('pid4242');
+    expect(resolveRunId({ [RUN_ID_ENV]: 'vitest-4' }, 1)).toBe('vitest4');
+  });
+
+  it('run ids are alphanumeric, so the separator before the random suffix stays unambiguous', () => {
+    expect(sanitizeRunId('a-b/c 1')).toBe('abc1');
+    expect(sanitizeRunId('x'.repeat(40))).toHaveLength(24);
+    // With `-` allowed inside an id, run "ab" would own run "abc"'s profiles.
+    expect(profilesOfRun(['cw-ui-shot-ab-1', 'cw-ui-shot-abc-1'], 'ab')).toEqual([
+      'cw-ui-shot-ab-1',
+    ]);
+  });
+
+  it("another run's profile is never counted as this run's leak", () => {
+    const names = ['cw-ui-shot-other-AbCdEf', 'cw-ui-shot-mine-123456', 'unrelated'];
+    expect(profilesOfRun(names, 'mine')).toEqual(['cw-ui-shot-mine-123456']);
+    expect(profilesOfRun(names, 'nobody')).toEqual([]);
+  });
+});
+
+describe('ui-shot stale profile report', () => {
+  let dir = '';
+  afterEach(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    dir = '';
+  });
+
+  it('names day-old profiles instead of counting them, and deletes nothing', () => {
+    dir = mkdtempSync(join(tmpdir(), 'ui-shot-stale-'));
+    for (const name of ['cw-ui-shot-old-AAAAAA', 'cw-ui-shot-new-BBBBBB', 'unrelated-dir']) {
+      mkdirSync(join(dir, name));
+    }
+    const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+    utimesSync(join(dir, 'cw-ui-shot-old-AAAAAA'), twoDaysAgo, twoDaysAgo);
+
+    const stale = findStaleProfiles(dir);
+    expect(stale.map((s) => s.name)).toEqual(['cw-ui-shot-old-AAAAAA']);
+
+    const report = describeStaleProfiles(stale, dir);
+    expect(report).toContain('cw-ui-shot-old-AAAAAA');
+    expect(report).toMatch(/4[0-9]h old/);
+    expect(report).not.toContain('cw-ui-shot-new-BBBBBB');
+
+    // Reporting must never be deletion: a stale-looking profile can belong to
+    // another agent's long-running session.
+    expect(readdirSync(dir).sort()).toEqual([
+      'cw-ui-shot-new-BBBBBB',
+      'cw-ui-shot-old-AAAAAA',
+      'unrelated-dir',
+    ]);
+  });
+
+  it('ignores non-profile entries and anything younger than the cutoff', () => {
+    dir = mkdtempSync(join(tmpdir(), 'ui-shot-stale-'));
+    mkdirSync(join(dir, 'cw-ui-shot-fresh-CCCCCC'));
+    mkdirSync(join(dir, 'some-other-tmp'));
+    expect(findStaleProfiles(dir)).toEqual([]);
+    expect(describeStaleProfiles([], dir)).toBe('');
   });
 });
 
