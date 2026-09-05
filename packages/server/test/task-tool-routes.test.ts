@@ -77,7 +77,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       body: JSON.stringify(body),
     });
 
-  /** A fresh hub workspace with a north-star goal + two board goals. The ids
+  /** A fresh board workspace with a north-star goal + two board goals. The ids
    *  are minted by the server, so the bands come back keyed by the labels this
    *  file used to hard-code as ids (`g1`, `g1a`, `g2`). */
   async function seedWorkspace(): Promise<{ wsId: string; G: GoalIds }> {

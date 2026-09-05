@@ -239,12 +239,12 @@ describe('web app shells', () => {
     expect(html).toContain('apple-touch-icon');
   });
 
-  it('links the manifest from the hub shell', async () => {
+  it('links the manifest from the board shell', async () => {
     const { base } = await start();
     const created = await fetch(`${base}/api/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'push-hub', goal: 'Ship it.' }),
+      body: JSON.stringify({ name: 'push-board', goal: 'Ship it.' }),
     });
     const { workspace } = (await created.json()) as { workspace: { id: string } };
     const html = await (await fetch(`${base}/workspaces/${workspace.id}`)).text();

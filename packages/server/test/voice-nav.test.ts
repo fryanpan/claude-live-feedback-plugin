@@ -1,13 +1,13 @@
 /**
  * Voice navigation to places that have no TITLE.
  *
- * Observed at the hub (Bryan, 2026-08-29): "can you open up my top goal" and
+ * Observed at the board (Bryan, 2026-08-29): "can you open up my top goal" and
  * "can you take me to the homepage" both came back "Nothing here matched —
  * sent to the lead agent". The lead agent cannot drive a browser, so a
- * lookup miss on a destination the hub itself owns is a dead end. Two kinds
+ * lookup miss on a destination the board itself owns is a dead end. Two kinds
  * of ask resolve here without any model:
  *
- *  - the hub's own destinations — Home, the board, My tasks, Activity — by a
+ *  - the board's own destinations — Home, the board, My tasks, Activity — by a
  *    small explicit phrase table (never a regex that would swallow a task
  *    whose title contains "home");
  *  - a goal by ORDINAL — "my top goal", "the second goal", "the last goal" —
@@ -23,40 +23,40 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { goalOrdinalAsk, hubDestinationAsk, resolveByTitle, spokenKind } from '../src/voice.ts';
+import { boardDestinationAsk, goalOrdinalAsk, resolveByTitle, spokenKind } from '../src/voice.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
 
 // ── Unit: the deterministic pieces ─────────────────────────────────────────
 
-describe('hubDestinationAsk: the hub’s own destinations, by explicit phrase', () => {
+describe('boardDestinationAsk: the board’s own destinations, by explicit phrase', () => {
   it('hears Bryan’s two phrasings of Home', () => {
-    expect(hubDestinationAsk('can you take me to the homepage')).toBe('home');
-    expect(hubDestinationAsk('take me to the homepage')).toBe('home');
-    expect(hubDestinationAsk('go home')).toBe('home');
-    expect(hubDestinationAsk('open home')).toBe('home');
-    expect(hubDestinationAsk('Take me to the home page.')).toBe('home');
+    expect(boardDestinationAsk('can you take me to the homepage')).toBe('home');
+    expect(boardDestinationAsk('take me to the homepage')).toBe('home');
+    expect(boardDestinationAsk('go home')).toBe('home');
+    expect(boardDestinationAsk('open home')).toBe('home');
+    expect(boardDestinationAsk('Take me to the home page.')).toBe('home');
   });
 
   it('hears the board, my tasks and activity', () => {
-    expect(hubDestinationAsk('show me the board')).toBe('tasks');
-    expect(hubDestinationAsk('go to the task board')).toBe('tasks');
-    expect(hubDestinationAsk('open my tasks')).toBe('mine');
-    expect(hubDestinationAsk('show me the activity pane')).toBe('activity');
+    expect(boardDestinationAsk('show me the board')).toBe('tasks');
+    expect(boardDestinationAsk('go to the task board')).toBe('tasks');
+    expect(boardDestinationAsk('open my tasks')).toBe('mine');
+    expect(boardDestinationAsk('show me the activity pane')).toBe('activity');
   });
 
   it('a trailing "in <board>" names the workspace, not the destination', () => {
-    expect(hubDestinationAsk('take me to the homepage in QB', ['QB'])).toBe('home');
-    expect(hubDestinationAsk('go home in QB', ['QB'])).toBe('home');
-    expect(hubDestinationAsk('take me home on the QB board', ['QB'])).toBe('home');
+    expect(boardDestinationAsk('take me to the homepage in QB', ['QB'])).toBe('home');
+    expect(boardDestinationAsk('go home in QB', ['QB'])).toBe('home');
+    expect(boardDestinationAsk('take me home on the QB board', ['QB'])).toBe('home');
   });
 
   it('is a table, not a substring: a task with "home" in its name is NOT a destination', () => {
-    expect(hubDestinationAsk('open the home page redesign')).toBeNull();
-    expect(hubDestinationAsk('open the homepage copy task')).toBeNull();
-    expect(hubDestinationAsk('mark the home page done')).toBeNull();
-    expect(hubDestinationAsk('brief status')).toBeNull();
-    expect(hubDestinationAsk('go home and rest')).toBeNull();
+    expect(boardDestinationAsk('open the home page redesign')).toBeNull();
+    expect(boardDestinationAsk('open the homepage copy task')).toBeNull();
+    expect(boardDestinationAsk('mark the home page done')).toBeNull();
+    expect(boardDestinationAsk('brief status')).toBeNull();
+    expect(boardDestinationAsk('go home and rest')).toBeNull();
   });
 });
 
@@ -123,7 +123,7 @@ describe('voice navigation (route)', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
-  let hubId: string;
+  let boardId: string;
   /** Goal ids in PRIORITY order, as `PUT /goals` returned them. */
   let goalIds: string[] = [];
   let homeTaskId: string;
@@ -148,11 +148,11 @@ describe('voice navigation (route)', () => {
 
   const say = async (
     transcript: string,
-    workspaceId = hubId,
+    workspaceId = boardId,
   ): Promise<{ route: string; ack: string; navigate?: string }> => {
     const r = await post(`/api/workspaces/${workspaceId}/voice`, {
       transcript,
-      context: { surface: 'hub' },
+      context: { surface: 'board' },
       author: PERSON,
     });
     expect(r.status).toBe(200);
@@ -174,10 +174,10 @@ describe('voice navigation (route)', () => {
 
     const ws = await post('/api/workspaces', { name: 'QB', goal: 'Ship onboarding.' });
     expect(ws.status).toBe(200);
-    hubId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
+    boardId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
 
     const goals = await post(
-      `/api/workspaces/${hubId}/goals`,
+      `/api/workspaces/${boardId}/goals`,
       {
         author: PERSON,
         goals: [
@@ -189,11 +189,11 @@ describe('voice navigation (route)', () => {
       'PUT',
     );
     expect(goals.status).toBe(200);
-    goalIds = (handle.tasks.getWorkspace(hubId)?.goals ?? []).map((g) => g.id);
+    goalIds = (handle.tasks.getWorkspace(boardId)?.goals ?? []).map((g) => g.id);
     expect(goalIds).toHaveLength(3);
 
     // The swallow control: a TASK whose title contains "home page".
-    const t = await post(`/api/workspaces/${hubId}/tasks`, {
+    const t = await post(`/api/workspaces/${boardId}/tasks`, {
       title: 'Home page redesign',
       author: PERSON,
     });
@@ -210,48 +210,50 @@ describe('voice navigation (route)', () => {
     calls.n = 0;
     const body = await say('can you take me to the homepage');
     expect(body.route).toBe('fast-path');
-    expect(body.navigate).toBe(`/workspaces/${hubId}/home`);
+    expect(body.navigate).toBe(`/workspaces/${boardId}/home`);
     expect(body.ack).toContain('Home');
     expect(calls.n).toBe(0);
   });
 
   it('"go home" and "open home" are the same ask', async () => {
-    expect((await say('go home')).navigate).toBe(`/workspaces/${hubId}/home`);
-    expect((await say('open home')).navigate).toBe(`/workspaces/${hubId}/home`);
+    expect((await say('go home')).navigate).toBe(`/workspaces/${boardId}/home`);
+    expect((await say('open home')).navigate).toBe(`/workspaces/${boardId}/home`);
   });
 
   it('"show me the board" opens the board — the bare workspace path', async () => {
     calls.n = 0;
     const body = await say('show me the board');
     expect(body.route).toBe('fast-path');
-    expect(body.navigate).toBe(`/workspaces/${hubId}`);
+    expect(body.navigate).toBe(`/workspaces/${boardId}`);
     expect(body.ack.toLowerCase()).toContain('board');
     expect(calls.n).toBe(0);
   });
 
   it('"open my tasks" and "show me the activity pane" reach the other two destinations', async () => {
-    expect((await say('open my tasks')).navigate).toBe(`/workspaces/${hubId}/mine`);
-    expect((await say('show me the activity pane')).navigate).toBe(`/workspaces/${hubId}/activity`);
+    expect((await say('open my tasks')).navigate).toBe(`/workspaces/${boardId}/mine`);
+    expect((await say('show me the activity pane')).navigate).toBe(
+      `/workspaces/${boardId}/activity`,
+    );
   });
 
   it('"open my top goal" opens the highest-priority goal’s detail, naming it', async () => {
     calls.n = 0;
     const body = await say('can you open up my top goal');
     expect(body.route).toBe('fast-path');
-    expect(body.navigate).toBe(`/workspaces/${hubId}?goal=${goalIds[0]}`);
+    expect(body.navigate).toBe(`/workspaces/${boardId}?goal=${goalIds[0]}`);
     expect(body.ack).toContain('Sign-in that just works');
     expect(calls.n).toBe(0);
     expect((await say('open the first goal')).navigate).toBe(
-      `/workspaces/${hubId}?goal=${goalIds[0]}`,
+      `/workspaces/${boardId}?goal=${goalIds[0]}`,
     );
   });
 
   it('"the second goal" is index 1; "the last goal" is the bottom of the order', async () => {
     expect((await say('show me the second goal')).navigate).toBe(
-      `/workspaces/${hubId}?goal=${goalIds[1]}`,
+      `/workspaces/${boardId}?goal=${goalIds[1]}`,
     );
     expect((await say('go to the last goal')).navigate).toBe(
-      `/workspaces/${hubId}?goal=${goalIds[2]}`,
+      `/workspaces/${boardId}?goal=${goalIds[2]}`,
     );
   });
 
@@ -259,7 +261,7 @@ describe('voice navigation (route)', () => {
     calls.n = 0;
     const body = await say('open the sign-in goal');
     expect(body.route).toBe('fast-path');
-    expect(body.navigate).toBe(`/workspaces/${hubId}?goal=${goalIds[0]}`);
+    expect(body.navigate).toBe(`/workspaces/${boardId}?goal=${goalIds[0]}`);
     expect(body.ack).toContain('Sign-in that just works');
     expect(calls.n).toBe(0);
   });
@@ -267,7 +269,7 @@ describe('voice navigation (route)', () => {
   it('a task with "home page" in its title is still the TASK, not Home', async () => {
     calls.n = 0;
     const body = await say('open the home page redesign');
-    expect(body.navigate).toBe(`/workspaces/${hubId}?task=${homeTaskId}`);
+    expect(body.navigate).toBe(`/workspaces/${boardId}?task=${homeTaskId}`);
     expect(calls.n).toBe(0);
   });
 

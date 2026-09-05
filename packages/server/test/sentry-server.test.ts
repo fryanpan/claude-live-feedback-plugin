@@ -69,7 +69,7 @@ describe('routePatternForSpan: default-deny redaction', () => {
     // server.ts serves these four with `pathname.startsWith('/<root>/')`,
     // not a fixed segment count — codex review caught the whole-template
     // rewrite silently collapsing them to the generic `/:id/:id` fallback.
-    expect(routePatternForSpan('/app/hub.js')).toBe('/app/:id');
+    expect(routePatternForSpan('/app/board.js')).toBe('/app/:id');
     expect(routePatternForSpan('/widget/assets/chunk-abc123.js')).toBe('/widget/:id');
     expect(routePatternForSpan('/demos/some-demo/index.html')).toBe('/demos/:id');
     expect(routePatternForSpan('/projects/octocat/hello-world')).toBe('/projects/:id');
@@ -113,7 +113,7 @@ describe('routePatternForSpan: default-deny redaction', () => {
   it('names the reviewApi subroutes under both of their live aliases', () => {
     // codex review: server.ts's `reviewApi(sub)` builds ONE regex per
     // subroute that matches `/api/(?:reviews|workspaces)/:id/<sub>` — a
-    // review or a hub workspace addressed under either prefix (compat for
+    // review or a board workspace addressed under either prefix (compat for
     // long-running sessions and open tabs). Missing either alias here isn't
     // a privacy bug (an unmatched path still redacts to all-:id), but it
     // does lose the route name for every request to that alias — this

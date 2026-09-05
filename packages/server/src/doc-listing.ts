@@ -67,7 +67,7 @@ export interface CompactDocRow {
   relPath?: string;
   /** The review (folder bind / diff review) this doc is a member of. */
   setId?: string;
-  /** The hub board the doc is addressed under — the one in `reviewUrl`. */
+  /** The board the doc is addressed under — the one in `reviewUrl`. */
   boardId?: string;
   createdAt: number;
   lastActivityAt?: number;

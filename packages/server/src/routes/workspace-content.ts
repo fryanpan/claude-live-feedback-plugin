@@ -46,12 +46,12 @@ export async function handleWorkspaceContent(
     safeJson,
     externalBaseUrl,
     withReviewUrl,
-    fileUnderHubWorkspace,
+    fileUnderBoardWorkspace,
     unfileFromDefault,
     workspacesOfDoc,
   } = ctx;
   const { req, pathname, authorFor, visitor } = rq;
-  // attach_doc: link an existing doc or review to a hub workspace.
+  // attach_doc: link an existing doc or review to a board workspace.
   const wsAttachMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/docs$/);
   if (wsAttachMatch && req.method === 'POST') {
     const workspaceId = decodeURIComponent(wsAttachMatch[1] ?? '');
@@ -118,7 +118,7 @@ export async function handleWorkspaceContent(
   // hand-maintained tracker (group headings + status tables). The
   // DEFAULT is a dry-run that returns the mapping and touches nothing;
   // apply:true creates the goals + tasks and stamps the source file
-  // with a banner + hub link so the old tracker can't quietly stay a
+  // with a banner + board link so the old tracker can't quietly stay a
   // second source of truth (a stamped file refuses re-import).
   const wsImportMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/import-tasks$/);
   if (wsImportMatch && req.method === 'POST') {
@@ -192,12 +192,12 @@ export async function handleWorkspaceContent(
     // pull the banner into the live doc too — reparse right after our
     // own write, so disk (which we just wrote) wins the race with the
     // doc's debounced flush.
-    const hubUrl = `${externalBaseUrl()}/workspaces/${encodeURIComponent(workspaceId)}`;
+    const boardUrl = `${externalBaseUrl()}/workspaces/${encodeURIComponent(workspaceId)}`;
     writeFileSync(
       path,
       importBanner({
         workspaceId,
-        hubUrl,
+        boardUrl,
         taskCount: res.tasksCreated.length,
         ts: Date.now(),
       }) + markdown,
@@ -209,7 +209,7 @@ export async function handleWorkspaceContent(
     return j(200, {
       ok: true,
       workspaceId,
-      hubUrl,
+      boardUrl,
       stamped: true,
       goalsCreated: res.goalsCreated,
       tasksCreated: res.tasksCreated,
@@ -226,7 +226,7 @@ export async function handleWorkspaceContent(
   // The Board's "Make a plan" / "Have a meeting" buttons. ONE call: a
   // workspace-tied markdown doc, titled by its kind and the clock, empty or headed
   // by the topic, filed on this board exactly as every other board doc
-  // is (so `list_docs`, the hub's docs list and the board fan-out see
+  // is (so `list_docs`, the board's docs list and the board fan-out see
   // it with no new verb), flagged `huddle`, and answered with where to
   // open it. The mic is the browser's to start; the server's part ends
   // at the doc. A member of this board reaches it too (Bryan, 2026-09-03:
@@ -295,7 +295,7 @@ export async function handleWorkspaceContent(
     }
     const room = created.room;
     const docId = room.docId;
-    const hubWorkspaceId = fileUnderHubWorkspace(docId, workspaceId);
+    const boardWorkspaceId = fileUnderBoardWorkspace(docId, workspaceId);
     // The file first, then the bind — `attachFile` seeds the room from
     // the file when the room is empty, so the topic heading lands
     // through the same path a bound project file's content does, and
@@ -317,7 +317,7 @@ export async function handleWorkspaceContent(
       // link-refs route does.
       if (linked.ok) taskProjection.ensureWorkspace(linked.task.workspaceId);
     }
-    const decorated = withReviewUrl(room.meta, hubWorkspaceId);
+    const decorated = withReviewUrl(room.meta, boardWorkspaceId);
     /**
      * The reply's doc metadata, as this caller may see it.
      *
@@ -341,9 +341,9 @@ export async function handleWorkspaceContent(
       ...(typeof huddleTaskId === 'string' ? { taskId: huddleTaskId } : {}),
       // Where the Board opens it — the SPA doc route under THIS board,
       // relative so the client navigates within its own origin.
-      url: `/workspaces/${encodeURIComponent(hubWorkspaceId)}/docs/${encodeURIComponent(docId)}`,
+      url: `/workspaces/${encodeURIComponent(boardWorkspaceId)}/docs/${encodeURIComponent(docId)}`,
       ...(reviewUrl !== undefined ? { reviewUrl } : {}),
-      hubWorkspaceId,
+      hubWorkspaceId: boardWorkspaceId,
       meta,
       ...(parsedTopic.topic !== undefined ? { topic: parsedTopic.topic } : {}),
     });

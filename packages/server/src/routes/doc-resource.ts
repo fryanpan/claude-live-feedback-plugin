@@ -43,7 +43,7 @@ export async function handleDocResourceCore(
     safeJson,
     ANONYMOUS_ACTOR,
     backTargetFor,
-    unlinkFromEveryHubWorkspace,
+    unlinkFromEveryBoardWorkspace,
     withReviewUrl,
     fileReviewRequest,
   } = ctx;
@@ -105,11 +105,11 @@ export async function handleDocResourceCore(
     // reference this doc — directly or via one of its threads.
     // Visitor-safe by construction (§3.3 rule 2); omitted when empty.
     const taskRefs = docTaskEntries();
-    // Which hub workspace this doc is attached to, so the doc surface
+    // Which board workspace this doc is attached to, so the doc surface
     // can route voice utterances (§3.8: voice is not board-only).
     // OWNER ONLY: a workspace id is an unguessable URL capability, and
     // a doc-scoped visitor must not learn it from a member doc.
-    const hubWs = visitor ? null : taskStore.workspaceOfDoc(docId);
+    const boardWs = visitor ? null : taskStore.workspaceOfDoc(docId);
     // Where the review app's `←` should go: the board that links this
     // doc, rather than the machine-wide landing page. OWNER ONLY for
     // the same reason `hubWorkspaceId` is — a board id is an
@@ -120,12 +120,12 @@ export async function handleDocResourceCore(
     const backTo = visitor ? null : backTargetFor(docId, room.meta.workspaceId);
     // Who the Make Plan float names ("Ask <lead> to create a plan").
     // Owner-only like the board id it comes from; a lead id is
-    // already a display name everywhere the hub shows one.
-    const lead = hubWs ? taskStore.getWorkspace(hubWs)?.leadAgentId : undefined;
+    // already a display name everywhere the board shows one.
+    const lead = boardWs ? taskStore.getWorkspace(boardWs)?.leadAgentId : undefined;
     return j(200, {
       meta: metaFor(room.meta),
       ...(taskRefs.length > 0 ? { tasks: taskRefs } : {}),
-      ...(hubWs ? { hubWorkspaceId: hubWs } : {}),
+      ...(boardWs ? { hubWorkspaceId: boardWs } : {}),
       ...(lead !== undefined ? { leadAgentId: lead } : {}),
       ...(backTo ? { backTo: { workspaceId: backTo.id, name: backTo.name } } : {}),
     });
@@ -134,7 +134,7 @@ export async function handleDocResourceCore(
     const force = url.searchParams.get('force') === 'true';
     const res = docStore.deleteDoc(docId, { force });
     if (res.ok) {
-      unlinkFromEveryHubWorkspace(docId);
+      unlinkFromEveryBoardWorkspace(docId);
       return j(200, res);
     }
     return j(res.error === 'has-open-threads' ? 409 : 404, res);

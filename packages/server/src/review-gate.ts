@@ -33,7 +33,7 @@ import type { DocStore } from './doc-store.ts';
 import { taskDeepLink } from './home-brief.ts';
 import type { ReviewGate, ThreadReviewGate } from './review-gate-types.ts';
 import type { ReviewJudge, ReviewJudgeVerdict } from './review-judge.ts';
-import type { SseHub } from './sse.ts';
+import type { SseBus } from './sse.ts';
 import { REVIEW_ITEM_HELD_EVENT, type ReviewItemHeldFrame } from './stall-nudge.ts';
 import type { TaskProjection } from './task-projection.ts';
 import {
@@ -85,12 +85,12 @@ export type ReviewGateAddress =
 export interface ReviewGateContext {
   /** Doc store — a comment-borne declaration is judged and stamped on one. */
   docStore: DocStore;
-  /** The hub store — the tickets, their items and the board's criteria. */
+  /** The board store — the tickets, their items and the board's criteria. */
   taskStore: TaskStore;
   /** The ydoc projection, refreshed after a verdict the store does not emit. */
   taskProjection: TaskProjection;
-  /** The event hub a held-item frame is pushed down. */
-  sse: SseHub;
+  /** The event bus a held-item frame is pushed down. */
+  sse: SseBus;
 
   /**
    * The one `ServerOptions` field this module reads.

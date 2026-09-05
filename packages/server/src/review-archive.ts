@@ -32,7 +32,7 @@ export interface ArchivedReview {
   root?: string;
   docIds: string[];
   /**
-   * Hub boards the review was linked to when it was archived. Archiving
+   * Boards the review was linked to when it was archived. Archiving
    * detaches it from each (a board row pointing at a doc that no longer loads
    * is a dead end), and unarchive re-attaches exactly these — so the round
    * trip lands the review back where it was rather than orphaned.

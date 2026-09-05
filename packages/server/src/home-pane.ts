@@ -43,7 +43,7 @@ import { type ReviewItemRow, reviewItemRows } from './review-queue.ts';
 import type { ThreadSummarizer } from './summarize.ts';
 import { taskBodyDocId } from './task-projection.ts';
 import {
-  type HubWorkspace,
+  type BoardWorkspace,
   LEGACY_REVIEW_ITEM_ID,
   type TaskStore,
   legacyDecisionItem,
@@ -86,11 +86,11 @@ export interface HomePane {
   /** The read-marker + stored-brief store, also read by the Home routes. */
   homeBriefs: HomeBriefStore;
   /** The review items exactly as `GET /review-items` ships them. */
-  reviewItemsFor: (workspace: HubWorkspace) => ReviewItemRow[];
+  reviewItemsFor: (workspace: BoardWorkspace) => ReviewItemRow[];
   /** How many items the Home queue holds right now, over those items. */
-  homeQueueTotal: (workspace: HubWorkspace, items: ReviewItemRow[]) => number;
+  homeQueueTotal: (workspace: BoardWorkspace, items: ReviewItemRow[]) => number;
   /** Everything `GET /home` answers, brief included. */
-  homePayload: (workspace: HubWorkspace, person: string, now: number) => HomePayload;
+  homePayload: (workspace: BoardWorkspace, person: string, now: number) => HomePayload;
 }
 
 export function createHomePane(ctx: HomePaneContext): HomePane {
@@ -104,7 +104,7 @@ export function createHomePane(ctx: HomePaneContext): HomePane {
   /** The review items exactly as GET /review-items ships them.
    *  ONE builder for that route and for the brief's queue count, so the
    *  number the brief prints cannot drift from the queue rendered under it. */
-  const reviewItemsFor = (workspace: HubWorkspace): ReviewItemRow[] =>
+  const reviewItemsFor = (workspace: BoardWorkspace): ReviewItemRow[] =>
     reviewItemRows({
       tasks: taskStore.listTasks(workspace.id).map((t) => ({
         id: t.id,
@@ -170,7 +170,7 @@ export function createHomePane(ctx: HomePaneContext): HomePane {
    * queue that renders nothing.
    *
    * TICKET-borne rows (`kind: 'task-review'`) count too — Home places them
-   * now (`reviewQueue` in hub-review-model.ts), which closed the measured gap where
+   * now (`reviewQueue` in board-review-model.ts), which closed the measured gap where
    * a review item filed with `create_tasks` / `add_review_item` was shipped
    * by the route and rendered by nothing. The one exception is the DERIVED
    * `r-legacy` row: its legacy decision is already counted from the tasks
@@ -184,7 +184,7 @@ export function createHomePane(ctx: HomePaneContext): HomePane {
    * derived rows instead would tie this number to a row Home does not read.
    * A decision is therefore counted once, never twice.
    */
-  const homeQueueTotal = (workspace: HubWorkspace, items: ReviewItemRow[]): number => {
+  const homeQueueTotal = (workspace: BoardWorkspace, items: ReviewItemRow[]): number => {
     const open = taskStore.listTasks(workspace.id).filter((t) => t.status !== 'done');
     // A decision the reader has asked on is the OWNER's turn and off the
     // browser's queue (`decisionRows` reads `decisionState`), so it is not
@@ -200,7 +200,7 @@ export function createHomePane(ctx: HomePaneContext): HomePane {
     return rendered.length + decisions.length;
   };
 
-  const homeBriefInput = (workspace: HubWorkspace, since: number): BriefInput => {
+  const homeBriefInput = (workspace: BoardWorkspace, since: number): BriefInput => {
     const events = briefEvents(readEventRows(dataDir, workspace.id), since);
     const items = reviewItemsFor(workspace);
     return {
@@ -213,7 +213,7 @@ export function createHomePane(ctx: HomePaneContext): HomePane {
 
   /** Fire-and-forget one generation; the client re-reads when it lands. */
   const generateHomeBriefFor = (
-    workspace: HubWorkspace,
+    workspace: BoardWorkspace,
     person: string,
     marker: number,
     input: BriefInput,
@@ -256,7 +256,7 @@ export function createHomePane(ctx: HomePaneContext): HomePane {
    * brief-relevant events — see BRIEF_EVENT_TYPES for why heartbeats are
    * excluded from that count.
    */
-  const homePayload = (workspace: HubWorkspace, person: string, now: number): HomePayload => {
+  const homePayload = (workspace: BoardWorkspace, person: string, now: number): HomePayload => {
     const marker = homeBriefs.lastReadAt(workspace.id, person);
     const since = effectiveSince(marker, now);
     const input = homeBriefInput(workspace, since);

@@ -2,7 +2,7 @@
  * What a page's boot sequence is allowed to reach for.
  *
  * Both entry points — the document editor (`app.ts`) and the board
- * (`hub/hub-app.ts`) — used to run their whole boot on import, against the
+ * (`board/board-app.ts`) — used to run their whole boot on import, against the
  * ambient `document` / `location` / `history` / `localStorage` and a real
  * WebSocket. That is why neither could be loaded in a test at all: importing
  * the module WAS running the app, so their sequences were pinned by reading

@@ -127,7 +127,7 @@ boot: a malformed one is a startup failure with a named error, not a silent
 fallback.
 
 Step 2 is not optional polish. `publicBaseUrl` is the single source of every
-`reviewUrl`, `entryUrl` and task-import `hubUrl` the server emits — the links
+`reviewUrl`, `entryUrl` and task-import `boardUrl` the server emits — the links
 agents paste into chat. Without it those keep reading
 `http://<tailnet-name>:8787`, so every link lands back on the insecure origin
 and voice stays dead for anyone who follows one. The TLS deploy would look
@@ -203,7 +203,7 @@ that no longer answers. Undo them together, frontend last.
 
 - **Agents.** The MCP resolves `http://localhost:<port>` from a file holding a
   port and a pid. No hostname is involved and no session needs restarting.
-- **The client's own URLs.** The workspaces-app, the redline view, the hub and
+- **The client's own URLs.** The workspaces-app, the redline view, the board and
   the widget all build their websocket URL as
   `location.protocol === 'https:' ? 'wss' : 'ws'`, so they follow the page.
   There was nothing to fix there.

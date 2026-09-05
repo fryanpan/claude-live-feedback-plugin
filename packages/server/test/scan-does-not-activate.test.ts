@@ -20,7 +20,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DocStore } from '../src/doc-store.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { SseHub } from '../src/sse.ts';
+import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 
 describe('a scan does not activate the docs it enumerates', () => {
@@ -39,7 +39,7 @@ describe('a scan does not activate the docs it enumerates', () => {
   it('peek reads a doc without putting it in the fast lane; get still does', () => {
     const docStore = new DocStore({
       dataDir,
-      sse: new SseHub(),
+      sse: new SseBus(),
       webhooks: createWebhookDispatcher({ onLog: () => {} }),
     });
     const docIds: string[] = [];
@@ -71,7 +71,7 @@ describe('a scan does not activate the docs it enumerates', () => {
   it('peek resolves the same ids and aliases as get', () => {
     const docStore = new DocStore({
       dataDir,
-      sse: new SseHub(),
+      sse: new SseBus(),
       webhooks: createWebhookDispatcher({ onLog: () => {} }),
     });
     // `get` now routes through `peek`, so alias resolution has exactly one

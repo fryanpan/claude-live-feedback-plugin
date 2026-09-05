@@ -46,7 +46,7 @@ import {
   resolveHomeCheckout,
   verifyPathInHome,
 } from './doc-home.ts';
-import { isHubOwnedDoc } from './doc-ids.ts';
+import { isBoardOwnedDoc } from './doc-ids.ts';
 import { DOC_STORE_TIMINGS } from './doc-store-timings.ts';
 import type { DocRoom } from './doc-store.ts';
 import { showFile } from './git-diff.ts';
@@ -740,7 +740,7 @@ export class FileBindings {
     | { ok: false; error: 'not-found' | 'invalid-home' | 'not-markdown'; detail?: string } {
     const room = this.p.room(docId);
     if (!room) return { ok: false, error: 'not-found' };
-    if (isHubOwnedDoc(room.docId) || contentKind(room.meta.type) !== 'prose') {
+    if (isBoardOwnedDoc(room.docId) || contentKind(room.meta.type) !== 'prose') {
       return {
         ok: false,
         error: 'not-markdown',
@@ -881,7 +881,7 @@ export class FileBindings {
   maybeRebindHome(room: DocRoom, opts?: { force?: boolean }): void {
     const home = room.meta.docHome;
     if (!home || this.bindings.has(room.docId)) return;
-    if (isHubOwnedDoc(room.docId) || contentKind(room.meta.type) !== 'prose') return;
+    if (isBoardOwnedDoc(room.docId) || contentKind(room.meta.type) !== 'prose') return;
     const now = Date.now();
     if (!opts?.force && now - (this.homeRebindAttemptAt.get(room.docId) ?? 0) < 1000) return;
     this.homeRebindAttemptAt.set(room.docId, now);
@@ -1245,7 +1245,7 @@ export class FileBindings {
     // with reparse documented as one of its two recovery verbs.
     if (
       room.meta.docHome &&
-      !isHubOwnedDoc(room.docId) &&
+      !isBoardOwnedDoc(room.docId) &&
       contentKind(room.meta.type) === 'prose'
     ) {
       const bound = this.bindings.get(docId);

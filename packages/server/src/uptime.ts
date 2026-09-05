@@ -1,12 +1,12 @@
 /**
  * Deploy readiness (plan §3.12 commit 11): uptime measured from the
  * per-workspace events.jsonl audit log, against the 99% availability target
- * (goal 4.4 — "the hub is up when you pull out your phone").
+ * (goal 4.4 — "the board is up when you pull out your phone").
  *
  * The log is the substrate: every event line is proof the server was alive
  * at that instant, so downtime is a GAP analysis — any silence wider than
  * the tick grace means the process was down (or unable to write, which for
- * a hub you can't reach amounts to the same thing). Real store events alone
+ * a board you can't reach amounts to the same thing). Real store events alone
  * can't carry this — an idle workspace emits nothing for hours — so the
  * UptimeMonitor appends a periodic `server.tick` marker as a liveness
  * floor, plus one `server.started` at boot so a restart bounds the outage

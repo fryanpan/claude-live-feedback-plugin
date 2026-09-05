@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DocStore } from '../src/doc-store.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { SseHub } from '../src/sse.ts';
+import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 import { pastWriteBack, waitFor, waitForFile, waitForFileToBe } from './wait-for.ts';
 
@@ -29,7 +29,7 @@ import { pastWriteBack, waitFor, waitForFile, waitForFileToBe } from './wait-for
 function makeDocStore(dataDir: string): DocStore {
   return new DocStore({
     dataDir,
-    sse: new SseHub(),
+    sse: new SseBus(),
     webhooks: createWebhookDispatcher({ onLog: () => {} }),
     decorateDocMeta: (m) => ({ ...m, reviewUrl: `http://test/review/${m.docId}` }),
   });

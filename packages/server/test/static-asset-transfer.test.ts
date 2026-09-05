@@ -48,7 +48,7 @@ describe('static assets are compressed and revalidatable', () => {
     distDir = mkdtempSync(join(tmpdir(), 'static-transfer-dist-'));
     mkdirSync(distDir, { recursive: true });
     writeFileSync(join(distDir, 'styles.css'), CSS_BODY);
-    writeFileSync(join(distDir, 'hub.js'), JS_BODY);
+    writeFileSync(join(distDir, 'board.js'), JS_BODY);
 
     handle = createServer({ port: 0, dataDir, markdownAppDistDir: distDir });
     base = `http://localhost:${handle.port}`;
@@ -63,7 +63,7 @@ describe('static assets are compressed and revalidatable', () => {
   it('gzips CSS and JS for a client that asks', async () => {
     for (const [path, raw] of [
       ['/app/styles.css', CSS_BODY],
-      ['/app/hub.js', JS_BODY],
+      ['/app/board.js', JS_BODY],
     ] as const) {
       // Positive control: without the header the full body still arrives, so
       // "smaller when asked" below is a claim about encoding and not about a
@@ -110,18 +110,18 @@ describe('static assets are compressed and revalidatable', () => {
   });
 
   it('gives a changed file a different etag', async () => {
-    const before = await get('/app/hub.js');
+    const before = await get('/app/board.js');
     const beforeTag = before.headers.get('etag');
     expect(beforeTag).toBeTruthy();
 
     // A redeploy rewrites the file in place. If the etag did not move, every
     // client holding the old one would be told 304 and keep running the old
     // bundle — the silent-stale-deploy failure this server already knows well.
-    writeFileSync(join(distDir, 'hub.js'), `${JS_BODY}// changed\n`);
+    writeFileSync(join(distDir, 'board.js'), `${JS_BODY}// changed\n`);
 
-    const after = await get('/app/hub.js');
+    const after = await get('/app/board.js');
     expect(after.headers.get('etag')).not.toBe(beforeTag);
-    const stillMatched = await get('/app/hub.js', { 'if-none-match': beforeTag as string });
+    const stillMatched = await get('/app/board.js', { 'if-none-match': beforeTag as string });
     expect(stillMatched.status).toBe(200);
   });
 

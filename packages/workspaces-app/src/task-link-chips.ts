@@ -187,7 +187,7 @@ export function refreshTaskLinkChips(view: EditorView): void {
 
 /**
  * Keep this editor's chips live: the board's `task.transitioned` push stales
- * every cached status and the next rebuild re-asks — the same event the hub
+ * every cached status and the next rebuild re-asks — the same event the board
  * refreshes its own chips on. Returns the teardown; callers bind it to the
  * mount scope so navigation closes the stream.
  */

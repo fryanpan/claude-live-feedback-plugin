@@ -5,7 +5,7 @@ import { IOS_ACCESSORY, keyboardInset, wireKeyboardInset } from '../src/keyboard
  * The bottom inset the on-screen keyboard takes, as a number anything docked
  * to the bottom of the window can be lifted by.
  *
- * It lived inside `app.ts` as a private function, which is why the HUB never
+ * It lived inside `app.ts` as a private function, which is why the BOARD never
  * had it: the board, Home and the task panel are a different entry point, and
  * a fix written into the doc app's setup reaches none of them. Extracted so
  * both entries can call the same wiring, and so the arithmetic — the part

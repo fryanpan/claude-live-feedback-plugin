@@ -1,12 +1,12 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import * as boardIsland from '../src/hub/board-island.tsx';
-import * as hubDetailRender from '../src/hub/hub-detail-render.ts';
-import * as hubRender from '../src/hub/hub-render.ts';
-import * as taskDetailIsland from '../src/hub/task-detail-island.tsx';
+import * as boardDetailRender from '../src/board/board-detail-render.ts';
+import * as boardIsland from '../src/board/board-island.tsx';
+import * as boardRender from '../src/board/board-render.ts';
+import * as taskDetailIsland from '../src/board/task-detail-island.tsx';
 import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
-import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
+import { BOARD_BOOT_SOURCES } from './support/board-boot-sources.ts';
 
 /**
  * The board's two side rails — "Docs" and "Open threads (N)" — are gone.
@@ -26,32 +26,32 @@ import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
  * something that is still there. Without that half a mistyped path, a moved
  * file or an empty string reads as a clean removal.
  *
- * The stylesheet layer no longer greps `hub.css`. It installs the board's
+ * The stylesheet layer no longer greps `board.css`. It installs the board's
  * sheets and reads the computed style of the classes, so the control and the
  * absence are both measured the way a browser would answer them.
  */
 
 const SRC = resolve(import.meta.dirname, '../src');
-// The hub's boot sources: `hub-app.ts` and the three modules split out of
+// The board's boot sources: `board-app.ts` and the three modules split out of
 // it. Read as one string because these assertions are about the board's
 // shape, not about which file a line ended up in — a move must not fail
 // them, and an absence checked across all four is the stronger read.
-const hubApp = HUB_BOOT_SOURCES.map((m) => readFileSync(resolve(SRC, `hub/${m}.ts`), 'utf8')).join(
-  '\n',
-);
+const boardApp = BOARD_BOOT_SOURCES.map((m) =>
+  readFileSync(resolve(SRC, `board/${m}.ts`), 'utf8'),
+).join('\n');
 
 /* The stylesheet layer is read by RENDERING it, not by grepping it: the
    board's sheets are installed and the classes are built, so "no rail is
    styled" is measured as "nothing reaches an element carrying the rail's
    class" rather than as "the file does not contain the string". A hidden rail
    whose selector had been renamed would satisfy the old read and fail this
-   one. `hub.css` before `styles.css` is the order `renderHubShell` links them
+   one. `board.css` before `styles.css` is the order `renderBoardShell` links them
    in; `tokens.css` is left out because the served file is a vendored Open
    Props subset plus `src/tokens.css`, and the mapping half alone re-points
    every remapped token at an undefined `var(--gray-N)`. */
 let cleanup = () => {};
 beforeEach(() => {
-  cleanup = installSheets('hub.css', 'styles.css');
+  cleanup = installSheets('board.css', 'styles.css');
 });
 afterEach(() => {
   cleanup();
@@ -60,7 +60,7 @@ afterEach(() => {
 
 describe('the board no longer carries the docs and open-threads rails', () => {
   it('exports neither renderer, and still exports the board renderers', () => {
-    const names = Object.keys(hubRender);
+    const names = Object.keys(boardRender);
     // Positive control: this read can see exports at all, and the board's own
     // renderers survived the excision beside them. `renderBoard` itself moved
     // to the Preact island — so the control follows it there rather than being
@@ -68,10 +68,10 @@ describe('the board no longer carries the docs and open-threads rails', () => {
     // `renderTaskDetail` has now made the same move, for the same reason, so
     // its control follows it to `task-detail-island.tsx` and the pieces it
     // still fills stand in for the surface here — `detailFields` among them,
-    // which now lives in `hub-detail-render.ts`, so the control reads there.
+    // which now lives in `board-detail-render.ts`, so the control reads there.
     expect(Object.keys(boardIsland)).toContain('mountBoardIsland');
     expect(Object.keys(taskDetailIsland)).toContain('mountTaskDetailIsland');
-    expect(Object.keys(hubDetailRender)).toContain('detailFields');
+    expect(Object.keys(boardDetailRender)).toContain('detailFields');
     expect(names).not.toContain('renderDocsSidebar');
     expect(names).not.toContain('renderThreadsSidebar');
   });
@@ -79,27 +79,27 @@ describe('the board no longer carries the docs and open-threads rails', () => {
   it('has no rail containers in the shell, and still has the board regions', () => {
     // Positive control: the shell string is the one being read, and the
     // regions that stayed are in it.
-    expect(hubApp).toContain('id="hub-board"');
-    expect(hubApp).toContain('id="hub-quick"');
-    expect(hubApp).toContain('id="hub-decisions"');
-    expect(hubApp).not.toContain('hub-docs');
-    expect(hubApp).not.toContain('hub-threads');
+    expect(boardApp).toContain('id="board"');
+    expect(boardApp).toContain('id="board-quick"');
+    expect(boardApp).toContain('id="board-decisions"');
+    expect(boardApp).not.toContain('board-docs');
+    expect(boardApp).not.toContain('board-threads');
     // The whole `<aside>` element, not just its id — a rail kept as an empty
     // container is the "hidden, not removed" outcome this test exists for.
-    expect(hubApp).not.toContain('<aside');
+    expect(boardApp).not.toContain('<aside');
   });
 
   it('does not fetch rail data any more', () => {
     // Positive control: the other REST loaders the board still runs.
-    expect(hubApp).toContain('loadAgents');
-    expect(hubApp).toContain('loadReviewItems');
-    expect(hubApp).not.toContain('loadSidebars');
-    expect(hubApp).not.toContain('sidebarEntriesFor');
+    expect(boardApp).toContain('loadAgents');
+    expect(boardApp).toContain('loadReviewItems');
+    expect(boardApp).not.toContain('loadSidebars');
+    expect(boardApp).not.toContain('sidebarEntriesFor');
     // The module that resolved an attachment into rail entries is deleted, not
     // orphaned — an unimported file still compiles, still ships in nobody's
     // bundle, and still reads as a live part of the surface.
-    expect(existsSync(resolve(SRC, 'hub/hub-render.ts'))).toBe(true); // control
-    expect(existsSync(resolve(SRC, 'hub/hub-sidebar.ts'))).toBe(false);
+    expect(existsSync(resolve(SRC, 'board/board-render.ts'))).toBe(true); // control
+    expect(existsSync(resolve(SRC, 'board/board-sidebar.ts'))).toBe(false);
   });
 
   it('styles no rail, and the board layout still lays out around the columns it kept', () => {
@@ -107,17 +107,15 @@ describe('the board no longer carries the docs and open-threads rails', () => {
     // Positive control: the sheets are installed and the layout rule the rails
     // used to sit beside is live. Without it every absence below would pass by
     // measuring an element no stylesheet reaches.
-    expect(styleOf(attach('hub-main')).display).toBe('grid');
+    expect(styleOf(attach('board-main')).display).toBe('grid');
     // The board column is a real, styled surface: Home hides it, the board
     // shows it. Both halves, so the selector is proved reachable.
-    const home = attach('hub-main hub-main--home');
-    expect(styleOf(attach('hub-board-col', { parent: home })).display).toBe('none');
-    expect(styleOf(attach('hub-board-col', { parent: attach('hub-main') })).display).not.toBe(
-      'none',
-    );
+    const home = attach('board-main board-main--home');
+    expect(styleOf(attach('board-col', { parent: home })).display).toBe('none');
+    expect(styleOf(attach('board-col', { parent: attach('board-main') })).display).not.toBe('none');
     // And nothing at all reaches a rail: a bare <div> the cascade never
     // touches computes the UA's own `display: block`.
-    expect(styleOf(attach('hub-side', { tag: 'aside' })).display).toBe('block');
+    expect(styleOf(attach('board-side', { tag: 'aside' })).display).toBe('block');
   });
 
   it('gives the board a min-0 track, so a long title cannot widen the page', () => {
@@ -129,13 +127,13 @@ describe('the board no longer carries the docs and open-threads rails', () => {
     // back is a bare `1fr` anywhere in the template. Read off the cascade, so
     // a media override that reintroduced one would be caught too.
     setViewport(IPAD);
-    const template = styleOf(attach('hub-main')).gridTemplateColumns;
+    const template = styleOf(attach('board-main')).gridTemplateColumns;
     expect(template).toContain('minmax(0, 1fr)');
     expect(template.replace(/minmax\(0, 1fr\)/g, '')).not.toContain('1fr');
     // Below 1100 the same guarantee is bought differently — a block-level flex
     // item is sized from its container, so there is no track to widen at all.
     setViewport(PHONE);
-    const phone = styleOf(attach('hub-main'));
+    const phone = styleOf(attach('board-main'));
     expect(phone.display).toBe('flex');
     expect(phone.flexDirection).toBe('column');
   });

@@ -19,7 +19,7 @@
  * answer and the Tell-me-more ask — become editors without any of them
  * changing how they send.
  *
- * Loading is lazy, for the reason the description editor is lazy: the hub
+ * Loading is lazy, for the reason the description editor is lazy: the board
  * bundle is a board, and the whole Tiptap/ProseMirror stack measured 22× the
  * board's entry. Until the chunk lands (or if it never does) the plain
  * textarea is on screen and works.
@@ -116,7 +116,7 @@ const LIVE = new Set<Field>();
 /**
  * Destroy the editors whose textarea has left the document.
  *
- * The hub's detail panel repaints by `replaceChildren` on every board change
+ * The board's detail panel repaints by `replaceChildren` on every board change
  * and builds a fresh composer each time, so without this every SSE event
  * would leave another ProseMirror view behind. Run on attach and on refresh —
  * both of which a repaint does — so the set never holds more than the

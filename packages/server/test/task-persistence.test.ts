@@ -28,8 +28,8 @@ import {
 } from '../src/task-persistence.ts';
 import type {
   AgentAttachment,
+  BoardWorkspace,
   GoalRow,
-  HubWorkspace,
   Task,
   TaskStoreEvent,
   WorkspaceState,
@@ -37,14 +37,14 @@ import type {
 
 const ACTOR = { id: 'known-bryan', name: 'Bryan', kind: 'person' };
 
-function workspace(id: string, overrides?: Partial<HubWorkspace>): HubWorkspace {
+function workspace(id: string, overrides?: Partial<BoardWorkspace>): BoardWorkspace {
   return {
     id,
     name: 'W',
     goals: [],
     docIds: [],
     ...overrides,
-  } as HubWorkspace;
+  } as BoardWorkspace;
 }
 
 function task(id: string, overrides?: Partial<Task>): Task {

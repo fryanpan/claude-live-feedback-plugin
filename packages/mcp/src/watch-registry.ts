@@ -257,7 +257,7 @@ async function watchDoc(
  *  - A GROUPING (a diff review / folder bind): its member docs carry the
  *    review tag and `doc-store.ts` has always double-broadcast on it. True from
  *    the start.
- *  - A hub BOARD: it holds docs through `workspace.docIds`, which is NOT that
+ *  - A BOARD: it holds docs through `workspace.docIds`, which is NOT that
  *    tag. Until the board fan-out landed in server.ts's `onDocRoomEvent`, a
  *    doc filed on a board reached this stream never — and nothing said so,
  *    which is the whole failure class here. Now it does, resolved at

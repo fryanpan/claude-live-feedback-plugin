@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import { assignGroups } from '../src/diff-groups.ts';
 import { DocStore } from '../src/doc-store.ts';
 import { diffFiles } from '../src/git-diff.ts';
-import { SseHub } from '../src/sse.ts';
+import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 
 function git(repo: string, ...args: string[]): string {
@@ -165,7 +165,7 @@ describe('whitespace classification survives regrouping', async () => {
   const { repo, base, target } = makeRepo();
   const docStore = new DocStore({
     dataDir: mkdtempSync(join(tmpdir(), 'ws-diff-data-')),
-    sse: new SseHub(),
+    sse: new SseBus(),
     webhooks: createWebhookDispatcher({ onLog: () => {} }),
     decorateDocMeta: (m) => m,
   });

@@ -22,7 +22,7 @@
  */
 import type { Ref, TaskStatus } from './tasks.ts';
 
-export type VoiceSurface = 'hub' | 'doc' | 'task';
+export type VoiceSurface = 'board' | 'doc' | 'task';
 
 /** The per-utterance anchor (§3.8): wherever the speaker is NOW. */
 export interface VoiceContext {

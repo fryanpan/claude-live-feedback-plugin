@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { getMeta } from '@feedback/core';
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
-import { hubTabTitle } from '../src/hub/hub-presence-model.ts';
+import { boardTabTitle } from '../src/board/board-presence-model.ts';
 import { MountScope } from '../src/mount-scope.ts';
 import { type ChromeOpts, mountReviewChrome } from '../src/review-chrome.ts';
 import type { ReviewSurface } from '../src/review-surface.ts';
@@ -64,19 +64,21 @@ describe('tabName', () => {
   });
 });
 
-describe('hubTabTitle', () => {
+describe('boardTabTitle', () => {
   it('leads with the workspace name on the board', () => {
-    expect(hubTabTitle('search-revamp', 'tasks')).toBe('search-revamp · Workspaces');
+    expect(boardTabTitle('search-revamp', 'tasks')).toBe('search-revamp · Workspaces');
   });
 
   it('names the pane after the workspace, so SPA nav is visible in the tab', () => {
-    expect(hubTabTitle('search-revamp', 'home')).toBe('search-revamp · Home · Workspaces');
-    expect(hubTabTitle('search-revamp', 'mine')).toBe('search-revamp · My Tasks · Workspaces');
-    expect(hubTabTitle('search-revamp', 'activity')).toBe('search-revamp · Activity · Workspaces');
+    expect(boardTabTitle('search-revamp', 'home')).toBe('search-revamp · Home · Workspaces');
+    expect(boardTabTitle('search-revamp', 'mine')).toBe('search-revamp · My Tasks · Workspaces');
+    expect(boardTabTitle('search-revamp', 'activity')).toBe(
+      'search-revamp · Activity · Workspaces',
+    );
   });
 
   it('falls back to the product name when the workspace has no name yet', () => {
-    expect(hubTabTitle('', 'tasks')).toBe(SITE_NAME);
+    expect(boardTabTitle('', 'tasks')).toBe(SITE_NAME);
   });
 });
 

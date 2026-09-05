@@ -39,7 +39,7 @@
  * is the property that keeps this from trading a socket storm for a
  * reconnect storm.
  */
-import { SSE_KEEPALIVE_MS, type SseHub } from './sse.ts';
+import { SSE_KEEPALIVE_MS, type SseBus } from './sse.ts';
 
 /** What one watch key resolves to on the wire. `ws:<id>` keys broadcast on
  *  the `ws~<id>` channel; a doc key is its own canonical id. */
@@ -54,7 +54,7 @@ function registersAgentId(key: string): boolean {
 }
 
 export interface AgentMuxStreamOptions {
-  hub: SseHub;
+  bus: SseBus;
   /** The agent this stream belongs to — its identity on board channels and
    *  the filter its replay is scoped by. */
   agentId: string;
@@ -77,10 +77,10 @@ export interface AgentMuxStreamOptions {
  * the subscription, exactly like `openSseStream`.
  */
 export function openAgentMuxStream(opts: AgentMuxStreamOptions): Response {
-  const { hub, agentId, keys, channelFor } = opts;
+  const { bus, agentId, keys, channelFor } = opts;
   const encoder = new TextEncoder();
   let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
-  /** watch key → the hub disposer for its registration. */
+  /** watch key → the board disposer for its registration. */
   const subscribed = new Map<string, () => void>();
   let unsubscribeWatchSet: (() => void) | null = null;
   let keepalive: ReturnType<typeof setInterval> | null = null;
@@ -100,7 +100,7 @@ export function openAgentMuxStream(opts: AgentMuxStreamOptions): Response {
     );
   };
 
-  /** The per-channel sink the hub writes through. One object per key, so the
+  /** The per-channel sink the board writes through. One object per key, so the
    *  tag is decided at registration rather than guessed at write time. */
   const sinkFor = (watchKey: string) => ({
     write: (event: string, data: unknown, id?: string) => emit(watchKey, event, data, id),
@@ -133,7 +133,7 @@ export function openAgentMuxStream(opts: AgentMuxStreamOptions): Response {
       if (subscribed.has(key)) continue;
       subscribed.set(
         key,
-        hub.add(
+        bus.add(
           channelFor(key),
           sinkFor(key),
           undefined,
@@ -153,7 +153,7 @@ export function openAgentMuxStream(opts: AgentMuxStreamOptions): Response {
       sync();
       // Catch-up, BETWEEN registration and the first live write, and
       // synchronous for the same reason `openSseStream` gives: nothing can be
-      // broadcast between `hub.add` above and the replay below, so the
+      // broadcast between `bus.add` above and the replay below, so the
       // replayed tail and the live feed meet with neither a hole nor a
       // duplicate.
       const cursors = opts.cursors;
@@ -161,7 +161,7 @@ export function openAgentMuxStream(opts: AgentMuxStreamOptions): Response {
         for (const key of subscribed.keys()) {
           const lastId = cursors.get(key);
           if (lastId === undefined) continue;
-          const replay = hub.replayAfter(channelFor(key), lastId, agentId);
+          const replay = bus.replayAfter(channelFor(key), lastId, agentId);
           if (replay.ok) {
             for (const e of replay.events) emit(key, e.payload.event, e.payload, e.id);
           } else {

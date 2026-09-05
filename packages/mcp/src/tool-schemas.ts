@@ -150,7 +150,7 @@ export const TOOL_LIST: ListToolsResult = {
           workspaceId: {
             type: 'string',
             description:
-              'Only docs in this workspace. Matches hub-board membership and the reviewId folder binds / diff reviews stamp on their members. An unknown id returns an empty list.',
+              'Only docs in this workspace. Matches board membership and the reviewId folder binds / diff reviews stamp on their members. An unknown id returns an empty list.',
           },
           kind: {
             type: 'string',
@@ -1074,7 +1074,7 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
-          workspaceId: { type: 'string', description: 'Hub workspace id.' },
+          workspaceId: { type: 'string', description: 'Board workspace id.' },
           name: { type: 'string', description: 'The new name. Trimmed; may not be empty.' },
         },
         required: ['workspaceId', 'name'],
@@ -1087,7 +1087,7 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
-          workspaceId: { type: 'string', description: 'Hub workspace id.' },
+          workspaceId: { type: 'string', description: 'Board workspace id.' },
           reason: {
             type: 'string',
             description:
@@ -1100,10 +1100,10 @@ export const TOOL_LIST: ListToolsResult = {
     {
       name: 'unretire_workspace',
       description:
-        'Bring a retired hub board back. It ranks again, takes new work again, and stops warning readers. Nothing has to be restored — retiring only ever wrote one field — so this is a plain reversal and not a recovery.',
+        'Bring a retired board back. It ranks again, takes new work again, and stops warning readers. Nothing has to be restored — retiring only ever wrote one field — so this is a plain reversal and not a recovery.',
       inputSchema: {
         type: 'object',
-        properties: { workspaceId: { type: 'string', description: 'Hub workspace id.' } },
+        properties: { workspaceId: { type: 'string', description: 'Board workspace id.' } },
         required: ['workspaceId'],
       },
     },
@@ -1114,7 +1114,7 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
-          workspaceId: { type: 'string', description: 'Hub workspace id from create_workspace.' },
+          workspaceId: { type: 'string', description: 'Board workspace id from create_workspace.' },
           leadAgentId: {
             type: 'string',
             description:
@@ -1136,7 +1136,7 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
-          workspaceId: { type: 'string', description: 'Hub workspace id from create_workspace.' },
+          workspaceId: { type: 'string', description: 'Board workspace id from create_workspace.' },
           docId: { type: 'string', description: 'Doc id, or a diff-review/folder-bind id.' },
         },
         required: ['workspaceId', 'docId'],
@@ -1266,7 +1266,7 @@ export const TOOL_LIST: ListToolsResult = {
         properties: {
           docId: { type: 'string' },
           threadId: { type: 'string' },
-          workspaceId: { type: 'string', description: 'Hub workspace the task lands in.' },
+          workspaceId: { type: 'string', description: 'Board workspace the task lands in.' },
           title: {
             type: 'string',
             description:
@@ -1813,7 +1813,7 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
-          workspaceId: { type: 'string', description: 'Hub workspace id from create_workspace.' },
+          workspaceId: { type: 'string', description: 'Board workspace id from create_workspace.' },
           path: { type: 'string', description: 'Absolute path to the tracker .md file.' },
           apply: {
             type: 'boolean',
@@ -2004,7 +2004,7 @@ export const TOOL_LIST: ListToolsResult = {
     {
       name: 'list_attachments',
       description:
-        "List the agents attached to a hub workspace with their derived state: active, 'process up, agent unresponsive' (fresh heartbeat, stale tool calls), or 'away — requests queue'. The ambient-awareness read: who is where, and is anyone wedged.",
+        "List the agents attached to a board workspace with their derived state: active, 'process up, agent unresponsive' (fresh heartbeat, stale tool calls), or 'away — requests queue'. The ambient-awareness read: who is where, and is anyone wedged.",
       inputSchema: {
         type: 'object',
         properties: { workspaceId: { type: 'string' } },

@@ -29,13 +29,13 @@ import { type DocMeta, createThread, setStatus } from '@feedback/core';
 import type * as Y from 'yjs';
 import { moveDocIndex } from '../src/doc-index.ts';
 import { DocStore } from '../src/doc-store.ts';
-import { SseHub } from '../src/sse.ts';
+import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 
 function makeDocStore(dataDir: string): DocStore {
   return new DocStore({
     dataDir,
-    sse: new SseHub(),
+    sse: new SseBus(),
     webhooks: createWebhookDispatcher({ onLog: () => {} }),
   });
 }

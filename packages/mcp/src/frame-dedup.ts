@@ -45,7 +45,7 @@
  * window of seconds is already enormous for the job it has to do.
  *
  * Anything the key cannot positively identify is forwarded: no `eid`, no
- * numeric `seq`, no docId, not an object. Every hub `task.*` / `decision.*` /
+ * numeric `seq`, no docId, not an object. Every board `task.*` / `decision.*` /
  * `voice.*` event is in that category — none carry a `seq`, each
  * rides exactly one channel, and two can be byte-identical and both real (two
  * voice notes with the same text). For those there is no duplicate to

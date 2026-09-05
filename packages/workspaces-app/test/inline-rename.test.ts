@@ -16,7 +16,7 @@ import {
   sameSelection,
   selectionInside,
   wireWordsInPlace,
-} from '../src/hub/inline-rename.ts';
+} from '../src/board/inline-rename.ts';
 
 /**
  * The two caret APIs, as the guard in `caretOffsetIn` actually sees them:
@@ -349,7 +349,7 @@ describe('finePointer — asking the pointer, not the viewport', () => {
     const real = (globalThis as { matchMedia?: unknown }).matchMedia;
     (globalThis as { matchMedia?: unknown }).matchMedia = matchMedia;
     try {
-      const mod = await import('../src/hub/inline-rename.ts');
+      const mod = await import('../src/board/inline-rename.ts');
       return mod.finePointer();
     } finally {
       (globalThis as { matchMedia?: unknown }).matchMedia = real;

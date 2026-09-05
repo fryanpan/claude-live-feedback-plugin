@@ -9,7 +9,7 @@ import * as Y from 'yjs';
 import { getProseFragment } from '../../core/src/prose.ts';
 import { DocStore } from '../src/doc-store.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { SseHub } from '../src/sse.ts';
+import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 
 /**
@@ -298,7 +298,7 @@ describe('DocStore.staleWriteCheck (10-minute fallback window)', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-stale-rooms-'));
     docStore = new DocStore({
       dataDir,
-      sse: new SseHub(),
+      sse: new SseBus(),
       webhooks: createWebhookDispatcher({ onLog: () => {} }),
     });
     docStore.getOrCreate('d1', { type: 'markdown' });

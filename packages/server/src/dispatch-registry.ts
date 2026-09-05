@@ -47,7 +47,7 @@
  *   caller: the cap view, the dispatch refusal, the stall gate's watching
  *   set and `/api/dispatches` all read this one set, and a filter in one of
  *   them would let the others keep counting a slot nobody holds. Measured
- *   2026-08-31 right after a deploy: the hub read `inUse 12 / free 0`, every
+ *   2026-08-31 right after a deploy: the board read `inUse 12 / free 0`, every
  *   holder a task already `done` whose builder finished on a bundle that
  *   never sent `close_dispatch` — and the first real spawn would have been
  *   refused. Leaving the worktree directory behind (a done builder's checkout

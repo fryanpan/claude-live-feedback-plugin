@@ -24,12 +24,12 @@ flowchart LR
   ES --> EP["core/effort-estimate-prompt.ts<br/>prompt and parser, both pure"]
   ES --> TR["task-row.ts<br/>the estimate, stored on the row"]
   TR --> WIRE[("task rows, over REST and SSE")]
-  WIRE --> BM["hub/hub-board-model.ts<br/>recomputes in the browser"]
+  WIRE --> BM["board/board-model.ts<br/>recomputes in the browser"]
   BM --> ET["core/effort-task.ts<br/>what one ticket contributes"]
   ET --> EC["core/effort-calibration.ts<br/>actual ÷ estimate, with priors"]
   EC --> GE["core/goal-effort.ts<br/>rollup · pace · projected date"]
   GE --> EF["core/effort-format.ts<br/>the readouts"]
-  EF --> UI["hub/board-island.tsx · hub/hub-detail-render.ts<br/>the goal bar and the detail panel"]
+  EF --> UI["board/board-island.tsx · board/board-detail-render.ts<br/>the goal bar and the detail panel"]
 ```
 
 The server asks for the estimate and stores it; every number a reader sees is

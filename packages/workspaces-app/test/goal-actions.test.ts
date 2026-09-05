@@ -1,24 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { archiveConfirmLine } from '../src/hub/goal-detail-island.tsx';
 import {
+  type BoardGoal,
+  type BoardTask,
   DEFAULT_DONE_WINDOW,
-  type HubGoal,
-  type HubTask,
   archivedGoals,
   boardSections,
   cascadePhrase,
   goalSection,
   isGoalArchived,
-} from '../src/hub/hub-board-model.ts';
-import { describeEvent } from '../src/hub/hub-presence-model.ts';
-import { type GoalDetailHandlers, renderArchivedList } from '../src/hub/hub-render.ts';
-import { GOAL_PLACEHOLDER_TEXT, PLACEHOLDER_TEXT } from '../src/hub/task-body-editor.ts';
+} from '../src/board/board-model.ts';
+import { describeEvent } from '../src/board/board-presence-model.ts';
+import { type GoalDetailHandlers, renderArchivedList } from '../src/board/board-render.ts';
+import { archiveConfirmLine } from '../src/board/goal-detail-island.tsx';
+import { GOAL_PLACEHOLDER_TEXT, PLACEHOLDER_TEXT } from '../src/board/task-body-editor.ts';
 import { disposeGoalDetail, renderGoalDetail } from './support/goal-detail.ts';
 
 /**
  * A goal's extra actions — the ones a task row has had all along.
  *
- * Bryan by voice at the hub, 2026-08-29: *"add to the core flow that goals
+ * Bryan by voice at the board, 2026-08-29: *"add to the core flow that goals
  * should have the same additional extra actions that tasks do like being able
  * to Archive get a link and so on"*. The task panel's head carries copy-link,
  * full-screen and archive/restore; the goal panel's carried a close button and
@@ -44,7 +44,7 @@ const filters = {
 } as const;
 
 let seq = 0;
-function task(over: Partial<HubTask> = {}): HubTask {
+function task(over: Partial<BoardTask> = {}): BoardTask {
   seq += 1;
   return {
     id: `t-${seq}`,
@@ -72,8 +72,8 @@ function handlers(over: Partial<GoalDetailHandlers> = {}): GoalDetailHandlers {
   };
 }
 
-function sectionOf(goal: Partial<HubGoal> & { id: string; title: string }) {
-  const found = goalSection([goal as HubGoal], goal.id);
+function sectionOf(goal: Partial<BoardGoal> & { id: string; title: string }) {
+  const found = goalSection([goal as BoardGoal], goal.id);
   if (!found) throw new Error('no section');
   return found;
 }
@@ -109,7 +109,7 @@ describe('the goal panel’s head actions', () => {
 
   beforeEach(() => {
     host = document.createElement('div');
-    host.className = 'hub-detail hidden';
+    host.className = 'board-detail hidden';
     document.body.replaceChildren(host);
   });
 
@@ -119,7 +119,7 @@ describe('the goal panel’s head actions', () => {
   });
 
   const panel = () => {
-    const el = host.querySelector('.hub-detail-panel');
+    const el = host.querySelector('.board-detail-panel');
     if (!(el instanceof HTMLElement)) throw new Error('no panel');
     return el;
   };
@@ -131,17 +131,17 @@ describe('the goal panel’s head actions', () => {
       sectionOf({ id: 'g-pr', title: '1. Get the PR out' }),
       handlers({ onCopyLink: vi.fn(), onArchive: vi.fn(), onCascadeCount: vi.fn() }),
     );
-    expect(button('.hub-detail-share')).not.toBeNull();
-    expect(button('.hub-detail-expand')).not.toBeNull();
-    expect(button('.hub-detail-archive')).not.toBeNull();
-    expect(button('.hub-detail-close')).not.toBeNull();
+    expect(button('.board-detail-share')).not.toBeNull();
+    expect(button('.board-detail-expand')).not.toBeNull();
+    expect(button('.board-detail-archive')).not.toBeNull();
+    expect(button('.board-detail-close')).not.toBeNull();
   });
 
   it('copies a link to the goal it is open on', () => {
     const onCopyLink = vi.fn();
     const section = sectionOf({ id: 'g-pr', title: '1. Get the PR out' });
     renderGoalDetail(host, section, handlers({ onCopyLink }));
-    button('.hub-detail-share')?.click();
+    button('.board-detail-share')?.click();
     expect(onCopyLink).toHaveBeenCalledWith(expect.objectContaining({ id: 'g-pr' }));
   });
 
@@ -149,16 +149,16 @@ describe('the goal panel’s head actions', () => {
     // An affordance that copies nothing is worse than its absence — the task
     // panel's own rule, and the reason the button is conditional.
     renderGoalDetail(host, sectionOf({ id: 'g-pr', title: '1. Get the PR out' }), handlers());
-    expect(button('.hub-detail-share')).toBeNull();
+    expect(button('.board-detail-share')).toBeNull();
   });
 
   it('marks the board as full screen and takes it back', () => {
     renderGoalDetail(host, sectionOf({ id: 'g-pr', title: '1. Get the PR out' }), handlers());
-    button('.hub-detail-expand')?.click();
-    expect(host.classList.contains('hub-detail--full')).toBe(true);
-    expect(document.body.classList.contains('hub-detail-full')).toBe(true);
-    button('.hub-detail-expand')?.click();
-    expect(host.classList.contains('hub-detail--full')).toBe(false);
+    button('.board-detail-expand')?.click();
+    expect(host.classList.contains('board-detail--full')).toBe(true);
+    expect(document.body.classList.contains('board-detail-full')).toBe(true);
+    button('.board-detail-expand')?.click();
+    expect(host.classList.contains('board-detail--full')).toBe(false);
   });
 });
 
@@ -167,7 +167,7 @@ describe('archiving a goal from the panel', () => {
 
   beforeEach(() => {
     host = document.createElement('div');
-    host.className = 'hub-detail hidden';
+    host.className = 'board-detail hidden';
     document.body.replaceChildren(host);
   });
 
@@ -177,12 +177,12 @@ describe('archiving a goal from the panel', () => {
   });
 
   const panel = () => {
-    const el = host.querySelector('.hub-detail-panel');
+    const el = host.querySelector('.board-detail-panel');
     if (!(el instanceof HTMLElement)) throw new Error('no panel');
     return el;
   };
   const button = (cls: string) => panel().querySelector<HTMLButtonElement>(cls);
-  const ask = () => panel().querySelector('.hub-goal-archive-ask')?.textContent ?? '';
+  const ask = () => panel().querySelector('.board-goal-archive-ask')?.textContent ?? '';
 
   /** A promise the test resolves by hand, so the window between the click and
    *  the answer is a state the assertions can stand in. */
@@ -202,18 +202,18 @@ describe('archiving a goal from the panel', () => {
       sectionOf({ id: 'g-pr', title: 'Ship W3' }),
       handlers({ onArchive, onCascadeCount: () => count.promise }),
     );
-    button('.hub-detail-archive')?.click();
+    button('.board-detail-archive')?.click();
     expect(onArchive).not.toHaveBeenCalled();
     // While the count is in flight the bar is up and honest, and there is
     // nothing to press: a confirmation that cannot say what it is about to do
     // must not offer to do it.
     expect(ask()).toBe('Archive “Ship W3” and everything under it?');
-    expect(button('.hub-goal-archive-go')).toBeNull();
+    expect(button('.board-goal-archive-go')).toBeNull();
 
     count.settle({ tasks: 14 });
     await count.promise;
     expect(ask()).toBe('Archive “Ship W3” and its 14 tasks?');
-    button('.hub-goal-archive-go')?.click();
+    button('.board-goal-archive-go')?.click();
     expect(onArchive).toHaveBeenCalledWith(expect.objectContaining({ id: 'g-pr' }));
   });
 
@@ -224,11 +224,11 @@ describe('archiving a goal from the panel', () => {
       sectionOf({ id: 'g-pr', title: 'Ship W3' }),
       handlers({ onArchive, onCascadeCount: async () => ({ tasks: 3 }) }),
     );
-    button('.hub-detail-archive')?.click();
+    button('.board-detail-archive')?.click();
     await Promise.resolve();
-    expect(panel().querySelector('.hub-goal-archive-confirm')).not.toBeNull();
-    button('.hub-goal-archive-cancel')?.click();
-    expect(panel().querySelector('.hub-goal-archive-confirm')).toBeNull();
+    expect(panel().querySelector('.board-goal-archive-confirm')).not.toBeNull();
+    button('.board-goal-archive-cancel')?.click();
+    expect(panel().querySelector('.board-goal-archive-confirm')).toBeNull();
     expect(onArchive).not.toHaveBeenCalled();
   });
 
@@ -239,12 +239,12 @@ describe('archiving a goal from the panel', () => {
       sectionOf({ id: 'g-pr', title: 'Ship W3' }),
       handlers({ onArchive: vi.fn(), onCascadeCount: () => count.promise }),
     );
-    button('.hub-detail-archive')?.click();
-    button('.hub-goal-archive-cancel')?.click();
+    button('.board-detail-archive')?.click();
+    button('.board-goal-archive-cancel')?.click();
     count.settle({ tasks: 14 });
     await count.promise;
     await Promise.resolve();
-    expect(panel().querySelector('.hub-goal-archive-confirm')).toBeNull();
+    expect(panel().querySelector('.board-goal-archive-confirm')).toBeNull();
   });
 
   it('offers no Archive when it could not find out what is under the band', async () => {
@@ -253,15 +253,15 @@ describe('archiving a goal from the panel', () => {
       sectionOf({ id: 'g-pr', title: 'Ship W3' }),
       handlers({ onArchive: vi.fn(), onCascadeCount: async () => null }),
     );
-    button('.hub-detail-archive')?.click();
+    button('.board-detail-archive')?.click();
     await Promise.resolve();
     await Promise.resolve();
-    expect(button('.hub-goal-archive-go')).toBeNull();
-    const text = panel().querySelector('.hub-goal-archive-ask')?.textContent ?? '';
+    expect(button('.board-goal-archive-go')).toBeNull();
+    const text = panel().querySelector('.board-goal-archive-ask')?.textContent ?? '';
     expect(text).toContain('Nothing has been archived');
     // And the way out is still there — a dead bar with no Cancel would trap
     // the reader in a question nobody can answer.
-    expect(button('.hub-goal-archive-cancel')).not.toBeNull();
+    expect(button('.board-goal-archive-cancel')).not.toBeNull();
   });
 
   it('shows Restore, and the record of who archived it, on an archived band', () => {
@@ -277,36 +277,36 @@ describe('archiving a goal from the panel', () => {
       }),
       handlers({ onRestore, onArchive: vi.fn(), onCascadeCount: vi.fn() }),
     );
-    const note = panel().querySelector('.hub-archived-note');
+    const note = panel().querySelector('.board-archived-note');
     expect(note?.textContent).toContain('Jordan');
     expect(note?.textContent).toContain('goal moved past');
     // The head's third control is the other face of the same slot — never
     // both, because an archived band has nothing left to archive.
-    const head = button('.hub-detail-archive');
+    const head = button('.board-detail-archive');
     expect(head?.getAttribute('aria-label')).toBe('Restore this goal to the board');
     head?.click();
     expect(onRestore).toHaveBeenCalledWith(expect.objectContaining({ id: 'g-pr' }));
-    expect(panel().querySelector('.hub-goal-archive-confirm')).toBeNull();
+    expect(panel().querySelector('.board-goal-archive-confirm')).toBeNull();
   });
 
   // Every archived band restores on its own now — bands are a flat list, so
   // no goal is ever archived as somebody else's member.
   it('offers restore on any archived band, wherever it sits in the list', () => {
     const onRestore = vi.fn();
-    const goals: HubGoal[] = [
+    const goals: BoardGoal[] = [
       { id: 'g-pr', title: 'Ship the widget' },
       { id: 'g-sub', title: 'Land the diff', archivedAt: NOW },
     ];
     const section = goalSection(goals, 'g-sub');
     if (!section) throw new Error('goalSection lost the archived band');
     renderGoalDetail(host, section, handlers({ onRestore, onCascadeCount: vi.fn() }));
-    panel().querySelector<HTMLButtonElement>('.hub-archived-restore')?.click();
+    panel().querySelector<HTMLButtonElement>('.board-archived-restore')?.click();
     expect(onRestore).toHaveBeenCalledWith(expect.objectContaining({ id: 'g-sub' }));
   });
 });
 
 describe('an archived band on the board', () => {
-  const band = (over: Partial<HubGoal> = {}): HubGoal => ({
+  const band = (over: Partial<BoardGoal> = {}): BoardGoal => ({
     id: 'g-pr',
     title: '1. Get the PR out',
     ...over,
@@ -397,11 +397,11 @@ describe('the restore list, with bands in it', () => {
       { ...base, onRestoreGoal, onOpenGoal: vi.fn() },
       [{ id: 'g-pr', title: 'Ship W3', archivedAt: NOW, archivedBy: 'Jordan' }],
     );
-    const rows = [...container.querySelectorAll('.hub-archived-row')];
+    const rows = [...container.querySelectorAll('.board-archived-row')];
     expect(rows).toHaveLength(2);
-    expect(rows[0]?.classList.contains('hub-archived-row--goal')).toBe(true);
-    expect(rows[0]?.querySelector('.hub-archived-kind')?.textContent).toBe('Goal');
-    const restore = rows[0]?.querySelector<HTMLButtonElement>('.hub-archived-restore');
+    expect(rows[0]?.classList.contains('board-archived-row--goal')).toBe(true);
+    expect(rows[0]?.querySelector('.board-archived-kind')?.textContent).toBe('Goal');
+    const restore = rows[0]?.querySelector<HTMLButtonElement>('.board-archived-restore');
     // The label carries what "Restore" cannot: the tasks come back too.
     expect(restore?.getAttribute('aria-label')).toBe(
       'Restore “Ship W3” and its tasks to the board',
@@ -417,7 +417,7 @@ describe('the restore list, with bands in it', () => {
       { ...base, onRestoreGoal: vi.fn(), onOpenGoal: vi.fn() },
       [{ id: 'g-pr', title: 'Ship W3', archivedAt: NOW }],
     );
-    expect(container.querySelector('.hub-section-title')?.textContent).toBe(
+    expect(container.querySelector('.board-section-title')?.textContent).toBe(
       '1 archived goal and 1 archived task',
     );
   });
@@ -429,7 +429,7 @@ describe('the restore list, with bands in it', () => {
       { ...base, onRestoreGoal: vi.fn(), onOpenGoal: vi.fn() },
       [],
     );
-    expect(container.querySelector('.hub-section-title')?.textContent).toBe('2 archived tasks');
+    expect(container.querySelector('.board-section-title')?.textContent).toBe('2 archived tasks');
   });
 
   it('counts every archived band in the heading, one row each', () => {
@@ -442,17 +442,17 @@ describe('the restore list, with bands in it', () => {
         { id: 'g-sub', title: 'Land the diff', archivedAt: NOW },
       ],
     );
-    expect(container.querySelector('.hub-section-title')?.textContent).toBe(
+    expect(container.querySelector('.board-section-title')?.textContent).toBe(
       '2 archived goals and 1 archived task',
     );
     // The heading and the list cannot disagree: every counted band is listed.
-    expect(container.querySelectorAll('.hub-archived-row--goal')).toHaveLength(2);
+    expect(container.querySelectorAll('.board-archived-row--goal')).toHaveLength(2);
   });
 
   it('draws no band when the caller wired no way to restore one', () => {
     renderArchivedList(container, [], base, [{ id: 'g-pr', title: 'Ship W3', archivedAt: NOW }]);
-    expect(container.querySelector('.hub-archived-row--goal')).toBeNull();
-    expect(container.querySelector('.hub-section-empty')).not.toBeNull();
+    expect(container.querySelector('.board-archived-row--goal')).toBeNull();
+    expect(container.querySelector('.board-section-empty')).not.toBeNull();
   });
 });
 
@@ -472,7 +472,7 @@ describe('one phrase for one archive, wherever it is described', () => {
   });
 
   it('counts every archived band, and only the archived ones', () => {
-    const goals: HubGoal[] = [
+    const goals: BoardGoal[] = [
       { id: 'g-pr', title: '1. Get the PR out', archivedAt: NOW },
       { id: 'g-sub', title: 'Land the diff', archivedAt: NOW },
       { id: 'g-live', title: '2. Keep it live' },

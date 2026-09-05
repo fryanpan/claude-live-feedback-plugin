@@ -54,7 +54,7 @@ describe('typingInPath', () => {
 
   it('lets a keydown on the board itself through', () => {
     const row = document.createElement('div');
-    row.className = 'hub-task-row';
+    row.className = 'board-task-row';
     document.body.append(row);
     expect(typingInPath([row, document.body, document])).toBe(false);
     // An empty path (a synthesized event with no target) must not wedge the

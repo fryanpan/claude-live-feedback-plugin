@@ -3,9 +3,9 @@
  * ends. Every glyph in the nav rail and the top-right cluster is drawn this
  * way, so anything that sits beside them has to be drawn this way too.
  *
- * The mic lives here rather than in `hub/hub-app.ts` with the nav glyphs
+ * The mic lives here rather than in `board/board-app.ts` with the nav glyphs
  * because more than one surface mounts a mic — the board's docked one and the
- * capture composer's — and importing `hub-app.ts` from outside the hub to
+ * capture composer's — and importing `board-app.ts` from outside the board to
  * reach a string would pull the whole board into the doc bundle. (The review
  * doc's own hold-to-talk dock retired with the top-bar overhaul; recording
  * lives behind the Record Audio button now.)

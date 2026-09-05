@@ -1,13 +1,13 @@
 /* ===== THE CHROME EVERY PAGE SHARES =====
    The base stylesheet. All three pages load it: the review editor
-   (index.html), the board (renderHubShell) and the sign-in page
+   (index.html), the board (renderBoardShell) and the sign-in page
    (renderSigninShell). A rule belongs here when more than one of them can
    reach it — and only then, because every byte in this file is downloaded
    three times over.
 
    Its two siblings are the pages' own:
 
-     hub.css     the board's surfaces, loaded BEFORE this file (its rules sat
+     board.css     the board's surfaces, loaded BEFORE this file (its rules sat
                  ahead of most of this one, so loading it last would flip
                  ~30 equal-specificity ties)
      doc.css     the review editor's surfaces, loaded AFTER this file (its
@@ -30,7 +30,7 @@
    neither of them cared about. */
 /* ===== DESIGN TOKENS =====
    The single home for app-wide custom properties. Component-scoped variables
-   (--threads-w, --hub-bottom-bar, --cw-suggest-*) stay with their component —
+   (--threads-w, --board-bottom-bar, --cw-suggest-*) stay with their component —
    only tokens that mean the same thing everywhere live here. New shared
    colors / spacing / radii get defined here, not as literals at the use
    site.
@@ -83,7 +83,7 @@
      copies of a width is how a panel edge ends up a few pixels over the
      content it was supposed to clear. Asked for by number (2026-08-18):
      *"default 1100px, at least 900px when space allows"*. */
-  --hub-detail-w: min(1100px, max(900px, 62vw));
+  --board-detail-w: min(1100px, max(900px, 62vw));
 
   /* What the task LIST needs to still be a list once the panel has taken its
      share. The split pane reserves the panel's width out of the board's
@@ -95,14 +95,14 @@
      the quick-capture input renders as "Ca"; at 1191px the same column
      computed to zero and the rows had no width at all. 420px is where a row
      shows enough of a story title to be scanned rather than guessed at. */
-  --hub-board-min: 420px;
+  --board-min: 420px;
   /* What the board's side of a split costs in total: its own floor plus the
      234px that sits between the CONTAINER's edge and the list — the nav rail
      and its gap (190), the page gutters (28), the panel's offset (16).
 
      It read 334 until 2026-08-19, from `1600 − 992 − 274 = 334` measured at a
      1600px window. That subtraction starts from the VIEWPORT and the board
-     lives inside `#hub-root`, which is capped at `--hub-page-w` — so the
+     lives inside `#board-root`, which is capped at `--board-page-w` — so the
      missing 100px was not a scrollbar, as the old comment guessed. It was
      1600 − 1500, the width the cap threw away, and it is only 100px at
      exactly 1600px. Folding a cap overflow into a constant is what made every
@@ -110,33 +110,33 @@
      234 is container-relative and therefore true at every width; it
      reproduces the same 274px at 1600, and 359 / 166 / 166 at the 1661 / 1920
      / 2400 a reviewer measured off rendered pixels. */
-  /* Inside `.hub-main`'s grid, everything to the left of the board: the nav
+  /* Inside `.board-main`'s grid, everything to the left of the board: the nav
      rail's `max-content` track (170px measured — the one number here with no
      literal to read, and the one a longer nav label would move) and the
      grid's own 20px gap. Named because the floor's clamp needs this distance
-     in `.hub-main`'s own coordinates, where the page gutters are already
+     in `.board-main`'s own coordinates, where the page gutters are already
      out. */
-  --hub-board-inset: 190px;
-  /* The same distance in `#hub-root`'s coordinates — the page gutters either
+  --board-inset: 190px;
+  /* The same distance in `#board-root`'s coordinates — the page gutters either
      side, the inset above, and the panel's offset. 234px. */
-  --hub-board-chrome: calc(28px + var(--hub-board-inset) + var(--hub-detail-gap));
-  --hub-board-keep: calc(var(--hub-board-min) + var(--hub-board-chrome));
+  --board-chrome: calc(28px + var(--board-inset) + var(--board-detail-gap));
+  --board-keep: calc(var(--board-min) + var(--board-chrome));
   /* The panel's width IN THE SPLIT, where it is capped by what the board must
      keep — one expression, because the panel's width and the room the board
      reserves for it have to be the same number or the panel's edge lands over
      the content it was supposed to clear. Below the split's breakpoint the
-     modal uses `--hub-detail-w` directly and this is unused. */
-  --hub-detail-pane-w: min(var(--hub-detail-w), calc(100vw - var(--hub-board-keep)));
+     modal uses `--board-detail-w` directly and this is unused. */
+  --board-detail-pane-w: min(var(--board-detail-w), calc(100vw - var(--board-keep)));
   /* How far the panel's edge sits inside the board's reservation. A token
      because THREE rules now need the same number — the reservation, the
      container's open-state cap, and the panel's own offset — and the file's
      own warning about two hand-kept copies of a width applies harder to
      three. */
-  --hub-detail-gap: 16px;
-  /* How wide the page gets. The cap's reasoning is at `#hub-root`; it is a
+  --board-detail-gap: 16px;
+  /* How wide the page gets. The cap's reasoning is at `#board-root`; it is a
      token because the split's container cap has to be derived from it rather
      than repeat it. */
-  --hub-page-w: 1500px;
+  --board-page-w: 1500px;
 }
 
 * {
@@ -424,7 +424,7 @@ body.view-mode #toggle-format {
 }
 
 /* ================= VOICE (hold-to-talk, §2.4/§3.8) =================
-   The mic button + streaming-dictation/ack indicator. The hub/board is its
+   The mic button + streaming-dictation/ack indicator. The board/board is its
    one surface now: the doc screen's hold-to-talk mic was retired by the
    top-bar overhaul (the Record Audio button owns everything audio there —
    see MEETING RECORD CHROME).
@@ -432,8 +432,8 @@ body.view-mode #toggle-format {
    Two things live here. The SHARED LOOK — a 44px round bordered button, the
    stroked glyph, the recording red, the dimmed insecure-origin state — and
    the FLOATING positioning in the same rule, which nothing ships wearing:
-   the hub docks the mic in its nav rail / bottom tab bar (`.hub-nav-dock`,
-   workspace-hub section), which un-fixes it. The float stays as the fallback
+   the board docks the mic in its nav rail / bottom tab bar (`.board-nav-dock`,
+   workspace-board section), which un-fixes it. The float stays as the fallback
    for a shell with no dock, bottom-LEFT and riding --kb-bottom. */
 
 .voice-mic {
@@ -483,7 +483,7 @@ body.view-mode #toggle-format {
    draw a ring there (`outline: auto 1px rgb(0, 95, 204)`), so this is not a
    missing ring being restored. It is the platform blue being replaced by the
    one every other focusable in this chrome uses: `.doc-switcher`,
-   `.hub-drag-handle` and `.thread-caret` all set `2px solid var(--accent)`,
+   `.board-drag-handle` and `.thread-caret` all set `2px solid var(--accent)`,
    and a control that focuses in a different colour from its neighbours reads
    as belonging to a different app. `:focus-visible`, not `:focus`, so a
    press-and-hold does not leave a ring behind. */
@@ -524,7 +524,7 @@ body.view-mode #toggle-format {
      `left` and no `width` is shrink-to-fit, and shrink-to-fit's upper bound is
      the space left in its CONTAINING BLOCK — the viewport for the floating
      form, but the dock's own column once the mic is docked. A `max-width`
-     cannot raise that bound, so the cap below was doing nothing on the hub:
+     cannot raise that bound, so the cap below was doing nothing on the board:
      measured 2026-08-21 against a full sentence, the readout came out 45×978
      in the collapsed rail (49 lines, one syllable each, starting 248px ABOVE
      the viewport), 54×645 in the ≤1100px strip and 64×527 in the phone's
@@ -927,9 +927,9 @@ body.is-reading-width #editor > .ProseMirror {
   }
   /* The back arrow is the shell's only navigation affordance on a phone and
      it measured 26 × 20 CSS px at 440px — a 16px glyph with 2px/6px padding.
-     design-mobile.md asks for ≥36px, which `.hub-topbar .back-link` has had
+     design-mobile.md asks for ≥36px, which `.board-topbar .back-link` has had
      since it was written and this one never did. Scoped to `.doc-crumb`
-     rather than widening the shared `.back-link` base, which the hub arrow
+     rather than widening the shared `.back-link` base, which the board arrow
      also uses with its own sizing; inline-flex + centring because `min-height`
      does nothing to an inline box and would otherwise leave the glyph pinned
      to the top of a taller one. */
@@ -1679,7 +1679,7 @@ body.threads-resizing {
   font-size: 14.5px;
   line-height: 1.55;
 }
-/* The declared header, in the threads pane. Same vocabulary as the hub's
+/* The declared header, in the threads pane. Same vocabulary as the board's
    version — one accent rule and an uppercase kind — so a review item does not
    look like two different components depending on which surface found it. */
 .comment-review {
@@ -1726,7 +1726,7 @@ body.threads-resizing {
 }
 /* The FULL review-item interface, rendered first in the expanded thread that
    carries the item (approved design, review-flow-mock-v1). Same anatomy as
-   the hub's card — head row (kind badge · headline · asked-by meta), one
+   the board's card — head row (kind badge · headline · asked-by meta), one
    markdown body, options / composer or the answered record — with
    thread-scoped names so the pane's narrower column can size it. Margins are
    kept tight on purpose: the primary reviewing device is an iPad in
@@ -1748,7 +1748,7 @@ body.threads-resizing {
 }
 /* `.thread-item-k*` lived here — the item card's DECISION / QUESTION chip.
    Deleted with the chip itself: no face of a doc card names its kind now,
-   because the option buttons and the answer box below already do. The hub's
+   because the option buttons and the answer box below already do. The board's
    own item cards are a different component and keep theirs. */
 .thread-item-headline {
   margin: 0;
@@ -1802,7 +1802,7 @@ body.threads-resizing {
   text-align: left;
   cursor: pointer;
 }
-/* Same hover guard as .hub-decide-option — a tap must not leave the accent
+/* Same hover guard as .board-decide-option — a tap must not leave the accent
    border stuck on an option nobody chose. */
 @media (hover: hover) {
   .thread-item-option:hover {
@@ -1987,8 +1987,8 @@ body.threads-resizing {
 }
 /* Status chip on a workspace task/goal link (comment-markdown + link-titles).
    Unscoped for the same reason as `.cm-h`: stamped by that one renderer,
-   read wherever its output lands — a thread body, a hub card, a task detail
-   panel. Colours are the board's status vocabulary (`.hub-status-mark-*`):
+   read wherever its output lands — a thread body, a board card, a task detail
+   panel. Colours are the board's status vocabulary (`.board-status-mark-*`):
    triage dashed yellow, in-progress accent, done green, todo quiet. */
 .ws-status-chip {
   display: inline-block;
@@ -2274,7 +2274,7 @@ body.composer-open #editor > .ProseMirror ::selection {
    swap is a class on the wrapper rather than a removal.
 
    The wrapper is the flex child, which is what keeps the row composers (field
-   and Send side by side, e.g. .hub-walk-answer) intact.
+   and Send side by side, e.g. .board-walk-answer) intact.
 
    Box chrome is NOT here: each composer's own rule dresses the surface the
    same way it dresses its textarea (search `.md-composer-surface` — it is
@@ -2565,9 +2565,9 @@ body.composer-open #editor > .ProseMirror ::selection {
 
    THEY ARE IN THE SHARED BASE, not doc.css, and that is load-bearing. The
    board mounts the same `createEditor` over a task body
-   (hub/task-body-editor.ts), and editor.ts registers SuggestInsert,
+   (board/task-body-editor.ts), and editor.ts registers SuggestInsert,
    SuggestDelete and SuggestionChips in the BASE extension list with no
-   review-surface condition. The board loads hub.css + styles.css and never
+   review-surface condition. The board loads board.css + styles.css and never
    links doc.css, so a suggestion rule parked there would leave an agent's
    pending proposal on a task description rendering as plain accepted prose,
    and would leave the chip's `display: none` default off the board entirely.

@@ -288,7 +288,7 @@ describe('ydoc projection + workspace room', () => {
   });
 
   it('projects a transition without the evidence the caller still sends', async () => {
-    // The hub renders from ws:<id> and nothing else, so this is where a
+    // The board renders from ws:<id> and nothing else, so this is where a
     // "removed" field would go on being visible if the projection still
     // carried it. Positive control: the row IS in the room, with its actor
     // and note, so an absent `evidence` below is a decision and not an empty
@@ -316,7 +316,7 @@ describe('ydoc projection + workspace room', () => {
     const wsId = await makeWorkspace('projection-guard');
     const taskId = await makeTask(wsId, { title: 'Real task' });
 
-    // Watch the hub workspace event stream for the whole exercise.
+    // Watch the board workspace event stream for the whole exercise.
     const sseRes = await local(`/events/workspace/${wsId}`);
     expect(sseRes.status).toBe(200);
     const sse = listen(sseRes);

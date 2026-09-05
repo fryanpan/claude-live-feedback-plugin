@@ -1,5 +1,5 @@
 /**
- * Hold-to-talk voice capture (§2.4 / §3.8), shared by the hub, the doc
+ * Hold-to-talk voice capture (§2.4 / §3.8), shared by the board, the doc
  * surface, and the task detail. Hold Space over the page itself (a real hold,
  * never a tap, never while typing or while any control has focus), hold
  * the mic button, or hold Space/Enter while the mic button has focus — the
@@ -23,7 +23,7 @@
  */
 
 export interface VoiceContext {
-  surface: 'hub' | 'doc' | 'task';
+  surface: 'board' | 'doc' | 'task';
   /** The thread the speaker has open — the review item they are "in", so a
    *  spoken answer lands on it rather than on whichever item is first. */
   threadId?: string;
@@ -328,7 +328,7 @@ const SPACE_SCROLL_OVERLAP_PX = 40;
 /**
  * The box a native Space would have scrolled, or null for the viewport.
  *
- * `null` is the answer for the page itself, and it is not a fallback: a hub
+ * `null` is the answer for the page itself, and it is not a fallback: a board
  * page sets `overflow: auto` on <body>, which PROPAGATES to the viewport — so
  * the body element is not the scroller and `body.scrollBy()` moves nothing at
  * all. Only the marked page-like containers need the walk, and one of them
@@ -453,7 +453,7 @@ export function createVoiceCapture(opts: VoiceCaptureOpts): VoiceCapture {
       // showed "Listening…", the engine refused, and the only visible
       // outcome was an empty transcript indistinguishable from silence.
       // `not-allowed` on a page served over plain http is the common one —
-      // Chrome gates the microphone on a secure context, so every hub
+      // Chrome gates the microphone on a secure context, so every board
       // reached by hostname (rather than localhost) fails exactly here.
       lastError = errorCodeOf(ev);
     };
