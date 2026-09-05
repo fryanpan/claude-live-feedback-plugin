@@ -11,11 +11,11 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { ThreadSummarizer } from '../src/summarize.ts';
 
-const hadFlag = 'LF_SUMMARIES' in process.env;
-const original = process.env.LF_SUMMARIES;
+const hadFlag = 'CW_SUMMARIES' in process.env;
+const original = process.env.CW_SUMMARIES;
 afterEach(() => {
-  if (hadFlag && original !== undefined) process.env.LF_SUMMARIES = original;
-  else Reflect.deleteProperty(process.env, 'LF_SUMMARIES');
+  if (hadFlag && original !== undefined) process.env.CW_SUMMARIES = original;
+  else Reflect.deleteProperty(process.env, 'CW_SUMMARIES');
 });
 
 function fakeFetch(
@@ -44,8 +44,8 @@ describe('ThreadSummarizer.generateHomeBrief', () => {
     expect(calls.length).toBe(0);
   });
 
-  it('LF_SUMMARIES=0 is the same kill switch as thread summaries', async () => {
-    process.env.LF_SUMMARIES = '0';
+  it('CW_SUMMARIES=0 is the same kill switch as thread summaries', async () => {
+    process.env.CW_SUMMARIES = '0';
     const { impl, calls } = fakeFetch();
     const s = new ThreadSummarizer({ apiKey: 'test-key', fetchImpl: impl });
     expect(await s.generateHomeBrief(prompt)).toBeNull();

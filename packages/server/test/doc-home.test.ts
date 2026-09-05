@@ -39,7 +39,7 @@ describe('doc-home git plumbing readers', () => {
   let wt: string;
 
   beforeEach(() => {
-    tmp = realpathSync(mkdtempSync(join(tmpdir(), 'lf-home-')));
+    tmp = realpathSync(mkdtempSync(join(tmpdir(), 'cw-home-')));
     main = join(tmp, 'repo');
     mkdirSync(main);
     git(main, 'init', '-b', 'main');

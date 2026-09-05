@@ -172,7 +172,7 @@ administration, the deploy verb — from outside the tailnet, that is a third
 list, kept apart from the other two because it grants the most:
 
 ```sh
-export CW_PROXIED_TRUSTED_HOSTS="ops.example.com"   # LF_ spelling also read
+export CW_PROXIED_TRUSTED_HOSTS="ops.example.com"
 export CW_PROXIED_TRUSTED_EMAILS="you@example.com"  # defaults to CW_OWNER_EMAIL
 export CF_ACCESS_TEAM_DOMAIN="<team>.cloudflareaccess.com"
 export CF_ACCESS_AUD="<the AUD of the Access app over that hostname>"

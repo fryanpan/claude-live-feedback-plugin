@@ -597,7 +597,7 @@ export interface ServerOptions {
    * The external base URL this deployment is reached on, when something in
    * front terminates TLS (`tailscale serve` → this process on loopback).
    * Already normalized — bin.ts runs `normalizePublicBaseUrl` on
-   * `LF_PUBLIC_BASE_URL` at boot so a typo fails there rather than here.
+   * `CW_PUBLIC_BASE_URL` at boot so a typo fails there rather than here.
    *
    * Every human-facing URL the server emits (`reviewUrl`, `entryUrl`, the
    * import banner's `hubUrl`) is built from this when set. Unset — the

@@ -174,7 +174,7 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
   editorEl.appendChild(marginEl);
 
   const overlay = document.createElementNS(SVG_NS, 'svg');
-  overlay.setAttribute('class', 'lf-leader-overlay');
+  overlay.setAttribute('class', 'cw-leader-overlay');
   overlay.setAttribute('aria-hidden', 'true');
   editorEl.appendChild(overlay);
 
@@ -233,7 +233,7 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
   // text, built once per mount and reused across taps.
   const deletionSheet = mountDeletionSheet(scope);
   scope.listen(editorEl, 'click', (ev) => {
-    const chip = (ev.target as HTMLElement).closest?.('.lf-del-chip');
+    const chip = (ev.target as HTMLElement).closest?.('.cw-del-chip');
     if (!chip) return;
     ev.preventDefault();
     deletionSheet.open((chip as HTMLElement).dataset.lfDelText ?? '');
@@ -244,7 +244,7 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
   // card — see mountSuggestionSheet above).
   const suggestionSheet = mountSuggestionSheet(scope, buildSuggestionBalloon);
   scope.listen(editorEl, 'click', (ev) => {
-    const chip = (ev.target as HTMLElement).closest?.('.lf-suggest-chip');
+    const chip = (ev.target as HTMLElement).closest?.('.cw-suggest-chip');
     if (!chip) return;
     ev.preventDefault();
     const sid = (chip as HTMLElement).dataset.lfSuggestSid ?? '';
@@ -324,7 +324,7 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     // second implementation. Positioning classes are additive.
     const el = opts.chrome?.threadsPanel.renderThread(thread, pendingReply);
     if (!el) throw new Error('buildCommentBalloon requires opts.chrome');
-    el.classList.add('lf-balloon', 'lf-balloon-comment');
+    el.classList.add('cw-balloon', 'cw-balloon-comment');
     // This is the ONLY comment builder: collapsed and expanded are the same
     // node in two states, because the morph cross-fades between two faces
     // that must both already exist. `renderThread` has already put the card
@@ -516,10 +516,10 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
       const line = document.createElementNS(SVG_NS, 'line');
       const classes =
         leaderKind === 'comment'
-          ? ['lf-leader', 'lf-leader-comment']
+          ? ['cw-leader', 'cw-leader-comment']
           : leaderKind === 'suggestion'
-            ? ['lf-leader', 'lf-leader-suggestion']
-            : ['lf-leader'];
+            ? ['cw-leader', 'cw-leader-suggestion']
+            : ['cw-leader'];
       // Word's rule: tapping a balloon brings it forward and pushes the rest
       // back, and its leader comes with it. The CARDS dim in CSS (the margin
       // reads `:has(.thread.active)`), but a line in a detached SVG overlay
@@ -527,7 +527,7 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
       // is written here, on the pass that draws them.
       const b = rendered[i];
       if (selectedId !== null && b.kind === 'comment') {
-        classes.push(b.thread.id === selectedId ? 'lf-leader-on' : 'lf-leader-dim');
+        classes.push(b.thread.id === selectedId ? 'cw-leader-on' : 'cw-leader-dim');
       }
       line.setAttribute('class', classes.join(' '));
       // The visible leg starts where the PROSE ends, never inside it: `anchorX`
@@ -644,7 +644,7 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     // is the tap target) has already folded every copy in place by the time
     // this bubbles up. All the column owes it is a restack: a card that just
     // grew or shrank moves every card below it.
-    if (target.closest?.('.lf-balloon-comment')) {
+    if (target.closest?.('.cw-balloon-comment')) {
       // …but only when the tap actually folded something. The same exclusion
       // list the card itself uses, shared rather than copied.
       if (!isFoldingTap(target)) return;
@@ -659,12 +659,12 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
       restackThroughMorph();
       return;
     }
-    if (target.closest?.('.lf-balloon-collapse')) {
+    if (target.closest?.('.cw-balloon-collapse')) {
       expandedKey = null;
       relayout();
       return;
     }
-    const collapsed = target.closest?.('.lf-balloon-collapsed') as HTMLElement | null;
+    const collapsed = target.closest?.('.cw-balloon-collapsed') as HTMLElement | null;
     if (!collapsed) return;
     // The compact ✓/✕ on a collapsed suggestion act without expanding.
     if (target.closest('button')) return;
@@ -674,10 +674,10 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
 
   // "Show more" toggle inside an expanded deletion balloon (text clamp).
   scope.listen(marginEl, 'click', (ev) => {
-    const toggle = (ev.target as HTMLElement).closest?.('.lf-balloon-expand');
+    const toggle = (ev.target as HTMLElement).closest?.('.cw-balloon-expand');
     if (!toggle) return;
-    const balloon = toggle.closest('.lf-balloon');
-    const text = balloon?.querySelector('.lf-balloon-text');
+    const balloon = toggle.closest('.cw-balloon');
+    const text = balloon?.querySelector('.cw-balloon-text');
     if (!balloon || !text) return;
     const expanded = balloon.classList.toggle('is-expanded');
     text.classList.toggle('is-clamped', !expanded);

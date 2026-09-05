@@ -156,7 +156,7 @@ describe('owner kind over the real routes', () => {
   }
 
   beforeAll(() => {
-    dataDir = mkdtempSync(join(tmpdir(), 'lf-owner-kind-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-owner-kind-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
   });
@@ -491,7 +491,7 @@ describe('owner id beside the owner name', () => {
   };
 
   beforeAll(() => {
-    dataDir = mkdtempSync(join(tmpdir(), 'lf-owner-id-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-owner-id-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
   });

@@ -226,7 +226,7 @@ export function buildShell(
  * and the stored preference is simply not consulted.
  */
 export function wireNavCollapse(document: Document, storage: NavCollapseStorage): void {
-  const NAV_COLLAPSED_KEY = 'lf-hub-nav-collapsed';
+  const NAV_COLLAPSED_KEY = 'cw-hub-nav-collapsed';
   const nav = document.getElementById('hub-nav');
   const collapseBtn = document.getElementById('hub-nav-collapse');
   const apply = (collapsed: boolean) => {

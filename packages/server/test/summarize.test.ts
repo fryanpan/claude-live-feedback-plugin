@@ -95,15 +95,15 @@ function loggingFetch(log: string[]) {
   return impl;
 }
 
-const hadFlag = 'LF_SUMMARIES' in process.env;
-const original = process.env.LF_SUMMARIES;
+const hadFlag = 'CW_SUMMARIES' in process.env;
+const original = process.env.CW_SUMMARIES;
 afterEach(() => {
   // `process.env.X = undefined` stores the STRING "undefined", which is not
   // '0' and so silently leaves generation ENABLED for every later test. Hence
   // a real property delete — via Reflect so biome's noDelete rule, whose
   // suggested fix is exactly the `= undefined` bug above, stays satisfied.
-  if (hadFlag && original !== undefined) process.env.LF_SUMMARIES = original;
-  else Reflect.deleteProperty(process.env, 'LF_SUMMARIES');
+  if (hadFlag && original !== undefined) process.env.CW_SUMMARIES = original;
+  else Reflect.deleteProperty(process.env, 'CW_SUMMARIES');
 });
 
 describe('ThreadSummarizer.generate', () => {
@@ -204,21 +204,6 @@ describe('ThreadSummarizer.generate', () => {
     } finally {
       Reflect.deleteProperty(process.env, 'CW_SUMMARIES');
     }
-  });
-
-  // Kept on the PRE-RENAME spelling on purpose: this is the only thing that
-  // asserts an off-switch already set in a launchd plist or a shell profile
-  // still switches the feature off. A launch environment is the one input the
-  // rename cannot restart on somebody's behalf, and the failure would be a
-  // server that starts sending comment text off-machine for an operator who
-  // had turned that off.
-  it('the pre-rename LF_SUMMARIES=0 still switches it off', async () => {
-    const { impl, calls } = fakeFetch();
-    process.env.LF_SUMMARIES = '0';
-    const s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl });
-    expect(s.enabled).toBe(false);
-    expect(await s.generate(thread())).toBeNull();
-    expect(calls).toHaveLength(0);
   });
 });
 
@@ -559,7 +544,7 @@ describe('ThreadSummarizer.schedule', () => {
 
   it('does nothing, quietly, when generation is switched off', async () => {
     const { impl, calls } = fakeFetch();
-    process.env.LF_SUMMARIES = '0';
+    process.env.CW_SUMMARIES = '0';
     s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl, debounceMs: 1 });
     s.schedule({ docId: 'd', threadId: 't', getThread: () => thread(), apply: () => {} });
     await new Promise((r) => setTimeout(r, 30));
@@ -746,7 +731,7 @@ describe('ThreadSummarizer.backfill', () => {
 
   it('does nothing when generation is off', async () => {
     const { impl, calls } = fakeFetch();
-    process.env.LF_SUMMARIES = '0';
+    process.env.CW_SUMMARIES = '0';
     s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl });
     expect(await s.backfill(tasks(3), { windowMs: 0, minIntervalMs: 0 })).toEqual({
       attempted: 0,

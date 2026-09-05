@@ -27,7 +27,7 @@ import {
 } from '../src/plugin-refresh';
 
 const installedFile = (records: unknown): string => {
-  const dir = mkdtempSync(join(tmpdir(), 'lf-installed-'));
+  const dir = mkdtempSync(join(tmpdir(), 'cw-installed-'));
   const file = join(dir, 'installed_plugins.json');
   writeFileSync(file, JSON.stringify(records));
   return file;
@@ -74,7 +74,7 @@ describe('readInstalledPluginVersion', () => {
   test('returns null for a missing file, missing plugin, or unreadable json', () => {
     expect(readInstalledPluginVersion('/nope/installed_plugins.json')).toBeNull();
     expect(readInstalledPluginVersion(installedFile({ plugins: {} }))).toBeNull();
-    const dir = mkdtempSync(join(tmpdir(), 'lf-installed-'));
+    const dir = mkdtempSync(join(tmpdir(), 'cw-installed-'));
     const bad = join(dir, 'installed_plugins.json');
     writeFileSync(bad, '{ not json');
     expect(readInstalledPluginVersion(bad)).toBeNull();

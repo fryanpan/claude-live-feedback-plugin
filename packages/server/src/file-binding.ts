@@ -809,7 +809,7 @@ export class FileBindings {
       const md = prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
       try {
         mkdirSync(dirname(absPath), { recursive: true });
-        const tmp = `${absPath}.lf-export~`;
+        const tmp = `${absPath}.cw-export~`;
         writeFileSync(tmp, md);
         renameSync(tmp, absPath);
         // The export just changed the answer the preread carried, and a
@@ -1626,7 +1626,7 @@ export class FileBindings {
       // the thread pool is precisely the case this branch exists for — and
       // two writers filling one temp file interleave their bytes into it,
       // which the rename then publishes as the user's document.
-      const tmp = `${target}.lf-flush~`;
+      const tmp = `${target}.cw-flush~`;
       writeFileSync(tmp, md);
       renameSync(tmp, target);
       binding.lastWritten = md;

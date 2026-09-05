@@ -205,7 +205,7 @@ export interface CommentHintsHandle {
 
 function glyphEl(glyph: ThreadGlyph, fresh: boolean): HTMLElement {
   const i = document.createElement('i');
-  i.className = `lf-ic lf-ic-${glyph}${fresh ? ' is-new' : ''}`;
+  i.className = `cw-ic cw-ic-${glyph}${fresh ? ' is-new' : ''}`;
   i.setAttribute('aria-hidden', 'true');
   return i;
 }
@@ -243,7 +243,7 @@ function renderHint(el: HTMLElement, t: Tally, dir: 'above' | 'below'): void {
   el.appendChild(dirEl);
   if (t.fresh > 0) {
     const fresh = document.createElement('span');
-    fresh.className = 'w lf-offscreen-new';
+    fresh.className = 'w cw-offscreen-new';
     fresh.textContent = ` · ${t.fresh} new`;
     el.appendChild(fresh);
   }
@@ -256,7 +256,7 @@ function renderHint(el: HTMLElement, t: Tally, dir: 'above' | 'below'): void {
 function makeHint(dir: 'above' | 'below'): HTMLButtonElement {
   const b = document.createElement('button');
   b.type = 'button';
-  b.className = `lf-offscreen lf-offscreen-${dir === 'above' ? 'top' : 'bottom'}`;
+  b.className = `cw-offscreen cw-offscreen-${dir === 'above' ? 'top' : 'bottom'}`;
   b.dataset.n = '0';
   b.hidden = true;
   return b;

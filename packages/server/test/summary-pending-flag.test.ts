@@ -87,11 +87,11 @@ function markerOf(handle: ServerHandle, docId: string, threadId: string): unknow
 }
 
 describe('summaryPendingTs marker', () => {
-  const priorEnv = process.env.LF_SUMMARIES;
+  const priorEnv = process.env.CW_SUMMARIES;
 
   afterAll(() => {
-    if (priorEnv === undefined) Reflect.deleteProperty(process.env, 'LF_SUMMARIES');
-    else process.env.LF_SUMMARIES = priorEnv;
+    if (priorEnv === undefined) Reflect.deleteProperty(process.env, 'CW_SUMMARIES');
+    else process.env.CW_SUMMARIES = priorEnv;
   });
 
   describe('with generation on', () => {
@@ -101,7 +101,7 @@ describe('summaryPendingTs marker', () => {
     let summarizer: ThreadSummarizer;
 
     beforeAll(() => {
-      Reflect.deleteProperty(process.env, 'LF_SUMMARIES');
+      Reflect.deleteProperty(process.env, 'CW_SUMMARIES');
       dataDir = mkdtempSync(join(tmpdir(), 'feedback-summary-marker-on-'));
       summarizer = new ThreadSummarizer({
         apiKey: 'test-key-never-sent-anywhere',

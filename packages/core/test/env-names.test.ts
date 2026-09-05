@@ -20,11 +20,9 @@ describe('ENV_RENAMES', () => {
     for (const [, next] of ENV_RENAMES) expect(next.startsWith('CW_')).toBe(true);
   });
 
-  it('renames the two old prefixes and nothing else', () => {
+  it('renames only the old feedback-era spellings and nothing else', () => {
     for (const [old] of ENV_RENAMES) {
-      expect(
-        old.startsWith('LF_') || old.startsWith('FEEDBACK_') || old.startsWith('LIVE_FEEDBACK_'),
-      ).toBe(true);
+      expect(old.startsWith('FEEDBACK_') || old.startsWith('LIVE_FEEDBACK_')).toBe(true);
     }
   });
 
@@ -37,11 +35,6 @@ describe('ENV_RENAMES', () => {
       'FEEDBACK_BASE_URL',
       'FEEDBACK_AGENT_NAME',
       'FEEDBACK_AUTHOR',
-      'LF_CLIENT_ROOT',
-      'LF_PUBLIC_BASE_URL',
-      'LF_SUMMARIES',
-      'LF_SHARING_DISABLED',
-      'LF_CLAUDE_BIN',
       'LIVE_FEEDBACK_SUMMARY_API_KEY',
     ]) {
       expect(olds.has(name)).toBe(true);
@@ -51,7 +44,7 @@ describe('ENV_RENAMES', () => {
 
 describe('legacyEnvName', () => {
   it('answers the old spelling of a renamed variable', () => {
-    expect(legacyEnvName('CW_SUMMARIES')).toBe('LF_SUMMARIES');
+    expect(legacyEnvName('CW_BASE_URL')).toBe('FEEDBACK_BASE_URL');
     expect(legacyEnvName('CW_AGENT_NAME')).toBe('FEEDBACK_AGENT_NAME');
   });
 
@@ -62,20 +55,20 @@ describe('legacyEnvName', () => {
 
 describe('readRenamedEnv', () => {
   it('reads the new name', () => {
-    expect(readRenamedEnv({ CW_SUMMARIES: '0' }, 'CW_SUMMARIES')).toBe('0');
+    expect(readRenamedEnv({ CW_AUTHOR: 'bryan' }, 'CW_AUTHOR')).toBe('bryan');
   });
 
   it('still reads the old name, so a straggler launch config keeps working', () => {
-    expect(readRenamedEnv({ LF_SUMMARIES: '0' }, 'CW_SUMMARIES')).toBe('0');
+    expect(readRenamedEnv({ FEEDBACK_AUTHOR: 'bryan' }, 'CW_AUTHOR')).toBe('bryan');
   });
 
   it('prefers the new name when both are set', () => {
-    const env: EnvLike = { CW_SUMMARIES: '1', LF_SUMMARIES: '0' };
-    expect(readRenamedEnv(env, 'CW_SUMMARIES')).toBe('1');
+    const env: EnvLike = { CW_AUTHOR: 'new', FEEDBACK_AUTHOR: 'old' };
+    expect(readRenamedEnv(env, 'CW_AUTHOR')).toBe('new');
   });
 
   it('is undefined when neither is set', () => {
-    expect(readRenamedEnv({}, 'CW_SUMMARIES')).toBeUndefined();
+    expect(readRenamedEnv({}, 'CW_AUTHOR')).toBeUndefined();
   });
 
   /**
@@ -87,12 +80,12 @@ describe('readRenamedEnv', () => {
    * exists to fail in.
    */
   it('does not let an empty new name mask a real old value', () => {
-    expect(readRenamedEnv({ CW_CLIENT_ROOT: '', LF_CLIENT_ROOT: '/real' }, 'CW_CLIENT_ROOT')).toBe(
+    expect(readRenamedEnv({ CW_BASE_URL: '', FEEDBACK_BASE_URL: '/real' }, 'CW_BASE_URL')).toBe(
       '/real',
     );
-    expect(
-      readRenamedEnv({ CW_CLIENT_ROOT: '   ', LF_CLIENT_ROOT: '/real' }, 'CW_CLIENT_ROOT'),
-    ).toBe('/real');
+    expect(readRenamedEnv({ CW_BASE_URL: '   ', FEEDBACK_BASE_URL: '/real' }, 'CW_BASE_URL')).toBe(
+      '/real',
+    );
   });
 
   it('returns the value unmodified — trimming is the caller’s business', () => {
@@ -107,27 +100,27 @@ describe('readRenamedEnv', () => {
 
 describe('renamedEnvConflicts', () => {
   it('names a variable set to two different values under both spellings', () => {
-    const c = renamedEnvConflicts({ CW_SUMMARIES: '1', LF_SUMMARIES: '0' });
-    expect(c).toEqual([{ current: 'CW_SUMMARIES', legacy: 'LF_SUMMARIES' }]);
+    const c = renamedEnvConflicts({ CW_AUTHOR: 'new', FEEDBACK_AUTHOR: 'old' });
+    expect(c).toEqual([{ current: 'CW_AUTHOR', legacy: 'FEEDBACK_AUTHOR' }]);
   });
 
   it('stays quiet when the two spellings agree', () => {
-    expect(renamedEnvConflicts({ CW_SUMMARIES: '0', LF_SUMMARIES: '0' })).toEqual([]);
+    expect(renamedEnvConflicts({ CW_AUTHOR: 'same', FEEDBACK_AUTHOR: 'same' })).toEqual([]);
   });
 
   it('stays quiet when only one spelling is set', () => {
-    expect(renamedEnvConflicts({ LF_SUMMARIES: '0' })).toEqual([]);
-    expect(renamedEnvConflicts({ CW_SUMMARIES: '0' })).toEqual([]);
+    expect(renamedEnvConflicts({ FEEDBACK_AUTHOR: 'old' })).toEqual([]);
+    expect(renamedEnvConflicts({ CW_AUTHOR: 'new' })).toEqual([]);
   });
 
   it('reports every conflicting variable, not just the first', () => {
     const c = renamedEnvConflicts({
-      CW_SUMMARIES: '1',
-      LF_SUMMARIES: '0',
-      CW_CLIENT_ROOT: '/a',
-      LF_CLIENT_ROOT: '/b',
+      CW_AUTHOR: 'new',
+      FEEDBACK_AUTHOR: 'old',
+      CW_BASE_URL: '/a',
+      FEEDBACK_BASE_URL: '/b',
     });
-    expect(c.map((x) => x.current).sort()).toEqual(['CW_CLIENT_ROOT', 'CW_SUMMARIES']);
+    expect(c.map((x) => x.current).sort()).toEqual(['CW_AUTHOR', 'CW_BASE_URL']);
   });
 });
 
@@ -159,9 +152,9 @@ describe('positiveEnvDuration', () => {
     expect(positiveEnvDuration({ CW_X: 'Infinity' }, 'CW_X', MIN)).toBeUndefined();
   });
 
+  // Any surviving renamed pair proves the point: the duration read goes
+  // through readRenamedEnv rather than reaching into `env` itself.
   it('reads the legacy spelling too, like every other env read here', () => {
-    expect(
-      positiveEnvDuration({ LF_SUMMARY_BACKFILL_MINUTES: '7' }, 'CW_SUMMARY_BACKFILL_MINUTES', MIN),
-    ).toBe(7 * MIN);
+    expect(positiveEnvDuration({ FEEDBACK_AUTHOR: '7' }, 'CW_AUTHOR', MIN)).toBe(7 * MIN);
   });
 });

@@ -306,7 +306,7 @@ immutable, numbered release:
 ```
 
 The state root is `$XDG_STATE_HOME` (default `~/.local/state`), overridable
-with `LF_CLIENT_ROOT`. The switchover cannot tear: the copy lands in a
+with `CW_CLIENT_ROOT`. The switchover cannot tear: the copy lands in a
 dot-prefixed staging directory nothing scans, becomes a release by `rename(2)`
 (so it appears complete or not at all), and the `current` pointer moves by
 renaming a fresh symlink over it, which is also atomic. Nothing ever copies
@@ -351,7 +351,7 @@ another process does to the cache reaches it; only its own relaunch does.
 Prod polls it. `scripts/serve.ts --no-watch` passes
 `--plugin-refresh-interval-ms`, and the server then runs
 `claude plugin update claude-workspaces@claude-workspaces` at boot and every 30
-minutes (`LF_PLUGIN_REFRESH_MINUTES`; `0` turns it off). A merge therefore
+minutes (`CW_PLUGIN_REFRESH_MINUTES`; `0` turns it off). A merge therefore
 reaches this machine's cache on its own, within the window.
 
 This is safe to arm without asking because **it cannot interrupt anyone**: the

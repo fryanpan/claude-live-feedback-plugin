@@ -2,7 +2,7 @@
  * "Is somebody already on this row?" — asked where the pickup decision is
  * actually made.
  *
- * The fixture is the 2026-08-17 collision (`t-K69wxtRLCn2a`): two sessions
+ * The fixture is the 2026-08-17 collision on a single task row: two sessions
  * dispatched onto one task, hours of work each, two complete answers, one
  * thrown away. Neither could detect the other because the surface they pick
  * work from — the queue — carried a bare `assignee` STRING and nothing about
@@ -16,7 +16,7 @@
  *    A sha-based signal scores zero on every case below.
  *  - It only ever informs. There is no assertion that a second claim is
  *    refused, because a second claim must not be refused: two agents on one
- *    row is sometimes right, and on `t-K69wxtRLCn2a` the disagreement between
+ *    row is sometimes right, and on that row the disagreement between
  *    the two designs is what made the choice legible.
  */
 import { afterEach, describe, expect, it } from 'bun:test';
@@ -80,7 +80,7 @@ describe('the queue says who is already on a row', () => {
   };
 
   const setup = async (opts?: { heartbeatFreshMs?: number }) => {
-    dataDir = mkdtempSync(join(tmpdir(), 'lf-row-presence-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-row-presence-'));
     handle = createServer({
       port: 0,
       dataDir,
@@ -171,7 +171,7 @@ describe('the queue says who is already on a row', () => {
 
   it('the second claim is recorded, never refused', async () => {
     // One-directional by construction: the read informs and the write always
-    // goes through. `t-K69wxtRLCn2a` produced two designs whose disagreement
+    // goes through. That collision produced two designs whose disagreement
     // made the choice legible — a gate here would have destroyed that.
     const wsId = await setup();
     await attach(wsId, 'agent-first-taker');

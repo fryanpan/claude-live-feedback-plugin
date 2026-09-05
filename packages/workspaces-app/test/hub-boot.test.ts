@@ -273,7 +273,7 @@ describe('a deep-linked task opens on boot', () => {
 });
 
 describe('what the boot restores from storage', () => {
-  const NAV_KEY = 'lf-hub-nav-collapsed';
+  const NAV_KEY = 'cw-hub-nav-collapsed';
 
   it('reads the collapsed rail once and applies it', async () => {
     const { storage } = await boot(`https://board.test/workspaces/${WS}/tasks`, {

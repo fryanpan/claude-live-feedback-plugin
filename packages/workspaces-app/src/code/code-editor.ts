@@ -402,7 +402,7 @@ export function createCodeEditor(opts: CreateCodeEditorOpts): CodeSurface {
         return Math.max(0, v.scrollDOM.clientWidth - (gutters?.offsetWidth ?? 0) - CARD_MARGIN_X);
       },
       write: (w: number) => {
-        if (w > 0) view.dom.style.setProperty('--lf-inline-card-w', `${w}px`);
+        if (w > 0) view.dom.style.setProperty('--cw-inline-card-w', `${w}px`);
       },
     });
   }

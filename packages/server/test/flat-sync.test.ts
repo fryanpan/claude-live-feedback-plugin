@@ -73,7 +73,7 @@ describe('flat write-back', () => {
   let rooms: Rooms;
 
   beforeEach(() => {
-    dataDir = mkdtempSync(join(tmpdir(), 'lf-flat-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-flat-'));
     path = join(dataDir, 'Main.kt');
     writeFileSync(path, SRC);
     rooms = makeRooms(dataDir);
@@ -166,8 +166,8 @@ describe('flat write-back through bindDiff', () => {
   let base: string;
 
   beforeEach(() => {
-    repo = mkdtempSync(join(tmpdir(), 'lf-flatrepo-'));
-    dataDir = mkdtempSync(join(tmpdir(), 'lf-flatdata-'));
+    repo = mkdtempSync(join(tmpdir(), 'cw-flatrepo-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-flatdata-'));
     git(repo, 'init', '-q');
     writeFileSync(join(repo, 'Main.kt'), SRC);
     writeFileSync(join(repo, 'README.md'), '# Title\n\nBody.\n');
