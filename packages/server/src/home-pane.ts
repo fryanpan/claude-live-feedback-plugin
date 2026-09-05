@@ -1,4 +1,3 @@
-import { reviewItemState } from '@feedback/core';
 /**
  * ── Home pane: per-person read markers + the "What's New?" brief ────────────
  *
@@ -24,6 +23,7 @@ import { reviewItemState } from '@feedback/core';
  * internal: nothing outside this module reached them inside `createServer`
  * either, and the in-flight set is only correct if exactly one thing owns it.
  */
+import { reviewItemState } from '@feedback/core';
 import {
   type BriefCoverage,
   type BriefInput,
@@ -256,7 +256,7 @@ export function createHomePane(ctx: HomePaneContext): HomePane {
    * brief-relevant events — see BRIEF_EVENT_TYPES for why heartbeats are
    * excluded from that count.
    */
-  const homePayload = (workspace: HubWorkspace, person: string, now: number) => {
+  const homePayload = (workspace: HubWorkspace, person: string, now: number): HomePayload => {
     const marker = homeBriefs.lastReadAt(workspace.id, person);
     const since = effectiveSince(marker, now);
     const input = homeBriefInput(workspace, since);
