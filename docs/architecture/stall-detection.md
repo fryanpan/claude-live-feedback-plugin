@@ -88,7 +88,7 @@ or by an agent the roster cannot place parks nobody, and a linked doc's plain
 COMMENTS
 and edits still count for every row that links it — that exoneration expires
 with the quiet window rather than lasting as long as a question does. Reading
-those threads goes through `rooms.listThreads`, which hydrates an evicted room
+those threads goes through `docStore.listThreads`, which hydrates an evicted room
 from disk rather than peeking, so a board whose rows link many cold docs pulls
 them back into memory on the loop's schedule.
 
