@@ -231,8 +231,13 @@ interface Verdict {
 
 describe('turn coverage over a scripted three-minute meeting', () => {
   it('is three minutes of speech, cut the way the clocks cut it', () => {
-    expect(MEETING_SECONDS).toBeGreaterThanOrEqual(150);
-    expect(MEETING_SECONDS).toBeLessThanOrEqual(230);
+    // The shape of the corpus, asserted so a PR quoting these numbers cannot
+    // quote them wrong: 25 things said, 19 of them notes, over 7 runs.
+    expect(LINES.length).toBe(25);
+    expect(LINES.filter((l) => l.note !== null).length).toBe(19);
+    expect(LINES.filter((l) => l.note === null).length).toBe(6);
+    expect(SCRIPT.length).toBe(7);
+    expect(MEETING_SECONDS).toBe(180);
     // Every filler line says why it is one; an unexplained skip is not a skip.
     for (const line of LINES) {
       if (line.note === null) expect(line.skip).toBeTruthy();
