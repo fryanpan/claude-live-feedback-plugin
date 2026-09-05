@@ -293,8 +293,8 @@ describe('ADVERSARIAL: landing project->artifacts + delete_workspace guardrail',
 
     const html = await (await fetch(`${base}/`)).text();
     // One LINK for the project behind the review-docs fold, by owner
-    // basename. `/` itself is a list of active workspaces (Bryan's re-scope,
-    // task t-UZMXu32nt4wN), so the project carries no artifact counts here.
+    // basename. `/` itself is a list of active workspaces (Bryan's re-scope
+    // of the landing page), so the project carries no artifact counts here.
     expect(html).toContain('adv');
     expect(html).toContain(`/projects/${encodeURIComponent('/proj/adv')}`);
     // …and none of its contents: the per-artifact detail is what moved off the
