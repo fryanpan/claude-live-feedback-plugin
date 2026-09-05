@@ -1,7 +1,7 @@
 /**
- * Routes added for the hub UI (plan §3.12 commit 7):
+ * Routes added for the board UI (plan §3.12 commit 7):
  *
- *   GET  /workspaces/:id        — the hub page shell (server-rendered, loads /app/hub.js)
+ *   GET  /workspaces/:id        — the board page shell (server-rendered, loads /app/board.js)
  *   POST /api/tasks/:id/title   — in-place task title edit (§3.9)
  *   GET  /api/workspaces/:id/events — the activity view's audit-log read (§3.9)
  *
@@ -16,13 +16,13 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { User } from '@feedback/core';
-import { HUB_FEEDBACK_DOC_ID, type ServerHandle, createServer } from '../src/server.ts';
+import { BOARD_FEEDBACK_DOC_ID, type ServerHandle, createServer } from '../src/server.ts';
 import { workspaceRoomId } from '../src/task-projection.ts';
 import type { Task } from '../src/tasks.ts';
 
 const PERSON: User = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
 
-describe('hub UI routes (plan §3.12 commit 7)', () => {
+describe('board UI routes (plan §3.12 commit 7)', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
@@ -54,7 +54,7 @@ describe('hub UI routes (plan §3.12 commit 7)', () => {
   }
 
   beforeAll(() => {
-    dataDir = mkdtempSync(join(tmpdir(), 'cw-hub-ui-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-board-ui-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
   });
@@ -64,8 +64,8 @@ describe('hub UI routes (plan §3.12 commit 7)', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  describe('GET /workspaces/:id (hub page shell)', () => {
-    it('serves an HTML shell for a hub workspace, name escaped, hub bundle referenced', async () => {
+  describe('GET /workspaces/:id (board page shell)', () => {
+    it('serves an HTML shell for a board workspace, name escaped, board bundle referenced', async () => {
       const wsId = await seedWorkspace('a<b workspace');
       const res = await fetch(`${base}/workspaces/${wsId}`);
       expect(res.status).toBe(200);
@@ -75,7 +75,7 @@ describe('hub UI routes (plan §3.12 commit 7)', () => {
       expect(html).toContain('a&lt;b workspace');
       // …and the raw (unescaped) name never reaches the markup.
       expect(html).not.toContain('a<b workspace');
-      expect(html).toContain('/app/hub.js');
+      expect(html).toContain('/app/board.js');
       // §3.9: the browser tab is a workspace switcher — so the WORKSPACE
       // leads the title and the product name trails it. Every tab used to
       // open with the same word and truncate before reaching the part that
@@ -97,12 +97,12 @@ describe('hub UI routes (plan §3.12 commit 7)', () => {
       expect(tokens).toBeGreaterThan(styles);
     });
 
-    // Every hub carries the widget, and every hub's widget writes to the SAME
-    // doc — feedback on the hub UI is about the product, not about whichever
+    // Every board carries the widget, and every board's widget writes to the SAME
+    // doc — feedback on the board UI is about the product, not about whichever
     // workspace you were standing in, so it must reach one place from all of
     // them. Two workspaces asserted, because "the widget is present" would
     // pass for a per-workspace doc too.
-    it('embeds the feedback widget on every hub, pointed at one shared doc', async () => {
+    it('embeds the feedback widget on every board, pointed at one shared doc', async () => {
       const a = await seedWorkspace('alpha');
       const b = await seedWorkspace('beta');
       const htmlA = await (await fetch(`${base}/workspaces/${a}`)).text();
@@ -111,22 +111,22 @@ describe('hub UI routes (plan §3.12 commit 7)', () => {
       for (const html of [htmlA, htmlB]) {
         expect(html).toContain('/widget.esm.js');
         expect(html).toContain('<claude-feedback-widget');
-        expect(html).toContain(`doc-id="${HUB_FEEDBACK_DOC_ID}"`);
+        expect(html).toContain(`doc-id="${BOARD_FEEDBACK_DOC_ID}"`);
       }
       // The workspace name rides along as `view` so a thread reads without
-      // anyone resolving an id — and it differs per hub, which is the
+      // anyone resolving an id — and it differs per board, which is the
       // positive control that these two responses aren't the same page.
       expect(htmlA).toContain('view="alpha"');
       expect(htmlB).toContain('view="beta"');
     });
 
     // Without this attribute the widget keeps its identity under its own `cfw:`
-    // prefix — correct on a stranger's page, wrong here, because the hub has
+    // prefix — correct on a stranger's page, wrong here, because the board has
     // already asked this reader their name under the UNPREFIXED key. The
     // observed symptom was a board greeting the reader by the name they gave,
     // while every comment the widget posted from that same page was signed
     // "Anonymous <animal>".
-    it('tells the widget to adopt the hub page own identity', async () => {
+    it('tells the widget to adopt the board page own identity', async () => {
       const id = await seedWorkspace('gamma');
       const html = await (await fetch(`${base}/workspaces/${id}`)).text();
       // Positive control first: the widget is on this page at all.
@@ -134,13 +134,13 @@ describe('hub UI routes (plan §3.12 commit 7)', () => {
       expect(html).toContain('identity-scope="host"');
     });
 
-    // The doc must be findable by an agent that never opened a hub — a room
+    // The doc must be findable by an agent that never opened a board — a room
     // conjured by the first `/y/<id>` connect has no title and no type.
     it('materializes the shared feedback doc at startup', async () => {
-      const res = await fetch(`${base}/api/docs/${HUB_FEEDBACK_DOC_ID}`);
+      const res = await fetch(`${base}/api/docs/${BOARD_FEEDBACK_DOC_ID}`);
       expect(res.status).toBe(200);
       const meta = (await res.json()) as { meta?: { title?: string } };
-      expect(meta.meta?.title ?? '').toContain('Hub feedback');
+      expect(meta.meta?.title ?? '').toContain('Board feedback');
     });
 
     // …but it is infrastructure, so it must not sit in the landing index
@@ -149,8 +149,8 @@ describe('hub UI routes (plan §3.12 commit 7)', () => {
     it('keeps the feedback doc out of the landing index', async () => {
       const html = await (await fetch(`${base}/`)).text();
       expect(html).toContain('Workspaces'); // the real landing page
-      expect(html).not.toContain(HUB_FEEDBACK_DOC_ID);
-      expect(html).not.toContain('Hub feedback (all workspaces)');
+      expect(html).not.toContain(BOARD_FEEDBACK_DOC_ID);
+      expect(html).not.toContain('Board feedback (all workspaces)');
     });
 
     it('404s (as a page, not JSON) for an unknown workspace id', async () => {

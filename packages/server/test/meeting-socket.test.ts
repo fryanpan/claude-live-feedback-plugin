@@ -353,7 +353,7 @@ describe('meeting audio socket', () => {
 
     const kinds = events.map((e) => e.event).filter((e) => e.startsWith('meeting.'));
     expect(kinds).toEqual(['meeting.started', 'meeting.stopped']);
-    // The words rode the audio socket. Nothing word-rate reached the hub — a
+    // The words rode the audio socket. Nothing word-rate reached the board — a
     // transcript on this channel would evict every real doc event from the
     // 200-event replay buffer.
     expect(events.some((e) => JSON.stringify(e).includes('bottleneck'))).toBe(false);
@@ -465,23 +465,23 @@ describe('meeting audio socket with no engine configured', () => {
  * server-side — so the boundary below is the assertion that matters.
  */
 describe('a member opens the audio socket on their board, and on no other', () => {
-  const HUB: ShareTarget = { workspaceId: 'hub-1' };
+  const BOARD: ShareTarget = { workspaceId: 'board-1' };
   const OTHER: ShareTarget = { workspaceId: 'ws-a' };
   const workspaceOf = (d: string): string[] =>
-    d === 'standup-notes' ? ['ws-a'] : d.startsWith('hub-1:') ? ['hub-1'] : [];
+    d === 'standup-notes' ? ['ws-a'] : d.startsWith('board-1:') ? ['board-1'] : [];
 
   it('opens /audio/ for a doc on the shared board, however it is addressed', () => {
     expect(shareScopeAllows('/audio/standup-notes', 'GET', OTHER, workspaceOf)).toBe(true);
-    expect(shareScopeAllows('/audio/hub-1%3Aplan.md', 'GET', HUB, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/audio/board-1%3Aplan.md', 'GET', BOARD, workspaceOf)).toBe(true);
   });
 
   it('refuses /audio/ for a doc on a board this share does not cover', () => {
     // Same two paths, the other target each time — so a `false` here is the
     // board boundary and not a fixture that refuses everything.
-    expect(shareScopeAllows('/audio/standup-notes', 'GET', HUB, workspaceOf)).toBe(false);
-    expect(shareScopeAllows('/audio/hub-1%3Aplan.md', 'GET', OTHER, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/audio/standup-notes', 'GET', BOARD, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/audio/board-1%3Aplan.md', 'GET', OTHER, workspaceOf)).toBe(false);
     // A doc on no board at all is refused by both.
-    for (const target of [HUB, OTHER]) {
+    for (const target of [BOARD, OTHER]) {
       expect(shareScopeAllows('/audio/unfiled-doc', 'GET', target, workspaceOf)).toBe(false);
     }
   });

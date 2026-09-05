@@ -280,7 +280,7 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
     // A folder bind / diff review puts ONE row on the board — the GROUPING —
     // and the agent watches the grouping's own channel. It never asked about
     // the board, so a board row here would be an alarm about somebody else's
-    // seat, on a key that is not a hub board at all.
+    // seat, on a key that is not a board at all.
     const boardId = await makeBoard('holding-board');
     writeFileSync(join(srcDir, 'README.md'), '# Bound folder\n\nBody.\n');
     const bound = await post('/api/workspaces', { folderPath: srcDir, hubWorkspaceId: boardId });
@@ -296,7 +296,7 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
     expect(row.key).toBe(`ws:${groupingId}`);
     expect(row.workspaceId).toBe(groupingId);
     expect(row.kind).toBe('review');
-    // Attachment / lead / heartbeat are hub-board facts. Printing `false` for
+    // Attachment / lead / heartbeat are board facts. Printing `false` for
     // a grouping would read as a gap that cannot exist.
     expect(row.attached).toBeUndefined();
     expect(row.lead).toBeUndefined();

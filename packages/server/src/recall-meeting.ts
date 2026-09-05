@@ -74,7 +74,7 @@ export interface RecallMeetingDeps {
   /**
    * The live word ticker: one `meeting.transcript` per frame the vendor
    * sends, partials included, on the doc's own SSE channel — fanned out to
-   * whoever has the doc open and never buffered (`SseHub.broadcastTransient`).
+   * whoever has the doc open and never buffered (`SseBus.broadcastTransient`).
    * The microphone path returns its words on the audio socket; a bot has no
    * socket to a browser, and this is the one channel every viewer already
    * holds.

@@ -666,8 +666,8 @@ export function shareScopeAllows(
    *
    * The id may be a doc OR a review (folder bind / diff review), and a
    * doc belongs to more than one workspace at once: its review, and the
-   * hub board that review is filed on. Membership is therefore a SET, not
-   * a single answer — an exact `=== workspaceOf(id)` was what refused a hub
+   * board that review is filed on. Membership is therefore a SET, not
+   * a single answer — an exact `=== workspaceOf(id)` was what refused a board
    * visitor every review row on their own board.
    *
    * Every share is a workspace share, so this is consulted for every scope
@@ -752,7 +752,7 @@ export function shareScopeAllows(
     return id === target.workspaceId || insideSharedWorkspace(id);
   };
 
-  // Workspace-hub surfaces (§3.12 commit 8) — three explicit allowances,
+  // Workspace-board surfaces (§3.12 commit 8) — three explicit allowances,
   // ONLY for a workspace-scope share. A doc-scoped share never reaches the
   // board: the ws:<id> room syncs every task in the workspace (§3.3 rule 2),
   // so task chips inside a shared doc resolve through the REST endpoint
@@ -952,9 +952,9 @@ export function shareScopeAllows(
   // the review.
   //
   // "Covers" is `inScope`, not string equality, and that is the whole of the
-  // fix for a shared BOARD: a group bind is filed on a hub workspace, so the
+  // fix for a shared BOARD: a group bind is filed on a board workspace, so the
   // review row a visitor can see on the board is reached through the
-  // GROUPING's id while the share is scoped to the HUB's. An exact `!==`
+  // GROUPING's id while the share is scoped to the BOARD's. An exact `!==`
   // refused every one of them. A review filed on a different board is not
   // in the set `workspacesOf` returns, so it stays refused — that half is
   // the one under test, because widening is the direction that costs.
@@ -1111,7 +1111,7 @@ export function collabScope(
  * enumerate-the-server route.
  *
  * A LIST rather than one answer, because a doc belongs to more than one
- * workspace at once: its review, and every hub board that review or doc is
+ * workspace at once: its review, and every board that review or doc is
  * filed on. Answering with the first of them asked the membership question
  * about whichever board the store iterated first, so a doc filed on two
  * boards was refused to a visitor who holds the second — while that board's
@@ -1190,7 +1190,7 @@ function pathWorkspaces(pathname: string, workspacesOf?: (id: string) => string[
  *   POST threads/<id>/{rewrite_region,insert_after,insert_blocks_after}
  *                       agent-side document surgery, not a review action
  * `threads/<id>/promote` used to be in that list, with the reason "visitors
- * are read-only on the hub gate, comments are their only write". That reason
+ * are read-only on the board gate, comments are their only write". That reason
  * is the thing Bryan's 2026-09-03 call removed: a member files tasks on the
  * board this doc is filed on, so turning a comment into one is the same act
  * by a shorter route. It is allowed now.

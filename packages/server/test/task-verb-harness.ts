@@ -15,8 +15,8 @@
 import type { Task, TaskStatus } from '@feedback/core/task-wire';
 import { isReservedGoalId } from '../src/task-goals.ts';
 import type {
+  BoardWorkspace,
   GoalRow,
-  HubWorkspace,
   TaskStoreEvent,
   TransitionResult,
   WorkspaceState,
@@ -61,14 +61,14 @@ export function makeGoalRow(overrides: Partial<GoalRow> & { id: string }): GoalR
   } as GoalRow;
 }
 
-export function makeWorkspace(overrides?: Partial<HubWorkspace>): HubWorkspace {
+export function makeWorkspace(overrides?: Partial<BoardWorkspace>): BoardWorkspace {
   return {
     id: WS,
     name: 'Board',
     goals: [{ id: 'g-1', title: 'First goal' }],
     docIds: [],
     ...overrides,
-  } as HubWorkspace;
+  } as BoardWorkspace;
 }
 
 /** Everything the five verb modules can reach, plus the recording a test
@@ -83,7 +83,7 @@ export class FakeStore {
   docRevisions = new Map<string, number>();
   rosterIds = new Map<string, string>();
 
-  constructor(workspace: HubWorkspace = makeWorkspace()) {
+  constructor(workspace: BoardWorkspace = makeWorkspace()) {
     this.states.set(workspace.id, {
       workspace,
       tasks: new Map(),
@@ -127,7 +127,7 @@ export class FakeStore {
   }
 
   /** The same reading `TaskStore` takes: a reserved band always exists. */
-  goalIdExists(workspace: HubWorkspace, goalId: string): boolean {
+  goalIdExists(workspace: BoardWorkspace, goalId: string): boolean {
     if (isReservedGoalId(goalId)) return true;
     return workspace.goals.some((g) => g.id === goalId);
   }

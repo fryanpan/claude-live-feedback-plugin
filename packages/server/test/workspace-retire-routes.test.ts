@@ -1,10 +1,10 @@
 /**
- * HTTP surface for retiring and renaming a hub board.
+ * HTTP surface for retiring and renaming a board.
  *
  * Every handler under `/api/workspaces` hand-copies body fields into the
  * store call, so a field that isn't copied is silently discarded while the
  * request still returns 200 — the standing reason this file exists at all
- * (see the banner over the hub-board routes in server.ts). Each param below
+ * (see the banner over the board routes in server.ts). Each param below
  * is asserted through the wire, not through the store.
  *
  * The other half is READBACK: retiring is only useful if the surfaces an
@@ -176,16 +176,16 @@ describe('retire / rename routes', () => {
     expect(payload.retired?.notice.toLowerCase()).toContain('retired');
   });
 
-  it('GET /api/workspaces marks the retired rows in hubWorkspaces', async () => {
+  it('GET /api/workspaces marks the retired rows in boardWorkspaces', async () => {
     start();
     const live = await newBoard('harbor-relay');
     const stale = await newBoard('september-board');
     await put(`/api/workspaces/${stale}/retired`, { retired: true, author: AGENT });
 
     const payload = (await (await get('/api/workspaces')).json()) as {
-      hubWorkspaces: Array<{ id: string; retired?: boolean }>;
+      boardWorkspaces: Array<{ id: string; retired?: boolean }>;
     };
-    const byId = new Map(payload.hubWorkspaces.map((w) => [w.id, w]));
+    const byId = new Map(payload.boardWorkspaces.map((w) => [w.id, w]));
     expect(byId.get(stale)?.retired).toBe(true);
     expect(byId.get(live)?.retired).toBeUndefined();
   });

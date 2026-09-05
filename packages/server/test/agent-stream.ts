@@ -13,7 +13,7 @@
  * anyone is on the channel, so a test that wants delivery has to be reachable
  * — which is the same thing production requires.
  *
- * Registration is synchronous: `openSseStream` calls `hub.add` inside the
+ * Registration is synchronous: `openSseStream` calls `board.add` inside the
  * stream's `start()`, before the Response is returned. So an awaited fetch is
  * an established subscriber, and there is nothing to poll for.
  */

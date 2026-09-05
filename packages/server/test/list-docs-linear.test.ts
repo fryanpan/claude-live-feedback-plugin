@@ -2,7 +2,7 @@
  * GET /api/docs resolves every row's board from ONE pass over the workspaces.
  *
  * It used to take two per row. `withReviewUrl` → `resolveWorkspaceForDoc` →
- * `backTargetFor` called `hubWorkspacesHolding` twice for every doc, and each
+ * `backTargetFor` called `boardWorkspacesHolding` twice for every doc, and each
  * call ran `listWorkspaces().filter(w => w.docIds.includes(id))` — a fresh
  * array of every board, then a linear scan of its docIds. Quadratic in the
  * doc count, and paid in full by the docs no board holds, which once a server

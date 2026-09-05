@@ -4,12 +4,12 @@ import { type DocMeta, isReviewMember, reviewIdOf } from '@feedback/core';
  * Every review belongs to a workspace — including the ones made before that
  * was true.
  *
- * `fileUnderHubWorkspace` has filed each new bind and diff review onto a
+ * `fileUnderBoardWorkspace` has filed each new bind and diff review onto a
  * workspace since it was written, defaulting to the "Unfiled" board. Reviews
  * created BEFORE it was written were never filed and nothing has gone back for
  * them. Measured in the live data dir on 2026-08-21: 23 reviews exist, 3 are
  * filed, 20 are not. So the invariant the code asserts in prose ("Every doc
- * and every group bind belongs to a hub workspace") is currently false for
+ * and every group bind belongs to a board workspace") is currently false for
  * most of the data.
  *
  * That was survivable while a review's URL was `/review/<docId>`, which needs

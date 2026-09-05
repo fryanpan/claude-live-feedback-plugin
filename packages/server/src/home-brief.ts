@@ -280,7 +280,7 @@ function actorName(actor: unknown): string | undefined {
 
 /**
  * The relative URL that opens a task's detail on the board — the same shape
- * the voice route navigates to and `hub-app.ts` reads off `?task=` on load.
+ * the voice route navigates to and `board-app.ts` reads off `?task=` on load.
  * Relative on purpose: the brief renders on the page it points at, and the
  * client resolves it against its own origin, so it is right on the tailnet
  * hostname, on localhost, and behind a share host alike.

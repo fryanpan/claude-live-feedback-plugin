@@ -70,9 +70,9 @@ export interface IdentitySetupContext {
   /** The root HMAC key both derived keys hang off. A thunk because the key
    *  is generated on first use rather than at boot. */
   cookieKey: () => string;
-  /** Teach the hub store which roster resolves its agent ids. A thunk
+  /** Teach the board store which roster resolves its agent ids. A thunk
    *  rather than the store itself: this is the only thing wanted from it,
-   *  and naming the store would pull the whole hub in for one call. */
+   *  and naming the store would pull the whole board in for one call. */
   setTaskStoreAgentRoster: (roster: Identities) => void;
   /** The request's SOCKET address. Not a header — see client-address.ts for
    *  why both of this deployment's proxies dial over loopback. */

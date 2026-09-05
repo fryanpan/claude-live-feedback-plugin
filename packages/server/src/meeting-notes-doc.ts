@@ -500,7 +500,7 @@ export function withServerNotesSinks(
     onTaskReady?: (wake: { workspaceId: string; taskId: string; title: string }) => void;
     /**
      * The board a doc's meeting files onto. A huddle doc has no `setId` —
-     * it is HELD by a hub workspace, not owned by one — so scoping capture
+     * it is HELD by a board workspace, not owned by one — so scoping capture
      * on `meta.setId` alone silently returned nothing for exactly the docs
      * meetings run on. Absent, `meta.setId` is the whole answer.
      */

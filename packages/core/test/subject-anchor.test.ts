@@ -4,7 +4,7 @@
  * Every anchor kind so far points INTO a document: a text range, a DOM
  * element, or the memory of one that has gone (orphan). There was no way to
  * say "this comment is about the thing itself" — which is the only kind of
- * comment a hub task can carry, because a task's discussion is about the
+ * comment a board task can carry, because a task's discussion is about the
  * task, and a freshly created task's description is empty, so there is
  * nothing in it to point at. `create_thread` requires a `find` string and
  * `POST /api/docs/<id>/threads` requires an anchor, so neither a person nor

@@ -15,7 +15,7 @@
  * scope here.
  *
  * The predicate is the board's NAME, because that is how the server itself
- * identifies the default board: `defaultHubWorkspaceId()` finds it by
+ * identifies the default board: `defaultBoardWorkspaceId()` finds it by
  * `name === 'Unfiled'` on every call — the id is never cached, and a fresh
  * data dir has a fresh id. Any board answering to that lookup can receive
  * stray reviews, so any board answering to it is refused.
@@ -76,7 +76,7 @@ describe('the Unfiled board cannot be shared', () => {
   let dataDir: string;
   let folder: string;
 
-  /** The default hub board — where a bind that names no board lands. */
+  /** The default board — where a bind that names no board lands. */
   let unfiledBoardId: string;
   /** A real, named board — the positive control. */
   let boardId: string;

@@ -180,11 +180,11 @@ describe('home routes — deterministic server (no summarizer)', () => {
     expect(put.status).toBe(400);
   });
 
-  it('serves the hub shell at /workspaces/:id/home (deep-linkable pane)', async () => {
+  it('serves the board shell at /workspaces/:id/home (deep-linkable pane)', async () => {
     const page = await h.local(`/workspaces/${ws}/home`);
     expect(page.status).toBe(200);
     const html = await page.text();
-    expect(html).toContain('hub-root');
+    expect(html).toContain('board-root');
     // A missing workspace still 404s crisply on the /home spelling.
     expect((await h.local('/workspaces/w-none/home')).status).toBe(404);
   });
@@ -198,7 +198,7 @@ describe('home routes — deterministic server (no summarizer)', () => {
     for (const suffix of ['', '/home', '/tasks', '/mine', '/activity']) {
       const page = await h.local(`/workspaces/${ws}${suffix}`);
       expect({ suffix, status: page.status }).toEqual({ suffix, status: 200 });
-      expect(await page.text()).toContain('hub-root');
+      expect(await page.text()).toContain('board-root');
     }
     // Negative control, so the widening is a list and not a catch-all: an
     // unknown suffix must still 404 rather than serving a board for a

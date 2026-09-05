@@ -1,5 +1,5 @@
 /**
- * Retiring, un-retiring and renaming a hub board — the store half.
+ * Retiring, un-retiring and renaming a board — the store half.
  *
  * The incident this covers (2026-08-19): two boards carried the identical
  * name AND the identical lead agent, with different goal lists. An agent read

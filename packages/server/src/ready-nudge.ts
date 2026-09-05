@@ -100,7 +100,7 @@ export const READY_IDLE_DEFAULT_MS = 15 * 60_000;
 export const READY_TICK_DEFAULT_MS = 60_000;
 
 /** The two things a nudge can be about. Separate EVENT NAMES rather than one
- *  name with a reason field, because the plugin renders an unrecognised hub
+ *  name with a reason field, because the plugin renders an unrecognised board
  *  event off the event name alone — one name would make the two
  *  indistinguishable in the lead's channel. */
 export const READY_IDLE_EVENT = 'workspace.ready_idle';

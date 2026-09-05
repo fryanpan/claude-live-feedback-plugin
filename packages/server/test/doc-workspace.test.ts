@@ -113,7 +113,7 @@ describe('a doc always lands in a workspace', () => {
     // The whole point: no error, no second call, and the doc is in a workspace.
     expect(body.hubWorkspaceId).toBeTruthy();
 
-    // And it's a REAL workspace — one the hub can open, not just a string
+    // And it's a REAL workspace — one the board can open, not just a string
     // stamped on the doc. This is the assertion that would catch "we set the
     // field and never created anything".
     const ws = await local(`/api/workspaces/${body.hubWorkspaceId}`);
@@ -132,7 +132,7 @@ describe('a doc always lands in a workspace', () => {
     expect(((await viaAlias.json()) as DocResponse).meta.docId).toBe(body.docId);
   });
 
-  it('puts the auto-created workspace in the list the hub renders', async () => {
+  it('puts the auto-created workspace in the list the board renders', async () => {
     const r = await post('/api/docs', {
       docId: 'doc-listed-ws',
       type: 'markdown',
@@ -143,7 +143,7 @@ describe('a doc always lands in a workspace', () => {
     // undefined needle against a list that happens not to hold one.
     expect(wsId).toBeTruthy();
     const list = await local('/api/workspaces');
-    const ids = ((await list.json()) as { hubWorkspaces: { id: string }[] }).hubWorkspaces.map(
+    const ids = ((await list.json()) as { boardWorkspaces: { id: string }[] }).boardWorkspaces.map(
       (w) => w.id,
     );
     // A workspace the server materialized was never named to anyone, so a
@@ -152,7 +152,7 @@ describe('a doc always lands in a workspace', () => {
   });
 
   it('reuses one auto-created workspace instead of minting one per doc', async () => {
-    // A workspace per doc is the same as no workspace: the hub fills with
+    // A workspace per doc is the same as no workspace: the board fills with
     // single-doc boards and the grouping stops meaning anything.
     const a = await post('/api/docs', {
       docId: 'doc-auto-a',
@@ -179,7 +179,7 @@ describe('a doc always lands in a workspace', () => {
   it('filing a doc into a real workspace takes it out of the default one', async () => {
     // The ordinary agent flow is create-then-attach, so the doc is filed into
     // the holding pen before anyone names a workspace for it. Left in both, it
-    // has two hub workspaces and `workspaceOfDoc` answers with whichever the
+    // has two board workspaces and `workspaceOfDoc` answers with whichever the
     // store iterates first — which is what share scoping resolves against, so
     // a workspace visitor gets a 403 on the doc the share was made for.
     const created = await post('/api/docs', {

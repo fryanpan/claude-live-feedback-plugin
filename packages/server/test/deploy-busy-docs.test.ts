@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Rooms } from '../src/rooms.ts';
-import { SseHub } from '../src/sse.ts';
+import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 import { waitFor } from './wait-for.ts';
 
@@ -27,7 +27,7 @@ describe('pendingFileWrites', () => {
     writeFileSync(path, 'fun main() {}\n');
     rooms = new Rooms({
       dataDir,
-      sse: new SseHub(),
+      sse: new SseBus(),
       webhooks: createWebhookDispatcher({ onLog: () => {} }),
       decorateDocMeta: (m) => ({ ...m, reviewUrl: `http://test/review/${m.docId}` }),
     });

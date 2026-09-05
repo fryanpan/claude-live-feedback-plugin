@@ -247,9 +247,9 @@ describe('resources under the workspace path', () => {
       ).toBe(200);
       // Detach it from whatever default workspace filing put it on.
       const wsList = (await (await local('/api/workspaces')).json()) as {
-        hubWorkspaces?: Array<{ id: string }>;
+        boardWorkspaces?: Array<{ id: string }>;
       };
-      for (const w of wsList.hubWorkspaces ?? []) {
+      for (const w of wsList.boardWorkspaces ?? []) {
         await local(`/api/workspaces/${w.id}/docs?docId=orphan-doc`, { method: 'DELETE' });
       }
       const r = await local('/review/orphan-doc');
@@ -266,9 +266,9 @@ describe('resources under the workspace path', () => {
         (await post('/api/docs', { docId: 'orphan-mock', type: 'mockup', sourceUrl: p })).status,
       ).toBe(200);
       const wsList = (await (await local('/api/workspaces')).json()) as {
-        hubWorkspaces?: Array<{ id: string }>;
+        boardWorkspaces?: Array<{ id: string }>;
       };
-      for (const w of wsList.hubWorkspaces ?? []) {
+      for (const w of wsList.boardWorkspaces ?? []) {
         await local(`/api/workspaces/${w.id}/docs?docId=orphan-mock`, { method: 'DELETE' });
       }
       const r = await local('/review/orphan-mock');

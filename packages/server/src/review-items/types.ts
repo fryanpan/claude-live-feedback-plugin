@@ -4,7 +4,7 @@
  */
 import type { TaskReviewItem } from '@feedback/core';
 import type { Task } from '@feedback/core/task-wire';
-import type { HubWorkspace } from '../tasks.ts';
+import type { BoardWorkspace } from '../tasks.ts';
 
 export type AnswerDecisionResult =
   | { ok: true; task: Task }
@@ -142,5 +142,5 @@ export type ReviewItemCriteriaRead = { value: string; isDefault: boolean };
 
 /** `setReviewItemCriteria`'s answer. */
 export type SetReviewItemCriteriaResult =
-  | { ok: true; workspace: HubWorkspace; criteria: ReviewItemCriteriaRead }
+  | { ok: true; workspace: BoardWorkspace; criteria: ReviewItemCriteriaRead }
   | { ok: false; error: 'workspace-not-found' };

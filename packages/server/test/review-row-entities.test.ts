@@ -18,8 +18,8 @@
  * All fixtures are synthetic.
  */
 import { describe, expect, it } from 'bun:test';
-import type { HubTask } from '../../workspaces-app/src/hub/hub-board-model.ts';
-import { reviewQueue, reviewRowTitle } from '../../workspaces-app/src/hub/hub-review-model.ts';
+import type { BoardTask } from '../../workspaces-app/src/board/board-model.ts';
+import { reviewQueue, reviewRowTitle } from '../../workspaces-app/src/board/board-review-model.ts';
 import { projectTask } from '../src/task-projection.ts';
 import type { Task } from '../src/tasks.ts';
 
@@ -44,7 +44,7 @@ function task(over: Partial<Task> = {}): Task {
 }
 
 /** What a board reader gets: the projection, read as the browser's row type. */
-const projected = (t: Task): HubTask => projectTask(t) as unknown as HubTask;
+const projected = (t: Task): BoardTask => projectTask(t) as unknown as BoardTask;
 
 describe('projectTask decodes titles', () => {
   it("renders '&' where a caller baked in '&amp;'", () => {
@@ -74,7 +74,7 @@ describe('projectTask decodes titles', () => {
 });
 
 describe('the Home queue row a decision task produces', () => {
-  const decision = (title: string): HubTask =>
+  const decision = (title: string): BoardTask =>
     projected(task({ title, needs: 'decision', assignee: 'human' }));
 
   /** The bug as reported: a decision row's title IS the task title (its `ask`

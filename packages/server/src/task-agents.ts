@@ -148,7 +148,7 @@ export interface AttachmentThresholds {
  * Is anyone actually subscribed to the channel a request is about to ride?
  *
  * The half a time window cannot cover: a session that died since its last
- * write is still inside the window and still gone. Wired to the SSE hub in
+ * write is still inside the window and still gone. Wired to the SSE bus in
  * `server.ts`; unwired it answers yes, so a store with no transport behaves
  * exactly as it did before.
  *
@@ -186,7 +186,7 @@ export type DeliveryProbe = (workspaceId: string) => boolean;
 export type AgentStreamProbe = (workspaceId: string, agentId: string) => boolean;
 
 /**
- * Derive the hub's attachment state (§4). "Active 2m ago" is shown because a
+ * Derive the board's attachment state (§4). "Active 2m ago" is shown because a
  * heartbeat actually arrived — we never guess from the absence of activity —
  * and fresh-heartbeat-but-stale-tool-calls is rendered as "process up, agent
  * unresponsive", never as active.
@@ -229,7 +229,7 @@ export type DescribedAttachment = AgentAttachment & {
  *  by default and stayed there until somebody noticed. `endpoint` is a
  *  host-machine fact and was the one that had to go; the next one nobody
  *  has written yet is the one this shape is for. Every neighbouring visitor
- *  projection — `redactMetaForVisitor`, `redactHubWorkspaceForVisitor` —
+ *  projection — `redactMetaForVisitor`, `redactBoardWorkspaceForVisitor` —
  *  was rewritten this way after a leak, and this was the last one that
  *  had not been. */
 export type PublicAttachment = Pick<
@@ -549,7 +549,7 @@ export class AgentStore {
   }
 
   //
-  // The registry behind the triage-delivery bridge and the hub's attachment
+  // The registry behind the triage-delivery bridge and the board's attachment
   // state. Records live in their own per-workspace sidecar; agent.* events
   // ride the SAME emit choke point as every other §3.6 row (SSE + audit),
   // carrying the PUBLIC shape — `endpoint` never leaves REST/sidecar.

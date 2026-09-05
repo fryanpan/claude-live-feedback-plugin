@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import { threadCreateRequest } from '../src/thread-create.ts';
 
-const AUTHOR = { id: 'agent-hub', name: 'Hub Agent', kind: 'known' as const, color: '#888888' };
+const AUTHOR = { id: 'agent-board', name: 'Board Agent', kind: 'known' as const, color: '#888888' };
 
 describe('threadCreateRequest', () => {
   it('anchors to the found text when find is given', () => {

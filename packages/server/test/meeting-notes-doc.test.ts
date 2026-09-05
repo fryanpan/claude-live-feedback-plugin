@@ -749,7 +749,7 @@ describe('withServerNotesSinks task capture', () => {
   });
 
   it('scopes a huddle doc — held by a board, never owned — through boardOf', async () => {
-    // A huddle doc has no `setId`: it is held by a hub workspace, the way
+    // A huddle doc has no `setId`: it is held by a board workspace, the way
     // the doc page's back arrow finds it. Scoping on `setId` alone was why
     // "create a task" said aloud on one used to do nothing.
     const w = captureWorld();

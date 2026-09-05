@@ -20,7 +20,7 @@
  * move code whose position is load-bearing (it needs `resolveWorkspaceForDoc`
  * and the projection, and says so where it is built).
  *
- * `hubBoardsForDoc` and `backTargetFor` were thunks for the same reason until
+ * `boardsForDoc` and `backTargetFor` were thunks for the same reason until
  * they moved into `board-membership.ts`, which `createServer` now composes
  * above this wiring. They arrive as plain values.
  *
@@ -52,7 +52,7 @@ import {
 } from './ready-nudge.ts';
 import type { ReviewGateAddress } from './review-gate.ts';
 import type { Rooms } from './rooms.ts';
-import type { SseHub } from './sse.ts';
+import type { SseBus } from './sse.ts';
 import { StallEscalations } from './stall-escalation.ts';
 import {
   HELD_ITEM_DEFAULT_MS,
@@ -65,8 +65,8 @@ import { STALL_NUDGE_STAMP_FILENAME, StallNudger, type StallSnapshot } from './s
 import { type TaskProjection, taskBodyDocId, taskIdOfBodyDoc } from './task-projection.ts';
 import { buildQueue } from './task-queue.ts';
 import {
+  type BoardWorkspace,
   DEFAULT_PARALLELISM_CAP,
-  type HubWorkspace,
   LEGACY_REVIEW_ITEM_ID,
   type ParallelismCapChange,
   type TaskStore,
@@ -95,15 +95,15 @@ export interface ParallelismCapRead {
 /** The long-lived collaborators this subsystem reads, plus the tuning knobs
  *  `ServerOptions` carries for it. Built once per server. */
 export interface StallWiringContext {
-  /** The hub task store — workspaces, rows, review state, the held items. */
+  /** The board task store — workspaces, rows, review state, the held items. */
   taskStore: TaskStore;
   /** The ydoc projection: the roster reader both snapshots ask who owns a
    *  row, and the refresh a task comment needs to move its count. */
   taskProjection: TaskProjection;
   /** Doc rooms — read for a row's discussion and for the docs it links. */
   rooms: Rooms;
-  /** The stream hub: who can be reached, and where a wake is sent. */
-  sse: SseHub;
+  /** The stream board: who can be reached, and where a wake is sent. */
+  sse: SseBus;
   /** Open builder dispatches — the witness that keeps the loop from waking a
    *  lead over a row whose builder is busy in a checkout the board cannot
    *  see. */
@@ -126,9 +126,9 @@ export interface StallWiringContext {
     lastChange?: ParallelismCapChange;
   }) => CapSummary;
 
-  /** Every hub board a doc's discussion actually reaches —
+  /** Every board a doc's discussion actually reaches —
    *  `board-membership.ts`, composed above this wiring. */
-  hubBoardsForDoc: (docId: string) => Set<string>;
+  boardsForDoc: (docId: string) => Set<string>;
   /** The board a doc belongs back to, for the lead-presence monitor. Same
    *  module, same reason it can be a value. */
   backTargetFor: (docId: string, reviewId?: string) => { id: string; name: string } | null;
@@ -186,7 +186,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
     dataDir,
     parallelismCapView,
     capSummary,
-    hubBoardsForDoc,
+    boardsForDoc,
     backTargetFor,
     reviseCallFor,
   } = ctx;
@@ -221,7 +221,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
    * invisible to this wake by construction rather than by a second rule that
    * could drift from the one `next_tasks` follows.
    */
-  const readyWorkSnapshot = (workspace: HubWorkspace): ReadyWorkSnapshot => {
+  const readyWorkSnapshot = (workspace: BoardWorkspace): ReadyWorkSnapshot => {
     const tasks = taskStore.listTasks(workspace.id);
     const byId = new Map(tasks.map((t) => [t.id, t]));
     const ownerKindOf = taskProjection.ownerKindReader(workspace.id);
@@ -294,7 +294,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
     hasListeners: (docId) => sse.count(docId) > 0,
   });
   // The lead's own stream opening is what makes it deliverable, and it
-  // emits no store event — so the hub says so directly.
+  // emits no store event — so the board says so directly.
   sse.onAgentStreams = (channel) => {
     if (channel.startsWith('ws~')) leadPresence.notify(channel.slice('ws~'.length));
   };
@@ -369,7 +369,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
     ctx.noteAskJudge !== undefined ? { judge: ctx.noteAskJudge } : {},
   );
 
-  const stallVerdict = (workspace: HubWorkspace): StallVerdict => {
+  const stallVerdict = (workspace: BoardWorkspace): StallVerdict => {
     const tasks = taskStore.listTasks(workspace.id);
     const ownerKindOf = taskProjection.ownerKindReader(workspace.id);
     const goals = workspace.goals;
@@ -696,7 +696,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
    * is the "held for hours, nobody told" shape the five-minute window exists
    * to prevent.
    */
-  function heldThreadReviewItems(workspace: HubWorkspace): HeldItemInput[] {
+  function heldThreadReviewItems(workspace: BoardWorkspace): HeldItemInput[] {
     const out: HeldItemInput[] = [];
     const scan = (docId: string, title: string, taskId?: string) => {
       for (const thread of rooms.listThreads(docId, { status: 'open' })) {
@@ -742,7 +742,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
     }
     return out;
   }
-  const stallSnapshot = (workspace: HubWorkspace): StallSnapshot => {
+  const stallSnapshot = (workspace: BoardWorkspace): StallSnapshot => {
     const verdict = stallVerdict(workspace);
     const capRead = taskStore.parallelismCap(workspace.id);
     // Review items the quality gate is holding past the window — a fourth
@@ -881,7 +881,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
   // Resolution happens HERE, at BROADCAST time, against `workspace.docIds` —
   // nothing is registered when a doc is created. That is what makes "and
   // anything created later" true with no new call, no new field and no
-  // migration: `fileUnderHubWorkspace` already files every doc onto some
+  // migration: `fileUnderBoardWorkspace` already files every doc onto some
   // board, defaulting to Unfiled, so a doc that exists is a doc some board
   // holds.
   /** Does this comment author name this agent? Candidate-matched both ways,
@@ -989,7 +989,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
     // `shareWorkspacesOf` spells out, so what an agent HEARS about a review
     // and what a share visitor may OPEN in it cannot drift apart.
     const reviewId = reviewIdOf(rooms.peekMeta(docId) ?? {});
-    for (const board of hubBoardsForDoc(docId)) {
+    for (const board of boardsForDoc(docId)) {
       const rows = queueCommentRows(board, docId, payload);
       // rooms.ts already broadcast on the review's own channel; a second
       // send here would deliver the same comment twice to one listener. The

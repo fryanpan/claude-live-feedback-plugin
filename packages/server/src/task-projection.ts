@@ -72,7 +72,7 @@ export interface ClaimSession extends OwnerSession {
 }
 
 /**
- * Ydoc projection of the hub task store (plan §3.3).
+ * Ydoc projection of the board task store (plan §3.3).
  *
  * The sidecar-backed TaskStore is the source of truth for everything the
  * system is accountable for; the `ws:<workspaceId>` room's `tasks` and
@@ -599,7 +599,7 @@ export class TaskProjection {
    * Settled in the approved design against the ticket's `goal:<goalId>`
    * proposal: goal ids are `g-…` and task ids are `t-…`, so one namespace
    * holds both without collision, and reusing the prefix is what makes every
-   * piece of body machinery apply unchanged — `isHubOwnedRoom`, the prose edit
+   * piece of body machinery apply unchanged — `isBoardOwnedRoom`, the prose edit
    * tools, the thread store, the SSE redactors, the doc routes. A second
    * prefix would have been an edit to each of them buying nothing a reader
    * could see.

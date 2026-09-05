@@ -1,5 +1,5 @@
 /**
- * Unit tests for the hub task store (tasks.ts): workspace creation, doc
+ * Unit tests for the board task store (tasks.ts): workspace creation, doc
  * attachment, task creation defaults, the transition gate (dependency
  * blockers, per-edge enforce), actor attribution via
  * classifyActor, and the debounced sidecar persistence at
@@ -69,7 +69,7 @@ describe('TaskStore', () => {
   });
 
   describe('workspaceOfDoc (share-scope membership, §3.12 commit 8)', () => {
-    it('resolves an attached doc to its hub workspace', () => {
+    it('resolves an attached doc to its board workspace', () => {
       const ws = store.createWorkspace('ws');
       store.attachDoc(ws.id, 'plan-doc');
       expect(store.workspaceOfDoc('plan-doc')).toBe(ws.id);
@@ -423,7 +423,7 @@ describe('Ref: the url kind', () => {
   it('accepts http and https, and nothing else', () => {
     expect(isValidRef({ kind: 'url', url: 'https://example.com/a/pull/7' })).toBe(true);
     expect(isValidRef({ kind: 'url', url: 'http://example.com/dashboard' })).toBe(true);
-    // A ref becomes an href in the hub's link chips, so the scheme is the
+    // A ref becomes an href in the board's link chips, so the scheme is the
     // security boundary. `url` is the first kind that can carry one at all —
     // every other kind is an internal id.
     expect(isValidRef({ kind: 'url', url: 'javascript:alert(1)' })).toBe(false);

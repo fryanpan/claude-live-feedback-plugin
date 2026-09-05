@@ -9,8 +9,8 @@
  * renderers touch outside their own payload is passed in: the notification
  * sink, the HTTP client, this session's identity, and the clock.
  *
- * `emitChannelMessage` is the entry point. Hub families (`task.`, `decision.`,
- * `workspace.`, `agent.`, `voice.`) go to `emitHubChannelMessage`; everything
+ * `emitChannelMessage` is the entry point. Board families (`task.`, `decision.`,
+ * `workspace.`, `agent.`, `voice.`) go to `emitBoardChannelMessage`; everything
  * else keeps the doc-shaped path.
  */
 import { decisionAnsweredLine } from './decision-line.ts';
@@ -50,14 +50,14 @@ export interface ChannelDeps {
 
 export interface ChannelMessages {
   emitChannelMessage(event: string, rawPayload: unknown): Promise<void>;
-  emitHubChannelMessage(event: string, rawPayload: unknown): Promise<void>;
+  emitBoardChannelMessage(event: string, rawPayload: unknown): Promise<void>;
 }
 
 /** Bind the renderers to one process's dependencies. */
 export function createChannelMessages(deps: ChannelDeps): ChannelMessages {
   return {
     emitChannelMessage: (event, payload) => emitChannelMessage(deps, event, payload),
-    emitHubChannelMessage: (event, payload) => emitHubChannelMessage(deps, event, payload),
+    emitBoardChannelMessage: (event, payload) => emitBoardChannelMessage(deps, event, payload),
   };
 }
 
@@ -102,12 +102,12 @@ export interface ChannelPayload {
   message?: string;
 }
 
-/** Hub/workspace event families formatted by emitHubChannelMessage. Thread
+/** Board/workspace event families formatted by emitBoardChannelMessage. Thread
  *  and suggestion events on the same workspace stream keep the doc-shaped
  *  path below. */
-const HUB_EVENT_RE = /^(task|decision|workspace|agent|voice)\./;
+const BOARD_EVENT_RE = /^(task|decision|workspace|agent|voice)\./;
 
-export interface HubEventPayload {
+export interface BoardEventPayload {
   workspaceId?: string;
   /** On `voice.request`: the durable queue row this frame came from. Sending
    *  it back is what takes the row off the queue. Absent from a server older
@@ -174,18 +174,18 @@ export interface HubEventPayload {
 }
 
 /**
- * Forward a workspace-hub event as a compact channel message. Two §3.7-style
+ * Forward a workspace-board event as a compact channel message. Two §3.7-style
  * suppressions, both deliberate: `agent.heartbeat` never forwards (a
  * clock tick every few minutes is pure context noise), and an event whose
  * actor is THIS agent never forwards (never deliver an author's own events
  * back to them — §3.10 companion rule).
  */
-async function emitHubChannelMessage(
+async function emitBoardChannelMessage(
   deps: ChannelDeps,
   event: string,
   rawPayload: unknown,
 ): Promise<void> {
-  const p = (rawPayload ?? {}) as HubEventPayload;
+  const p = (rawPayload ?? {}) as BoardEventPayload;
   if (event === 'agent.heartbeat') return;
   // A per-turn note from another agent's Stop hook. The server keeps it off
   // the workspace stream (server.ts, the broadcast listener); this is the
@@ -337,11 +337,11 @@ async function emitChannelMessage(
   event: string,
   rawPayload: unknown,
 ): Promise<void> {
-  if (HUB_EVENT_RE.test(event)) {
-    await emitHubChannelMessage(deps, event, rawPayload);
+  if (BOARD_EVENT_RE.test(event)) {
+    await emitBoardChannelMessage(deps, event, rawPayload);
     return;
   }
-  // The doc-shaped companion to the actor check in emitHubChannelMessage:
+  // The doc-shaped companion to the actor check in emitBoardChannelMessage:
   // never deliver an author's own thread event back to them. The fan-out
   // reaches the author's own watch stream by design (it is one subscriber
   // among many), so the suppression belongs at the render point, where it

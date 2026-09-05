@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Rooms } from '../src/rooms.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { SseHub } from '../src/sse.ts';
+import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 import { insideWriteBack, waitFor } from './wait-for.ts';
 
@@ -66,14 +66,14 @@ interface SyncErrorEvent {
 describe('doc.sync_error broadcast (in-process Rooms)', () => {
   let dataDir: string;
   let path: string;
-  let sse: SseHub;
+  let sse: SseBus;
   let rooms: Rooms;
 
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-syncerr-'));
     path = join(dataDir, 'doc.md');
     writeFileSync(path, DOC);
-    sse = new SseHub();
+    sse = new SseBus();
     rooms = new Rooms({
       dataDir,
       sse,

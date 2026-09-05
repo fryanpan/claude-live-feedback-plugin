@@ -85,7 +85,7 @@ describe('a doc thread reaches the boards holding the doc', () => {
     rmSync(srcDir, { recursive: true, force: true });
   });
 
-  /** A hub board with `agentId` seated as its lead, then a live SSE listener
+  /** A board with `agentId` seated as its lead, then a live SSE listener
    *  on the board channel — exactly what `attach_agent` + the MCP watch do. */
   async function seatLead(
     name: string,

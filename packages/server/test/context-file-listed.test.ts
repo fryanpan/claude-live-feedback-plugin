@@ -181,7 +181,7 @@ describe('the non-git listing carries its own floor', () => {
     const bind = await post('/api/workspaces', { folderPath: folder });
     expect(bind.status, await bind.clone().text()).toBe(200);
     // The GROUPING workspace id the bind returns — the id `context-file`
-    // and `/files` are addressed by, not the hub board it is also filed under.
+    // and `/files` are addressed by, not the board it is also filed under.
     workspaceId = ((await bind.json()) as { workspaceId: string }).workspaceId;
   });
 

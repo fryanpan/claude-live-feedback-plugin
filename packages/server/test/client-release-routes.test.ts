@@ -84,7 +84,7 @@ async function startWith(
   const res = await fetch(`${base}/api/workspaces`, {
     method: 'POST',
     headers: { host: `localhost:${server.port}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ name: 'release-hub', goal: 'Ship it.' }),
+    body: JSON.stringify({ name: 'release-board', goal: 'Ship it.' }),
   });
   const workspaceId = ((await res.json()) as { workspace: { id: string } }).workspace.id;
   return { base, port: server.port, workspaceId, access };

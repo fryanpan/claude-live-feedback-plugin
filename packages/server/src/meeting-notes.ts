@@ -42,7 +42,7 @@
  *
  * NOTHING HERE RIDES SSE. A tick per pause is word-rate-adjacent; ticks and
  * composed notes go to the injected `onNotes` sink only, and the stage that
- * writes them into the doc decides delivery (the CRDT, not the event hub).
+ * writes them into the doc decides delivery (the CRDT, not the event bus).
  */
 
 import {

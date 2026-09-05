@@ -51,17 +51,17 @@ describe('voice routing (§3.8)', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
-  let hubId: string;
+  let boardId: string;
   let taskId: string;
   let docId: string;
   /** A SECOND board, so "belongs to another workspace" is a real fixture and
    *  not a made-up id the store would reject anyway. */
-  let otherHubId: string;
+  let otherBoardId: string;
   let otherTaskId: string;
   let otherDocId: string;
   /** Lives on the second board: its title alone blows the resource budget. */
   let bigTaskId: string;
-  /** On `hubId`, carries links + an assignee — the resource block's payload. */
+  /** On `boardId`, carries links + an assignee — the resource block's payload. */
   let linkedTaskId: string;
   /** Per-test fast-path behavior. null = "fast path unavailable". */
   let completeImpl: ((args: { system: string; user: string }) => Promise<string>) | null = null;
@@ -90,7 +90,7 @@ describe('voice routing (§3.8)', () => {
       body: JSON.stringify(body),
     });
 
-  const voice = (body: unknown) => post(`/api/workspaces/${hubId}/voice`, body);
+  const voice = (body: unknown) => post(`/api/workspaces/${boardId}/voice`, body);
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'voice-data-'));
@@ -110,9 +110,9 @@ describe('voice routing (§3.8)', () => {
       goal: 'Ship the new search.',
     });
     expect(ws.status).toBe(200);
-    hubId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
+    boardId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
 
-    const t = await post(`/api/workspaces/${hubId}/tasks`, {
+    const t = await post(`/api/workspaces/${boardId}/tasks`, {
       title: 'Wire the results page',
       author: PERSON,
     });
@@ -131,11 +131,11 @@ describe('voice routing (§3.8)', () => {
     });
     expect(madeDoc.status).toBe(200);
     docId = ((await madeDoc.json()) as { docId: string }).docId;
-    expect((await post(`/api/workspaces/${hubId}/docs`, { docId })).status).toBe(200);
+    expect((await post(`/api/workspaces/${boardId}/docs`, { docId })).status).toBe(200);
 
     // A task carrying links + an owner, so the resource block has something to
     // render beyond a title.
-    const linked = await post(`/api/workspaces/${hubId}/tasks`, {
+    const linked = await post(`/api/workspaces/${boardId}/tasks`, {
       title: 'Fold the expansion plan into the results page',
       assignee: 'Jordan',
       assigneeKind: 'person',
@@ -149,22 +149,22 @@ describe('voice routing (§3.8)', () => {
     expect(linked.status).toBe(200);
     linkedTaskId = ((await linked.json()) as { task: { id: string } }).task.id;
 
-    // ── The second board: everything here is FOREIGN to `hubId` ────────────
+    // ── The second board: everything here is FOREIGN to `boardId` ────────────
     const other = await post('/api/workspaces', {
       name: 'billing-cleanup',
       goal: 'Retire the old invoicing path.',
     });
     expect(other.status).toBe(200);
-    otherHubId = ((await other.json()) as { workspace: { id: string } }).workspace.id;
+    otherBoardId = ((await other.json()) as { workspace: { id: string } }).workspace.id;
 
-    const ot = await post(`/api/workspaces/${otherHubId}/tasks`, {
+    const ot = await post(`/api/workspaces/${otherBoardId}/tasks`, {
       title: 'Drop the legacy invoice job',
       author: PERSON,
     });
     expect(ot.status).toBe(200);
     otherTaskId = ((await ot.json()) as { task: { id: string } }).task.id;
 
-    const big = await post(`/api/workspaces/${otherHubId}/tasks`, {
+    const big = await post(`/api/workspaces/${otherBoardId}/tasks`, {
       title: `Rewrite the invoicing narrative ${'and reconcile every ledger row '.repeat(60)}`,
       // The bulk has to be in something PER-FIELD clamping cannot shrink: a
       // long title is now cut at its own budget before the block budget is
@@ -188,7 +188,7 @@ describe('voice routing (§3.8)', () => {
     });
     expect(madeOtherDoc.status).toBe(200);
     otherDocId = ((await madeOtherDoc.json()) as { docId: string }).docId;
-    expect((await post(`/api/workspaces/${otherHubId}/docs`, { docId: otherDocId })).status).toBe(
+    expect((await post(`/api/workspaces/${otherBoardId}/docs`, { docId: otherDocId })).status).toBe(
       200,
     );
   });
@@ -221,13 +221,13 @@ describe('voice routing (§3.8)', () => {
       // naming a target, so the phrase leaves the model its turn.
       const r = await voice({
         transcript: 'the results page task',
-        context: { surface: 'hub' },
+        context: { surface: 'board' },
         author: PERSON,
       });
       expect(r.status).toBe(200);
       const body = (await r.json()) as { route: string; ack: string; navigate?: string };
       expect(body.route).toBe('fast-path');
-      expect(body.navigate).toBe(`/workspaces/${hubId}?task=${taskId}`);
+      expect(body.navigate).toBe(`/workspaces/${boardId}?task=${taskId}`);
       expect(body.ack).toContain('the results page task');
       expect(body.ack).toContain('Wire the results page');
       // The route forwarded the transcript into the classification prompt,
@@ -255,7 +255,7 @@ describe('voice routing (§3.8)', () => {
       // Model-named, so no opener (see the task lookup above).
       const r = await voice({
         transcript: 'the expansion plan doc',
-        context: { surface: 'hub' },
+        context: { surface: 'board' },
         author: PERSON,
       });
       const body = (await r.json()) as { route: string; navigate?: string };
@@ -268,10 +268,10 @@ describe('voice routing (§3.8)', () => {
       // fallback below has nobody to fall back to. The old copy here was
       // "Lookup — nothing in this workspace matched", a dead end that named
       // no next step (Bryan, 2026-08-29: "never say lookup failed").
-      expect(handle.tasks.getWorkspace(hubId)?.leadAgentId).toBeUndefined();
+      expect(handle.tasks.getWorkspace(boardId)?.leadAgentId).toBeUndefined();
       completeImpl = () =>
         Promise.resolve(JSON.stringify({ kind: 'lookup', target: 'task', id: 't-invented' }));
-      const before = handle.tasks.listQueuedVoice(hubId).length;
+      const before = handle.tasks.listQueuedVoice(boardId).length;
       const r = await voice({
         transcript: 'open the flux capacitor task',
         author: PERSON,
@@ -285,8 +285,8 @@ describe('voice routing (§3.8)', () => {
       // Nothing delivered: no queue row for a lead that does not exist. (The
       // positive control is the lead-live case below, where the same call
       // adds exactly the row this one must not.)
-      expect(handle.tasks.listQueuedVoice(hubId).length).toBe(before);
-      expect(handle.tasks.listQueuedVoice(hubId).map((q) => q.transcript)).not.toContain(
+      expect(handle.tasks.listQueuedVoice(boardId).length).toBe(before);
+      expect(handle.tasks.listQueuedVoice(boardId).map((q) => q.transcript)).not.toContain(
         'open the flux capacitor task',
       );
     });
@@ -297,7 +297,7 @@ describe('voice routing (§3.8)', () => {
       completeImpl = () => Promise.resolve(JSON.stringify({ kind: 'change' }));
       const r = await voice({
         transcript: 'rework these into different groupings',
-        context: { surface: 'hub' },
+        context: { surface: 'board' },
         author: PERSON,
       });
       expect(r.status).toBe(200);
@@ -306,7 +306,7 @@ describe('voice routing (§3.8)', () => {
       expect(body.ack).toContain('rework these into different groupings');
       expect(body.ack.toLowerCase()).toContain('queued');
       // "Queued" is grounded: the request is on disk, not just promised.
-      const qPath = voiceQueuePath(dataDir, hubId);
+      const qPath = voiceQueuePath(dataDir, boardId);
       expect(existsSync(qPath)).toBe(true);
       expect(readFileSync(qPath, 'utf8')).toContain('rework these into different groupings');
     });
@@ -318,7 +318,7 @@ describe('voice routing (§3.8)', () => {
     });
 
     it('attaching an agent DRAINS the queue into the attach result', async () => {
-      const r = await post(`/api/workspaces/${hubId}/attachments`, {
+      const r = await post(`/api/workspaces/${boardId}/attachments`, {
         agentId: 'agent-search-revamp',
         runtime: 'claude-code-local',
       });
@@ -327,16 +327,16 @@ describe('voice routing (§3.8)', () => {
       // straight after (`subscribe !== false`). Delivery is a broadcast on
       // that channel, so an agent that never opens it is unreachable however
       // recently it attached.
-      agentStream = await openWorkspaceStream(base, hubId);
+      agentStream = await openWorkspaceStream(base, boardId);
       const body = (await r.json()) as {
         queuedVoice?: Array<{ transcript: string }>;
       };
       expect(body.queuedVoice?.map((q) => q.transcript)).toContain(
         'rework these into different groupings',
       );
-      expect(existsSync(voiceQueuePath(dataDir, hubId))).toBe(false);
+      expect(existsSync(voiceQueuePath(dataDir, boardId))).toBe(false);
       // Drained means drained: a second attach delivers nothing again.
-      const r2 = await post(`/api/workspaces/${hubId}/attachments`, {
+      const r2 = await post(`/api/workspaces/${boardId}/attachments`, {
         agentId: 'agent-search-revamp',
         runtime: 'claude-code-local',
       });
@@ -350,7 +350,7 @@ describe('voice routing (§3.8)', () => {
       const off = handle.tasks.onEvent((ev) => seen.push(ev));
       const r = await voice({
         transcript: 'add a task to benchmark the crawler',
-        context: { surface: 'hub' },
+        context: { surface: 'board' },
         author: PERSON,
       });
       off();
@@ -407,7 +407,7 @@ describe('voice routing (§3.8)', () => {
       // moved. Re-open the stream and the same utterance routes to the agent
       // — so the assertion above is about reachability and not about the
       // attachment having expired mid-test.
-      agentStream = await openWorkspaceStream(base, hubId);
+      agentStream = await openWorkspaceStream(base, boardId);
       const back = await voice({ transcript: 'rename the crawler task', author: PERSON });
       expect(((await back.json()) as { route: string }).route).toBe('agent');
     });
@@ -417,14 +417,14 @@ describe('voice routing (§3.8)', () => {
         Promise.resolve(JSON.stringify({ kind: 'lookup', target: 'task', id: 't-invented' }));
 
       it('with the lead live: delivered to the lead, queued as its record, ack names the lead', async () => {
-        expect(handle.tasks.getWorkspace(hubId)?.leadAgentId).toBe('agent-search-revamp');
-        expect(handle.tasks.hasLiveLeadAttachment(hubId)).toBe(true);
+        expect(handle.tasks.getWorkspace(boardId)?.leadAgentId).toBe('agent-search-revamp');
+        expect(handle.tasks.hasLiveLeadAttachment(boardId)).toBe(true);
         completeImpl = missing;
         const seen: TaskStoreEvent[] = [];
         const off = handle.tasks.onEvent((ev) => seen.push(ev));
         const r = await voice({
           transcript: 'open the flux capacitor task',
-          context: { surface: 'hub' },
+          context: { surface: 'board' },
           author: PERSON,
         });
         off();
@@ -443,7 +443,7 @@ describe('voice routing (§3.8)', () => {
           expect(ev.queueId).toBeDefined();
         }
         // The queue is the record, exactly as it is for a change.
-        expect(handle.tasks.listQueuedVoice(hubId).map((q) => q.transcript)).toContain(
+        expect(handle.tasks.listQueuedVoice(boardId).map((q) => q.transcript)).toContain(
           'open the flux capacitor task',
         );
       });
@@ -458,27 +458,27 @@ describe('voice routing (§3.8)', () => {
         expect(body.navigate).toBeUndefined();
         expect(body.ack).toContain('lead agent');
         expect(body.ack.toLowerCase()).toContain('queued');
-        expect(handle.tasks.listQueuedVoice(hubId).map((q) => q.transcript)).toContain(
+        expect(handle.tasks.listQueuedVoice(boardId).map((q) => q.transcript)).toContain(
           'find the crawler budget note',
         );
-        agentStream = await openWorkspaceStream(base, hubId);
+        agentStream = await openWorkspaceStream(base, boardId);
       });
 
       it('a lookup that DOES resolve still navigates — it never reaches the lead', async () => {
         completeImpl = () =>
           Promise.resolve(JSON.stringify({ kind: 'lookup', target: 'task', id: taskId }));
-        const before = handle.tasks.listQueuedVoice(hubId).length;
+        const before = handle.tasks.listQueuedVoice(boardId).length;
         const seen: TaskStoreEvent[] = [];
         const off = handle.tasks.onEvent((ev) => seen.push(ev));
         const r = await voice({ transcript: 'the results page', author: PERSON });
         off();
         const body = (await r.json()) as { route: string; ack: string; navigate?: string };
         expect(body.route).toBe('fast-path');
-        expect(body.navigate).toBe(`/workspaces/${hubId}?task=${taskId}`);
+        expect(body.navigate).toBe(`/workspaces/${boardId}?task=${taskId}`);
         expect(body.ack).not.toContain('lead agent');
         // Audited, but not handed over: no new queue row, and the audit row
         // says fast-path (which the MCP drops).
-        expect(handle.tasks.listQueuedVoice(hubId).length).toBe(before);
+        expect(handle.tasks.listQueuedVoice(boardId).length).toBe(before);
         const ev = seen.find((e) => e.type === 'voice.request');
         expect(ev?.type === 'voice.request' && ev.route).toBe('fast-path');
       });
@@ -487,7 +487,7 @@ describe('voice routing (§3.8)', () => {
 
   describe('every utterance is audited (§3.6 voice.request)', () => {
     it('the events.jsonl audit log carries the transcript, route, and ack verbatim', async () => {
-      const r = await local(`/api/workspaces/${hubId}/events`);
+      const r = await local(`/api/workspaces/${boardId}/events`);
       expect(r.status).toBe(200);
       const { events } = (await r.json()) as {
         events: Array<{ event: string; transcript?: string; route?: string; ack?: string }>;
@@ -614,7 +614,7 @@ describe('voice routing (§3.8)', () => {
     it('over-budget resource content is truncated and SAYS it was', async () => {
       completeImpl = () => Promise.resolve(JSON.stringify({ kind: 'change' }));
       lastPrompt.value = null;
-      const r = await post(`/api/workspaces/${otherHubId}/voice`, {
+      const r = await post(`/api/workspaces/${otherBoardId}/voice`, {
         transcript: 'mark this done',
         context: { surface: 'task', taskId: bigTaskId },
         author: PERSON,
@@ -699,8 +699,8 @@ describe('voice routing (§3.8)', () => {
       expect(resolve('{"kind":"lookup","target":"task","id":"t-fixture"}')).toBeNull();
     });
 
-    it('the deictic "mark this done" from the hub — no id in context — resolves to nothing', () => {
-      const noResource = { surface: 'hub' as const };
+    it('the deictic "mark this done" from the board — no id in context — resolves to nothing', () => {
+      const noResource = { surface: 'board' as const };
       expect(
         resolveVoiceAction({
           classification: parseVoiceReply(MARK_DONE),
@@ -831,7 +831,7 @@ describe('voice routing (§3.8)', () => {
     it('the enumerated action shapes reach the model', async () => {
       completeImpl = () => Promise.resolve(JSON.stringify({ kind: 'change' }));
       lastPrompt.value = null;
-      await voice({ transcript: 'mark this done', context: { surface: 'hub' }, author: PERSON });
+      await voice({ transcript: 'mark this done', context: { surface: 'board' }, author: PERSON });
       const system = promptSystem();
       expect(system).toContain('"kind":"action"');
       expect(system).toContain('set-status');
@@ -854,16 +854,16 @@ describe('voice routing (§3.8)', () => {
           JSON.stringify({ kind: 'action', action: 'set-status', status: 'done', id: taskId }),
         );
       const status = async (): Promise<string | undefined> => {
-        const r = await local(`/api/workspaces/${hubId}/tasks`);
+        const r = await local(`/api/workspaces/${boardId}/tasks`);
         const { tasks } = (await r.json()) as { tasks: Array<{ id: string; status: string }> };
         return tasks.find((t) => t.id === taskId)?.status;
       };
       expect(await status()).toBe('todo');
 
       const r = await voice({
-        // Spoken from the hub: no detail panel, so no resource in view.
+        // Spoken from the board: no detail panel, so no resource in view.
         transcript: 'mark this done',
-        context: { surface: 'hub' },
+        context: { surface: 'board' },
         author: PERSON,
       });
       expect(r.status).toBe(200);

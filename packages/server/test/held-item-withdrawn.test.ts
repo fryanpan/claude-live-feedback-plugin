@@ -43,7 +43,7 @@ import {
   StallNudger,
   type StallSnapshot,
 } from '../src/stall-nudge.ts';
-import type { HubWorkspace } from '../src/tasks.ts';
+import type { BoardWorkspace } from '../src/tasks.ts';
 
 const FILER = { id: 'agent-almanac', name: 'Almanac Agent', kind: 'known' };
 const READER = { id: 'known-reviewer', name: 'Reviewer', kind: 'known' };
@@ -83,7 +83,7 @@ function fake() {
     updatedAt: T0 - 5_000,
   } as Task;
   const rows = new Map([[row.id, row]]);
-  const workspace: HubWorkspace = {
+  const workspace: BoardWorkspace = {
     id: WS,
     name: 'Fake board',
     goals: [],

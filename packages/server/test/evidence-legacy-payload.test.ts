@@ -29,7 +29,7 @@ const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known',
 /** What an older bundle puts on the wire, verbatim. */
 const LEGACY_EVIDENCE = {
   commit: 'abc1234def',
-  threadRef: { kind: 'thread', docId: 'hub-plan-doc', threadId: 'th-2' },
+  threadRef: { kind: 'thread', docId: 'board-plan-doc', threadId: 'th-2' },
 };
 
 describe('a legacy evidence payload on the transition route', () => {
