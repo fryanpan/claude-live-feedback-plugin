@@ -7,24 +7,24 @@
  * ydoc projection (server-owned `tasks` / `workspace` Y.Maps); every
  * mutation goes through the REST gate — never by writing into the maps,
  * which the server would revert.
+ *
+ * What is left in THIS file is the boot sequence and the address bar. Every
+ * region the boot composes — the board pane, Home, the detail panel, the
+ * discussion, the chrome cluster, the islands, the REST reads — is a module
+ * that takes `HubState` plus one explicit dependency object, and hands back
+ * the renders the sequence below calls. Read the order of the `const`s in
+ * `bootHub` and you have read the page: nothing between them is a surprise,
+ * because a region can only reach what its deps object names.
  */
-import type { FeedbackClient, ReviewPayload, User } from '@feedback/core';
+import type { FeedbackClient, User } from '@feedback/core';
 import type { BootHistory, BootLocation, BootStorage, BootWindow } from '../boot-env.ts';
 import { renderConnectionBanner, watchConnection } from '../connection-state.ts';
 import { ensureUserIdentity } from '../identity-prompt.ts';
 import { wireKeyboardInset } from '../keyboard-inset.ts';
-import { startReadingTracker } from '../reading-tracker.ts';
 import { pageSentry } from '../sentry-page.ts';
-import {
-  asBackgroundWrite,
-  fetchWriteAccess,
-  installWriteGateNotice,
-  showSignInBar,
-} from '../signin/write-gate.ts';
+import { fetchWriteAccess, installWriteGateNotice, showSignInBar } from '../signin/write-gate.ts';
 import { installStaleClientNotice } from '../stale-client.ts';
-import { type VoiceAck, createVoiceCapture } from '../voice-capture.ts';
-import { asksOf } from './activity-model.ts';
-import { type BoardHandlers, boardData, mountBoardIsland } from './board-island.tsx';
+import { mountBoardIsland } from './board-island.tsx';
 import {
   type BoardLocation,
   buildBoardUrl,
@@ -34,99 +34,36 @@ import {
   resourceOf,
   taskShareUrl,
 } from './board-url.ts';
-import { goalDetailData, mountGoalDetailIsland } from './goal-detail-island.tsx';
-import { homeActivityData, mountHomeActivityIsland } from './home-activity-island.tsx';
-import { homeReviewData, mountHomeReviewIsland } from './home-review-island.tsx';
 import { type HubState, createHubActions, fetchJson, send, showToast } from './hub-actions.ts';
 import {
-  type BoardSection,
-  DEFAULT_DONE_WINDOW,
   type DoneWindow,
-  type HubGoal,
   type HubTask,
   type HubWorkspaceInfo,
-  type ReorderTarget,
-  archivedGoals,
-  archivedTasks,
-  bandOfGoal,
-  boardBlockers,
-  boardCalibration,
-  boardSections,
-  boardSectionsWithEffort,
-  goalBandIds,
-  goalLabel,
-  goalSection,
   isTaskArchived,
 } from './hub-board-model.ts';
-import { type TaskDiscussion, type TaskThread } from './hub-detail-render.ts';
+import { createHubBoardRegion } from './hub-board-region.ts';
+import { createHubChromeRegion } from './hub-chrome-region.ts';
+import { createHubLoads } from './hub-data-loads.ts';
+import { createHubDeepLinks } from './hub-deep-links.ts';
+import { createHubDetailPanel } from './hub-detail-panel.ts';
+import { createHubDiscussion } from './hub-discussion.ts';
+import { createHubHomeRegion } from './hub-home-region.ts';
+import { mountHubIslands } from './hub-islands.ts';
 import { wireHubLive } from './hub-live-wiring.ts';
-import {
-  type ActivityEvent,
-  type ClientRelease,
-  type DriftNotice,
-  type HomePayload,
-  type HubNav,
-  type LeadSeatView,
-  type PluginRelease,
-  type PresenceAgent,
-  type PresencePerson,
-  type UptimeReport,
-  clientDriftNotice,
-  hubTabTitle,
-  initialsOf,
-  paneForNav,
-  pluginDriftNotice,
-  presenceChips,
-  shouldPollHome,
-  tabForNav,
-  voiceHubContext,
-} from './hub-presence-model.ts';
-import {
-  renderActivity,
-  renderArchivedList,
-  renderHomeBrief,
-  renderLeadStrip,
-  renderQuickActions,
-  renderReviewBanner,
-  renderWorkspaceIdentity,
-} from './hub-render.ts';
+import { postLoadReport } from './hub-load-report.ts';
+import { type HubNav, paneForNav, tabForNav } from './hub-presence-model.ts';
+import { createHubProjection, initialHubState } from './hub-projection.ts';
+import { createHubQueueOpeners } from './hub-queue-open.ts';
+import { renderQuickActions } from './hub-render.ts';
 import { createHubReviewController } from './hub-review-controller.ts';
-import {
-  type ReviewItem,
-  type ReviewThreadItem,
-  type WalkSources,
-  applyRefresh,
-  humanBlockerRows,
-  panelAsks,
-  refreshReviewItems,
-  reviewQueue,
-  reviewRow,
-  walkHandoff,
-  walkHandoffReady,
-  walkNextUrl,
-} from './hub-review-model.ts';
+import { type WalkSources, reviewQueue } from './hub-review-model.ts';
 import { wireHubSettingsPanel } from './hub-settings-panel.ts';
-import { NAV_ICONS, buildShell } from './hub-shell.ts';
-import { hubShortcutKeydown } from './hub-shortcuts.ts';
+import { buildShell, wireNavCollapse } from './hub-shell.ts';
+import { wireHubShortcuts } from './hub-shortcuts.ts';
+import { wireHubVoice } from './hub-voice.ts';
 import { createHubWalkthrough } from './hub-walkthrough.ts';
 import { mountIslandProbe } from './island-probe.tsx';
-import { wireMeMenu } from './me-menu.ts';
-import {
-  driftData,
-  mountDriftIsland,
-  mountPresenceIsland,
-  presenceData,
-} from './presence-island.tsx';
 import { createRepaintGuard } from './repaint-guard.ts';
-import {
-  type TaskAskKind,
-  type TaskAskState,
-  taskAskRequestPath,
-  taskAskStatePath,
-} from './task-asks.ts';
-import { GOAL_PLACEHOLDER_TEXT, createTaskBodyEditorHost } from './task-body-editor.ts';
-import { type DetailTab, mountTaskDetailIsland, taskDetailData } from './task-detail-island.tsx';
-import { mountWalkthroughIsland } from './walkthrough-island.tsx';
 
 /**
  * Everything the board's boot reaches outside its own module.
@@ -145,21 +82,21 @@ export interface HubBootEnv {
   connect: (url: string) => FeedbackClient;
 }
 
-/** How long an armed ?walk=1 handoff waits for the board to produce a queue
- *  before concluding it is genuinely clear. Generous against a slow ydoc
- *  sync; short enough that a truly cleared board hands off while the reader
- *  is still looking at it. */
-export const WALK_HANDOFF_DEADLINE_MS = 4000;
+// The deadline every boot claim is decided by now lives with the claims
+// themselves (`hub-deep-links.ts`). Re-exported rather than moved outright:
+// it is part of this entry's published surface, and a caller asking the page
+// how long it waits should not have to know which module holds the timer.
+export { WALK_HANDOFF_DEADLINE_MS } from './hub-deep-links.ts';
 
 /**
  * The board's whole boot sequence, as a function of its environment.
  *
- * Nothing here runs on import any more: the one call at the bottom of this file
- * is what starts the page, and a test calls this with its own document, address
- * and socket instead. The destructure below deliberately re-binds each injected
+ * Nothing here runs on import: the one call at the bottom of this file is what
+ * starts the page, and a test calls this with its own document, address and
+ * socket instead. The destructure below deliberately re-binds each injected
  * thing to the name it had as a global — `document`, `location`, `history`,
- * `localStorage`, `window`, `connect` — so the two thousand lines that follow
- * are the same lines, and what changed is only where those names come from.
+ * `localStorage`, `window`, `connect` — so the lines that follow are the same
+ * lines, and what changed is only where those names come from.
  */
 export async function bootHub(env: HubBootEnv): Promise<void> {
   const { document, location, history, localStorage, window, connect } = env;
@@ -229,40 +166,7 @@ export async function bootHub(env: HubBootEnv): Promise<void> {
   // they resolve against arrives after first paint, and the deadline near the
   // bottom of main() is what finally decides a claim was stale.
   const bootLoc = parseBoardLocation(location.pathname, location.search);
-  const initialNav = bootLoc.nav;
-  const state: HubState = {
-    seat: null,
-    info: null,
-    tasks: new Map(),
-    nav: initialNav,
-    pane: paneForNav(initialNav),
-    settingsOpen: false,
-    home: null,
-    homeEditingRecipe: false,
-    homeSettled: new Map(),
-    homePollStarted: 0,
-    tab: tabForNav(initialNav) ?? 'all',
-    doneWindow: DEFAULT_DONE_WINDOW,
-    view: initialNav === 'activity' ? 'activity' : 'board',
-    showArchived: bootLoc.archived,
-    activityFilter: 'all',
-    events: [],
-    uptime: null,
-    agents: [],
-    pluginRelease: null,
-    clientRelease: null,
-    detailTaskId: bootLoc.task,
-    detailTab: 'comments',
-    detailGoalId: bootLoc.goal,
-    detailThreadId: bootLoc.thread,
-    discussion: { loading: false, threads: [] },
-    discussionTaskId: null,
-    reviewItems: [],
-    walkIndex: -1,
-    walkKey: null,
-    walkProgress: { cleared: 0, last: null },
-    followedKey: null,
-  };
+  const state: HubState = initialHubState(bootLoc);
 
   // ── The address bar's working state (functions live next to setNav) ─────
   /** What the URL currently says, in parsed form — `historyStep`'s "prev". */
@@ -277,9 +181,6 @@ export async function bootHub(env: HubBootEnv): Promise<void> {
   /** The boot URL aimed at a thread; checked once against the loaded
    *  discussion, then dropped. */
   let bootThreadPending = bootLoc.thread !== null;
-  /** The row "New task" just filed: the panel opens it with the title in
-   *  rename. Cleared the moment any other task is on screen. */
-  let focusTitleTaskId: string | null = null;
   /** The boot URL named a walkthrough item; opened when the queue holds it. */
   let pendingBootItem = bootLoc.item;
 
@@ -295,6 +196,17 @@ export async function bootHub(env: HubBootEnv): Promise<void> {
   // vanilla wipe of root — the contract is that no vanilla code wipes a
   // container while an island lives in it.
   mountIslandProbe(root);
+
+  // The server-owned `tasks` / `workspace` projection, and the two headers
+  // that must follow it — `hub-projection.ts`. Built here, before the socket
+  // below, because the header paints once from the REST read; the maps
+  // arrive through a thunk for exactly that reason.
+  const { readProjection, syncHeader, syncTabTitle } = createHubProjection({
+    state,
+    workspaceId,
+    document,
+    maps: () => ({ tasks: tasksMap, ws: wsMap }),
+  });
   // The REST read above already knows whether this board is retired, and the
   // board room's first sync can be a second away on a cold connection. Paint
   // it now so nobody reads a retired board as live in that window.
@@ -302,101 +214,22 @@ export async function bootHub(env: HubBootEnv): Promise<void> {
 
   const el = (id: string) => document.getElementById(id) as HTMLElement;
 
-  // The "For Your Review" pane — the first real Preact island (contract per
-  // island-probe: it owns a wrapper inside #hub-home-review, and no vanilla
-  // code may wipe that container while the island lives in it). Mounted once,
-  // here, because buildShell above was the last vanilla write of this subtree;
-  // from now on the pane repaints itself from `homeReviewData` writes in
-  // renderHomeRegion. The handlers are hoisted function declarations below —
-  // the same stable closures the vanilla renderer received.
-  mountHomeReviewIsland(el('hub-home-review'), {
-    onReview: (item, index) => openInQueue(item, index),
-    onOpen: (item) => openReviewItem(item),
-    onOpenThread: (item) => void openReviewThread(item),
-    onWalkthrough: () => startWalkthrough(),
-  });
-
-  // "Recent activity" — the second island on Home, under the queue and above
-  // the brief (approved mock, 2026-08-29). Same contract, same mount-once
-  // reason. Its one handler opens the task the way a queue row does;
-  // `boardHandlers` is declared below and only read when a row is tapped.
-  mountHomeActivityIsland(
-    el('hub-home-activity'),
-    {
-      onOpenTask: (taskId) => {
-        const task = state.tasks.get(taskId);
-        // On the Activity tab: the reader was looking at what happened to
-        // the task, and the panel opens on the rest of that.
-        if (task) openTaskDetail(task, 'activity');
-      },
-      onComment: (taskId, phrase, text) => commentOnActivity(taskId, phrase, text),
-      onReply: (taskId, threadId, text) => replyOnActivity(taskId, threadId, text),
-    },
+  // Every island this page keeps for its whole life, mounted here because
+  // `buildShell` above was the last vanilla write of `#hub-root`. The handlers
+  // are thunks into regions built further down — see hub-islands.ts.
+  mountHubIslands({
+    state,
     user,
-  );
-
-  // The card that pane opens on — the walkthrough. Mounted once for the
-  // reason the board island is: this surface is repainted by every board
-  // event, and everything the card holds (a half-typed answer, an expansion
-  // the reader opened) used to die with the nodes each repaint replaced.
-  // It takes no handlers here; they change per paint and ride the signal.
-  mountWalkthroughIsland(el('hub-walkthrough'));
-
-  // The task detail panel. Mounted once for the same reason again: it is
-  // repainted by every `thread.*` and `task.transitioned` event, and the tab,
-  // the review queue's position, an unfolded capture and every half-typed
-  // draft used to die with the nodes each repaint replaced. Handlers ride
-  // `taskDetailData` — they close over the task, the review rows and the clock
-  // this paint resolved.
-  mountTaskDetailIsland(el('hub-detail'));
-  mountGoalDetailIsland(el('hub-goal-detail'));
-
-  // The presence strip, in both places it renders: who is here in the
-  // top-right cluster, and the drift notices in the settings panel. Same
-  // contract, and mounted once for the same reason — the strip repaints on
-  // every awareness update and a 30s tick, and a rebuilt circle used to drop
-  // the long-press running on it.
-  mountPresenceIsland(
-    el('hub-people'),
-    {
-      onTap: (chip) => {
-        if (chip.docId) location.assign(`/review/${encodeURIComponent(chip.docId)}`);
-      },
-      onLongPress: (chip) => {
-        state.followedKey = state.followedKey === chip.key ? null : chip.key;
-        showToast(
-          state.followedKey
-            ? `Following ${chip.label} — long-press again to stop`
-            : 'Stopped following',
-        );
-        renderPresenceRegion();
-      },
-      // The "+N" circle's names have to reach a touch screen, where a title
-      // attribute never shows. A toast is enough: it answers "who else".
-      onOverflow: (hiddenChips) =>
-        showToast(`Also here: ${hiddenChips.map((c) => c.label).join(', ')}`),
-    },
-    { compact: true },
-  );
-  mountDriftIsland(el('hub-drift'));
-
-  // ── The description, edited in place ────────────────────────────────────
-  //
-  // A second room, opened per task rather than per board: the task's body is
-  // `task:<taskId>`, the same room an agent rewrites through `set_doc_content`
-  // and the same one `/review/task:<id>` opens. Mounting the review surface's
-  // editor over it is what makes the reader's typing and an agent's rewrite
-  // merge as CRDT edits instead of one overwriting the other.
-  //
-  // The editor itself is behind a dynamic import so the board's bundle stays a
-  // board — see task-body-editor-chunk.ts.
-  const bodyEditor = createTaskBodyEditorHost({
-    connect: (docId) => connect(wsUrl(docId, 'markdown')),
-    loadEditor: () => import('./task-body-editor-chunk.ts'),
-    user: { name: user.name, color: user.color },
-    // Already awaited above — the description box is never live before the
-    // answer, and never live after a "no".
-    canWrite: writeAccess.canWrite,
+    el,
+    location,
+    openInQueue: (item, index) => openInQueue(item, index),
+    openReviewItem: (item) => openReviewItem(item),
+    openReviewThread: (item) => openReviewThread(item),
+    startWalkthrough: () => startWalkthrough(),
+    openTaskDetail: (task, tab) => openTaskDetail(task, tab),
+    commentOnActivity: (taskId, phrase, text) => commentOnActivity(taskId, phrase, text),
+    replyOnActivity: (taskId, threadId, text) => replyOnActivity(taskId, threadId, text),
+    renderPresenceRegion: () => renderPresenceRegion(),
   });
 
   // ── Realtime: the ws:<id> board room ────────────────────────────────────
@@ -413,101 +246,9 @@ export async function bootHub(env: HubBootEnv): Promise<void> {
   const tasksMap = client.ydoc.getMap('tasks');
   const wsMap = client.ydoc.getMap('workspace');
 
-  function readProjection(): void {
-    const next = new Map<string, HubTask>();
-    tasksMap.forEach((value, key) => {
-      next.set(key, value as unknown as HubTask);
-    });
-    state.tasks = next;
-    if (wsMap.get('id')) {
-      state.info = {
-        id: String(wsMap.get('id')),
-        name: String(wsMap.get('name') ?? workspaceId),
-        goals: (wsMap.get('goals') as HubGoal[] | undefined) ?? [],
-        ...(wsMap.get('leadAgentId') ? { leadAgentId: String(wsMap.get('leadAgentId')) } : {}),
-        ...(wsMap.get('retiredAt') ? { retiredAt: Number(wsMap.get('retiredAt')) } : {}),
-        ...(wsMap.get('retiredReason')
-          ? { retiredReason: String(wsMap.get('retiredReason')) }
-          : {}),
-        createdAt: Number(wsMap.get('createdAt') ?? 0),
-      };
-    }
-    syncHeader();
-    syncTabTitle();
-  }
-
-  /**
-   * The board's name and its retired badge, repainted from current state.
-   * Called from both writers of what it reads — the boot fetch and every
-   * projection read — because a header set once is wrong the moment somebody
-   * renames or retires the board, and this page never reloads.
-   */
-  function syncHeader(): void {
-    renderWorkspaceIdentity(
-      document.getElementById('hub-ws-name-text'),
-      document.getElementById('hub-retired-badge'),
-      state.info,
-      workspaceId,
-    );
-  }
-
-  /**
-   * Name the browser tab after this workspace and the pane showing in it.
-   *
-   * Called from both writers of what it reads — `setNav` (the reader moved)
-   * and `readProjection` (the workspace was renamed under them) — because a
-   * title set once at boot is wrong the moment either happens, and this page
-   * never reloads.
-   */
-  function syncTabTitle(): void {
-    document.title = hubTabTitle(state.info?.name ?? workspaceId, state.nav);
-  }
-
-  // ── Region renders ──────────────────────────────────────────────────────
+  // ── The projections every region reads ──────────────────────────────────
   const taskList = () => [...state.tasks.values()];
   const titleOf = (taskId: string) => state.tasks.get(taskId)?.title ?? taskId;
-
-  /** The tickets one task is waiting on, as Related Links entries. Reads the
-   *  board's own derivation so a panel can never disagree with the ring on
-   *  the row; an id naming a row this board has never seen is skipped by
-   *  `boardBlockers` and so is absent here too. */
-  const openBlockersOf = (task: HubTask): { taskId: string; title: string }[] =>
-    (boardBlockers(taskList()).get(task.id) ?? []).map((id) => ({
-      taskId: id,
-      title: titleOf(id),
-    }));
-
-  /** The one opener behind every task tap — board row, queue row, Home
-   *  activity pane — so the panel opens the same way from each, with only
-   *  the landing tab differing. */
-  function openTaskDetail(task: HubTask, tab: DetailTab = 'comments'): void {
-    state.detailTaskId = task.id;
-    state.detailTab = tab;
-    state.detailGoalId = null;
-    // Opening the task any other way clears the queue's aim, so a mark left
-    // over from the last walkthrough item can't point at the wrong thread.
-    state.detailThreadId = null;
-    renderDetail();
-  }
-
-  const boardHandlers: BoardHandlers = {
-    onStatusSet: (task: HubTask, to: HubTask['status']) => void transitionTask(task, to),
-    onGoalTitleCommit: (sectionId: string, title: string) => void retitleGoal(sectionId, title),
-    onGoalAdd: (title: string, after?: string) => void addGoal(title, after),
-    // The goal row's one gesture on a coarse pointer, and the desktop click
-    // anywhere off the title's words (decision 4). The two panels share the
-    // detail container, so opening a goal closes any task.
-    onOpenGoal: (section: BoardSection) => {
-      state.detailGoalId = section.id;
-      state.detailTaskId = null;
-      state.detailThreadId = null;
-      renderDetail();
-    },
-    onOpenTask: (task: HubTask) => openTaskDetail(task),
-    onReorder: (task: HubTask, target: ReorderTarget) => void placeTask(task, target),
-    onTitleCommit: (task: HubTask, title: string) => void renameTask(task, title),
-    onAssign: (task: HubTask, assignee: string) => void assignTask(task, assignee),
-  };
 
   /** Re-derived on every render rather than stored: the decision half comes
    *  from the live projection, so an answer anyone posts drops its item out
@@ -520,137 +261,76 @@ export async function bootHub(env: HubBootEnv): Promise<void> {
   const currentQueue = () =>
     reviewQueue(taskList(), state.reviewItems, Date.now(), state.info?.goals ?? []);
 
-  /**
-   * "Exactly the place where I need to review and make the choice" — the
-   * whole point of the queue. A decision opens its task panel; a task comment
-   * opens that task's discussion; a doc comment opens the doc AT the comment
-   * (`?thread=`), not the doc's top.
-   *
-   * Returns whether the reader is still on THIS page afterwards — false only
-   * for the doc jump, which leaves via location.assign. The walkthrough's
-   * hand-off keys its card repaint on it (see onOpenItem).
-   *
-   * `returnItem` is the reader's place in the review queue, and only the
-   * walkthrough passes one. It rides the doc's URL so the doc's back arrow
-   * can bring them back to the sitting rather than to the bare board — the
-   * doc page has no referrer and cannot work this out for itself. Every other
-   * caller omits it, which is what keeps a doc opened from a board row (or a
-   * pasted link) from returning a visitor into a queue they were never in.
-   */
-  function openReviewItem(item: ReviewItem, returnItem?: string | null): boolean {
-    // `reviewRow` is the one reader for "which task is this row about", so a
-    // future band that carries a task row cannot land in the strip with a
-    // chip that taps into nothing.
-    const row = reviewRow(item);
-    if (row) {
-      boardHandlers.onOpenTask(row.task);
-      return true;
-    }
-    const t = item.thread;
-    if (!t) return true;
-    if (t.kind === 'task-review') {
-      // A ticket-borne review item lives on the TASK — there is no thread to
-      // aim at, so the panel itself is the place. Without this branch the
-      // fall-through below navigated to `/review/undefined`.
-      const task = t.taskId ? state.tasks.get(t.taskId) : undefined;
-      if (task) boardHandlers.onOpenTask(task);
-      return true;
-    }
-    if (t.kind === 'goal-thread' && t.taskId) {
-      // The goal PANEL, not the task panel and not the raw doc: the row is a
-      // band, and the question was asked about the band. Aim at the queued
-      // thread the same way a task row does — landing on the panel top is the
-      // "now go find it" the queue exists to remove.
-      state.detailGoalId = t.taskId;
-      state.detailTaskId = null;
-      state.detailThreadId = t.threadId;
-      renderDetail();
-      return true;
-    }
-    if (t.kind === 'task-thread') {
-      const task = t.taskId ? state.tasks.get(t.taskId) : undefined;
-      if (!task) return true;
-      boardHandlers.onOpenTask(task);
-      // The task is the container; the thread is the errand. On a task with
-      // six discussions, landing on the panel top is the same "now go find
-      // it" the strip exists to remove — so aim at the one that was queued.
-      state.detailThreadId = t.threadId;
-      renderDetail();
-      return true;
-    }
-    // The doc's canonical workspace address rather than the legacy `/review/`
-    // one, so what lands in the reader's address bar is the shape every other
-    // surface emits and the link-chip renderer titles.
-    const back = returnItem ? `&item=${encodeURIComponent(returnItem)}` : '';
-    location.assign(
-      `/workspaces/${encodeURIComponent(workspaceId)}/docs/${encodeURIComponent(t.docId)}?thread=${encodeURIComponent(t.threadId)}${back}`,
-    );
-    return false;
-  }
+  // ── Mutations (all through the REST gate) ───────────────────────────────
+  //
+  // The board's REST verbs live in `hub-actions.ts`, bound once to what they
+  // used to capture. Built before the regions because every region that offers
+  // a gesture ends in one of them; the three repaints they need arrive as
+  // thunks, which is the same cycle `hub-walkthrough.ts` resolves the same way.
+  const actions = createHubActions({
+    workspaceId,
+    author,
+    state,
+    renderAll,
+    renderDetail: () => renderDetail(),
+    renderLead: () => renderLead(),
+    focusTitle: (taskId) => setFocusTitle(taskId),
+  });
+  const { newTask, startHuddle, archiveTask } = actions;
 
-  /**
-   * The thread a question on a review item lives on — the reader's question
-   * and the owner's reply, where they were written. A ticket-borne item's
-   * threads are on its task's doc, so this is the task panel aimed at that
-   * thread, the way a `task-thread` row opens. Anything without a thread to
-   * aim at falls back to opening the item itself. Same return contract as
-   * `openReviewItem`: whether the reader is still on this page.
-   */
-  function openReviewThread(item: ReviewItem, returnItem?: string | null): boolean {
-    // A revised DECISION's thread is on its task doc, like a ticket item's.
-    if (item.decision && item.revision?.threadId) {
-      return openTaskThread(item.decision.task.id, item.revision.threadId);
-    }
-    const t = item.thread;
-    const threadId = item.revision?.threadId ?? t?.threadId;
-    if (!t || t.kind !== 'task-review' || !t.taskId || !threadId)
-      return openReviewItem(item, returnItem);
-    return openTaskThread(t.taskId, threadId);
-  }
+  // ── The review queue's controller ───────────────────────────────────────
+  //
+  // Opening an item, walking a sitting, and answering or asking back live in
+  // `hub-review-controller.ts`, bound here to what they used to capture.
+  const review = createHubReviewController({
+    author,
+    state,
+    currentQueue,
+    renderWalkthrough: () => renderWalkthrough(),
+    loadReviewItems: () => loadReviewItems(),
+    loadDiscussion: (row, quiet) => loadDiscussion(row, quiet),
+    openTaskThread: (taskId, threadId) => openTaskThread(taskId, threadId),
+  });
+  const {
+    startWalkthrough,
+    openInQueue,
+    answerDecision,
+    askOnReviewItem,
+    replyToReviewItem,
+    commentOnActivity,
+    replyOnActivity,
+  } = review;
 
-  /** The task panel, aimed at one thread on it — the shared tail of
-   *  `openReviewThread` and the stale-view fallback below, which knows the
-   *  OPEN thread's id from a 409 rather than from the item's own fields. */
-  function openTaskThread(taskId: string, threadId: string): boolean {
-    const task = state.tasks.get(taskId);
-    if (!task) return true;
-    boardHandlers.onOpenTask(task);
-    state.detailThreadId = threadId;
-    renderDetail();
-    return true;
-  }
+  // ── The board pane, and the openers that reach it ───────────────────────
+  const {
+    openTaskDetail,
+    boardHandlers,
+    knownAgentIds,
+    renderLead,
+    setShowArchived,
+    renderBoardRegion,
+    renderActivityRegion,
+  } = createHubBoardRegion({
+    state,
+    user,
+    el,
+    actions,
+    taskList,
+    titleOf,
+    currentQueue,
+    renderDetail: () => renderDetail(),
+    renderWalkthrough: () => renderWalkthrough(),
+    syncBoardUrl,
+    setNav,
+  });
 
-  /** Everyone a task can be handed to besides a person: the agents attached
-   *  to this workspace, plus the lead (who owns goal changes here and is
-   *  therefore somebody, whether or not their session is currently up). */
-  function knownAgentIds(): string[] {
-    const lead = state.info?.leadAgentId;
-    return [...new Set([...state.agents.map((a) => a.agentId), ...(lead ? [lead] : [])])];
-  }
-
-  function renderLead(): void {
-    renderLeadStrip(
-      el('hub-lead'),
-      state.info?.leadAgentId,
-      state.agents.map((agent) => agent.agentId),
-      { onLeadCommit: (leadAgentId) => void saveLead(leadAgentId) },
-      state.seat ?? undefined,
-    );
-  }
-
-  /**
-   * Show or leave the restore list, and put it in the address bar.
-   *
-   * A filter on the board rather than a page: `historyStep` answers `replace`
-   * for it, so Back still leaves the workspace rather than unwinding a list
-   * somebody glanced at.
-   */
-  function setShowArchived(on: boolean): void {
-    if (state.showArchived === on) return;
-    state.showArchived = on;
-    syncBoardUrl();
-    renderBoardRegion();
-  }
+  const { openReviewItem, openReviewThread, openTaskThread } = createHubQueueOpeners({
+    state,
+    workspaceId,
+    boardHandlers,
+    renderDetail: () => renderDetail(),
+    location,
+  });
 
   /** The board state the URL names, read whole. `renderDetail`'s task-wins
    *  rule and the walkthrough's "-1 means closed" are folded in here so the
@@ -733,135 +413,18 @@ export async function bootHub(env: HubBootEnv): Promise<void> {
     urlLoc = loc;
   }
 
-  function renderBoardRegion(): void {
-    const filters = {
-      tab: state.tab,
-      userName: user.name,
-      doneWindow: state.doneWindow,
-      now: Date.now(),
-    };
-    // No focus save/restore here any more. It used to bracket this whole
-    // function — snapshot the focused row's task id and whether the drag
-    // handle held it, then find the row again afterwards by scanning every
-    // `.hub-task-row` — because the vanilla renderer replaced every row on
-    // every paint and keyboard reordering died after one press. The rows are
-    // keyed Preact now: an unchanged row is the identical node, so a repaint
-    // leaves focus where it was without anyone asking. What the keyed diff
-    // still does is MOVE a reordered row, and re-inserting a node blurs it in
-    // WebKit and Blink — that one case is handled inside the island, on the
-    // node itself (see `Board`'s focus effect), which is a re-focus of a
-    // reference rather than a search for a replacement.
-    const archived = archivedTasks(taskList());
-    const archivedBands = archivedGoals(state.info?.goals ?? []);
-    const showArchived = state.pane === 'board' && state.showArchived;
-    // The restore list is still a vanilla renderer, so it gets its OWN
-    // container: no vanilla code may `replaceChildren` a node holding a live
-    // island, and `#hub-board` is the island's host for the life of the page.
-    el('hub-board').classList.toggle('hidden', showArchived);
-    el('hub-archived').classList.toggle('hidden', !showArchived);
-    if (showArchived) {
-      renderArchivedList(
-        el('hub-archived'),
-        archived,
-        {
-          onRestore: (task) => void restoreTask(task),
-          onOpenTask: (task) => boardHandlers.onOpenTask(task),
-          onBack: () => setShowArchived(false),
-          // A band opens the goal panel, which is where its Archived note and
-          // its own Restore live — the same "the title still opens the row"
-          // rule the task rows follow, for the same reason: the discussion on
-          // an archived row is often why somebody came looking.
-          onRestoreGoal: (goal) => {
-            const s = goalSection(state.info?.goals ?? [], goal.id);
-            if (s) void restoreGoal(s);
-          },
-          onOpenGoal: (goal) => {
-            state.detailGoalId = goal.id;
-            state.detailTaskId = null;
-            renderDetail();
-          },
-        },
-        archivedBands,
-      );
-    }
-    // The island's one input. `pane` rides along rather than gating the write:
-    // Home hides the board column outright, and a row built into it is a node
-    // with listeners nobody can see — but the signal is still the only place
-    // the board's state lives, so the island is what decides to draw nothing.
-    // The agent list is read HERE, at paint time, for the same reason it
-    // always was: attachments arrive after the first paint and change while
-    // the board is open, and a picker built from a stale list offers agents
-    // who have left.
-    boardData.value = {
-      sections: boardSectionsWithEffort(state.info?.goals ?? [], taskList(), filters, filters.now),
-      pane: state.pane,
-      showArchived,
-      knownAgentIds: knownAgentIds(),
-      // Bands count too: the chip is the way back to the restore list, and a
-      // board whose only archived thing is a goal must not read "0 archived"
-      // and hide the door.
-      archivedCount: archived.length + archivedBands.length,
-    };
-    // No "N tasks have no goal yet" strip above the board any more (Bryan,
-    // 2026-08-29, by voice: it "is taking out space and all of it's not
-    // useful"). Backlog already holds every unplaced row; `unplacedNotice`
-    // stays in the model for the lead's tools, and nothing here draws it.
-    // The board's read of the queue is one line now — the full list lives on
-    // Home. Two surfaces both claiming to be the queue would drift the first
-    // time only one of them learned something.
-    renderReviewBanner(el('hub-decisions'), currentQueue(), {
-      onGoHome: () => setNav('home'),
-    });
-    renderWalkthrough();
-  }
-
   // ── The Home pane ───────────────────────────────────────────────────────
-
-  function renderHomeRegion(): void {
-    // Nav active state, all four destinations.
-    for (const btn of document.querySelectorAll<HTMLButtonElement>('.hub-nav-item')) {
-      const active = btn.dataset.nav === state.nav;
-      btn.classList.toggle('hub-nav-item-active', active);
-      btn.setAttribute('aria-current', active ? 'page' : 'false');
-    }
-    const main = el('hub-main');
-    // Home is a clean frame: content only, none of the board's side columns.
-    // The pane-scoped `hub-root--home` class went with the board chrome it
-    // used to suppress — presence, lead and the goal banner live in the
-    // settings panel now, which is not a pane's to hide.
-    main.classList.toggle('hub-main--home', state.pane === 'home');
-    el('hub-home').classList.toggle('hidden', state.pane !== 'home');
-    if (state.pane !== 'home') return;
-    renderHomeBrief(el('hub-home-brief'), state.home, Date.now(), state.homeEditingRecipe, {
-      onMarkCaughtUp: () => void markCaughtUp(),
-      onSaveInstructions: (text) => void saveInstructions(text),
-      onEditRecipe: (open) => {
-        state.homeEditingRecipe = open;
-        renderHomeRegion();
-      },
-    });
-    // The island's one input. A plain signal write, not a render call: the
-    // pane re-renders itself, keyed on `ReviewItem.key`, so unchanged rows
-    // keep their DOM nodes. Background events still reach this line through
-    // `repaintGuard.schedule(...)` exactly as they reached the old renderer —
-    // the guard's parked/flush path is upstream of the write, not bypassed.
-    const queue = currentQueue();
-    const now = Date.now();
-    homeReviewData.value = {
-      queue,
-      settled: [...state.homeSettled.values()],
-      now,
-    };
-    // The activity pane's one input: the projection as it stands, plus what
-    // the queue above is already asking so the pane never says it twice. The
-    // island groups and flags; this line only hands over the facts.
-    homeActivityData.value = {
-      tasks: taskList(),
-      goals: state.info?.goals ?? [],
-      asks: asksOf(queue.items),
-      now,
-    };
-  }
+  const { renderHomeRegion, loadHome } = createHubHomeRegion({
+    state,
+    workspaceId,
+    author,
+    user,
+    document,
+    el,
+    currentQueue,
+    taskList,
+    schedule: (paint) => repaintGuard.schedule(paint),
+  });
 
   /**
    * The one writer of `nav`, `pane`, `tab` and `view`. Four destinations that
@@ -903,640 +466,47 @@ export async function bootHub(env: HubBootEnv): Promise<void> {
     if (nav === 'activity') void loadEvents();
   }
 
-  let homePollTimer: ReturnType<typeof setTimeout> | null = null;
-  async function loadHome(): Promise<void> {
-    const res = await fetchJson<HomePayload>(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/home?user=${encodeURIComponent(user.name)}`,
-    );
-    // A failed fetch keeps the previous payload — same rule as every other
-    // REST-fed region: "the request did not complete" is not "there is
-    // nothing here".
-    if (res) state.home = res;
-    // Through the guard: the generating-brief poll below re-runs this every
-    // 1.5s, and Home is exactly the surface whose option buttons a mid-press
-    // repaint was eating.
-    repaintGuard.schedule(renderHomeRegion);
-    // Poll while the server says a generation is actually queued, so the
-    // generated brief lands without a manual reload. The flag is grounded in
-    // a queued call; the cap stops a wedged payload from polling forever.
-    if (homePollTimer) {
-      clearTimeout(homePollTimer);
-      homePollTimer = null;
-    }
-    if (res?.generating) {
-      if (state.homePollStarted === 0) state.homePollStarted = Date.now();
-      if (shouldPollHome(res, state.homePollStarted, Date.now())) {
-        homePollTimer = setTimeout(() => void loadHome(), 1500);
-      }
-    } else {
-      state.homePollStarted = 0;
-    }
-  }
-
-  async function markCaughtUp(): Promise<void> {
-    const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/home/read`, 'POST', {
-      author,
-    });
-    if (!res.ok) {
-      showToast('Could not mark caught up — try again.');
-      return;
-    }
-    showToast('Caught up — the brief starts here now.');
-    await loadHome();
-  }
-
-  async function saveInstructions(text: string): Promise<void> {
-    const res = await send(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/home/instructions`,
-      'PUT',
-      { instructions: text, author },
-    );
-    if (!res.ok) {
-      showToast('Could not save the instructions — try again.');
-      return;
-    }
-    state.homeEditingRecipe = false;
-    if (res.data) state.home = res.data as unknown as HomePayload;
-    renderHomeRegion();
-    // The save dropped every cached brief; pick up the regeneration.
-    state.homePollStarted = 0;
-    await loadHome();
-  }
-
-  function renderActivityRegion(): void {
-    const board = el('hub-board');
-    const activity = el('hub-activity');
-    // Everything the task list is made of hides with it. Activity used to be
-    // a button that swapped ONE div, so the capture box and the review strip
-    // stayed on screen over a feed they have nothing to do with.
-    for (const id of ['hub-quick', 'hub-decisions', 'hub-archived']) {
-      el(id).classList.toggle('hub-hidden-by-view', state.view === 'activity');
-    }
-    if (state.view === 'activity') {
-      board.classList.add('hidden');
-      activity.classList.remove('hidden');
-      renderActivity(
-        activity,
-        state.events,
-        state.activityFilter,
-        titleOf,
-        (f) => {
-          state.activityFilter = f;
-          renderActivityRegion();
-        },
-        state.uptime,
-      );
-    } else {
-      board.classList.remove('hidden');
-      activity.classList.add('hidden');
-    }
-  }
-
-  /**
-   * The element that opened the panel, so closing it puts the keyboard back
-   * where it was.
-   *
-   * The panel takes focus when it opens (see `renderTaskDetail` — that is what
-   * makes hold-Space work inside it), so without this, Escape would drop a
-   * keyboard reader at the top of the document and the j/k walk they were in
-   * the middle of would restart from row one.
-   */
-  let detailOpener: HTMLElement | null = null;
-  /** Which task the panel is CURRENTLY showing, so open and close are
-   *  distinguishable from a repaint. */
-  let renderedDetailId: string | null = null;
-  /** Which task the panel has already fetched audit rows for — one fetch per
-   *  open, and the guard that keeps the fetch's own re-render from looping. */
-  let detailEventsFor: string | null = null;
-  /** Which task the panel has already read the two ask stamps for, and what
-   *  they said. Same one-fetch-per-open shape as `detailEventsFor`: the read
-   *  re-renders, and the id guard is what stops that re-render coming back
-   *  round here. Undefined until the read lands, which the controls render as
-   *  "not yet asked" — see `TaskAskState`. */
-  let detailAsksFor: string | null = null;
-  let detailAsks: TaskAskState | undefined;
-  /** Which GOAL the shared container is currently showing, so open, repaint
-   *  and close are distinguishable — the goal panel's `renderedDetailId`. */
-  let renderedGoalId: string | null = null;
-
-  /**
-   * Close the task panel — the island's own "no task" state.
-   *
-   * `handOverEditor` is for the one case where something ELSE is taking the
-   * body editor in the same turn: the goal panel mounts it synchronously,
-   * while this write's effect lands a microtask later, so without the hand-off
-   * the closing task panel would report a null slot and unmount the goal's
-   * editor from under it.
-   */
-  function closeTaskPanel(handOverEditor = false): void {
-    const handlers = { ...taskDetailData.value.handlers };
-    // `undefined` rather than `delete`: the island reaches this through
-    // `handlers.onBodySlot?.(…)`, so an absent key and an undefined one are
-    // the same absence to every reader of it.
-    if (handOverEditor) handlers.onBodySlot = undefined;
-    taskDetailData.value = { task: null, handlers };
-  }
-
-  /**
-   * Reading-time capture for the open ticket — the same tracker the markdown,
-   * redline and code surfaces mount, pointed at the task's body room.
-   *
-   * A ticket is a PANEL rather than a page, so there is no load to hang a
-   * tracker off and no unload to flush it: this is the lifecycle. It is keyed
-   * on the task id and called from every path that changes what the panel
-   * shows, so a repaint — and `renderDetail` runs on every board event and
-   * clock tick — is a no-op, while an open, a close, and a tap straight from
-   * one row to another each do the right thing. The disposer flushes any
-   * in-flight session, so closing a ticket banks its read rather than losing
-   * it.
-   */
-  let readTracker: { taskId: string; stop: () => void } | null = null;
-  function syncReadTracker(taskId: string | null, bodyDocId?: string): void {
-    if (readTracker?.taskId === taskId) return;
-    readTracker?.stop();
-    readTracker = null;
-    if (!taskId || !bodyDocId) return;
-    const host = document.getElementById('hub-detail');
-    if (!host) return;
-    readTracker = {
-      taskId,
-      stop: startReadingTracker({
-        docId: bodyDocId,
-        user,
-        // `.hub-detail-panel` is the element with `overflow: auto`, so it is
-        // what scroll depth means here. A getter, not the element: this runs
-        // during the signal write that opens the panel, and the panel is not
-        // painted until a microtask later.
-        scrollEl: () => host.querySelector<HTMLElement>('.hub-detail-panel'),
-        // Scoped to the panel: the board is still behind it, and scrolling
-        // the rows is not reading the ticket.
-        root: host,
-      }),
-    };
-  }
-
-  function renderDetail(): void {
-    // Task wins when both ids are somehow set: the deep-link and voice paths
-    // set a task id without knowing a goal panel was open, and what they mean
-    // is "show me this task".
-    if (state.detailTaskId) state.detailGoalId = null;
-    if (state.detailGoalId) {
-      // Unfiltered on purpose: the panel's counts and advisory are facts
-      // about the GOAL ("what would a done declaration leave open"), not
-      // about whatever tab or done-window the board happens to be on.
-      const section =
-        boardSections(state.info?.goals ?? [], taskList(), {
-          tab: 'all',
-          userName: user.name,
-          doneWindow: 'all',
-          now: Date.now(),
-        }).find((s) => s.id === state.detailGoalId) ??
-        // An ARCHIVED band is on no board and so in no section — and the panel
-        // is exactly where its Restore lives, reached from the restore list or
-        // from a link somebody sent last week. `goalSection` is the lookup that
-        // does not apply "off the board", the way `state.tasks` is for a task.
-        goalSection(state.info?.goals ?? [], state.detailGoalId);
-      if (section && !section.isChores) {
-        if (renderedGoalId === null && renderedDetailId === null) {
-          const active = document.activeElement;
-          detailOpener = active instanceof HTMLElement && active !== document.body ? active : null;
-        }
-        // The goal's comments, fetched the same lazy way a task's are and
-        // guarded by the same id — one fetch per open, and the guard is what
-        // stops the fetch's own re-render from looping back through here.
-        if (state.discussionTaskId !== section.id) {
-          void loadDiscussion({ id: section.id, bodyDocId: goalBodyDocId(section) });
-        }
-        // Only a discussion that belongs to the goal on screen: an in-flight
-        // load for a row the reader has left must not paint under this one.
-        const goalDiscussion =
-          state.discussionTaskId === section.id ? state.discussion : { loading: true, threads: [] };
-        // The task panel closes first: the two share the screen, never the
-        // container, so nothing else empties the island's host any more.
-        closeTaskPanel(true);
-        // A goal opening over a ticket ends the read of that ticket — this is
-        // the one close that does not run through the task path below.
-        syncReadTracker(null);
-        goalDetailData.value = {
-          section,
-          discussion: goalDiscussion,
-          handlers: {
-            onClose: () => {
-              state.detailGoalId = null;
-              renderDetail();
-            },
-            onTitleCommit: (goalId, title) => void retitleGoal(goalId, title),
-            onStatusSet: (goalId, to) => void transitionGoal(goalId, to),
-            onDueSet: (goalId, dueAt) => void setGoalDue(goalId, section.title, dueAt),
-            onComment: (goalId, text, threadId) =>
-              postRowComment({ id: goalId, bodyDocId: goalBodyDocId(section) }, text, threadId),
-            // The goal's description is a live room like a task's, so the SAME
-            // editor host drives it — one mount at a time, which is what makes
-            // "a body editor left mounted by the last open row" impossible
-            // rather than something this branch has to remember to tear down.
-            // The panel reports its own slot: a signal write does not paint
-            // synchronously, so nothing out here can know when the slot exists.
-            onBodySlot: (row, slot) =>
-              bodyEditor.sync(
-                row === null
-                  ? null
-                  : {
-                      id: row.id,
-                      bodyDocId: goalBodyDocId(row),
-                      placeholder: GOAL_PLACEHOLDER_TEXT,
-                    },
-                slot,
-              ),
-            onCopyLink: (s) => void copyGoalLink(s),
-            onCascadeCount: (goalId) => goalCascadeCount(goalId),
-            onArchive: (s) => void archiveGoal(s),
-            onRestore: (s) => void restoreGoal(s),
-            workspaceId,
-            ...(state.detailThreadId ? { focusThreadId: state.detailThreadId } : {}),
-            now: Date.now(),
-          },
-        };
-        // A deep-linked thread aim that the loaded discussion does not hold
-        // is gone, not loading — drop it gracefully, once.
-        if (state.discussionTaskId === section.id && !goalDiscussion.loading) {
-          noteStaleBootThread(goalDiscussion);
-        }
-        renderedGoalId = section.id;
-        renderedDetailId = null;
-        detailEventsFor = null;
-        syncBoardUrl();
-        return;
-      }
-      // The goal left the board under us (removed from the list, or the
-      // projection has not caught up) — fall through to an empty panel. A
-      // boot deep link is the second case by construction, so its claim
-      // survives until the deadline in main() gives up on it.
-      if (state.detailGoalId !== pendingBootGoal) state.detailGoalId = null;
-    }
-    // Past this point the goal panel is not what is showing, and its container
-    // is its own — so it has to be told to close rather than being replaced.
-    goalDetailData.value = {
-      section: null,
-      handlers: { onClose: () => {}, onTitleCommit: () => {}, onStatusSet: () => {} },
-    };
-    const task = state.detailTaskId ? (state.tasks.get(state.detailTaskId) ?? null) : null;
-    // An open-time act for ONE row: a row tap on any other task, or the panel
-    // closing, ends it — reopening the same row later must not start a rename.
-    if (state.detailTaskId !== focusTitleTaskId) focusTitleTaskId = null;
-    if (task && renderedDetailId === null) {
-      const active = document.activeElement;
-      detailOpener = active instanceof HTMLElement && active !== document.body ? active : null;
-    }
-    // Fetch here rather than at each of the four places that open the panel
-    // (row tap, `o`, deep link, voice navigate) — one of them would be missed
-    // otherwise, and the miss looks like a task with no discussion. Safe from
-    // recursion: loadDiscussion claims the id before it re-renders.
-    if (task && state.discussionTaskId !== task.id) {
-      void loadDiscussion(task);
-    }
-    if (!task) state.discussionTaskId = null;
-    // Every way the panel closes — the X, a goal opening over it, the task
-    // being archived under it — lands here with no task; the next open
-    // starts on Comments unless its opener says otherwise.
-    if (!task) state.detailTab = 'comments';
-    // The audit rows the Activity tab renders. Fetched on open rather than at
-    // boot: a reader who never opens a ticket never needs them, and the
-    // workspace Activity VIEW has always fetched them the same lazy way.
-    // Guarded by task id, which is also what stops `loadEvents`'s own
-    // re-render from coming back round here.
-    if (task && detailEventsFor !== task.id) {
-      detailEventsFor = task.id;
-      void loadEvents();
-    }
-    if (!task) detailEventsFor = null;
-    // Who has already asked this ticket for a plan or a review. Read on open
-    // for the same reason the audit rows are — four ways in, and the miss
-    // would look like a control offering an ask somebody already made.
-    if (task && detailAsksFor !== task.id) {
-      detailAsksFor = task.id;
-      detailAsks = undefined;
-      void loadTaskAsks(task.id);
-    }
-    if (!task) {
-      detailAsksFor = null;
-      detailAsks = undefined;
-    }
-    // Only pass a discussion that belongs to the task on screen. An in-flight
-    // load for a task the reader has left must not paint under this one.
-    const discussion =
-      task && state.discussionTaskId === task.id
-        ? state.discussion
-        : { loading: true, threads: [] };
-    // A deep-linked thread aim that the loaded discussion does not hold is
-    // gone, not loading — drop it gracefully, once, leaving the panel open.
-    if (task && state.discussionTaskId === task.id && !discussion.loading) {
-      noteStaleBootThread(discussion);
-    }
-    taskDetailData.value = {
-      task,
-      discussion: task ? discussion : undefined,
-      tab: state.detailTab,
-      // Learned from the WHOLE board, not from this ticket's band: the panel
-      // reports what the estimate was scaled by, and the scaling is a property
-      // of everything that has closed. Unfiltered for the same reason the goal
-      // rollup is — a correction that moved when the reader changed tabs would
-      // be a correction about the reader.
-      calibration: task ? boardCalibration(state.info?.goals ?? [], taskList()) : undefined,
-      // The band the row renders under, which is the key its correction was
-      // filed under. A ticket whose goal id matches no band shows Backlog's
-      // arithmetic, exactly as it shows under Backlog on the board.
-      calibrationGoal: task
-        ? bandOfGoal(goalBandIds(state.info?.goals ?? []), task.goal)
-        : undefined,
-      handlers: {
-        onClose: () => {
-          state.detailTaskId = null;
-          state.detailTab = 'comments';
-          state.detailThreadId = null;
-          renderDetail();
-        },
-        onCopyLink: (t) => void copyTaskLink(t),
-        onStatusSet: (t, to) => void transitionTask(t, to),
-        onTitleCommit: (t, title) => void renameTask(t, title),
-        onAnswer: (t, text, optionId) => answerTaskDecision(t, text, optionId),
-        onAnswerThread: (t, item, text, optionId) => answerPanelThreadItem(t, item, text, optionId),
-        onAskOnPanelItem: (t, item, question) => askOnPanelItem(t, item, question),
-        onUndoAnswer: (t) => undoTaskAnswer(t),
-        onReleaseHeld: (t, item) => releaseHeldReviewItem(t, item),
-        onUndoThreadAnswer: (t, item) => undoThreadAnswer(t, item),
-        // So the answered record can say "Answered by you" for the reader's
-        // own answer — the record compares display names, same as answer.by.
-        selfName: author.name,
-        ...(task ? { focusTitle: focusTitleTaskId === task.id } : {}),
-        onAssign: (t, assignee) => void assignTask(t, assignee),
-        knownAgentIds: knownAgentIds(),
-        // So the Source-doc field links the origin doc at its canonical
-        // workspace address rather than the legacy /review/ one.
-        workspaceId,
-        goalLabel: (id) => goalLabel(state.info?.goals ?? [], id),
-        goals: state.info?.goals ?? [],
-        onGoalSet: (t, goalId) => void setTaskGoal(t, goalId),
-        onDueSet: (t, dueAt) => void setTaskDue(t, dueAt),
-        onArchive: (t) => void archiveTask(t),
-        onRestore: (t) => void restoreTask(t),
-        onComment: (t, text, threadId) => postRowComment(t, text, threadId),
-        // The Activity feed takes comments the way the Home pane does — the
-        // same two writes, the same thread on the task's doc.
-        onActivityComment: (t, phrase, text) => commentOnActivity(t.id, phrase, text),
-        onActivityReply: (t, threadId, text) => replyOnActivity(t.id, threadId, text),
-        user,
-        ...(state.detailThreadId ? { focusThreadId: state.detailThreadId } : {}),
-        // This task's rows from the review queue the strip already reads, so
-        // the panel says the same thing the row that sent them here said.
-        // `panelAsks` owns which rows qualify — by taskId, thread-borne and
-        // ticket-borne alike, minus the derived legacy copy of the task's own
-        // decision.
-        asks: task ? panelAsks(state.reviewItems, task.id) : [],
-        // A blocker is task state (design point 5): when the open task is a
-        // person's own open work other tasks wait on, the panel — and only
-        // the panel — says so, via the amber blocked note.
-        blocked: task ? humanBlockerRows(taskList()).find((r) => r.task.id === task.id) : undefined,
-        // The other direction: the tickets THIS task is waiting on, resolved
-        // to titles here because the panel holds no board. Derived from the
-        // same `boardBlockers` the board's rings come from, so the panel and
-        // the row can never disagree about what is holding the work.
-        blockers: task ? openBlockersOf(task) : [],
-        onRelatedAdd: (t, url) => void addRelatedLink(t, url),
-        onRelatedRemove: (t, entry) => void removeRelatedLink(t, entry),
-        // The ticket's two one-tap asks. The write is a doc route, not a task
-        // route, because a ticket's comments live in its body doc — which is
-        // exactly what makes the ask reach the seated lead on the board
-        // subscription it already holds.
-        //
-        // Gated on write access, which is what draws the controls at all: the
-        // two floats hide themselves the same way. Offered to a reader who
-        // cannot write, the press would come back 403 and the only thing they
-        // would get is a toast — no sign-in path, no way to make the ask.
-        ...(writeAccess.canWrite ? { onAsk: (t, kind) => askOnTask(t, kind) } : {}),
-        ...(detailAsks !== undefined ? { taskAsks: detailAsks } : {}),
-        // The workspace's audit rows; the panel takes this task's out of them.
-        // The same list the Activity view reads — one log, two surfaces.
-        activity: state.events,
-        now: Date.now(),
-        // The panel reports its own slot, because a signal write does not
-        // paint synchronously: reading `.hub-detail-body-slot` off the DOM on
-        // the next line would find the slot as it stood BEFORE this write.
-        // Idempotent for an unchanged pair, so the repaints that arrive while
-        // somebody is typing cost nothing.
-        onBodySlot: (t, slot) =>
-          bodyEditor.sync(t ? { id: t.id, bodyDocId: t.bodyDocId } : null, slot),
-      },
-    };
-    if (!task && (renderedDetailId !== null || renderedGoalId !== null)) {
-      if (detailOpener?.isConnected) detailOpener.focus();
-      detailOpener = null;
-    }
-    syncBoardUrl();
-    // Open, close, and row-to-row all land here; keyed on the id, so the
-    // repaints in between cost nothing.
-    syncReadTracker(task?.id ?? null, task?.bodyDocId);
-    renderedDetailId = task?.id ?? null;
-    renderedGoalId = null;
-  }
-
-  /**
-   * A boot deep link's `?thread=` aim, checked once against a discussion that
-   * has actually loaded: absent then means gone (resolved away, or a stale
-   * paste), and the graceful fallback is the panel without the aim — plus a
-   * word about it, because a silent nothing reads as a broken link.
-   */
-  function noteStaleBootThread(discussion: TaskDiscussion): void {
-    if (!bootThreadPending || !state.detailThreadId) return;
-    bootThreadPending = false;
-    if (discussion.threads.some((t) => t.id === state.detailThreadId)) return;
-    state.detailThreadId = null;
-    showToast('That comment thread is gone — the link may be outdated.');
-  }
-
-  /**
-   * Clipboard write, with a fallback that is a real fallback: `writeText`
-   * rejects on an insecure origin and in a few embedded webviews, and a "Copied"
-   * toast over an empty clipboard is worse than no button. When it fails the
-   * toast carries the URL itself, which is at least selectable.
-   */
-  async function copyTaskLink(task: HubTask): Promise<void> {
-    const url = taskUrl(task.id);
-    try {
-      await navigator.clipboard.writeText(url);
-      showToast('Link copied');
-    } catch {
-      showToast(url);
-    }
-  }
-
-  /** The same for a band. Separate only because the URL is — the clipboard
-   *  refusal is handled identically, by showing the link so it can be copied
-   *  by hand. */
-  async function copyGoalLink(section: BoardSection): Promise<void> {
-    const url = goalUrl(section.id);
-    try {
-      await navigator.clipboard.writeText(url);
-      showToast('Link copied');
-    } catch {
-      showToast(url);
-    }
-  }
-
   // ── Task discussion ─────────────────────────────────────────────────────
+  const discussion = createHubDiscussion({
+    state,
+    author,
+    renderDetail: () => renderDetail(),
+  });
+  const { loadDiscussion } = discussion;
 
-  /**
-   * A row and its live body room — the only two things the discussion and the
-   * description editor ever needed from a task, which is why a GOAL reaches
-   * both through the same functions.
-   */
-  interface DiscussionRow {
-    id: string;
-    bodyDocId: string;
-  }
-
-  /**
-   * Where a goal's description and comments live.
-   *
-   * Prefers what the projection sent, and falls back to deriving it. The
-   * fallback is not defensive padding: a board served by a server that
-   * predates the goal-body projection carries no `bodyDocId`, and without it
-   * the panel would fetch `/api/docs//threads` and mount an editor on
-   * nothing. Deriving is safe because the shape is a DECISION rather than a
-   * lookup — `task:<goalId>`, settled in the goals-as-a-task-type design.
-   */
-  const goalBodyDocId = (section: { id: string; bodyDocId?: string }): string =>
-    section.bodyDocId ?? `task:${section.id}`;
-
-  /**
-   * A row's comments live in its body doc (`task:<rowId>` for a task and for a
-   * goal alike), so this is the ordinary thread API pointed at that room — no
-   * second store, and the same threads an agent sees through `create_thread`.
-   */
-  async function loadDiscussion(task: DiscussionRow, quiet = false): Promise<void> {
-    state.discussionTaskId = task.id;
-    if (!quiet) {
-      // A quiet reload is a refresh of something already on screen; flipping
-      // it to "Loading…" would blank a discussion the reader is reading.
-      state.discussion = { loading: true, threads: [] };
-      renderDetail();
-    }
-    const payload = await fetchJson<{
-      threads?: Array<{
-        id: string;
-        comments?: Array<{
-          id?: string;
-          author?: { name?: string };
-          text?: string;
-          ts?: number;
-          review?: ReviewPayload;
-        }>;
-      }>;
-    }>(`/api/docs/${encodeURIComponent(task.bodyDocId)}/threads`);
-    // The reader may have moved on while this was in flight.
-    if (state.discussionTaskId !== task.id) return;
-    // Only the id and the words. The payload also carries each thread's
-    // status and anchor, and the discussion model deliberately does not:
-    // the panel renders every comment as a peer of every other, so the
-    // fields fed nothing — see `TaskThread` in hub-render.
-    const threads: TaskThread[] = (payload?.threads ?? []).map((t) => ({
-      id: t.id,
-      comments: (t.comments ?? []).map((c) => ({
-        // The id is what the answered record's Undo names on the undo route;
-        // absent from an older server's payload, and the record then renders
-        // without the button rather than with one that could only fail.
-        ...(c.id !== undefined ? { id: c.id } : {}),
-        author: c.author?.name ?? 'Someone',
-        text: c.text ?? '',
-        ts: c.ts ?? Date.now(),
-        // Forwarded, not re-validated: the server refuses a malformed
-        // declaration at the write, and re-deciding here would be a second
-        // copy of one rule free to drift from the first.
-        ...(c.review ? { review: c.review } : {}),
-      })),
-    }));
-    state.discussion = { loading: false, threads };
-    renderDetail();
-  }
-
-  /** Resolves to whether the comment actually landed — the composer keeps the
-   *  text until it hears yes, so a failed post is retryable. Takes a row
-   *  rather than a task: a goal's discussion posts through the same route. */
-  async function postRowComment(
-    task: DiscussionRow,
-    text: string,
-    threadId?: string,
-  ): Promise<boolean> {
-    const doc = encodeURIComponent(task.bodyDocId);
-    const res = threadId
-      ? await send(`/api/docs/${doc}/threads/${encodeURIComponent(threadId)}/comments`, 'POST', {
-          author,
-          text,
-        })
-      : // No anchor to point at — the comment is about the task itself, which
-        // is what a subject anchor means. A task's description is often empty,
-        // so there is frequently nothing in it to point at at all.
-        await send(`/api/docs/${doc}/threads`, 'POST', {
-          author,
-          text,
-          anchor: { kind: 'subject' },
-        });
-    if (!res.ok) {
-      showToast('Posting the comment failed — your text is still in the box');
-      return false;
-    }
-    await loadDiscussion(task);
-    return true;
-  }
-
-  /**
-   * What this ticket's two ask stamps say — who asked for a plan or a review,
-   * and when. Read from the ticket's body doc, which is where the ask routes
-   * write them, so a reload and another tab's press both show the receipt
-   * without the panel tracking anything.
-   *
-   * A read that fails leaves the controls offering. That is the right way
-   * round: an offer costs one extra press at worst, where a receipt invented
-   * from a failed read hides the control for an ask nobody made.
-   */
-  async function loadTaskAsks(taskId: string): Promise<void> {
-    const body = await fetchJson<{ meta?: TaskAskState }>(taskAskStatePath(taskId));
-    // The reader may have moved on while this was in flight.
-    if (detailAsksFor !== taskId) return;
-    detailAsks = body?.meta ?? {};
-    renderDetail();
-  }
-
-  /**
-   * Ask the board's agent to plan this ticket, or to review it.
-   *
-   * The route is the doc one the meeting floats press (`taskAskRequestPath`),
-   * aimed at the ticket's body doc: it files the ask as a subject thread from
-   * this reader and stamps who asked. Resolves to whether it LANDED — the
-   * control puts itself back on a refusal rather than showing a receipt for
-   * an ask no agent received.
-   */
-  async function askOnTask(task: HubTask, kind: TaskAskKind): Promise<boolean> {
-    const res = await send(taskAskRequestPath(task.id, kind), 'POST', { author });
-    if (!res.ok) {
-      showToast(kind === 'plan' ? 'Asking for a plan failed' : 'Asking for a review failed');
-      return false;
-    }
-    // Both halves of what just changed: the stamp the receipt is built from,
-    // and the comment the ask actually IS — it belongs in the discussion the
-    // reader is looking at, not only in the agent's inbox.
-    await loadTaskAsks(task.id);
-    await loadDiscussion(task);
-    return true;
-  }
+  // ── The detail panel ────────────────────────────────────────────────────
+  const { renderDetail, setFocusTitle } = createHubDetailPanel({
+    state,
+    user,
+    workspaceId,
+    document,
+    taskUrl,
+    goalUrl,
+    actions,
+    review,
+    discussion,
+    taskList,
+    titleOf,
+    knownAgentIds,
+    loadEvents: () => loadEvents(),
+    syncBoardUrl,
+    connectMarkdown: (docId) => connect(wsUrl(docId, 'markdown')),
+    // Already awaited above — the description box is never live before the
+    // answer, and never live after a "no".
+    canWrite: writeAccess.canWrite,
+    boot: {
+      goal: () => pendingBootGoal,
+      threadPending: () => bootThreadPending,
+      clearThread: () => {
+        bootThreadPending = false;
+      },
+    },
+  });
 
   // ── The Home walkthrough ────────────────────────────────────────────────
   //
   // Where the reader stands in the review queue, and what answering does to
-  // that position: `hub-walkthrough.ts`. Built here rather than lower down
-  // because `renderWalkthrough` below is called from `setNav` and the review
-  // banner, and the three review writes it needs arrive as thunks — the
-  // controller that owns them takes `renderWalkthrough` as one of its own
-  // inputs, a cycle that predates the split.
+  // that position: `hub-walkthrough.ts`.
   const walkthrough = createHubWalkthrough({
     state,
     currentQueue,
@@ -1573,96 +543,9 @@ export async function bootHub(env: HubBootEnv): Promise<void> {
   // N of N. See `walkHandoffReady`.
   const walkSources: WalkSources = { reviewItems: false, projection: false };
 
-  function peopleFromAwareness(): PresencePerson[] {
-    const people: PresencePerson[] = [];
-    client.awareness.getStates().forEach((aw, clientId) => {
-      const s = aw as {
-        user?: { id?: string; name?: string };
-        surface?: string;
-        docId?: string;
-        lastActive?: number;
-      };
-      // A nameless entry draws no chip at all. Left exactly as it was — it is
-      // a separate question from this migration, and worth its own ticket.
-      if (!s?.user?.name) return;
-      people.push({
-        clientId,
-        // Absent from a hub tab still running a bundle that predates this
-        // line. `presenceIdentity` falls back to that tab's own connection
-        // there, so it keeps its own row and folds with nobody.
-        userId: s.user.id,
-        name: s.user.name,
-        surface: s.surface ?? 'hub',
-        docId: s.docId,
-        lastActive: s.lastActive ?? Date.now(),
-        self: clientId === client.awareness.clientID,
-      });
-    });
-    return people;
-  }
-
-  /**
-   * The presence strip renders in TWO places: who is here goes in the
-   * top-right cluster, and the drift notices go in the settings panel. Two
-   * islands, one loader — this function is the whole vanilla half of the
-   * bridge, and it is a pair of signal writes.
-   *
-   * A notice in a closed panel is an alarm nobody sees, so the settings button
-   * carries a dot whenever something in there is asking for attention. The
-   * `coverage` notice deliberately does not arm it: it renders permanently by
-   * design, and an always-on dot is one nobody reads.
-   */
-  function renderPresenceRegion(): void {
-    // Two signal writes, not two render calls: the islands mounted above own
-    // the DOM from here on, and they re-render themselves keyed on the
-    // participant — so a repaint that changes one person leaves everybody
-    // else's circle as the identical node, mid-press and all.
-    presenceData.value = {
-      chips: presenceChips(peopleFromAwareness(), state.agents, Date.now()),
-      followedKey: state.followedKey,
-    };
-    const notices = [
-      pluginDriftNotice(state.pluginRelease),
-      clientDriftNotice(state.clientRelease, Date.now()),
-    ];
-    driftData.value = notices;
-    renderSettingsAlarm(notices);
-  }
-
-  /** What in the settings panel is asking to be looked at. */
-  function renderSettingsAlarm(notices: Array<DriftNotice | null>): void {
-    const armed = notices.some((n) => n !== null && n.kind !== 'coverage');
-    el('hub-settings-alarm').classList.toggle('hidden', !armed);
-    // Both attributes, because the dot itself is `aria-hidden`: a reader who
-    // never sees it would otherwise be told "Workspace settings" while the
-    // button is visibly asking to be opened. `title` alone is announced
-    // weakly or not at all depending on the reader.
-    const label = armed ? 'Workspace settings — needs a look' : 'Workspace settings';
-    el('hub-settings').setAttribute('title', label);
-    el('hub-settings').setAttribute('aria-label', label);
-  }
-
-  /**
-   * Who the board thinks you are. `ensureUserIdentity` has always decided
-   * this — it is what stamps every comment and what "My Tasks" matches on —
-   * and until now nothing rendered it, so a reader with the wrong name saved
-   * found out by seeing their own comment signed by somebody else.
-   */
-  function renderMe(): void {
-    const me = el('hub-me');
-    me.textContent = initialsOf(user.name);
-    me.setAttribute('title', `You: ${user.name}`);
-    me.setAttribute('aria-label', `You: ${user.name}`);
-    if (user.color) me.style.background = user.color;
-  }
-  // The chip's menu — sign in / sign out. Wired once (buildShell above was
-  // the last write of this subtree); renderMe only repaints the chip face.
-  wireMeMenu({ button: el('hub-me'), menu: el('hub-me-menu'), localName: user.name });
-
-  function renderSettingsPanel(): void {
-    el('hub-settings-panel').classList.toggle('hidden', !state.settingsOpen);
-    el('hub-settings').setAttribute('aria-expanded', String(state.settingsOpen));
-  }
+  // ── The chrome cluster ──────────────────────────────────────────────────
+  const { peopleFromAwareness, renderPresenceRegion, renderMe, renderSettingsPanel } =
+    createHubChromeRegion({ state, user, el, awareness: client.awareness });
 
   function renderAll(): void {
     // Mounted, not rendered: `renderQuickActions` is a no-op after the first
@@ -1687,73 +570,6 @@ export async function bootHub(env: HubBootEnv): Promise<void> {
     renderHomeRegion();
   }
 
-  // ── Mutations (all through the REST gate) ───────────────────────────────
-  //
-  // The board's REST verbs live in `hub-actions.ts` now, bound once to what
-  // they used to capture. Destructured here, at the point in `main()` they
-  // were declared, so evaluation order is unchanged and every call site below
-  // reads as it did.
-  const {
-    transitionTask,
-    assignTask,
-    setTaskGoal,
-    setTaskDue,
-    addRelatedLink,
-    removeRelatedLink,
-    archiveTask,
-    restoreTask,
-    goalCascadeCount,
-    archiveGoal,
-    restoreGoal,
-    placeTask,
-    renameTask,
-    retitleGoal,
-    setGoalDue,
-    transitionGoal,
-    addGoal,
-    saveLead,
-    newTask,
-    startHuddle,
-  } = createHubActions({
-    workspaceId,
-    author,
-    state,
-    renderAll,
-    renderDetail,
-    renderLead,
-    focusTitle: (taskId) => {
-      focusTitleTaskId = taskId;
-    },
-  });
-
-  // ── The review queue's controller ───────────────────────────────────────
-  //
-  // Opening an item, walking a sitting, and answering or asking back live in
-  // `hub-review-controller.ts`, bound here to what they used to capture.
-  const {
-    startWalkthrough,
-    openInQueue,
-    answerDecision,
-    answerTaskDecision,
-    undoThreadAnswer,
-    undoTaskAnswer,
-    releaseHeldReviewItem,
-    answerPanelThreadItem,
-    askOnReviewItem,
-    askOnPanelItem,
-    commentOnActivity,
-    replyOnActivity,
-    replyToReviewItem,
-  } = createHubReviewController({
-    author,
-    state,
-    currentQueue,
-    renderWalkthrough,
-    loadReviewItems,
-    loadDiscussion,
-    openTaskThread,
-  });
-
   // ── Repaints wait for the reader's finger ───────────────────────────────
   //
   // Reported from the iPad, 2026-08-25: answering a decision review item
@@ -1767,172 +583,40 @@ export async function bootHub(env: HubBootEnv): Promise<void> {
   // ends the window before their handlers run. Sibling of `discussionIsBusy`,
   // which holds the discussion reload the same way for typing.
   const repaintGuard = createRepaintGuard({ dom: document, win: window });
-  /** The three regions the tasks projection and the review-items list feed —
-   *  every closure here is a STABLE reference, which is what lets the guard
-   *  coalesce a burst of events during one press into one repaint. */
-  const repaintQueueRegions = (): void => {
-    renderBoardRegion();
-    renderHomeRegion();
-    renderDetail();
-  };
 
-  async function loadReviewItems(): Promise<void> {
-    await refreshReviewItems(state, () =>
-      fetchJson<{ items: ReviewThreadItem[] }>(
-        `/api/workspaces/${encodeURIComponent(workspaceId)}/review-items`,
-      ),
-    );
-    // The task panel's review queue is handed down from this same list, so it
-    // is stale until this repaint runs — which is why answering a card in the
-    // panel repainted nothing at all before it was here.
-    repaintGuard.schedule(repaintQueueRegions);
-  }
-
-  async function loadAgents(): Promise<void> {
-    const res = await fetchJson<{
-      attachments: Array<{
-        agentId: string;
-        state?: PresenceAgent['state'];
-        stateLabel?: string;
-        lastToolCallAt: number;
-      }>;
-      seat?: LeadSeatView;
-      pluginRelease?: PluginRelease;
-      clientRelease?: ClientRelease;
-    }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`);
-    const before = knownAgentIds().join('\n');
-    // Which sessions can't run what was merged. Rides the read the board
-    // already makes, so nobody has to think to check.
-    // Same guard as the review strip: a refresh that never reached the server
-    // must not empty the presence row. During a restart every session looks
-    // detached for as long as the fetch keeps failing, which reads as the
-    // fleet going down rather than the server coming back.
-    state.pluginRelease = applyRefresh(state.pluginRelease, res, (r) => r.pluginRelease ?? null);
-    // …and which client every browser here is running. A failed build keeps
-    // the previous release live, which is right — but it announced itself
-    // only on the supervisor's stderr, so the split widened unread. Guarded
-    // the same way: an unreachable server must not read as "no release".
-    state.clientRelease = applyRefresh(state.clientRelease, res, (r) => r.clientRelease ?? null);
-    // Guarded like the releases above: a read that never reached the server
-    // must not read as a healthy seat. `?? null` keeps an older server's
-    // silence as "no claim", which the strip renders as it always did.
-    state.seat = applyRefresh(state.seat, res, (r) => r.seat ?? null);
-    state.agents = applyRefresh(state.agents, res, (r) =>
-      (r.attachments ?? []).map((a) => ({
-        agentId: a.agentId,
-        state: a.state ?? 'away',
-        stateLabel: a.stateLabel ?? a.state ?? 'away',
-        lastToolCallAt: a.lastToolCallAt,
-      })),
-    );
-    renderPresenceRegion();
-    // The picker's options come from the attachment list, so a fresh list is
-    // also a fresh set of agents to hand the board to.
-    renderLead();
-    // …and the board and the open task render their pickers from a snapshot
-    // taken when they last painted. This load is the ONLY thing that changes
-    // that list: the first one lands after the first paint, so without this
-    // the very first board offers nobody but 'human' until an unrelated task
-    // update happens to repaint it. Guarded on the SET rather than fired on
-    // every load, because `agent.heartbeat` arrives constantly and a board
-    // re-render would close a picker somebody is reading.
-    if (knownAgentIds().join('\n') !== before) {
-      repaintGuard.schedule(repaintBoardAndDetail);
-    }
-  }
-
-  /** The agent-set repaint, held off the reader's finger like every other
-   *  background repaint (stable reference — see `repaintQueueRegions`). */
-  const repaintBoardAndDetail = (): void => {
-    renderBoardRegion();
-    renderDetail();
-  };
-
-  /** The activity log has a reader on screen. Only the Activity view and an
-   *  open detail panel render `state.events` — everything else on the board
-   *  lives off the projection — so with neither up, fetching ~1000 audit
-   *  rows (~590KB on the live hub board) buys nothing. The SSE listeners
-   *  keep calling in; this gate is what makes those calls free until one of
-   *  the two readers opens, whose open paths already load on their own. */
-  const eventsConsumerActive = (): boolean =>
-    state.view === 'activity' || state.detailTaskId !== null || state.detailGoalId !== null;
-
-  async function loadEvents(): Promise<void> {
-    if (!eventsConsumerActive()) return;
-    const res = await fetchJson<{ events: ActivityEvent[]; uptime: UptimeReport | null }>(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/events`,
-    );
-    state.events = applyRefresh(state.events, res, (r) => r.events ?? []);
-    state.uptime = applyRefresh(state.uptime, res, (r) => r.uptime ?? null);
-    repaintGuard.schedule(repaintActivityRegions);
-  }
-
-  /** Activity arrives on every board event, and the open panel re-reads the
-   *  same rows — so this repaint fires constantly and must queue behind an
-   *  in-flight tap. The conditions run at paint time, deliberately: what is
-   *  showing when the repaint lands is what decides what it touches. */
-  const repaintActivityRegions = (): void => {
-    if (state.view === 'activity') renderActivityRegion();
-    // The ticket's own Activity tab reads the same rows, so a refresh that
-    // repainted only the workspace view left an open panel showing the
-    // history as it stood when it opened.
-    if (state.detailTaskId || state.detailGoalId) renderDetail();
-  };
-
-  // ── Sentry ──────────────────────────────────────────────────────────────
-  // The board no longer inits its own client. `/app/sentry.js` does it for
-  // every page type — board, doc, mockup, landing — so all four are
-  // comparable and there is one place the release, the tags and the privacy
-  // scrub are decided (see packages/server/src/browser-sentry.ts). This is
-  // the read side: whatever that entry parked on `window`, or null.
-  const sentry = pageSentry();
+  // ── What the board keeps learning from the server ───────────────────────
+  const { loadReviewItems, loadAgents, loadEvents, repaintQueueRegions } = createHubLoads({
+    state,
+    workspaceId,
+    schedule: (paint: () => void) => repaintGuard.schedule(paint),
+    renderBoardRegion,
+    renderHomeRegion,
+    renderDetail,
+    renderActivityRegion,
+    renderPresenceRegion,
+    renderLead,
+    knownAgentIds,
+  });
 
   // ── Load report ─────────────────────────────────────────────────────────
   // One line per page load, POSTed to /load-reports so "the board was slow"
-  // is a recorded fact with phase attribution: msToBoot is the REST first
-  // paint, msToFirstProjection is when the ydoc's task projection actually
-  // arrived (the payload the iPad spent its 10 seconds on). Both are ms from
-  // navigation start — performance.now()'s zero — so they compare across
-  // loads. Sent once, when both phases are in, or at the fallback deadline
-  // if the ydoc never syncs (that slow load is the one most worth recording).
+  // is a recorded fact with phase attribution. What a report CONTAINS is
+  // `hub-load-report.ts`; what boot owns is when each phase ended — the two
+  // stamps below, and the guard that makes the report fire once, when both
+  // phases are in or at the fallback deadline if the ydoc never syncs.
+  //
+  // The board no longer inits its own Sentry client: `/app/sentry.js` does it
+  // for every page type — board, doc, mockup, landing — so all four are
+  // comparable and there is one place the release, the tags and the privacy
+  // scrub are decided. `pageSentry()` is the read side of that.
+  const sentry = pageSentry();
   let msToBoot = 0;
   let msToFirstProjection: number | null = null;
   let loadReportSent = false;
   const sendLoadReport = (): void => {
     if (loadReportSent) return;
     loadReportSent = true;
-    // What the network actually moved: "slow because big" and "slow because
-    // far" need different fixes, and the report should tell them apart.
-    const resources = performance.getEntriesByType('resource') as PerformanceResourceTiming[];
-    // Nobody asked for this POST — it is telemetry about the load that just
-    // happened. Marked, so that a signed-out reader gets the standing bar
-    // rather than a modal demanding they sign in to do something they never
-    // did. Measured: unmarked, it raised the modal over the board within
-    // four seconds of opening it.
-    asBackgroundWrite(() => {
-      void fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/load-reports`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          msToBoot,
-          ...(msToFirstProjection !== null ? { msToFirstProjection } : {}),
-          resourceCount: resources.length,
-          transferBytes: resources.reduce((sum, r) => sum + (r.transferSize || 0), 0),
-          decodedBytes: resources.reduce((sum, r) => sum + (r.decodedBodySize || 0), 0),
-        }),
-      }).catch(() => {});
-    });
-    // Same numbers onto the pageload trace, best-effort: if the SDK loaded
-    // and the transaction is still open they land as measurements; if not,
-    // the posted report above is still the durable record.
-    try {
-      sentry?.setMeasurement('ms_to_boot', msToBoot, 'millisecond');
-      if (msToFirstProjection !== null) {
-        sentry?.setMeasurement('ms_to_first_projection', msToFirstProjection, 'millisecond');
-      }
-    } catch {
-      // The recorder never breaks the page it measures.
-    }
+    postLoadReport({ workspaceId, msToBoot, msToFirstProjection, sentry });
   };
   // The ydoc's initial sync is the phase boundary, not the first tasksMap
   // mutation: an empty workspace's sync changes no task and would otherwise
@@ -1986,29 +670,9 @@ export async function bootHub(env: HubBootEnv): Promise<void> {
   for (const btn of document.querySelectorAll<HTMLButtonElement>('.hub-nav-item[data-nav]')) {
     btn.addEventListener('click', () => setNav((btn.dataset.nav as HubNav) ?? 'tasks'));
   }
-  // Rail collapse — persisted so the choice survives reloads. The button only
-  // renders on wide screens (CSS hides it in the strip/bottom-bar bands).
-  {
-    const NAV_COLLAPSED_KEY = 'lf-hub-nav-collapsed';
-    const nav = document.getElementById('hub-nav');
-    const collapseBtn = document.getElementById('hub-nav-collapse');
-    const apply = (collapsed: boolean) => {
-      nav?.classList.toggle('hub-nav--collapsed', collapsed);
-      if (collapseBtn) {
-        const icon = collapseBtn.querySelector('.hub-nav-icon');
-        if (icon) icon.innerHTML = collapsed ? NAV_ICONS.expand : NAV_ICONS.collapse;
-        const label = collapseBtn.querySelector('.hub-nav-label');
-        if (label) label.textContent = collapsed ? 'Expand' : 'Collapse';
-        collapseBtn.title = collapsed ? 'Expand' : 'Collapse';
-      }
-    };
-    apply(localStorage.getItem(NAV_COLLAPSED_KEY) === '1');
-    collapseBtn?.addEventListener('click', () => {
-      const next = !nav?.classList.contains('hub-nav--collapsed');
-      localStorage.setItem(NAV_COLLAPSED_KEY, next ? '1' : '0');
-      apply(next);
-    });
-  }
+  // Rail collapse — the rail's own behaviour, so it lives beside the markup
+  // it toggles (`hub-shell.ts`). Persisted, so the choice survives reloads.
+  wireNavCollapse(document, localStorage);
   window.addEventListener('popstate', () => {
     // A history move is the reader going somewhere; whatever a boot deep link
     // was still waiting for, they have left it behind.
@@ -2045,170 +709,55 @@ export async function bootHub(env: HubBootEnv): Promise<void> {
     href: () => location.href,
   });
 
-  // Voice (§2.4/§3.8): hold Space or the mic button; the context object sent
-  // with each utterance anchors it to wherever the speaker is NOW — the hub
-  // board, or the open task detail. Every utterance gets an explicit ack.
-  createVoiceCapture({
-    button: el('hub-mic'),
-    indicator: el('hub-voice'),
-    // The open detail panel OR the highlighted row — see `voiceHubContext`.
-    // Both are "this ticket" to the person holding the mic.
-    getContext: () =>
-      voiceHubContext(
-        state.detailTaskId,
-        document.activeElement?.closest<HTMLElement>('.hub-task-row')?.dataset.taskId,
-        // The review item the panel is aimed at, so "pick the second one"
-        // answers THAT one when the ticket has several.
-        state.detailThreadId,
-        // Or the ticket's own single review row, when the panel is open on it.
-        state.reviewItems,
-      ),
-    send: async (transcript, context) => {
-      const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/voice`, 'POST', {
-        transcript,
-        context,
-        author,
-      });
-      return res.ok && res.data ? (res.data as unknown as VoiceAck) : null;
-    },
-    onNavigate: (u) => {
-      // A task lookup on this same hub opens the detail in place — the
-      // session survives navigation (§3.8); everything else is a page move.
-      const url = new URL(u, location.origin);
-      const taskParam = url.searchParams.get('task');
-      if (taskParam && url.pathname === location.pathname) {
-        state.detailTaskId = taskParam;
-        renderDetail();
-      } else {
-        location.assign(u);
-      }
-    },
-  });
+  // Where an utterance lands: the open panel, or the row the keyboard is on.
+  // `hub-voice.ts` — one capture per page, because Space is a singleton.
+  wireHubVoice({ state, author, workspaceId, document, location, el, renderDetail });
 
   // Gmail-style row shortcuts — the handler lives in hub-shortcuts.ts so a
   // test can call it directly with a state of its own, rather than booting a
   // board first and pressing keys at it.
-  document.addEventListener(
-    'keydown',
-    hubShortcutKeydown({
-      state,
-      helpEl: () => el('hub-help'),
-      openDetail: (taskId) => {
-        state.detailTaskId = taskId;
-        renderDetail();
-      },
-      closeDetail: () => {
-        state.detailTaskId = null;
-        // The goal panel closes on Escape too. It floats over the board the
-        // same way the task panel does, and one overlay that ignores the key
-        // its neighbour obeys reads as stuck rather than as different.
-        state.detailGoalId = null;
-        state.detailThreadId = null;
-        renderDetail();
-      },
-      archiveTask: (taskId) => {
-        const task = state.tasks.get(taskId);
-        // An already-archived row is unreachable from the board (it is not in
-        // a lane to focus) but IS reachable from the restore list, where `e`
-        // must not re-archive what is already gone.
-        if (task && !isTaskArchived(task)) void archiveTask(task);
-      },
-    }),
-  );
+  wireHubShortcuts({
+    document,
+    state,
+    el,
+    renderDetail,
+    archiveTask: (task) => archiveTask(task as HubTask),
+    isArchived: (task) => isTaskArchived(task as HubTask),
+  });
 
-  // Deep links (?task=, ?goal=, ?thread=, Home's ?item=) went into `state`
-  // before the first render — see `bootLoc` at the top of main(). What is
-  // left here is the waiting: the projection that can confirm them lands
-  // after first paint, so "not here yet" and "not here" are only
-  // distinguishable by a deadline — the same economics as ?walk= below.
-  const maybeOpenBootItem = (): void => {
-    if (!pendingBootItem) return;
-    const q = currentQueue();
-    const idx = q.items.findIndex((i) => i.key === pendingBootItem);
-    const item = q.items[idx];
-    if (!item) return; // don't burn — the projection may still be coming
-    pendingBootItem = null;
-    openInQueue(item, idx);
-  };
-  if (bootLoc.task || bootLoc.goal || bootLoc.item) {
-    setTimeout(() => {
-      if (pendingBootItem) {
+  // Deep links (?task=, ?goal=, ?thread=, Home's ?item=, and the landing
+  // page's ?walk=1) went into `state` before the first render — see `bootLoc`
+  // at the top of this function. What `hub-deep-links.ts` owns is the
+  // WAITING: the projection that can confirm a claim lands after first paint,
+  // so "not here yet" and "not here" are only distinguishable by a deadline.
+  const { deepLinkTick, chainWalkDrain: drainToNextBoard } = createHubDeepLinks({
+    state,
+    bootLoc,
+    location,
+    currentQueue,
+    walkSources,
+    openInQueue,
+    startWalkthrough,
+    syncBoardUrl,
+    renderDetail,
+    boot: {
+      item: () => pendingBootItem,
+      clearItem: () => {
         pendingBootItem = null;
-        showToast('That review item is not in the queue any more — it may already be answered.');
-        syncBoardUrl();
-      }
-      pendingBootGoal = null;
-      const goneTask =
-        bootLoc.task !== null &&
-        state.detailTaskId === bootLoc.task &&
-        !state.tasks.has(bootLoc.task);
-      // `goalSection` rather than a scan of the board's own sections, because
-      // an archived goal is on no board at all. The scan this replaces called
-      // that "gone" and closed the panel four seconds after it opened.
-      const goneGoal =
-        bootLoc.goal !== null &&
-        state.detailGoalId === bootLoc.goal &&
-        goalSection(state.info?.goals ?? [], bootLoc.goal) === null;
-      if (goneTask || goneGoal) {
-        state.detailTaskId = null;
-        state.detailGoalId = null;
-        state.detailThreadId = null;
-        showToast('Nothing on this board matches that link — it may be outdated.');
-        renderDetail();
-      }
-    }, WALK_HANDOFF_DEADLINE_MS);
-  }
-
-  // Deep link from the landing page's review chip / "Review all" bar:
-  // ?walk=1 opens the walkthrough once the queue arrives, and ?then= names
-  // the workspaces to visit after this one drains (walkNextUrl hops there).
-  // One-shot — SSE-driven reloads must not re-open a walkthrough the reader
-  // closed, so the flag burns on first use.
-  const handoff = walkHandoff(location.search);
-  let pendingWalk = handoff.walk && state.pane === 'home';
-  const maybeAutoWalk = (deadlinePassed = false): void => {
-    if (!pendingWalk) return;
-    // Neither half landing alone burns the flag: on a cold connection the
-    // ydoc task projection (decisions, and the tasks threads rank against)
-    // and the review-items list arrive in either order, and a walk opened on
-    // one half aims at a head the other half re-ranks to the bottom. The
-    // projection's onReady, its observer, and every review-items load call
-    // back in; only the deadline below stops waiting.
-    if (!walkHandoffReady(currentQueue(), walkSources, deadlinePassed)) return;
-    pendingWalk = false;
-    startWalkthrough();
-  };
-  const deepLinkTick = (): void => {
-    maybeAutoWalk();
-    maybeOpenBootItem();
-  };
+      },
+      clearGoal: () => {
+        pendingBootGoal = null;
+      },
+    },
+  });
   autoWalkTick = deepLinkTick;
-  if (pendingWalk) {
-    // Still nothing by now and the sync has had its chance: the board is
-    // genuinely clear (someone answered since the landing page rendered).
-    // Hop to the next board holding items, or stand down on Home.
-    setTimeout(() => {
-      if (!pendingWalk) return;
-      // Whatever has landed by now is the queue: open on it. Only a board
-      // with nothing in hand is clear enough to hop.
-      maybeAutoWalk(true);
-      if (!pendingWalk) return;
-      pendingWalk = false;
-      const next = walkNextUrl(handoff.chain);
-      if (next) location.href = next;
-    }, WALK_HANDOFF_DEADLINE_MS);
-  }
-  chainWalkDrain = () => {
-    // The sitting for THIS board is over; hand the reader to the next board
-    // in the chain rather than dead-ending on the cleared card.
-    const next = walkNextUrl(handoff.chain);
-    if (next) location.href = next;
-  };
+  chainWalkDrain = drainToNextBoard;
 
-  // The board itself — bands and rows. Same island contract as the two above,
-  // mounted once, and the one thing to keep in mind at this call site is that
-  // `#hub-board` is the island's host from here on: nothing vanilla may write
-  // into it. That is why the restore list moved to `#hub-archived` next door.
+  // The board itself — bands and rows. Same island contract as the ones in
+  // hub-islands.ts, mounted once, and the one thing to keep in mind at this
+  // call site is that `#hub-board` is the island's host from here on: nothing
+  // vanilla may write into it. That is why the restore list moved to
+  // `#hub-archived` next door.
   //
   // These are the STABLE callbacks; everything that changes per paint
   // (sections, the agent list, the archived count, which pane is showing)

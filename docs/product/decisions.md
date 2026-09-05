@@ -766,6 +766,13 @@ archive the section when the row is archived.
   placeholder after the selected line (`POST /research-request`), the mock's
   flow. Bryan: *"it just creates a task — does not follow the flow in the
   mockups."*
+  **Superseded 2026-09-04 for the TAPPED ask only** (Bryan): the pill offers
+  Comment and nothing else, so nothing taps Research or Create Task any more —
+  a reader asks for either inside the comment, rather than choosing a verb
+  before they have said anything. What each verb does, and the routes behind
+  them, are untouched: `POST /research-request`, the spin-off task placement
+  below, and the whole spoken flow still run. The history is in
+  `packages/workspaces-app/src/spinoff-menu.ts`.
 - **Make Plan on discussions.** The face rule read `huddleKind !== 'plan'` as
   "no button"; a discussion reaches plans too.
 - **Spin-offs are placed** — `TaskStore.placeSpinoff`: the goal of the task

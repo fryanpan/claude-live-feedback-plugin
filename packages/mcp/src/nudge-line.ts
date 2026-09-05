@@ -148,6 +148,14 @@ export interface StallPayload {
   /** Runnable rows past the board's parallelism cap, which the pass did not
    *  judge — idle by rule, not healthy. Absent when none. */
   beyondCapacity?: number;
+  /** What is new since this board's last wake — see `changedClause`. Absent
+   *  on a first wake, and on any frame from a server older than it. */
+  changed?: {
+    rows?: StalledRowPayload[];
+    undetermined?: string[];
+    heldItems?: HeldRowPayload[];
+    escalated?: boolean;
+  };
   /** The cap that kept them out, with who moved it and when. Sent only
    *  beside `beyondCapacity`; see `capClause`. */
   parallelismCap?: ParallelismCapPayload;
@@ -342,6 +350,33 @@ function stalledRowsClause(rows: readonly StalledRowPayload[]): string {
 }
 
 /**
+ * What is new since the last wake — the sentence that answers "why am I being
+ * told this again".
+ *
+ * It goes FIRST in the body, ahead of the full lists, because that is the
+ * order the reader needs: which of these four rows moved, and only then the
+ * four rows to drive. Absent on a board's first wake, where the whole frame
+ * is the news.
+ *
+ * "Nothing new" is not renderable here — the server only sets `changed` when
+ * something did — so an empty object renders nothing rather than a claim.
+ */
+function changedClause(changed: StallPayload['changed']): string {
+  if (!changed) return '';
+  const bits: string[] = [];
+  const rows = changed.rows ?? [];
+  if (rows.length > 0) bits.push(`${stalledRowsClause(rows)}`);
+  const unread = changed.undetermined ?? [];
+  if (unread.length > 0) bits.push(`${unread.join(', ')} became unreadable`);
+  const held = changed.heldItems ?? [];
+  if (held.length > 0) bits.push(`${held.length} review item(s) newly held`);
+  if (changed.escalated === true)
+    bits.push('the board\u2019s quietest row crossed another repeat window');
+  if (bits.length === 0) return '';
+  return `NEW since the last wake: ${bits.join('; ')}.`;
+}
+
+/**
  * Render `workspace.stalled` — work that was supposed to be moving and is not.
  *
  * This wake differs from `readyIdleLine` in what it asks for. Ready work needs
@@ -412,6 +447,10 @@ export function stalledLine(p: StallPayload): string {
   // Never empty: the server does not send this frame with all four lists
   // empty, and a line that could render to a bare slug would be the
   // no-subject wake the whole file exists to prevent.
+  // Ahead of the lists, so a repeat says what moved before it says what to
+  // drive. Empty on a first wake, where the whole frame is the news.
+  const changed = changedClause(p.changed);
+  if (changed) parts.unshift(changed);
   const body =
     parts.join(' ') ||
     'the board reported a stall with no rows on it — treat this as a bug in the wake, not as a clear board.';

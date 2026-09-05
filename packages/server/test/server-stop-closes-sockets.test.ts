@@ -97,4 +97,36 @@ describe('stopping the server closes its open connections', () => {
 
     expect(await within(5_000, () => closed)).toBe(true);
   });
+
+  it('runs our own close handler during the drain, not just the socket teardown', async () => {
+    // The sibling above asserts what the CLIENT sees. That passes even if the
+    // server's `close(ws)` never ran — a force-closed TCP connection reaches
+    // the browser as a close event either way. What the drain actually has to
+    // do is fire OUR handler while the stores are still up, because those
+    // handlers write (a meeting flushes its last sentence into the doc). So
+    // this asserts the server-side effect: the room's connection set, which
+    // only `onClose` empties.
+    //
+    // It is the property `socket-handlers.ts` would lose first if `close`
+    // ever became async — the promise would resolve after `rooms.flush()`,
+    // and nothing would be waiting for it.
+    const handle = boot();
+    const docId = 'stop-sockets-handler-mock';
+    const ws = new WebSocket(`ws://localhost:${handle.port}/y/${docId}?type=mockup`);
+    await new Promise<void>((resolve, reject) => {
+      ws.addEventListener('open', () => resolve());
+      ws.addEventListener('error', () => reject(new Error('socket never opened')));
+    });
+
+    // Control: the handler ran on the way IN, so the set it empties is a set
+    // that had something in it. Without this the assert below passes on a
+    // server that never tracked the connection at all.
+    const room = handle.rooms.get(docId);
+    expect(room).toBeDefined();
+    expect(await within(5_000, () => (room?.conns.size ?? 0) === 1)).toBe(true);
+
+    await handle.stop();
+
+    expect(room?.conns.size).toBe(0);
+  });
 });

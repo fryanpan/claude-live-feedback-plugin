@@ -3,13 +3,14 @@
  *
  * The properties worth a test are the ones a reader would notice were wrong:
  * the arrowhead lands on the WAITING row in both directions, an edge that
- * leaves the band is dropped rather than drawn short, and a band with no
- * layout draws nothing instead of a knot of degenerate curves at y=0.
+ * leaves the band is dropped rather than drawn short, a band with no layout
+ * draws nothing instead of a knot of degenerate curves at y=0, and every line
+ * in a band runs down an x of its own so a reader can follow one of them.
  *
  * Fixtures are synthetic.
  */
 import { describe, expect, it } from 'vitest';
-import { type DepRowBox, depCurves, depGutter } from '../src/hub/dep-curves.ts';
+import { type DepRowBox, depCurves, depGutter, depLanes } from '../src/hub/dep-curves.ts';
 
 const GUTTER = depGutter(34);
 
@@ -21,6 +22,13 @@ function rows(...ids: string[]): DepRowBox[] {
 function tip(head: string): { x: number; y: number } {
   const [, x, y] = head.split(' ');
   return { x: Number(x), y: Number(y) };
+}
+
+/** The x of the vertical a curve runs down, read back out of its `d`:
+ *  `M edgeX y1 C ctrlX y1 laneX ...`. Read from the path rather than the
+ *  `laneX` field so the test proves the number reached the drawing. */
+function laneOf(d: string): number {
+  return Number(d.split(' ')[6]);
 }
 
 describe('depGutter', () => {
@@ -103,5 +111,81 @@ describe('depCurves', () => {
 
   it('ignores a self-edge', () => {
     expect(depCurves(rows('a', 'b'), [{ from: 'a', to: 'a' }], GUTTER)).toEqual([]);
+  });
+});
+
+describe('depLanes', () => {
+  it('gives one line the gutter spine, unchanged from before the nesting', () => {
+    expect(depLanes(12, 1)).toEqual([12]);
+    expect(depLanes(12, 0)).toEqual([]);
+  });
+
+  it('steps each further lane 2px left, rightmost first', () => {
+    expect(depLanes(12, 5)).toEqual([12, 10, 8, 6, 4]);
+    // The narrow tier's spine is 7 and the same step still fits three lanes.
+    expect(depLanes(7, 3)).toEqual([7, 5, 3]);
+  });
+
+  it('shrinks the step rather than running lines off the left of the gutter', () => {
+    // 12 down to the 2px floor is 10px of room; eleven lanes need 1px each.
+    expect(depLanes(12, 11)).toEqual([12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2]);
+    const many = depLanes(12, 40);
+    expect(Math.min(...many)).toBe(2);
+    // Still distinct, which is the property the nesting depends on.
+    expect(new Set(many).size).toBe(40);
+    // Positive control: at a count the 2px step does fit, the step IS 2.
+    expect(depLanes(12, 3)).toEqual([12, 10, 8]);
+  });
+});
+
+describe('depCurves lanes', () => {
+  const many: DepRowBox[] = rows('a', 'b', 'c', 'd', 'e', 'f', 'g');
+
+  it('gives every line in a band its own x, nearest target rightmost', () => {
+    const out = depCurves(
+      many,
+      ['b', 'c', 'd', 'e', 'f', 'g'].map((to) => ({ from: 'a', to })),
+      GUTTER,
+    );
+    expect(out.map((c) => laneOf(c.d))).toEqual([12, 10, 8, 6, 4, 2]);
+    expect(new Set(out.map((c) => c.laneX)).size).toBe(6);
+    // The lanes move and nothing else does: every curve still leaves and
+    // re-enters the rows at the SAME edgeX, so the ends stay in a column and
+    // only the horizontal run into each row grows. That is what makes the set
+    // read as nested brackets rather than a fan.
+    expect(out.every((c) => c.d.startsWith('M 31 '))).toBe(true);
+    expect(out.every((c) => /\s31\s[\d.]+$/.test(c.d))).toBe(true);
+  });
+
+  it('ranks by reach, not by the order the edges arrive in', () => {
+    const out = depCurves(
+      many,
+      ['g', 'b'].map((to) => ({ from: 'a', to })),
+      GUTTER,
+    );
+    // Asked for the long edge first; the array comes back in that order so the
+    // caller's paint order is untouched, but the SHORT edge holds lane 0.
+    expect(out.map((c) => c.to)).toEqual(['g', 'b']);
+    expect(out.map((c) => c.laneX)).toEqual([10, 12]);
+  });
+
+  it('does not spend a lane on an edge it never draws', () => {
+    const out = depCurves(
+      many,
+      [
+        { from: 'elsewhere', to: 'b' },
+        { from: 'a', to: 'c' },
+        { from: 'a', to: 'd' },
+      ],
+      GUTTER,
+    );
+    // Two drawn edges, so two lanes — the dropped one must not leave a gap
+    // that pushes both of these one step further left.
+    expect(out.map((c) => c.laneX)).toEqual([12, 10]);
+  });
+
+  it('leaves a band with a single blocker pixel-identical to before the nesting', () => {
+    const [curve] = depCurves(rows('a', 'b'), [{ from: 'a', to: 'b' }], GUTTER);
+    expect(curve?.d).toBe('M 31 20 C 22 20 12 20 12 30 L 12 50 C 12 60 22 60 31 60');
   });
 });

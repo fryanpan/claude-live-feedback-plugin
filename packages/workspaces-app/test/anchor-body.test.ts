@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { __testing } from '../src/review-chrome.ts';
-
-const { anchorBody } = __testing;
+import { anchorBody } from '../src/doc/anchor-body.ts';
 
 /**
  * The chrome hand-builds every anchor body field by field, so a field present

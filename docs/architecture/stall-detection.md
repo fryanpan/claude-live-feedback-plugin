@@ -28,6 +28,48 @@ owner — their Home queue is the surface), and the **backlog** on boards
 with goal bands. Boards without goal bands carry whole columns as
 stall-eligible; structure the board to scope the watcher.
 
+**A row already named is not named again until it changes.** The stamp is the
+board's CURRENT finding set, so a row that left it was forgotten and its next
+quiet window read as a brand-new stall — one wake per window on any board
+whose owner keeps reporting (measured 2026-09-04: five wakes in sixty-five
+minutes over two rows that were being worked the whole time). `stall-nudge.ts`
+now remembers which rows a board's lead has been told about, across the row's
+own absence and across a restart, and forgets a row that has not been a
+finding for a whole repeat window. A remembered row is news again only when it
+comes back under a different BUCKET — a dispatched row whose builder then died
+returns as `builder-silent`, which is a different ask. Every repeat wake
+carries `changed`: the rows, holds, unreadable rows and escalation that are
+new since the last one, rendered ahead of the full lists.
+
+**An open question counts wherever it was asked.** A row's own `task:<id>`
+room is read for both things a discussion can say — somebody is talking,
+somebody is waiting on an answer — and so is every doc the row LINKS. Reading
+a linked doc for its prose alone missed the common case: thread writes carry
+no transaction origin, `lastContentChangeFor` refuses an unnamed one, so a
+question asked on a mock or a design doc left its row reading as quiet with
+nobody waiting while the reader had it on their queue.
+
+On a LINKED doc the ask is SCOPED, because a doc is a shared surface: without
+a scope one unanswered question on a design doc would park every row linking
+it, for as long as the question stayed open. Two ways an ask can count for a
+row. **Nothing else links the doc** — then the question cannot be about any
+other row, whoever typed it, so a builder's ask on a lead-owned row parks it.
+**Otherwise the asker must be the row's owner**, resolved through
+`taskStore.ownerIdOf`, which is the only signal separating the rows of a
+shared design doc from each other. Owner-matching alone was the first rule and
+missed the first case, leaving a row waking while a person owed it an answer;
+matching the row's ASSIGNEE instead is rejected on purpose, because it
+over-exonerates the moment one agent holds two rows. The row's own `task:<id>`
+room needs no scope at all, because a task-body thread belongs to exactly one
+row. Two consequences to know: on a doc several rows link, an ask by a person
+or by an agent the roster cannot place parks nobody, and a linked doc's plain
+COMMENTS
+and edits still count for every row that links it — that exoneration expires
+with the quiet window rather than lasting as long as a question does. Reading
+those threads goes through `rooms.listThreads`, which hydrates an evicted room
+from disk rather than peeking, so a board whose rows link many cold docs pulls
+them back into memory on the loop's schedule.
+
 **Task notes count as movement.** A row's quiet time is measured from the
 newest of: its status change, its last workspace event, its last thread
 activity, and its newest note in `task.notes` — the end-of-turn message the
@@ -38,11 +80,64 @@ clock without lighting up every board it is attached to. The board-level
 ready-idle clock (`ready-nudge.ts`) ignores notes on purpose — that wake
 exists to catch a session that keeps talking without moving anything.
 
+**Except a note that says the agent is waiting on a PERSON.** That is not
+movement, it is an unfiled ask wearing movement's clothes: three rows waited
+hours on 2026-09-04 while their end-of-turn notes said "Waiting on Bryan: …"
+and "parked on Bryan's (a) / (b) / (c)", nothing was filed, and the loop saw
+an agent-owned row under a dispatching band and called it ordinary quiet work
+the lead had already been told about. Such a row is now
+`blocked-on-owner-unfiled` with `unfiledAsk`, so it joins the `unfiled` list
+on both the report path and the wake path, and the lead is re-woken because a
+row that comes back under a different BUCKET is news. The reading is the
+row's NEWEST note — a later note reporting progress means the agent moved on
+— and the wake's clock is then the longer of the row's silence and the age of
+the ask, walked back through the unbroken run of notes that say the same
+thing. Without that second half nothing would ever fire: posting a note bumps
+`updatedAt`, so an agent restating the same ask each turn holds the quiet
+clock at zero forever.
+
+Detection is two stages and the second only ever narrows the first
+(`note-ask.ts`). A deterministic prefilter reads the note for a waiting phrase
+(waiting on, parked on, blocked on, needs, ready for) whose OBJECT is a
+person: a name the board supplied, an object pronoun, or a possessive plus an
+act — "your read", "his call", "their sign-off". The object test is what
+separates an ask from ordinary work, and it is not a refinement but the
+finding itself: "any waiting phrase anywhere AND any person word anywhere"
+reads "Blocked on the CI runner outage; the vendor says their fix is rolling
+out." as an ask, and with no key configured that row leaves `in-progress`,
+drops off the stalled list where `builder-silent` could still have named it,
+and wakes the lead to file an ask nobody has. An explicit release vocabulary
+wins over all of it: a note opening "Not waiting", "Not stalled" or "Not
+blocked", or saying the person answered, is not an ask. A prefilter HIT
+is then confirmed by the same Haiku key the review gate uses
+(`note-ask-judge.ts`, `CW_NOTE_ASK_JUDGE=0` to turn it off), one word back,
+cached per note by timestamp and text hash, run in the background between
+ticks and at most four in flight. A prefilter MISS is never sent anywhere, and neither is a row the board
+already reads as waiting on a person — no verdict could move that bucket — so
+the spend is one call per new ask-note and none at all on a board whose notes
+have been read. No key, an error, a timeout or an unparseable reply leaves the
+prefilter's verdict standing — a nudge, never a door that closes when the API
+does. The bias is stated rather than hidden: the release vocabulary winning
+means a note still waiting while it mentions an answer reads as released, and
+that direction is chosen because a false wake costs a lead's whole turn while
+a missed one still surfaces on the ordinary stall clock a window later.
+
 Known gap, deliberately open: nothing ages review items sitting unanswered
 on the owner's queue. That is a different signal (ask-aging, not
 row-stalling) and gets its own design if it proves needed. The one kind of
 review item the loop DOES age is the held one, below — an ask the reader
 cannot see is not waiting on the reader.
+
+**An ask only excuses a row while the reader can still act on it.** The count
+the loop reads (`reviewState.open`) has to agree, item for item, with the Home
+queue's own filter — so it drops the same four: answered, held or still being
+judged, WITHDRAWN by its asker, and WAITING because the reader asked back and
+it is now the owner's turn. When the two disagree the row parks forever: the
+ask is off the queue, so nobody can answer it, so nothing ever clears it and
+the watchdog stays off that row. Withdrawn and waiting were exactly that bug.
+Both surfaces call the same predicates rather than re-deriving the rule, for
+the reason the bug demonstrates — a second spelling of "on the queue" is free
+to disagree with the first.
 
 **A held review item is a finding of its own.** Every filing path that can
 put a row on the reader's queue passes a quality gate: a Haiku judge reads the board's
@@ -190,6 +285,20 @@ wakes correctly:
   unchanged board is re-said at most once per window. The default repeat
   floor across a 9-board fleet prices at roughly 43M tokens/day — the knob
   exists because that floor has to be tunable faster than a release.
+- **The repeat bucket is HELD, never lowered by a flicker**: a
+  remembered row that drops off the findings for one pass used to take the
+  armed bucket down with it, so its return read as another window crossed and
+  woke the lead about a row nothing had changed on — two wakes three minutes
+  apart on one 12h `ready-unpicked` row, measured 2026-09-04. Two things make
+  a row flicker without moving: an escalation item masks its anchor row from
+  the gate until it is withdrawn or re-anchored, and a row on the parallelism
+  cap's boundary leaves the judged set whenever another row starts or stops
+  being runnable. The bucket is now held UP with the row that earned it, and
+  the hold expires with that row: `told` forgets a row that has been off the
+  list for a whole repeat window, and the next row then escalates on its own
+  clock. Holding until the board went wholly clean was tried first and is a
+  ratchet — on a board that always has a finding, a number set hours ago
+  swallows every later row's repeat window, which is the repeat switched off.
 - **An unreachable lead escalates, and only then costs nothing**: the wake
   goes to any other session holding a stream on that board, carrying
   `escalatedFrom: <lead>` so the stand-in knows why it was told. The frame
@@ -209,6 +318,88 @@ wakes correctly:
   — billed turns, not decided wakes. `lead=` always names the SEAT HOLDER;
   an escalated wake adds `to=<agent>` for who actually got it.
 
+## Past the lead: the board files it itself
+
+Everything above ends at the lead. That is the right first addressee and the
+wrong last one: a lead session that has died, hit its usage limit, or is
+itself waiting on somebody cannot act on a wake, and every later wake is
+addressed to the same silence. Nothing in the loop could tell that apart from
+a board being driven.
+
+So when a row **the lead was already told about** is still a finding an hour
+later, the board goes over the lead's head and files ONE review item on the
+reader's own queue (`stall-escalation.ts`). What makes that possible is a
+told-time in the nudger's memory: `ToldRow.toldAt`, stamped on a DELIVERED
+wake, never refreshed while the row is remembered, and persisted in
+`stall-nudge-stamps.json` so a deploy does not hand every board a fresh hour.
+
+**A board with nobody to tell starts the same clock.** When the loop finds a
+row and there is no addressee at all — the lead seat held by a session that is
+not answering, nothing else attached — it stamps that first undeliverable
+attempt in a separate `undeliverable` map and the window runs from there. The
+two are kept apart on purpose: the wake stays owed, so a session that attaches
+later is still told, and the item can say which case it is (*"nobody could be
+reached on this board for 3h"* rather than *"the lead was told 3h ago"*). This
+is the case the whole feature opened with — a board whose lead had died, whose
+rows were therefore never told about, and which under a delivered-only clock
+would have escalated never.
+
+- **One item per board, revised in place.** The rows live in its body, each
+  with a relative link (`/workspaces/<id>?task=<taskId>`), what kind of stuck
+  it is in plain words, how long it has been quiet and how long ago the lead
+  was told. Rows joining or leaving revise that item; they never file a
+  second one. A queue that grows an entry per stuck row is the wake's own
+  failure mode wearing a different hat.
+- **Unjudged, by the same door the allow-rule proposals use.** It calls
+  `addReviewItem` on the store directly, so it lands in `task-review` without
+  passing the quality gate, which lives on the ROUTE. Deliberate: the judge
+  exists to make an agent's ask readable, and an item generated from board
+  state has no author to send it back to.
+- **Written as the server.** `agent-workspaces-server` / "Claude Workspaces",
+  the identity `park-migration.ts` and `artifact-check.ts` already use. No
+  session decided this and no person did.
+- **The anchor is the worst UNFILED row**, falling back to the worst stalled
+  one. A review item has to hang on a ticket, and an open item makes that row
+  `blocked-on-owner` — so the anchor stops being a stall finding while the
+  item is open. On an unfiled row that is the loop closing (this IS the filed
+  ask that was missing); on a stalled row it is a real loss of visibility,
+  which is why it is the fallback rather than the choice.
+- **It clears itself, and does not blink.** The item is withdrawn when no
+  named row still qualifies; the anchor, which the gate can no longer judge,
+  is read from its own ticket instead (closed, or touched by somebody after
+  our own write). Without that the module would react to the silence it
+  caused — file, watch the anchor leave the findings, withdraw, watch it come
+  back. A re-file cooldown of one escalation window is the second half of the
+  same guard.
+- **When the anchor stops holding, the item MOVES.** A `done` or archived
+  anchor is not a reason to keep revising: `taskReviewItems` skips a done
+  ticket's rows, so the ask would be open forever and visible to nobody while
+  every other stuck row on the board went unreported behind it. The item is
+  withdrawn and re-filed on the worst row that still qualifies, in the same
+  tick and with no cooldown — a cooldown is for a board that keeps flickering,
+  not for one ask being carried somewhere it can be read. The withdrawal also
+  unmasks the old anchor, which is how a row that dropped out of the body can
+  come back into a later one.
+  An item the reader asked back on is a different case and is NOT moved: a
+  revision with a later timestamp answers their turn, so revising it in place
+  returns it to the queue, and re-anchoring would abandon the thread they
+  started.
+- **A retired board withdraws unconditionally.** Standing a board down is the
+  owner saying nobody is working it, and the ask outlives the reason it was
+  filed. Checked before the qualifying set, because the anchor is re-read from
+  its own ticket and would otherwise keep the item alive on a board the gate
+  no longer looks at.
+- **The residual trade-off:** while an item is open its anchor is invisible to
+  the wake. There is no home for a board-level item that is not a ticket — the
+  allow-rule proposals hang on one too — so the alternative was anchoring on a
+  row that is NOT stuck, which would tell the reader something false about a
+  healthy row.
+- **Answered means heard.** An item the reader answered or withdrew is not
+  re-filed for rows it already named; a row it did not name files afresh.
+- `[stall] escalated ws=<id> rows=<n> item=<id>` and
+  `[stall] escalation cleared …` are the log lines — this is the one place
+  the server writes to a person's queue on its own, so it says so.
+
 ## Field results (first night, 2026-08-28)
 
 9 wakes across 4 boards. The stall class worked (a board woken for 2
@@ -224,7 +415,9 @@ grace window that #411 fixed.
 | `CW_STALL_NUDGE_MINUTES` | 20 | quiet time before a row is a finding |
 | `CW_STALL_REPEAT_HOURS` | 4 | how often an unchanged bad board is re-said |
 | `CW_HELD_ITEM_MINUTES` | 5 | how long a held review item may stand before its filer, then the lead, is told |
+| `CW_STALL_ESCALATE_MINUTES` | 60 | how long a row the lead was already told about may stay stuck before the board files over the lead's head |
 | `CW_REVIEW_GATE` | on | `0` turns the judge off; every item passes unjudged (also the state with no summary API key) |
+| `CW_NOTE_ASK_JUDGE` | on | `0` turns the note-ask confirmation off; the deterministic prefilter decides alone (also the state with no summary API key) |
 
 Both accept fractions; zero, negative, or unreadable values fall back to
 the default rather than firing every tick (`positiveEnvDuration` in
@@ -232,10 +425,17 @@ the default rather than firing every tick (`positiveEnvDuration` in
 
 ## Where things live
 
+`packages/server/src/stall-wiring.ts` (the wiring: both per-board snapshots,
+the two nudgers, the lead-presence monitor and the comment-queue bridge —
+`createServer` composes it and arms the nudgers, it derives none of it) ·
 `packages/server/src/stall-gate.ts` (classification) ·
-`packages/server/src/stall-nudge.ts` (stamps, wakes, logging) ·
+`packages/server/src/stall-nudge.ts` (stamps, told-times, wakes, logging) ·
+`packages/server/src/stall-escalation.ts` (the review item filed past the
+lead, and its sidecar `stall-escalations.json`) ·
 `packages/server/src/review-judge.ts` (the Haiku judge; prompt in
 `packages/core/src/review-judge-prompt.ts`) ·
+`packages/server/src/note-ask.ts` (the note prefilter and its verdict cache)
+· `packages/server/src/note-ask-judge.ts` (its Haiku confirmation) ·
 `packages/server/src/keep-moving.ts` (shared row classifier — the report
 counts unfiled asks with NO age gate on purpose; only the wake path has
 the grace) · `packages/mcp/src/nudge-line.ts` (frame rendering) ·

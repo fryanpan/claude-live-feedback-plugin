@@ -11,6 +11,7 @@ import {
   walkNextUrl,
   walkPosition,
 } from '../src/hub/hub-review-model';
+import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
 
 // The landing page's review chip and "Review all" bar (the walkthrough
 // handoff ticket) hand
@@ -56,7 +57,9 @@ describe('walkNextUrl', () => {
 // walk auto-opens after the first review-items load, and a drained queue
 // chains to the next workspace instead of dead-ending on a cleared card.
 describe('hub-app wires the handoff', () => {
-  const src = readFileSync(join(__dirname, '..', 'src', 'hub', 'hub-app.ts'), 'utf8');
+  const src = HUB_BOOT_SOURCES.map((m) =>
+    readFileSync(join(__dirname, '..', 'src', 'hub', `${m}.ts`), 'utf8'),
+  ).join('\n');
   // The ydoc observers moved to `hub-live-wiring.ts`; the entry is what hands
   // them the tick, so the retry contract is asserted across both halves.
   const wiring = readFileSync(join(__dirname, '..', 'src', 'hub', 'hub-live-wiring.ts'), 'utf8');
@@ -196,7 +199,9 @@ describe('the handoff walk starts at item 1', () => {
 });
 
 describe('hub-app gates the auto-walk on both sources', () => {
-  const src = readFileSync(join(__dirname, '..', 'src', 'hub', 'hub-app.ts'), 'utf8');
+  const src = HUB_BOOT_SOURCES.map((m) =>
+    readFileSync(join(__dirname, '..', 'src', 'hub', `${m}.ts`), 'utf8'),
+  ).join('\n');
 
   it('maybeAutoWalk asks walkHandoffReady, not queue length', () => {
     expect(src).toMatch(/const maybeAutoWalk[\s\S]{0,900}walkHandoffReady\(/);

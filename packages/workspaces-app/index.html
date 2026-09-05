@@ -377,9 +377,19 @@
         <div id="composer-quote" class="composer-quote" aria-hidden="true"></div>
         <div class="composer-inner">
           <div id="composer-avatar" class="composer-avatar"></div>
+          <!-- The placeholder is the pill's missing buttons. A selection used
+               to offer Research and Create Task beside Comment; Bryan cut the
+               pill to Comment alone on 2026-09-04 and asked the box to
+               "suggest in placeholder text that they can request research, ask
+               for edits, or ask to create task(s)". The reader says which one
+               in the sentence they were already typing, and says the rest of
+               it too. It is read from `ta.placeholder` when the markdown
+               editor mounts over this box (md-composer.ts), so this attribute
+               is the whole mechanism. The thread REPLY box above keeps "Add a
+               comment…": a reply answers a thread that already exists. -->
           <textarea
             id="composer-text"
-            placeholder="Add a comment…"
+            placeholder="Comment, or ask for research, edits, or a task…"
             rows="1"
             autocapitalize="sentences"
           ></textarea>

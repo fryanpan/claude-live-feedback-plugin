@@ -376,6 +376,65 @@ describe('the board tells its lead which rows have stopped', () => {
   });
 
   /**
+   * …and the row comes BACK to the clock when that question is withdrawn.
+   *
+   * The pair above stops at "an open ask excuses the row", which is only half
+   * a contract: an exoneration that never expires is indistinguishable from
+   * the watchdog being switched off. Withdrawing is the cheapest way to prove
+   * it expires, because it retires the ask without answering it — the row is
+   * no better understood afterwards, so anything still excusing it is
+   * excusing it for a reason that no longer exists.
+   *
+   * This is the shape the park-forever bug took. The Home queue drops a
+   * withdrawn item, but the ticket store's `open` count kept it, so the row
+   * sat parked on an ask that was off the reader's queue: unanswerable by
+   * anyone, therefore never cleared, therefore never nudged again.
+   */
+  it('names the row again once the question on it is WITHDRAWN', async () => {
+    const ctx = await boardWithLead();
+    const askedId = await addRow(ctx.workspaceId, 'Pick a retention window');
+    const filed = await jj<{ item: { id: string } }>(
+      await post(`/api/tasks/${askedId}/review-items`, {
+        author: LEAD,
+        workspaceId: ctx.workspaceId,
+        review: {
+          shape: 'decision',
+          headline: 'How long should search history be kept?',
+          options: [
+            { id: 'o-30', label: '30 days' },
+            { id: 'o-forever', label: 'Forever' },
+          ],
+        },
+      }),
+    );
+    await settle();
+
+    // The precondition, asserted rather than assumed: while the ask stands,
+    // the row is excused. A test that only checked the after-state would pass
+    // just as well on a board where the row was never parked at all.
+    handle.nudgeStalls();
+    await settle(400);
+    expect(stalls(ctx.lead.frames)).toHaveLength(0);
+
+    await jj(
+      await post(`/api/tasks/${askedId}/review-items/${filed.item.id}/withdraw`, {
+        author: LEAD,
+        reason: 'the retention window came down from legal, so nobody needs to choose',
+      }),
+    );
+    await settle();
+
+    handle.nudgeStalls();
+    const got = await waitForFrames(ctx.lead.frames, STALL_EVENT, 1);
+
+    expect(got).toHaveLength(1);
+    expect(rowsOf(got[0] as Frame).map((r) => r.id)).toEqual([askedId]);
+
+    await ctx.lead.stop();
+    await ctx.tab.stop();
+  });
+
+  /**
    * The same exoneration, for an ask filed as a REVIEW PAYLOAD ON A COMMENT
    * rather than on the ticket. Both land on the reader's Home queue, so both
    * are a filed question — but the ticket store's `reviewState` cannot see

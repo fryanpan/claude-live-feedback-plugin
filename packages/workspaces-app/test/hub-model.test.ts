@@ -56,6 +56,7 @@ import {
   reviewReplyRequest,
   reviewRow,
 } from '../src/hub/hub-review-model.ts';
+import { HUB_BOOT_SOURCES } from './support/hub-boot-sources.ts';
 
 /** All fixtures are synthetic — invented names, jordan@partner.example register. */
 
@@ -2223,7 +2224,9 @@ describe('unplacedNotice — the quiet bucket says how many and how long', () =>
  * empty file cannot read as a clean result.
  */
 describe('the detail panel takes its asks through panelAsks', () => {
-  const hubApp = readFileSync(resolve(import.meta.dirname, '../src/hub/hub-app.ts'), 'utf8');
+  const hubApp = HUB_BOOT_SOURCES.map((m) =>
+    readFileSync(resolve(import.meta.dirname, `../src/hub/${m}.ts`), 'utf8'),
+  ).join('\n');
 
   it('calls panelAsks and no longer filters reviewItems by taskId inline', () => {
     // Positive control: the read found the real file.
@@ -2288,6 +2291,27 @@ describe('heldReviewItems', () => {
       ],
     });
     expect(held.map((r) => r.id)).toEqual(['ri-held']);
+  });
+
+  /**
+   * The other way an item retires. A withdrawal keeps the standing verdict on
+   * purpose — a reinstated item the gate held is still held — so a filter on
+   * the verdict alone left a taken-back ask on the ticket card under a Held
+   * note with a release button, an item the reader could act on that nobody
+   * was asking about any more.
+   */
+  it('drops an item its asker withdrew, and keeps the one still held beside it', () => {
+    const held = heldReviewItems({
+      ...base,
+      reviews: [
+        item('ri-withdrawn', {
+          review: { headline: 'ok?', withdrawnAt: 9 },
+          judge: { at: 2, verdict: 'held', reason: 'No stakes.' },
+        }),
+        item('ri-still-held', { judge: { at: 2, verdict: 'held', reason: 'No stakes.' } }),
+      ],
+    });
+    expect(held.map((r) => r.id)).toEqual(['ri-still-held']);
   });
 
   it('is empty on a task with no reviews field — an older projection', () => {

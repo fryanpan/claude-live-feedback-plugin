@@ -405,7 +405,7 @@ export const TOOL_LIST: ListToolsResult = {
       },
     },
     {
-      name: 'bind_mock',
+      name: 'attach_mockup',
       description:
         'Serve an HTML mockup at /mockup/<docId> and bind it for comments — the server reads the file at sourceHtmlPath on each request, so edits show up on reload, and captures what it read so the link keeps working after your scratch directory is cleaned up. An unreadable sourceHtmlPath fails HERE rather than 404ing later in front of the reviewer. Hand the returned meta.reviewUrl to a person. Single-file mockups only: relative CSS/JS siblings will not resolve. Idempotent.',
       inputSchema: {
@@ -429,9 +429,9 @@ export const TOOL_LIST: ListToolsResult = {
       },
     },
     {
-      name: 'bind_folder',
+      name: 'attach_folder',
       description:
-        'Bind a folder or worktree as a browsable workspace — an alias for create_diff_review with no base. The reviewer picks files from the menu under the filename in the topbar — they open lazily, and markdown opens editable. Prefer create_diff_review directly: passing a base gets you the changed-files diff on top of browsing.',
+        'Attach a folder or worktree as a browsable workspace — an alias for create_diff_review with no base. The reviewer picks files from the menu under the filename in the topbar — they open lazily, and markdown opens editable. Prefer create_diff_review directly: passing a base gets you the changed-files diff on top of browsing.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -537,7 +537,7 @@ export const TOOL_LIST: ListToolsResult = {
         properties: {
           setId: {
             type: 'string',
-            description: 'reviewId from create_diff_review, or setId from bind_folder.',
+            description: 'reviewId from create_diff_review, or setId from attach_folder.',
           },
           force: {
             type: 'boolean',
@@ -561,7 +561,7 @@ export const TOOL_LIST: ListToolsResult = {
         properties: {
           setId: {
             type: 'string',
-            description: 'reviewId from create_diff_review, or setId from bind_folder.',
+            description: 'reviewId from create_diff_review, or setId from attach_folder.',
           },
           reason: {
             type: 'string',
@@ -620,7 +620,7 @@ export const TOOL_LIST: ListToolsResult = {
     {
       name: 'delete_workspace',
       description:
-        'Permanently delete a board and all of its tasks, rooms and history. Reach for retire_workspace instead in almost every case — this one cannot be undone. Refuses while open tasks remain unless you pass force. Docs attached to the board survive: attaching is a link, not ownership.',
+        'Permanently delete a board and all of its tasks, rooms and history. Reach for archive_workspace instead in almost every case — this one cannot be undone. Refuses while open tasks remain unless you pass force. Docs attached to the board survive: attaching is a link, not ownership.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -647,7 +647,7 @@ export const TOOL_LIST: ListToolsResult = {
         properties: {
           setId: {
             type: 'string',
-            description: 'reviewId from create_diff_review, or setId from bind_folder.',
+            description: 'reviewId from create_diff_review, or setId from attach_folder.',
           },
         },
         required: ['setId'],
@@ -942,7 +942,7 @@ export const TOOL_LIST: ListToolsResult = {
     {
       name: 'watch_doc',
       description:
-        "Subscribe this session to a doc's comment events, delivered as channel messages. Usually unnecessary — create_review_doc, bind_mock and most docId-bearing tools subscribe you already, and set_workspace_lead covers every doc on your board. Reach for it for a doc you have not otherwise touched, such as a peer's review you only want to observe. persisted: false means a restart will drop it.",
+        "Subscribe this session to a doc's comment events, delivered as channel messages. Usually unnecessary — create_review_doc, attach_mockup and most docId-bearing tools subscribe you already, and set_workspace_lead covers every doc on your board. Reach for it for a doc you have not otherwise touched, such as a peer's review you only want to observe. persisted: false means a restart will drop it.",
       inputSchema: {
         type: 'object',
         properties: { docId: { type: 'string' } },
@@ -975,7 +975,7 @@ export const TOOL_LIST: ListToolsResult = {
           workspaceId: {
             type: 'string',
             description:
-              'The BOARD to share — the id create_workspace returned, or the hubWorkspaceId bind_folder / create_diff_review reported. NOT a review/review id.',
+              'The BOARD to share — the id create_workspace returned, or the hubWorkspaceId attach_folder / create_diff_review reported. NOT a review/review id.',
           },
           ttlSeconds: {
             type: 'number',
@@ -1070,7 +1070,7 @@ export const TOOL_LIST: ListToolsResult = {
     {
       name: 'rename_workspace',
       description:
-        "Change a board's name. Nothing else moves — same id, same URL, same tasks, so every existing link keeps working. Renaming into a name another live board holds is allowed; the response names the collision in sameName. Use retire_workspace when the answer is that one of the two is over.",
+        "Change a board's name. Nothing else moves — same id, same URL, same tasks, so every existing link keeps working. Renaming into a name another live board holds is allowed; the response names the collision in sameName. Use archive_workspace when the answer is that one of the two is over.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1081,7 +1081,7 @@ export const TOOL_LIST: ListToolsResult = {
       },
     },
     {
-      name: 'retire_workspace',
+      name: 'archive_workspace',
       description:
         'Stand a board down reversibly, when it is superseded, finished, or a duplicate. It stops ranking, refuses new tasks, and tells anyone who reads it why — but destroys nothing, and unretire_workspace reverses it. This is the one to reach for; delete_workspace is not reversible. Pass a reason; it is replayed in every refusal, and it is usually the board that replaced this one.',
       inputSchema: {
@@ -1236,7 +1236,7 @@ export const TOOL_LIST: ListToolsResult = {
                 quote: {
                   type: 'string',
                   description:
-                    "The human's VERBATIM words, for chat-born asks — kept forever on the task. (For thread-born asks use promote_to_task, which captures the quote itself.)",
+                    "The human's VERBATIM words, for chat-born asks — kept forever on the task. (For thread-born asks use spin_off_task, which captures the quote itself.)",
                 },
               },
               required: ['title'],
@@ -1258,7 +1258,7 @@ export const TOOL_LIST: ListToolsResult = {
       },
     },
     {
-      name: 'promote_to_task',
+      name: 'spin_off_task',
       description:
         "Turn a comment thread into a task. Captures the backlink and the latest human comment as the verbatim quote, and drafts a title and body from it when you don't supply them. This is the verb for thread-born asks; create_tasks is for everything else.",
       inputSchema: {
@@ -1933,7 +1933,7 @@ export const TOOL_LIST: ListToolsResult = {
     {
       name: 'set_parallelism_cap',
       description:
-        'Set how many builders a board may have dispatched at once — the dispatch rule the lead skill describes. Every board starts on the default (4); lower it to keep this board from starving higher-priority projects, raise it when there is room. The change is recorded with you as the actor and takes effect on the next dispatch: nothing running is touched, register_dispatch simply refuses past the new number. Answers with the full view — the cap, the slots in use and who holds them, how many are free, and lastChange (who moved it, when, from what) — so you see in the same reply whether the board is already over it. The floor is one; pausing a board is retire_workspace, not a cap of zero.',
+        'Set how many builders a board may have dispatched at once — the dispatch rule the lead skill describes. Every board starts on the default (4); lower it to keep this board from starving higher-priority projects, raise it when there is room. The change is recorded with you as the actor and takes effect on the next dispatch: nothing running is touched, register_dispatch simply refuses past the new number. Answers with the full view — the cap, the slots in use and who holds them, how many are free, and lastChange (who moved it, when, from what) — so you see in the same reply whether the board is already over it. The floor is one; pausing a board is archive_workspace, not a cap of zero.',
       inputSchema: {
         type: 'object',
         properties: {

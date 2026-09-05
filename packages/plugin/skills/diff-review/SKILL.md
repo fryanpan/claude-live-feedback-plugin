@@ -76,7 +76,7 @@ so write a summary rather than pasting a commit body.
 **Browse mode** — omit `base` entirely to bind a folder with NO diff: the
 reviewer navigates everything from the all-files sidebar, files open lazily
 (markdown editable, source read-only). Works on plain folders and fresh
-repos with no commits; `bind_folder` is an alias for this.
+repos with no commits; `attach_folder` is an alias for this.
 
 Then hand the human the returned `entryUrl`. Format it for wherever you are
 putting it: an inline relative link when it goes on a task or a thread, bare
@@ -137,4 +137,4 @@ read.
   don't duplicate the surface unless the human asks.
 - Reviewing a single standalone document — use `create_review_doc`.
   (Folder browsing is no longer separate: omit `base` here instead of
-  reaching for `bind_folder`.)
+  reaching for `attach_folder`.)

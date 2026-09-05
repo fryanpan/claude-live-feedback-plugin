@@ -24,6 +24,7 @@
  */
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { AgentAuthor } from '../author.ts';
+import { inactiveWatches } from '../sse-loop.ts';
 import { type ThreadCreateInput, threadCreateRequest } from '../thread-create.ts';
 import type { RestoreState, WatchCoverage } from '../watch-coverage.ts';
 
@@ -59,6 +60,10 @@ export interface DocsToolContext {
   restoreState: RestoreState;
   lastPersistError: string | undefined;
   watchPersistenceMode: () => 'server' | 'session-only';
+  /** Which transport this session's watches ride — one multiplexed stream, or
+   *  a socket per key. Reported so a silent session can be diagnosed without
+   *  reading the child's stderr. */
+  streamMode: () => 'multiplexed' | 'per-key';
   /** Whether every peer collapsed into one shared identity. */
   IDENTITY_IS_SHARED: boolean;
   SHARED_IDENTITY_REASON: string;
@@ -84,6 +89,7 @@ export async function handleDocsTool(
     unwatchDoc,
     refreshCoverage,
     watchPersistenceMode,
+    streamMode,
     restoreState,
     lastPersistError,
     IDENTITY_IS_SHARED,
@@ -289,7 +295,14 @@ export async function handleDocsTool(
       const res = await http('DELETE', `/api/docs/${encodeURIComponent(docId)}${qs}`);
       return ok(res);
     }
-    case 'bind_mock': {
+    // COMPAT: `bind_mock` and `bind_folder` are the names these two had
+    // before Attachment became the product's word for what they do. A peer
+    // still running last week's bundle, or an agent working from a stale
+    // skill, calls the old name; it lands on the same arm and the log says so
+    // once (deprecated-aliases.ts). The tool LIST advertises the new names
+    // only — one name for one thing in the table an agent reads.
+    case 'bind_mock':
+    case 'attach_mockup': {
       const { docId, sourceHtmlPath, title, hubWorkspaceId } = a as {
         docId: string;
         sourceHtmlPath?: string;
@@ -309,7 +322,8 @@ export async function handleDocsTool(
       });
       return ok(res);
     }
-    case 'bind_folder': {
+    case 'bind_folder':
+    case 'attach_folder': {
       const {
         folderPath,
         workspaceId,
@@ -742,13 +756,26 @@ export async function handleDocsTool(
       // queued for a board it had never attached to. Absent rather than
       // empty when the server did not say.
       const coverage = await refreshCoverage();
+      // A key whose loop GAVE UP, with the reason. `open: false` alone cannot
+      // tell "reconnecting" from "stopped trying", and a doc deleted out from
+      // under a watch is the case where the difference matters: the key stays
+      // in `watching` and nothing will ever arrive on it. Absent when every
+      // watch is still being retried.
+      const inactive = inactiveWatches(watchers);
       return ok({
         watching: Array.from(watchers.keys()),
+        ...(inactive.length > 0 ? { inactive } : {}),
         persistence: {
           mode: watchPersistenceMode(),
           agentId: AUTHOR.id,
           ...(IDENTITY_IS_SHARED ? { reason: SHARED_IDENTITY_REASON } : {}),
         },
+        // `multiplexed` is one socket for the whole set; `per-key` is the old
+        // one-socket-per-watch transport, which now happens only for a shared
+        // identity or against a server older than the mux route. A session
+        // that is unexpectedly on `per-key` is a session whose host is one
+        // deploy behind, and that is worth being able to read.
+        streamMode: streamMode(),
         restore: restoreState,
         ...(coverage ? { coverage } : {}),
         ...(lastPersistError ? { lastPersistError } : {}),

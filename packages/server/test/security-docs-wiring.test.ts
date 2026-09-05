@@ -52,7 +52,13 @@ describe('security docs are wired together', () => {
     const doc = read(ARCHITECTURE_DOC);
     expect(doc).toContain('```mermaid');
     // Every gate the checklist asks about has to be findable from the map.
-    for (const gate of ['isGatedWrite', 'shareScopeAllows', 'isListedFile', 'classifyHost']) {
+    for (const gate of [
+      'isGatedWrite',
+      'shareScopeAllows',
+      'isListedFile',
+      'classifyHost',
+      'authorizeAgentCaller',
+    ]) {
       expect(doc).toContain(gate);
     }
     expect(doc).toContain(REVIEW_RULE.replace('.claude/rules/', ''));
@@ -92,6 +98,11 @@ describe('security docs are wired together', () => {
       'packages/server/src/middleware/host-guard.ts',
       'packages/server/src/auth/session.ts',
       'packages/server/src/auth/widget-token.ts',
+      // The proof that a caller IS the agent whose event feed it asks for.
+      // Two routes read one agent's whole subscription, and the id that
+      // addresses them is a hash of a name anyone on the board can read, so
+      // the gate is the only thing standing there.
+      'packages/server/src/auth/agent-token.ts',
       'packages/server/src/share/url-signing.ts',
       'packages/server/src/recall-webhook-auth.ts',
       'packages/server/src/fs-scan.ts',
@@ -108,6 +119,51 @@ describe('security docs are wired together', () => {
       // re-keys an agent's deliveries fleet-wide, which is exactly the kind
       // of change the security pass exists to catch.
       'packages/server/src/routes/agent-identity.ts',
+      // …and the fourth: the request-admission run — the default-deny host
+      // gate, the Access branch each host decision selects, and the
+      // external-access master switch — came out of `fetch` in A17. It is
+      // the door itself, so a PR that edits only this file must still answer
+      // the checklist; without this row the split would have taken the whole
+      // host gate off the trigger.
+      'packages/server/src/request-admission.ts',
+      // …and the fifth, which is NOT an auth surface and is on the list
+      // anyway. Shell and static serving holds the three static roots and
+      // the containment checks over them, serves a mockup from an absolute
+      // path the room was bound to, and `/widget/` sits on the share-host
+      // allowlist. Checklist items 1, 2 and 4 — name the gate on a moved
+      // route, what rejects a hostile file path, did share scope widen —
+      // all land on this file, so a PR that edits only it must still answer
+      // them.
+      'packages/server/src/shell-static.ts',
+      // …and the sixth, which is on the list by its nature rather than by
+      // argument. Every route in it ends in a LONG-LIVED connection, and a
+      // websocket is authorized exactly once — at its upgrade. The Origin
+      // checks that stand in for CORS on `/audio/` and `/y/`, the per-bot
+      // token that is the whole authentication for `/recall/`, the sign-in
+      // carry that makes an editing socket read-only, the `shareId` and
+      // `shareMember` stamps the revocation sweeps hunt by, and the share
+      // visitor's refusal from the agent-level stream all live here. A gate
+      // moved or reordered in this file cannot be caught later by a request
+      // that arrives afterwards, because there is no afterwards.
+      'packages/server/src/upgrade-stream.ts',
+      // …and the seventh, which is the other half of the fourth. Admission
+      // decides who the boundary proved; THIS file decides which proof is
+      // written down as the author, and it holds the widget-token gate whose
+      // identity it ranks. The precedence bug it documents — a header
+      // outranking the email Cloudflare confirmed, letting a request choose
+      // which of two proven identities to be recorded as — is exactly the
+      // shape the checklist exists to catch, and it lives in the ordering of
+      // four lines inside one function.
+      'packages/server/src/request-attribution.ts',
+      // …and the eighth, which is the other half of the sixth. A19 put the
+      // upgrade on this list because a websocket is authorized once; this is
+      // the file that then holds that authorization for the socket's whole
+      // life. `open` is what makes a share-stamped socket reachable by the
+      // revocation sweeps — a stamp that never reaches `trackShareSocket` is
+      // a connection no sweep can find — and `message` is where a frame is
+      // handed to a room, which is the read the share scope was deciding
+      // about in the first place.
+      'packages/server/src/socket-handlers.ts',
     ];
     for (const path of security) expect(pattern.test(path)).toBe(true);
 

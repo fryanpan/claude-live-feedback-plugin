@@ -45,6 +45,9 @@ export interface ComposerEditor {
    *  not rewrite `ta.value` through the serializer. */
   setMarkdown: (md: string) => void;
   focus: (sel: ComposerSelection | null, opts?: ComposerFocusOpts) => void;
+  /** Give the caret back. The doc composer calls it on dismiss: a box that is
+   *  hidden while it holds the caret still swallows what is typed next. */
+  blur: () => void;
   selection: () => ComposerSelection;
   isFocused: () => boolean;
   setEditable: (on: boolean) => void;
@@ -326,4 +329,24 @@ export function focusMarkdownComposer(
   // chunk arrives — and moves into the editor the moment it mounts.
   ta.focus({ preventScroll: opts.scroll === false });
   field.pendingFocus = { sel: sel ?? null, opts };
+}
+
+/**
+ * Take the caret out of this box, on whichever surface is actually holding
+ * it, and cancel a focus that was asked for before the editor existed.
+ *
+ * That last part is the half a bare `blur()` would miss: between the ask and
+ * the chunk landing, the focus lives as `pendingFocus` rather than in the
+ * document, and a composer dismissed inside that window would otherwise take
+ * the caret when the editor finally mounted.
+ */
+export function blurMarkdownComposer(ta: HTMLTextAreaElement): void {
+  const field = FIELDS.get(ta);
+  if (!field) {
+    ta.blur();
+    return;
+  }
+  field.pendingFocus = null;
+  if (field.editor) field.editor.blur();
+  else ta.blur();
 }

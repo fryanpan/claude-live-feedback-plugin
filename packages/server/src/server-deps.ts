@@ -26,6 +26,7 @@ import {
 import { stamped } from './log-stamp.ts';
 import { createHaikuNotesComposer } from './meeting-notes-composer.ts';
 import { createHaikuTaskCaptureExtractor } from './meeting-task-capture.ts';
+import { haikuNoteAskJudge, noteAskJudgeEnabled } from './note-ask-judge.ts';
 import { createNotesPromptStore } from './notes-prompt-store.ts';
 import { createPluginRefresher } from './plugin-refresh.ts';
 import { createRecallCalendarClient } from './recall-calendar.ts';
@@ -102,6 +103,21 @@ export function createServerDeps(
         ? '[review-gate] no summary API key; review items pass unjudged. ' +
             `Add one with: security add-generic-password -a "$USER" -s ${KEYCHAIN_SERVICE} -w`
         : '[review-gate] off (CW_REVIEW_GATE=0); review items pass unjudged.',
+    );
+  }
+
+  // The ONLY place the real note-ask confirmer is constructed — same seam
+  // rule and the same dedicated-key consent, because what leaves the machine
+  // is one task note's own text. Absent key or CW_NOTE_ASK_JUDGE=0 → null →
+  // the deterministic prefilter decides alone, which is the documented
+  // "no key" state rather than the detector being off.
+  const noteAskJudge = haikuNoteAskJudge();
+  if (!noteAskJudge) {
+    console.log(
+      noteAskJudgeEnabled()
+        ? '[note-ask] no summary API key; note asks are detected by the prefilter alone. ' +
+            `Add one with: security add-generic-password -a "$USER" -s ${KEYCHAIN_SERVICE} -w`
+        : '[note-ask] confirmation off (CW_NOTE_ASK_JUDGE=0); the prefilter decides alone.',
     );
   }
 
@@ -361,6 +377,7 @@ export function createServerDeps(
     codeSenderChoice,
     voiceComplete,
     reviewJudge,
+    noteAskJudge,
     effortEstimator,
     transcription,
     meetingBot,

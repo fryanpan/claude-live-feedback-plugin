@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { createAgentTokenStore } from './agent-token.ts';
 import { createAttachmentKeepalive } from './attachment-keepalive.ts';
 import { createAttachments } from './attachments.ts';
 import { resolveAgentAuthor } from './author.ts';
@@ -15,6 +16,7 @@ import { createDeferredEmitter } from './deferred-emit.ts';
 import { createFrameDedup } from './frame-dedup.ts';
 import { createFrameHandler } from './frame-handler.ts';
 import { resolveBaseUrl as baseUrlFrom, createHttp, err, ok } from './http-client.ts';
+import { createMuxLoop } from './mux-loop.ts';
 import { type Watcher, createSseLoops } from './sse-loop.ts';
 import { TOOL_LIST } from './tool-schemas.ts';
 import { handleDocsTool } from './tools/docs.ts';
@@ -73,7 +75,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.157';
+const PLUGIN_VERSION = '0.1.164';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -137,7 +139,7 @@ const server = new Server(
       'PR-style unified diff with line comments. Omit base to BROWSE a folder',
       'instead (no diff): everything is navigable from the all-files sidebar,',
       'files open lazily, markdown editable — works on plain folders and',
-      'fresh repos too (bind_folder is an alias for this). Default mode diffs',
+      'fresh repos too (attach_folder is an alias for this). Default mode diffs',
       'base against the LIVE working tree: keep editing the code and the reviewer',
       'sees your changes re-render within ~1s, with their comments riding along',
       '(threads orphan into the outdated-comments flow if their line disappears).',
@@ -184,7 +186,7 @@ const server = new Server(
       'WORKSPACE HUB: a hub workspace is a goal + a task board + linked docs.',
       'create_workspace mints one; attach_doc links existing docs/reviews to it;',
       'create_tasks (ALWAYS a list — one idea is a one-row list) and',
-      'promote_to_task add work (omit `goal` and the task lands UNPLACED in',
+      'spin_off_task add work (omit `goal` and the task lands UNPLACED in',
       'Backlog awaiting triage — the create says so and hands you the goal',
       'bands, and placing it with set_task_goal IS the triage:',
       'pick the goal AND the exact position). task_transition is the',
@@ -243,6 +245,7 @@ function toolContext(): ToolContext {
     unwatchDoc,
     refreshCoverage,
     watchPersistenceMode,
+    streamMode: registry.streamMode,
     claimNoticeFor,
     restoreState: restore.state(),
     lastPersistError: registry.lastPersistError(),
@@ -278,6 +281,21 @@ server.setRequestHandler(
 const watchers = new Map<string, Watcher>();
 
 const IDENTITY_IS_SHARED = isSharedIdentity(AUTHOR.id);
+
+/**
+ * This session's proof that it is AUTHOR and not some other agent whose name
+ * happens to be readable on the board. See agent-token.ts — fetched once,
+ * held for the process, and never fatal: no token means the header is absent,
+ * which is what this client sent before the header existed and what the
+ * server still accepts through its deprecation window.
+ */
+const agentTokens = createAgentTokenStore({
+  agentId: AUTHOR.id,
+  resolveBaseUrl,
+  fetch: (url, init) => fetch(url, init),
+  log: (...args) => console.error(...args),
+  identityIsShared: IDENTITY_IS_SHARED,
+});
 
 /**
  * This session's attachments, bound to this process. See attachments.ts — the
@@ -325,6 +343,10 @@ const handleFrame = createFrameHandler({
  * reconnect, the `open` flag on each watcher record, and the cursor's
  * deliver-then-commit order.
  */
+const loopTimers = {
+  set: (fn: () => void, ms: number) => setTimeout(fn, ms),
+  clear: (h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>),
+};
 const { startSseLoop } = createSseLoops({
   watchers,
   resolveBaseUrl,
@@ -333,10 +355,26 @@ const { startSseLoop } = createSseLoops({
   resetDedup: () => shouldForwardFrame.reset(),
   log: (...args) => console.error(...args),
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-  timers: {
-    set: (fn, ms) => setTimeout(fn, ms),
-    clear: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
-  },
+  timers: loopTimers,
+});
+
+/**
+ * This session's ONE event stream, bound to this process. See mux-loop.ts —
+ * every watched key rides it, which is what keeps a session with two hundred
+ * watches from holding two hundred sockets against the shared server.
+ */
+const muxLoop = createMuxLoop({
+  watchers,
+  agentId: AUTHOR.id,
+  resolveBaseUrl,
+  fetch: (url, init) => fetch(url, init),
+  handleFrame: (raw) => handleFrame(raw),
+  resetDedup: () => shouldForwardFrame.reset(),
+  log: (...args) => console.error(...args),
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  timers: loopTimers,
+  authHeaders: () => agentTokens.headers(),
+  forgetToken: () => agentTokens.forget(),
 });
 
 /**
@@ -349,6 +387,7 @@ const registry = createWatchRegistry({
   http: (method, path, body) => http(method, path, body),
   author: AUTHOR,
   startSseLoop,
+  mux: muxLoop,
   identityIsShared: IDENTITY_IS_SHARED,
   log: (...args) => console.error(...args),
 });
@@ -377,7 +416,11 @@ const restore = createWatchRestore({
 const { ensureWatchesRestored } = restore;
 
 /** The REST call every tool goes through; throws on a non-2xx. */
-const http = createHttp(resolveBaseUrl);
+const http = createHttp(
+  resolveBaseUrl,
+  (url, init) => fetch(url, init),
+  (path) => agentTokens.headersFor(path),
+);
 
 const transport = new StdioServerTransport();
 // Once the client has finished initializing (not merely connected — the MCP

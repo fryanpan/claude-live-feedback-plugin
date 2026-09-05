@@ -32,6 +32,23 @@
  *
  * Where the two buttons sit is `pointer-pill.ts`'s problem; this module is
  * the verbs behind them.
+ *
+ * THE BUTTONS ARE GONE (2026-09-04, Bryan's call: "Change Research / Comment
+ * / Add Task to just comment"). The pill offers one action now, and the
+ * composer it opens is how a person asks for research, an edit or a task —
+ * in the words they were already going to type, which the lead reads and
+ * acts on. Three named buttons made the reader pick a verb before they had
+ * said anything, and two of the three were an agent's errand dressed as a
+ * menu item; the sentence they type says which errand it is, and says the
+ * rest of it too. This is the same rule that took the kind chips off a
+ * review item: an affordance the reader can act on beats a label that
+ * explains one.
+ *
+ * The verbs below STAY, and so do their server routes — nothing about the
+ * capability was withdrawn, only the buttons in front of it.
+ * `SPINOFF_ACTIONS` and `runSpinoff` have no caller in the UI as of that
+ * date; a later ticket decides whether they come back behind something else
+ * or go. `spinoff-menu.test.ts` and `doc-spinoff.test.ts` still drive them.
  */
 
 import { type User, readyToWork, spinoffBody, spinoffDocHref } from '@feedback/core';
@@ -49,9 +66,9 @@ export interface SpinoffAnchor {
   deletedSnippet?: string;
 }
 
-/** The two the pill offers. `SpinoffTaskId` survives as the name the pill
- *  and its caller are typed against; only `task` puts a row on the board
- *  now, and `research` puts a section in the doc. */
+/** The two verbs. `task` puts a row on the board, `research` puts a section
+ *  in the doc. `SpinoffTaskId` is what `runSpinoff` and `doc-spinoff.ts` are
+ *  typed against; the pill no longer names either of them. */
 export type SpinoffTaskId = 'task' | 'research';
 export type SpinoffId = SpinoffTaskId;
 
@@ -61,18 +78,16 @@ export interface SpinoffAction {
 }
 
 /**
- * The two, as the pill shows them: "Research" first, because the mock put
- * the agent's errand in the primary slot, and "Create Task" beside it.
+ * The two verbs, still named here, no longer offered anywhere.
  *
- * There were five, then four. "Start now" did what "Create a task" did plus
- * `order: 0`, which nobody could tell apart in the running product, so Bryan
- * collapsed them (2026-09-01): where a row lands is decided from what the
- * row SAYS, not from which of two identical buttons was pressed. Then
- * "Answer a question" and "Leave a comment" went the same day, with the
- * menu they lived in: both only opened the composer, and a selection on a
- * huddle doc is now answered by a pill at the pointer rather than a four-row
- * menu behind a button. Labels are text, no icons — the pill is read, not
- * decoded.
+ * There were five, then four, then two, then none. "Start now" did what
+ * "Create a task" did plus `order: 0`, which nobody could tell apart in the
+ * running product, so Bryan collapsed them (2026-09-01): where a row lands is
+ * decided from what the row SAYS, not from which of two identical buttons was
+ * pressed. Then "Answer a question" and "Leave a comment" went the same day,
+ * with the menu they lived in. Then the last two went as buttons on
+ * 2026-09-04 — see the header. The list survives because the verbs behind it
+ * do; it is not what the pill reads its actions from any more.
  */
 export const SPINOFF_ACTIONS: readonly SpinoffAction[] = [
   { id: 'research', label: 'Research' },
@@ -80,23 +95,23 @@ export const SPINOFF_ACTIONS: readonly SpinoffAction[] = [
 ] as const;
 
 /**
- * What the pointer pill offers: a plain comment first, then the two
- * spin-offs. Dropping "Leave a comment" from the old menu took the comment
- * itself away with it, and a huddle doc's selection is the one place a
- * comment could not be left (owner, 2026-09-01: "keep a comment option
- * available"). Comment opens the composer on the selection, and is not a
- * spin-off: nothing is filed until the person sends it. Research keeps the
- * accent — the agent's errand is what the pill is mostly for.
+ * What the pointer pill offers: Comment, and nothing else.
+ *
+ * The comment was nearly lost once already — dropping "Leave a comment" from
+ * the old menu took the comment itself away with it, and a huddle doc's
+ * selection became the one place a comment could not be left (owner,
+ * 2026-09-01: "keep a comment option available"). It is now the whole pill.
+ * It is not a spin-off: nothing is filed until the person sends it.
+ *
+ * Still a LIST of one rather than a bare button, because the pill is a
+ * toolbar and the shape is what a second action would be added back to.
  */
-export type PointerPillActionId = SpinoffTaskId | 'comment';
+export type PointerPillActionId = 'comment';
 export const POINTER_PILL_ACTIONS: readonly {
   id: PointerPillActionId;
   label: string;
   primary?: boolean;
-}[] = [
-  { id: 'comment', label: 'Comment' },
-  ...SPINOFF_ACTIONS.map((a) => (a.id === 'research' ? { ...a, primary: true } : a)),
-];
+}[] = [{ id: 'comment', label: 'Comment' }];
 
 /** A task title is a line of a title, not a paragraph of one. */
 const TITLE_MAX = 80;
@@ -193,7 +208,7 @@ export interface SpinoffDeps {
   quote: string;
   /**
    * That same selection as a thread anchor — the WIRE shape
-   * (`review-chrome.ts`'s `anchorBody`), not core's `Anchor`. The two differ
+   * (`doc/anchor-body.ts`'s `anchorBody`), not core's `Anchor`. The two differ
    * on purpose: core stores relative positions as `Uint8Array`, and what
    * crosses the network is the JSON array form. Nothing here posts it today;
    * it rides along so a caller can pin what was spun off from where.
