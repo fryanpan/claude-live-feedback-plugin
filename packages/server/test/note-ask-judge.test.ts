@@ -11,7 +11,12 @@
  * network, and no test in this repo may.
  */
 import { describe, expect, it } from 'bun:test';
-import { haikuNoteAskJudge, noteAskUserPrompt, parseNoteAskReply } from '../src/note-ask-judge.ts';
+import {
+  haikuNoteAskJudge,
+  noteAskJudgeEnabled,
+  noteAskUserPrompt,
+  parseNoteAskReply,
+} from '../src/note-ask-judge.ts';
 
 const NOTE = 'Waiting on Bryan: the voice items above are his to make.';
 
@@ -57,6 +62,25 @@ describe('noteAskUserPrompt', () => {
 describe('haikuNoteAskJudge', () => {
   it('with no key there is no judge at all, rather than one that fails every call', () => {
     expect(haikuNoteAskJudge({ apiKey: null })).toBeNull();
+  });
+
+  it('the kill switch turns the confirmation off, leaving the prefilter alone', () => {
+    const before = process.env.CW_NOTE_ASK_JUDGE;
+    try {
+      // Positive control: with a key and the switch on, there IS a judge — so
+      // the null below is the switch and not the key.
+      process.env.CW_NOTE_ASK_JUDGE = '1';
+      expect(haikuNoteAskJudge({ apiKey: 'k' })).not.toBeNull();
+      process.env.CW_NOTE_ASK_JUDGE = '0';
+      expect(haikuNoteAskJudge({ apiKey: 'k' })).toBeNull();
+      expect(noteAskJudgeEnabled({ CW_NOTE_ASK_JUDGE: '0' })).toBe(false);
+      expect(noteAskJudgeEnabled({})).toBe(true);
+    } finally {
+      // `Reflect.deleteProperty`, not `= undefined`: assigning undefined to
+      // process.env stores the STRING "undefined", which is a set variable.
+      if (before === undefined) Reflect.deleteProperty(process.env, 'CW_NOTE_ASK_JUDGE');
+      else process.env.CW_NOTE_ASK_JUDGE = before;
+    }
   });
 
   it('answers yes and no from the reply', async () => {

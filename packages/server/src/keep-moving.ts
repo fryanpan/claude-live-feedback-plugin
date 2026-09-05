@@ -286,14 +286,16 @@ export function classifyOpenTasks(
     // the clock that would have named it (2026-09-04: three rows, hours
     // each). A filed ask beats it: a pending review item is the ask being
     // where the person reads, which is the whole protocol.
-    const askedInNoteAt = hasPendingAsk ? undefined : noteAskStartedAt(t, noteAsk);
+    // Asked only of the rows whose answer could change anything. A row the
+    // board ALREADY reads as waiting on a person is unfiled whatever its notes
+    // say, so reading them would schedule a judge call whose verdict cannot
+    // move the bucket — spend with no possible effect.
+    const boardSaysOwnerWaits = t.ownerKind === 'person' || bands.ownerBand.has(t.goal ?? '');
+    const askedInNoteAt =
+      hasPendingAsk || boardSaysOwnerWaits ? undefined : noteAskStartedAt(t, noteAsk);
     let bucket: Bucket;
     if (hasPendingAsk) bucket = 'blocked-on-owner';
-    else if (
-      t.ownerKind === 'person' ||
-      bands.ownerBand.has(t.goal ?? '') ||
-      askedInNoteAt !== undefined
-    )
+    else if (boardSaysOwnerWaits || askedInNoteAt !== undefined)
       bucket = 'blocked-on-owner-unfiled';
     else if (unmet.length > 0) bucket = 'blocked-on-dependency';
     else if (t.status === 'in-progress') bucket = 'in-progress';
