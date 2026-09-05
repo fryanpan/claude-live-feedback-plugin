@@ -36,7 +36,7 @@ import type { NotesComposeInput } from '../src/meeting-notes.ts';
 import { createNotesTickHarness } from './notes-tick-harness.ts';
 
 const WORKSPACE = 'w-recorder';
-const DOC = 'd-recorder-meeting';
+const DOC = 'd-standup';
 
 /** The board, written as tickets before any of the speech below existed. */
 const BOARD = [
