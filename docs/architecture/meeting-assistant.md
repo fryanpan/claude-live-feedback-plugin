@@ -107,6 +107,34 @@ vendor's raw audio into these same engines (see below), so the preference
 applies there too; it was never the vendor's transcript. Advanced Options
 stays, keyed on whichever engine will open.
 
+**Endpointing: one measured default, on the default engine** (2026-09-05).
+The adapters otherwise send no turn-detection tuning at all, on the principle
+that a default we never send is a default we can never get wrong. The single
+exception is Soniox's `endpoint_latency_adjustment_level`, which the adapter
+sends as **2** rather than the vendor's 0
+(`DEFAULT_ENDPOINT_LATENCY_ADJUSTMENT`). Measured with
+`scripts/endpoint-latency-check.ts --engine soniox --fixture trailing`, 15
+turns per rung on a built fixture of mid-thought stops:
+
+| level | speech end → settled turn, p50 | p90 | word recall |
+|---|---|---|---|
+| 0 (vendor default) | 485 ms | 503 ms | 100% |
+| 1 | 302 ms | — | 100% |
+| **2 (sent)** | **211 ms** | 508 ms | 100% |
+| 3 | 2508 ms | 2703 ms | 100%, with stray punctuation |
+
+Level 3 is not a further step in the same direction — it is five times slower
+and mangles the text — which is why the ladder was walked rather than jumped.
+A person who moves the control still wins: the sanitized tuning is spread
+after the fixed fields.
+
+**And this is a small share of the wait.** With the notes clocks at 4s quiet /
+15s cadence, `scripts/notes-latency-check.ts` puts the median speech →
+note-written wait at 9.2s before this change and 8.9s after. Endpoint
+detection was 5% of that wait and is now 2%; the rest is the notes clocks,
+which are deliberately unchanged. Anything that wants a materially shorter
+wait has to move them, not the engine.
+
 **Speaker labels** (added 2026-08-29): `speaker_labels=true` on the same
 streaming URL — supported on every streaming model, **+$0.12/hr** on top of
 the $0.15 base (docs: streaming/label-speakers-and-separate-channels for the

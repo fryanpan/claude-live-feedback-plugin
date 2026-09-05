@@ -20,6 +20,8 @@ import {
   prose,
 } from '@feedback/core';
 import {
+  DEFAULT_NOTES_CADENCE_MS,
+  DEFAULT_NOTES_QUIET_MS,
   type NotesComposeInput,
   type NotesComposer,
   type NotesCorrection,
@@ -84,6 +86,56 @@ class ManualScheduler implements TickScheduler {
     return due.length;
   }
 }
+
+describe('the notes clocks', () => {
+  /**
+   * The two numbers that decide when a meeting's notes get written, spelled
+   * out so moving either has to be a deliberate edit to this line.
+   *
+   * They are pinned because of what was DELIBERATELY left alone. Work on the
+   * wait between speaking and reading a note keeps arriving, and the standing
+   * decision (Bryan, 2026-09-04) is that these two stay where they are and
+   * the latency work happens upstream of them — in the engine's endpoint
+   * detector. A change that quietly shaved the quiet threshold would show up
+   * as the same improvement on every latency report in the repo while being
+   * the one thing that was not allowed, so the assertion lives here rather
+   * than in a reviewer's memory.
+   *
+   * Nothing else asserts them: `room-timings.test.ts` pins the DOC room's
+   * debounces (file poll, write-back, persist) and has never had these two
+   * in it.
+   */
+  it('are the shipped 4s quiet threshold and 15s cadence ceiling', () => {
+    expect(DEFAULT_NOTES_QUIET_MS).toBe(4_000);
+    expect(DEFAULT_NOTES_CADENCE_MS).toBe(15_000);
+    // The ceiling is a ceiling: quiet has to be able to fire first, or the
+    // pause tick would be unreachable and every note would arrive on cadence.
+    expect(DEFAULT_NOTES_QUIET_MS).toBeLessThan(DEFAULT_NOTES_CADENCE_MS);
+  });
+
+  it('are what a session with no overrides actually arms', async () => {
+    // A positive control on the test above: the constants could hold the
+    // right numbers while `beginNotesSession` fell back to something else.
+    // Every other test in this file passes its own quietMs, so nothing else
+    // here exercises the defaulting at all.
+    const schedule = new ManualScheduler();
+    const updates: NotesUpdate[] = [];
+    const session = beginNotesSession(
+      { composer: createStubNotesComposer(), schedule, onNotes: (u) => updates.push(u) },
+      { docId: 'doc-clocks', meetingId: 'm-clocks' },
+    );
+    session.onTurn({ turn: 0, text: 'The sync is the slowest thing on the page.', final: true });
+    // Both clocks are armed, each at the delay it ships with — and at no
+    // other, which is what a moved default would look like.
+    expect(schedule.armedAt(DEFAULT_NOTES_QUIET_MS)).toBe(1);
+    expect(schedule.armedAt(DEFAULT_NOTES_CADENCE_MS)).toBe(1);
+    expect(schedule.armed).toBe(2);
+    // Quiet is the one that fires first in a meeting, so it is the one asked.
+    expect(schedule.fireAt(DEFAULT_NOTES_QUIET_MS)).toBe(1);
+    await session.end();
+    expect(updates.map((u) => u.tick.reason)).toEqual(['pause']);
+  });
+});
 
 describe('pause ticker', () => {
   const QUIET_MS = 1000;
