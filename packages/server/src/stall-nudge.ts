@@ -470,6 +470,13 @@ export class StallNudger {
   /** The stamp each workspace was last woken for. */
   private readonly armed = new Map<string, string>();
   /**
+   * The board's escalation high-water mark, and the ROW that set it — see
+   * `priorFor`. Held so a finding flickering off the list for a pass cannot
+   * lower the bucket and make its own return read as an escalation; scoped to
+   * the row so the hold cannot outlive it and swallow the next row's repeat.
+   */
+  private readonly held = new Map<string, { rowId: string; bucket: number }>();
+  /**
    * Which rows each board's lead has already been told about, and when each
    * was last seen on the list.
    *
@@ -553,6 +560,7 @@ export class StallNudger {
     // The pruning has to reach the FILE too, or the durable copy grows for the
     // life of the install while the in-memory one stays bounded.
     for (const key of this.armed.keys()) if (!live.has(key)) this.armed.delete(key);
+    for (const key of this.held.keys()) if (!live.has(key)) this.held.delete(key);
     for (const key of this.told.keys()) if (!live.has(key)) this.told.delete(key);
     for (const key of this.undeliverable.keys()) if (!live.has(key)) this.undeliverable.delete(key);
     for (const key of this.reported.keys()) if (!live.has(key)) this.reported.delete(key);
@@ -629,6 +637,7 @@ export class StallNudger {
     // different conditions.
     if (board.retired || lead === undefined) {
       this.armed.delete(key);
+      this.held.delete(key);
       // …but an unreadable row on a board with no lead is exactly the case
       // the reporter exists for, so it is named BEFORE returning.
       this.reportUnevaluable(board);
@@ -650,6 +659,7 @@ export class StallNudger {
       held.length === 0
     ) {
       this.armed.delete(key);
+      this.held.delete(key);
       this.reported.delete(key);
       this.undeliverable.delete(key);
       return;
@@ -662,12 +672,13 @@ export class StallNudger {
     // the condition itself, so a tick that says nothing costs no line.
     this.reportUnevaluable(board);
     const memory = this.rememberSeen(key, board, now);
-    const change = this.changeOn(this.armed.get(key), stamp, board, memory.before);
+    const change = this.changeOn(this.priorFor(key, memory.rows), stamp, board, memory.before);
     if (!change) {
       // Silent, but RECORDED. A shrink that left the old stamp standing would
       // keep naming rows that are no longer on the list, so the board's
       // escalation bucket would be read against a set it no longer has.
       this.armed.set(key, stamp);
+      this.rememberHighWater(key, board, memory.rows);
       return;
     }
     // Checked LAST, and deliberately not recorded when it says no: a wake that
@@ -734,6 +745,7 @@ export class StallNudger {
       if (!memory.rows.has(item.id))
         memory.rows.set(item.id, { bucket: UNKNOWN_BUCKET, seenAt: now, toldAt: now });
     }
+    this.rememberHighWater(key, board, memory.rows);
     this.capTold(memory.rows);
     // Delivered beats undeliverable: these rows have a real told-time now.
     const dark = this.undeliverable.get(key);
@@ -741,6 +753,69 @@ export class StallNudger {
       for (const row of [...board.stalled, ...board.unfiled]) dark.delete(row.id);
       if (dark.size === 0) this.undeliverable.delete(key);
     }
+  }
+
+  /**
+   * The armed stamp, with the board's escalation bucket held UP while the row
+   * that earned it is still remembered.
+   *
+   * The bucket is read off the findings a tick can see, and every tick re-arms
+   * the board with it — so a remembered row that drops off the list for a
+   * single pass took the bucket down with it, and the tick that saw the row
+   * again read `after.bucket > before.bucket` as another repeat window
+   * crossed. A wake naming a row the lead was already told about, repeatable
+   * as often as the row flickers: two wakes three minutes apart in prod over
+   * one row quiet for twelve hours.
+   *
+   * The flicker is not the row moving. An escalation item masks its anchor row
+   * from the gate for as long as it is open (`stall-escalation.ts`), and a row
+   * on the parallelism cap's boundary leaves the judged set whenever another
+   * row starts or stops being runnable (`stall-gate.ts`).
+   *
+   * ── Why the hold is SCOPED to one row ───────────────────────────────────
+   *
+   * A hold that only ever dropped on a wholly clean board would be a ratchet:
+   * on a board that always has at least one finding the high-water mark would
+   * stand forever, and every later row's escalation would be swallowed until
+   * it passed a number some other row set hours ago — which is the repeat
+   * window, the thing that says a bad board again, silently switched off
+   * (found in review of this fix). So the hold is remembered WITH the row it
+   * came from and lasts exactly as long as that row does: `told` forgets a row
+   * that has been off the list for a whole repeat window, and the hold goes
+   * with it. The next row escalates on its own clock.
+   *
+   * Memory only, never persisted: after a restart a board falls back to the
+   * stamp on disk and pays at most the one wake this file has always been
+   * willing to pay for a lost stamp.
+   */
+  private priorFor(key: string, told: Map<string, ToldRow>): string | undefined {
+    const prior = this.armed.get(key);
+    if (prior === undefined) return undefined;
+    const held = this.held.get(key);
+    if (held === undefined || !told.has(held.rowId)) return prior;
+    const parsed = parseStamp(prior);
+    if (held.bucket <= parsed.bucket) return prior;
+    return `${held.bucket}${prior.slice(prior.indexOf('|'))}`;
+  }
+
+  /**
+   * Record which row is speaking for the board's bucket, so the hold above can
+   * expire with it. Keeps the standing hold while the row that set it is still
+   * remembered and still the worse fact; otherwise the board's current oldest
+   * row takes over.
+   */
+  private rememberHighWater(key: string, board: StallSnapshot, told: Map<string, ToldRow>): void {
+    const rows = [...board.stalled, ...board.unfiled];
+    let oldest = rows[0];
+    for (const row of rows) if (row.quietMs > (oldest?.quietMs ?? -1)) oldest = row;
+    if (oldest === undefined) {
+      this.held.delete(key);
+      return;
+    }
+    const bucket = Math.floor(oldest.quietMs / this.repeatMs);
+    const held = this.held.get(key);
+    if (held !== undefined && held.bucket > bucket && told.has(held.rowId)) return;
+    this.held.set(key, { rowId: oldest.id, bucket });
   }
 
   /**
