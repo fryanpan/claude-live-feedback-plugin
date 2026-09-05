@@ -24,6 +24,7 @@ import * as Y from 'yjs';
 import { type NotesLedger, withServerNotesSinks } from '../src/meeting-notes-doc.ts';
 import {
   type NotesComposeInput,
+  type NotesMeetingSummary,
   type TickScheduler,
   beginNotesSession,
 } from '../src/meeting-notes.ts';
@@ -153,6 +154,8 @@ export interface NotesTickHarness {
   readonly snapshots: readonly TickSnapshot[];
   /** Errors the session reported — an empty list is part of most assertions. */
   readonly errors: readonly string[];
+  /** What the meeting came to, once `end()` has run. Null before that. */
+  summary(): NotesMeetingSummary | null;
   readonly ydoc: Y.Doc;
   markdown(): string;
   notes(): string;
@@ -179,6 +182,7 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
   const schedule = new ManualScheduler();
   const snapshots: TickSnapshot[] = [];
   const errors: string[] = [];
+  let summary: NotesMeetingSummary | null = null;
   const settled = new Map<number, { input: NotesComposeInput; composed: string }>();
   const done = new Set<number>();
   let turnNo = 0;
@@ -200,6 +204,9 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
       cadenceMs: Number.POSITIVE_INFINITY,
       schedule,
       onError: (message) => errors.push(message),
+      onMeetingSummary: (s) => {
+        summary = s;
+      },
       onTickLifecycle: (event) => {
         if (event.phase === 'written' || event.phase === 'failed') done.add(event.tick);
       },
@@ -254,6 +261,7 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
   const harness: NotesTickHarness = {
     snapshots,
     errors,
+    summary: () => summary,
     ydoc,
     markdown,
     notes: () => sectionBody(MEETING_NOTES_HEADINGS),

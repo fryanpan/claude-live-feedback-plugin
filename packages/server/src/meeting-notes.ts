@@ -79,6 +79,35 @@ export {
 
 export type { NoteReference } from './notes-references.ts';
 
+/**
+ * What a whole meeting's notes came to: how much of what was said reached
+ * them, and how much did not.
+ *
+ * `turnsLost` is the number the report is about. It counts turns the engine
+ * settled that no successful compose ever carried — words in the transcript
+ * and in no note. Zero is the healthy state and the usual one; anything else
+ * names how much of the meeting the notes are missing.
+ */
+export interface NotesMeetingSummary {
+  docId: string;
+  meetingId: string;
+  /** Ticks that fired, the final pass included. */
+  ticks: number;
+  /** Distinct turns the engine settled during the meeting. */
+  turnsSettled: number;
+  /**
+   * Distinct turns a successful compose carried. It can exceed
+   * `turnsSettled` by one: the final pass carries the sentence that was
+   * still being spoken, which by definition never settled.
+   */
+  turnsComposed: number;
+  /** Settled turns no successful compose ever carried. The number the
+   *  "the notes skipped chunks" report is about. */
+  turnsLost: number;
+  composeFailures: number;
+  refusedTooLong: number;
+}
+
 /** One settled turn as a tick's delta carries it. */
 export interface NotesTurn {
   turn: number;
@@ -456,6 +485,17 @@ export interface MeetingNotesDeps {
   onReattribute?: (reattribution: NotesReattribution) => void;
   onError?: (message: string) => void;
   /**
+   * One line about the whole meeting, at `end()`.
+   *
+   * WHY THIS EXISTS. When a meeting is reported as having "skipped chunks",
+   * the only way to answer it is to know how many of the meeting's turns
+   * reached a note — and nothing on this path logged anything per tick, so
+   * the question was unanswerable after the fact. It is a summary rather
+   * than a tick log on purpose: a line per tick would be hundreds per
+   * meeting for a number nobody reads while the meeting is healthy.
+   */
+  onMeetingSummary?: (summary: NotesMeetingSummary) => void;
+  /**
    * A new session is beginning on this doc — called synchronously from
    * `beginNotesSession`, before any tick can fire. The server sink releases
    * the ownership ledger's claims here, so a stop-and-restart can never
@@ -514,7 +554,12 @@ export interface MeetingNotesSession {
    * meeting, and nothing about them is visible in the doc — the words carry
    * forward and the notes just stop growing.
    */
-  stats(): { composeFailures: number; refusedTooLong: number };
+  stats(): {
+    composeFailures: number;
+    refusedTooLong: number;
+    turnsSettled: number;
+    turnsComposed: number;
+  };
 }
 
 /**
@@ -635,6 +680,14 @@ export function beginNotesSession(
    */
   let composeFailures = 0;
   let refusedTooLong = 0;
+  /**
+   * Which turns the engine settled, and which of them a compose actually
+   * carried. Sets rather than counters because a turn can reach the composer
+   * more than once — a failed tick carries its words into the next one — and
+   * the question is coverage, not attempts.
+   */
+  const settledTurns = new Set<number>();
+  const composedTurns = new Set<number>();
 
   const lifecycle = (phase: 'composing' | 'written' | 'failed', tick: number, turns: number[]) =>
     deps.onTickLifecycle?.({ docId: ids.docId, meetingId: ids.meetingId, tick, phase, turns });
@@ -787,6 +840,7 @@ export function beginNotesSession(
           notes,
           ...(live ? { basedOn: live.items } : {}),
         });
+        for (const t of raw) composedTurns.add(t.turn);
         lifecycle(
           'written',
           tick.tick,
@@ -882,6 +936,7 @@ export function beginNotesSession(
   return {
     onTurn: (turn) => {
       if (turn.speaker !== undefined) seen.add(turn.speaker);
+      if (turn.final) settledTurns.add(turn.turn);
       ticker.onTurn(turn);
     },
     nameSpeaker(speaker, name) {
@@ -948,7 +1003,23 @@ export function beginNotesSession(
             'notes composes were refused as too long — the notes stopped keeping up',
         );
       }
+      const turnsLost = [...settledTurns].filter((t) => !composedTurns.has(t)).length;
+      deps.onMeetingSummary?.({
+        docId: ids.docId,
+        meetingId: ids.meetingId,
+        ticks: lastTickNo,
+        turnsSettled: settledTurns.size,
+        turnsComposed: composedTurns.size,
+        turnsLost,
+        composeFailures,
+        refusedTooLong,
+      });
     },
-    stats: () => ({ composeFailures, refusedTooLong }),
+    stats: () => ({
+      composeFailures,
+      refusedTooLong,
+      turnsSettled: settledTurns.size,
+      turnsComposed: composedTurns.size,
+    }),
   };
 }
