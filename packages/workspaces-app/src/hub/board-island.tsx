@@ -453,6 +453,13 @@ function TaskBadges(props: {
           }}
         >
           <RepeatMark />
+          {/* The tap target, sized past the 36px floor in
+              docs/product/design-mobile.md and laid out over the glyph rather
+              than around it, so the row's grid never widens by a pixel. A real
+              span rather than a `::after` because a pseudo-element is
+              unmeasurable in the test environment, and an unmeasurable target
+              is one that quietly shrinks back to the size of its icon. */}
+          <span class="hub-recur-target" aria-hidden="true" />
         </button>
       ) : (
         <span key="recur" class="hub-recur" title="One run of a scheduled task">

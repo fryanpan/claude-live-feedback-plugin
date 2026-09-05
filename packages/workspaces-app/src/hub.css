@@ -3110,12 +3110,34 @@ body.hub-body {
   color: var(--green);
   border-color: var(--green);
 }
+/* The strip WRAPS rather than hiding what will not fit, and nothing in it is
+   ever cut mid-word.
+
+   It used to be one nowrap line under `overflow: hidden`, which was survivable
+   while a badge was one short word and stopped being so the moment a scheduled
+   row put a rule and a next-run time in here: at 430px the rule chip was sliced
+   through its own border, the next-run chip vanished behind the avatar, and the
+   state word shrank to the single letter "t". Three separate ways of saying
+   less than the row knows, none of them visible as a failure.
+
+   The contract now, in the order it is applied:
+     - lines wrap, right-aligned, so a chip that does not fit MOVES rather than
+       disappearing;
+     - a chip that must still shrink carries `text-overflow: ellipsis`, so the
+       cut is always announced;
+     - the rule chip absorbs essentially all of the shrink (`flex-shrink: 100`)
+       and the next run and the state word almost none, which is the ranking:
+       when it runs is what the reader acts on and the cadence is the detail.
+   No clip on the container, which is also what lets the recurrence mark carry
+   a tap target bigger than its glyph. */
 .hub-task-badges {
   display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 4px;
+  row-gap: 2px;
   flex: 0 1 auto;
   min-width: 0;
-  overflow: hidden;
 }
 .hub-badge {
   font-size: 11px;
@@ -3124,6 +3146,12 @@ body.hub-body {
   border: 1px solid var(--border);
   color: var(--fg-muted);
   white-space: nowrap;
+  /* Shrinkable and self-clipping: a pill can never paint outside its own box
+     now that the strip does not clip for it, and never loses a character
+     without saying so. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* The one right-hand state word — "blocked" or "triage", never both, since
    blocked is a `todo` row. Plain muted text rather than a chip, matching the
@@ -3136,6 +3164,14 @@ body.hub-body {
   overflow: hidden;
   text-overflow: ellipsis;
   align-self: center;
+  /* It does NOT shrink. The paragraph above used to end "it truncates rather
+     than pushing the date off the row", which was the right instinct and the
+     wrong mechanism: on a scheduled row at 430px it truncated to "t", a single
+     glyph overlapping the next-run time, which is neither the word nor an
+     honest ellipsis. The strip wraps now, so the word moves to its own line
+     instead of being eaten — it still never pushes anything off the row. Six
+     characters, and the one thing here that says a row cannot be started. */
+  flex: none;
 }
 .hub-badge-decision {
   border-color: var(--yellow);
@@ -3157,6 +3193,10 @@ body.hub-body {
    rather than being a second pill. */
 .hub-badge-rule {
   background: var(--bg);
+  /* The chip that gives way first. A cadence read as "Every day · 9am and…"
+     still says which days; a next run read as "Thu 10 Se…" says nothing the
+     reader can plan against. */
+  flex-shrink: 100;
 }
 .hub-badge-sep {
   color: var(--border-strong);
@@ -3173,6 +3213,13 @@ body.hub-body {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   align-self: center;
+  /* Last to give way, and it announces it when it does. `flex-shrink: 1`
+     against the rule chip's 100 means this is only touched once the cadence
+     has given up everything it has. */
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* Today. The one state on these rows that changes what the reader does next,
    so it is the one that gets the accent. */
@@ -3195,6 +3242,7 @@ body.hub-body {
 }
 /* The linked form, which is a button and must not look like one. */
 .hub-recur-link {
+  position: relative;
   padding: 0;
   border: none;
   background: none;
@@ -3202,6 +3250,39 @@ body.hub-body {
 }
 .hub-recur-link:hover {
   color: var(--accent);
+}
+/* The tap target, which is not the glyph.
+
+   A 13px mark is a 13px target, and the floor in
+   docs/product/design-mobile.md is 36x36 for ANY interactive element — this
+   one was under a third of it on both viewports. The mark stays 13px because
+   it is a mark; what grows is an invisible square centred on it, sized past
+   the floor to the 44px convention, laid out `absolute` so the row's grid
+   never learns it is there. Same shape as the status and owner marks' own
+   phone targets (`inset: -6px` over a 24px mark), which is why the strip
+   above no longer clips: an overlay bigger than its box is only a target if
+   nothing crops it.
+
+   It is a real element rather than a pseudo-element so a test can read its
+   box — happy-dom resolves no `::after` at all, and a target nothing can
+   measure is a target that silently goes back to 13px.
+
+   IT OVERLAPS THE OPEN CARET BY 10px, measured at 430px, and that is the
+   decision rather than an oversight. A 44px square centred on a mark sitting
+   21px from the caret has to take something, and the two candidates are the
+   caret's left edge or the title's tail. The caret is `aria-hidden`, is not a
+   tab stop, and opens the task — which the whole row already does — so the
+   sliver costs a reader nothing they cannot do by tapping anywhere else on
+   the row. The title's tail is the primary open-the-task region and is worth
+   31px here, three times as much. The mark is the row's only route to the
+   rule it is a run of; it gets the 44px. */
+.hub-recur-target {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
 }
 /* The Scheduled band itself. It KEEPS the goal band's chrome — the accent
    rail, the panel header, an unmuted title — because it is a list of live
@@ -3217,6 +3298,12 @@ body.hub-body {
    the rules that generate the board's recurring work. */
 .hub-band-scheduled .hub-goal-row {
   cursor: default;
+  /* Grey, not the goal bands' blue — `.hub-band--sched` in the approved mock.
+     The accent rail is what marks a band as a goal somebody committed to, and
+     this section is a list of rules. Backlog's own rail is the weaker
+     `--border` for the same reason; this one is a step stronger because the
+     rows under it are live. */
+  border-left-color: var(--border-strong);
 }
 .hub-band-scheduled .hub-goal-open {
   visibility: hidden;

@@ -448,6 +448,112 @@ describe('the two viewports this project verifies', () => {
     expect(muted).not.toBe('');
   });
 
+  /**
+   * happy-dom lays nothing out, so "did it clip" is asked of the CASCADE
+   * rather than of pixels: a chip clips silently exactly when it can be
+   * squeezed (`min-width: 0` with a shrink factor) and has no
+   * `text-overflow`, or when its container crops it. Both are computed
+   * values. The pixel half — a real 430px row with real text in it — is the
+   * headless-Chromium pass, and its numbers are in the PR.
+   */
+  it('never cuts a chip mid-word at 430px, and never eats the state word', () => {
+    setViewport(PHONE);
+    // A row carrying all three at once, which is the shape that overflowed:
+    // a rule, a next run and the state word the band's triage status puts on
+    // every row under it.
+    const crowded = task({
+      title: 'Post the morning and evening digest',
+      status: 'triage',
+      schedule: {
+        rule: {
+          kind: 'calendar',
+          times: [
+            { hour: 9, minute: 0 },
+            { hour: 17, minute: 0 },
+          ],
+        },
+        until: NOW + 40 * DAY,
+        armedAt: NOW,
+      },
+    });
+    paint([crowded]);
+    const row = rowOf(crowded.id);
+    const strip = row.querySelector<HTMLElement>('.hub-task-badges');
+    const ruleChip = row.querySelector<HTMLElement>('.hub-badge-rule');
+    const next = row.querySelector<HTMLElement>('.hub-next');
+    const state = row.querySelector<HTMLElement>('.hub-state-note');
+    if (!strip || !ruleChip || !next || !state) throw new Error('the crowded row lost a chip');
+    // The strip wraps rather than hiding, and crops nothing itself. `''` is
+    // happy-dom's reading of a property no rule sets, which is the same
+    // answer as `visible` here.
+    expect(styleOf(strip).flexWrap).toBe('wrap');
+    expect(['', 'visible']).toContain(styleOf(strip).overflow);
+    // Every chip that CAN be squeezed says so when it is. This is the whole
+    // assertion: a shrinkable chip with no ellipsis is the silent cut.
+    for (const chip of [ruleChip, next]) {
+      expect(Number(styleOf(chip).flexShrink)).toBeGreaterThan(0);
+      expect(styleOf(chip).textOverflow).toBe('ellipsis');
+    }
+    // The state word does not shrink at all, so it cannot lose characters —
+    // it collapsed to the single letter "t" when it could.
+    expect(styleOf(state).flexShrink).toBe('0');
+    expect(state.textContent).toBe('triage');
+    // And the cadence gives way long before the time does.
+    expect(Number(styleOf(ruleChip).flexShrink)).toBeGreaterThan(Number(styleOf(next).flexShrink));
+    // The control: the same three reads at the iPad width, where nothing is
+    // under pressure, give the same answers — the guarantee is not a phone
+    // rule that a wider window quietly drops.
+    setViewport(IPAD);
+    expect(styleOf(strip).flexWrap).toBe('wrap');
+    expect(styleOf(row.querySelector('.hub-badge-rule') as HTMLElement).textOverflow).toBe(
+      'ellipsis',
+    );
+  });
+
+  it('gives the recurrence mark a target past the 36px floor, without widening the row', () => {
+    const rule = task({ title: 'Post the evening digest', schedule: weekdays9() });
+    const run = task({
+      title: 'Post the evening digest',
+      goal: 'g-quiet',
+      recurrenceOf: { taskId: rule.id, occurrenceAt: NOW },
+    });
+    for (const size of [IPAD, PHONE]) {
+      setViewport(size);
+      paint([rule, run]);
+      const mark = rowOf(run.id).querySelector<HTMLElement>('.hub-recur-link');
+      const target = mark?.querySelector<HTMLElement>('.hub-recur-target');
+      const glyph = mark?.querySelector('svg');
+      if (!mark || !target || !glyph) throw new Error(`no tap target at ${size.width}`);
+      // docs/product/design-mobile.md: "Minimum 36×36px for any interactive
+      // element". 44 is the stricter convention and clears it at both sizes.
+      expect(Number.parseFloat(styleOf(target).width)).toBeGreaterThanOrEqual(36);
+      expect(Number.parseFloat(styleOf(target).height)).toBeGreaterThanOrEqual(36);
+      // Out of flow and centred on the mark, so the row's grid never learns
+      // it is there — the glyph stays 13px and nothing else moves.
+      expect(styleOf(target).position).toBe('absolute');
+      expect(styleOf(mark).position).toBe('relative');
+      expect(styleOf(glyph).width).toBe('13px');
+      // Nothing crops it. A target inside a clipping strip is a 13px target
+      // wearing a 44px rule.
+      const strip = rowOf(run.id).querySelector<HTMLElement>('.hub-task-badges');
+      if (strip) expect(['', 'visible']).toContain(styleOf(strip).overflow);
+    }
+  });
+
+  it('paints the Scheduled rail grey, not the goal bands’ accent', () => {
+    setViewport(IPAD);
+    paint([task({ schedule: weekdays9() }), task({ title: 'Cut the release' })]);
+    const sched = scheduledBand().querySelector<HTMLElement>('.hub-goal-row');
+    const goal = root.querySelector<HTMLElement>('[data-goal-id="g-ship"] .hub-goal-row');
+    if (!sched || !goal) throw new Error('a band lost its header');
+    const grey = styleOf(sched).borderLeftColor;
+    const accent = styleOf(goal).borderLeftColor;
+    expect(grey).not.toBe(accent);
+    expect(grey).not.toBe('');
+    // The width is untouched — it is the same rail, in a different ink.
+    expect(styleOf(sched).borderLeftWidth).toBe(styleOf(goal).borderLeftWidth);
+  });
+
   it('keeps the next run at 430px, where the badge strip is capped', () => {
     setViewport(PHONE);
     const r = task({ title: 'Post the evening digest', schedule: weekdays9() });
