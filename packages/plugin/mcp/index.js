@@ -13669,6 +13669,60 @@ class StdioServerTransport {
   }
 }
 
+// packages/mcp/src/agent-token.ts
+function agentTokenPath(agentId) {
+  return `/api/agents/${encodeURIComponent(agentId)}/token`;
+}
+function createAgentTokenStore(deps) {
+  let token = null;
+  let minting = null;
+  let unsupported = false;
+  const mint = async () => {
+    try {
+      const res = await deps.fetch(`${deps.resolveBaseUrl()}${agentTokenPath(deps.agentId)}`, {
+        headers: { accept: "application/json" }
+      });
+      if (res.status === 404) {
+        unsupported = true;
+        await res.text().catch(() => "");
+        deps.log("[claude-workspaces-mcp] server has no agent-token route — continuing unauthenticated (it accepts that during the rollout)");
+        return null;
+      }
+      const text = await res.text();
+      if (!res.ok) {
+        deps.log(`[claude-workspaces-mcp] agent token → ${res.status}: ${text}`);
+        return null;
+      }
+      const parsed = JSON.parse(text);
+      return typeof parsed.token === "string" && parsed.token ? parsed.token : null;
+    } catch (e) {
+      deps.log("[claude-workspaces-mcp] agent token unavailable:", e);
+      return null;
+    }
+  };
+  return {
+    hasToken: () => token !== null,
+    forget: () => {
+      token = null;
+    },
+    async headers() {
+      if (deps.identityIsShared || unsupported)
+        return {};
+      if (token !== null)
+        return { authorization: `Bearer ${token}` };
+      minting ??= mint().then((minted2) => {
+        if (minted2 !== null)
+          token = minted2;
+        return minted2;
+      }).finally(() => {
+        minting = null;
+      });
+      const minted = await minting;
+      return minted === null ? {} : { authorization: `Bearer ${minted}` };
+    }
+  };
+}
+
 // packages/mcp/src/attachment-keepalive.ts
 var DEFAULT_INTERVAL_MS = 120000;
 function createAttachmentKeepalive(opts) {
@@ -14550,12 +14604,15 @@ function resolveBaseUrl(deps) {
   }
   throw new Error("claude-workspaces server not found — start it with `bun run dev` (or set CW_BASE_URL). " + `Looked for a discovery file at ${discoveryCandidates(deps.homedir()).join(" and ")}.`);
 }
-function createHttp(resolve, fetchFn = fetch) {
+function createHttp(resolve, fetchFn = fetch, authHeaders = async () => ({})) {
   return async (method, path, body) => {
     const baseUrl = resolve();
     const res = await fetchFn(`${baseUrl}${path}`, {
       method,
-      headers: body ? { "content-type": "application/json" } : {},
+      headers: {
+        ...body ? { "content-type": "application/json" } : {},
+        ...await authHeaders()
+      },
       body: body ? JSON.stringify(body) : undefined
     });
     const text = await res.text();
@@ -14863,10 +14920,14 @@ async function runMuxLoop(deps, rt, signal, onFirstAttempt) {
         deps.log(`[claude-workspaces-mcp] mux cursor over budget — ${dropped.length} key(s) reconnect without a position`);
         deps.resetDedup();
       }
+      const auth = deps.authHeaders ? await deps.authHeaders() : {};
       const res = await deps.fetch(`${deps.resolveBaseUrl()}${path}`, {
         signal,
-        ...value ? { headers: { "Last-Event-ID": value } } : {}
+        headers: { ...value ? { "Last-Event-ID": value } : {}, ...auth }
       });
+      if (res.status === 403) {
+        deps.forgetToken?.();
+      }
       if (res.status === 404) {
         await releaseBody(res);
         rt.unsupported = true;
@@ -18507,7 +18568,7 @@ var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.163";
+var PLUGIN_VERSION = "0.1.164";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
@@ -18654,6 +18715,13 @@ server.setRequestHandler(CallToolRequestSchema, createCallToolHandler({
 }));
 var watchers = new Map;
 var IDENTITY_IS_SHARED = isSharedIdentity(AUTHOR.id);
+var agentTokens = createAgentTokenStore({
+  agentId: AUTHOR.id,
+  resolveBaseUrl: resolveBaseUrl2,
+  fetch: (url, init) => fetch(url, init),
+  log: (...args) => console.error(...args),
+  identityIsShared: IDENTITY_IS_SHARED
+});
 var { markAttached: markAttached2, sendDueHeartbeats: sendDueHeartbeats2, claimNoticeFor: claimNoticeFor2 } = createAttachments({
   http: (method, path, body) => http(method, path, body),
   author: AUTHOR,
@@ -18694,7 +18762,9 @@ var muxLoop = createMuxLoop({
   resetDedup: () => shouldForwardFrame.reset(),
   log: (...args) => console.error(...args),
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-  timers: loopTimers
+  timers: loopTimers,
+  authHeaders: () => agentTokens.headers(),
+  forgetToken: () => agentTokens.forget()
 });
 var registry2 = createWatchRegistry({
   watchers,
@@ -18721,7 +18791,7 @@ var restore = createWatchRestore({
   identityIsShared: IDENTITY_IS_SHARED
 });
 var { ensureWatchesRestored: ensureWatchesRestored2 } = restore;
-var http = createHttp(resolveBaseUrl2);
+var http = createHttp(resolveBaseUrl2, (url, init) => fetch(url, init), () => agentTokens.headers());
 var transport = new StdioServerTransport;
 server.oninitialized = () => {
   ensureWatchesRestored2();
