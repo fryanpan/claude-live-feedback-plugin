@@ -53,6 +53,7 @@ import {
 import type { ReviewGateAddress } from './review-gate.ts';
 import type { Rooms } from './rooms.ts';
 import type { SseHub } from './sse.ts';
+import { StallEscalations } from './stall-escalation.ts';
 import {
   HELD_ITEM_DEFAULT_MS,
   type HeldItemInput,
@@ -147,6 +148,9 @@ export interface StallWiringContext {
   stallNudgeRepeatMs?: number;
   /** How long a held review item may stand before it is a finding (ms). */
   heldReviewItemMs?: number;
+  /** How long a row the lead was already told about may stay a finding
+   *  before the board files over the lead's head (ms). */
+  stallEscalateMs?: number;
   /**
    * Confirms that a note flagged by the deterministic prefilter really does
    * say the agent is waiting on a person (`note-ask-judge.ts`). **No
@@ -407,14 +411,28 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
     // first token counts too, since a note says "Bryan" where the row says
     // "Bryan Chan"; two characters or fewer is dropped as too common a word
     // to mean a person.
+    //
+    // TWO sources, and the second is the fix for the hole the first has (PR
+    // 691 review): an assignee is only a name on a board where the person
+    // OWNS a row, and on a board where every row is an agent's the set came
+    // out empty and the prefilter could not read any note as an ask. So the
+    // people the board has RECORDED ACTING also count — every transition
+    // actor whose kind is `person`, which is how a board knows the human who
+    // moved a row without ever being given one. There is no board-owner
+    // field to read; this is the nearest true thing.
     const personNames = new Set<string>();
-    for (const t of tasks) {
-      if (ownerKindOf(t) !== 'person') continue;
-      const name = (t.assignee ?? '').trim();
-      if (name.length < 3) continue;
+    const addPerson = (raw: string | undefined) => {
+      const name = (raw ?? '').trim();
+      if (name.length < 3) return;
       personNames.add(name);
       const first = name.split(/\s+/)[0] ?? '';
       if (first.length >= 3) personNames.add(first);
+    };
+    for (const t of tasks) {
+      if (ownerKindOf(t) === 'person') addPerson(t.assignee);
+      for (const transition of t.transitions) {
+        if (transition.by.kind === 'person') addPerson(transition.by.name);
+      }
     }
     noteAsk.setPersonNames([...personNames]);
 
@@ -769,6 +787,17 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
       ...(held.length > 0 ? { held } : {}),
     };
   };
+  /**
+   * The second addressee: when a row the lead was told about is still stuck
+   * an hour later, the board files a review item on the reader's own queue
+   * (`stall-escalation.ts`). Built here, driven by the nudger's tick, because
+   * the told-times it runs on are the nudger's memory and nothing else's.
+   */
+  const escalations = new StallEscalations({
+    store: taskStore,
+    dataDir,
+    ...(ctx.stallEscalateMs !== undefined ? { escalateMs: ctx.stallEscalateMs } : {}),
+  });
   const stallNudger = new StallNudger({
     snapshot: () => taskStore.listWorkspaces().map(stallSnapshot),
     // Addressed, never broadcast, and `agentsOn` rather than `count` for the
@@ -788,6 +817,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
     sendToFiler: (workspaceId, agentId, frame) =>
       sse.sendToAgent(`ws~${workspaceId}`, agentId, { ...frame }),
     ...(ctx.stallNudgeRepeatMs !== undefined ? { repeatMs: ctx.stallNudgeRepeatMs } : {}),
+    escalate: (board, toldAt, now) => escalations.onBoard(board, toldAt, now),
     // Prod restarts at every merge; without this each deploy would re-fire one
     // wake per board over rows their leads had already been told about.
     stampFile: join(dataDir, STALL_NUDGE_STAMP_FILENAME),

@@ -468,6 +468,17 @@ export interface ServerOptions {
    * after a change and do not read it as a rate.
    */
   stallNudgeRepeatMs?: number;
+  /**
+   * How long a row the lead was already told about may stay a finding before
+   * the board files a review item over the lead's head (default
+   * `STALL_ESCALATE_DEFAULT_MS`, one hour; `CW_STALL_ESCALATE_MINUTES` sets it
+   * on the box).
+   *
+   * Deployment-tunable for the same reason `stallNudgeRepeatMs` is, one step
+   * more expensive: what this number spends is a PERSON's attention, and the
+   * right interval is a thing an owner discovers by living with it.
+   */
+  stallEscalateMs?: number;
   /** Stands in for the done-artifact check's GitHub lookup. Tests only —
    *  production asks api.github.com, unauthenticated. */
   artifactCheckFetch?: typeof fetch;
@@ -1588,6 +1599,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     ...(opts.stallNudgeRepeatMs !== undefined
       ? { stallNudgeRepeatMs: opts.stallNudgeRepeatMs }
       : {}),
+    ...(opts.stallEscalateMs !== undefined ? { stallEscalateMs: opts.stallEscalateMs } : {}),
     ...(opts.heldReviewItemMs !== undefined ? { heldReviewItemMs: opts.heldReviewItemMs } : {}),
     ...(opts.noteAskJudge !== undefined ? { noteAskJudge: opts.noteAskJudge } : {}),
   });
