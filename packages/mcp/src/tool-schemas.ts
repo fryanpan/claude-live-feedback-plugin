@@ -2002,7 +2002,7 @@ export const TOOL_LIST: ListToolsResult = {
       },
     },
     {
-      name: 'list_attachments',
+      name: 'list_agents',
       description:
         "List the agents attached to a board workspace with their derived state: active, 'process up, agent unresponsive' (fresh heartbeat, stale tool calls), or 'away — requests queue'. The ambient-awareness read: who is where, and is anyone wedged.",
       inputSchema: {

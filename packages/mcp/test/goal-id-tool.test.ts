@@ -45,7 +45,7 @@ const declText = (tool: string) => JSON.stringify(mcp.tool(tool) ?? {});
 
 describe('set_goal_list declares the generated-id contract', () => {
   it('POSITIVE CONTROL: the running bundle serves a known tool', () => {
-    expect(mcp.tool('list_attachments')).toBeDefined();
+    expect(mcp.tool('list_agents')).toBeDefined();
     expect(mcp.tool('set_goal_tree')).toBeUndefined();
   });
 

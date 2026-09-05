@@ -13917,7 +13917,8 @@ var DEPRECATED_TOOL_ALIASES = {
   bind_folder: "attach_folder",
   bind_mock: "attach_mockup",
   promote_to_task: "spin_off_task",
-  retire_workspace: "archive_workspace"
+  retire_workspace: "archive_workspace",
+  list_attachments: "list_agents"
 };
 function deprecationLine(alias, now2) {
   return `[mcp] ${alias} is the old name for ${now2} — still answered this release, removed in the next. Call ${now2}.`;
@@ -16749,7 +16750,7 @@ var TOOL_LIST = {
       }
     },
     {
-      name: "list_attachments",
+      name: "list_agents",
       description: "List the agents attached to a board workspace with their derived state: active, 'process up, agent unresponsive' (fresh heartbeat, stale tool calls), or 'away — requests queue'. The ambient-awareness read: who is where, and is anyone wedged.",
       inputSchema: {
         type: "object",
@@ -18219,7 +18220,8 @@ async function handleWorkspaceTool(name, a, ctx) {
     case "request_plugin_refresh": {
       return ok2(await http("POST", "/api/plugin/refresh"));
     }
-    case "list_attachments": {
+    case "list_attachments":
+    case "list_agents": {
       const { workspaceId } = a;
       const res = await http("GET", `/workspaces/${encodeURIComponent(workspaceId)}/agents`);
       return ok2(res);
