@@ -129,6 +129,21 @@ describe('reading a phrase', () => {
     expect(parseSchedulePhrase('every Sep 10 at 9am', CTX)).toMatchObject({ ok: false });
   });
 
+  it('refuses a word it did not read, rather than defaulting to every day at 9am', () => {
+    // A fresh-eyes review typed "every purple" and got a daily rule with no
+    // error: the repeat word matched and the rest was never looked at.
+    expect(parseSchedulePhrase('every purple', CTX)).toMatchObject({
+      ok: false,
+      error: 'did not understand "purple"',
+    });
+    expect(parseSchedulePhrase('every day purple at 9am', CTX)).toMatchObject({ ok: false });
+    expect(parseSchedulePhrase('every', CTX)).toMatchObject({ ok: false });
+    // The words a scope may hold still read, alone and together.
+    expect(parseSchedulePhrase('daily', CTX)).toMatchObject({ ok: true });
+    expect(parseSchedulePhrase('every 9am', CTX)).toMatchObject({ ok: true });
+    expect(parseSchedulePhrase('every Mon, Wed and Fri at 9am', CTX)).toMatchObject({ ok: true });
+  });
+
   it('reads a spent date as the next one, and a bare time as the next time round', () => {
     // NOW is 5 Sep; 1 Sep has gone, so the rule is next year's.
     const past = parse('Sep 1 at 9am').rule as { kind: 'once'; at: number };

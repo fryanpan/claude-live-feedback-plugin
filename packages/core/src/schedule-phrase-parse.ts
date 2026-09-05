@@ -271,6 +271,15 @@ function weekdaysIn(scope: string): Weekday[] | undefined {
 }
 
 const RECUR = /\b(every|each|daily|weekly|twice|thrice|\d+\s*(?:x|times))\b/;
+/** Every word a repeat scope may contain. Anything else was not read. */
+const SCOPE_WORDS = new RegExp(
+  String.raw`\b(?:every|each|daily|weekly|twice|thrice|\d+\s*(?:x|times)|a|an|per|the|on|and|days?|weeks?|weekdays?|weekends?|${DAY_WORDS.flat().join('|')})\b`,
+  'g',
+);
+/** The words left in a repeat scope once every known one is removed. */
+function unreadWords(scope: string): string {
+  return scope.replace(SCOPE_WORDS, ' ').replace(/[,&]/g, ' ').replace(/\s+/g, ' ').trim();
+}
 
 /**
  * Read a phrase, or say why it could not be read.
@@ -364,6 +373,17 @@ export function parseSchedulePhrase(raw: string, ctx: SchedulePhraseContext): Sc
     // dropping half of what was typed.
     if (/\b\d+\s*(?:minute|min|hour|hr|day|week)s?\b/.test(scope)) {
       return { ok: false, error: 'an interval and a time of day cannot both be set' };
+    }
+    // A word the reader typed that nothing above read is not decoration: "every
+    // purple" must not quietly become "every day at 9am".
+    const unread = unreadWords(scope);
+    if (unread !== '') return { ok: false, error: `did not understand "${unread}"` };
+    if (
+      times === undefined &&
+      weekdays === undefined &&
+      !/\b(?:days?|weeks?|daily|weekly|twice|thrice|\d+\s*(?:x|times))\b/.test(scope)
+    ) {
+      return { ok: false, error: 'say what to repeat on, like "every weekday"' };
     }
     return {
       ok: true,

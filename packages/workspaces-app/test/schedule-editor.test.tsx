@@ -142,6 +142,25 @@ describe('a phrase derives the chips', () => {
     expect(input().getAttribute('aria-invalid')).toBe('true');
   });
 
+  it('will not save a phrase that did not read, and tells assistive tech why', () => {
+    const onSet = vi.fn(async () => true);
+    mount({}, onSet);
+    click(host?.querySelector('.hub-sched-arm'));
+    type('every weekday at 9am');
+    type('every purple');
+    const save = $<HTMLButtonElement>('.hub-sched-save');
+    expect(input().getAttribute('aria-invalid')).toBe('true');
+    expect(save.disabled).toBe(true);
+    const whyId = input().getAttribute('aria-describedby') ?? '';
+    expect(document.getElementById(whyId)?.textContent).toBe('did not understand "purple"');
+    click(save);
+    expect(onSet).not.toHaveBeenCalled();
+    // Reading again clears the block, and the description with it.
+    type('every weekday at 9am');
+    expect(save.disabled).toBe(false);
+    expect(input().hasAttribute('aria-describedby')).toBe(false);
+  });
+
   it('offers an example that fills the box and derives from it', () => {
     mount();
     click(host?.querySelector('.hub-sched-arm'));
