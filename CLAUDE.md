@@ -204,7 +204,17 @@ longer deploys from there, but building bundles in the primary working copy
 is its own accident): :8788, throwaway data dir; prod stays on 8787. Agent:
 `FEEDBACK_BASE_URL=http://<host>:8788` at launch; data never migrates to prod.
 
-## Pre-push leak gate (public repo)
+## Leak gates (public repo) — one at commit, one at push
+
+**`.githooks/pre-commit` judges the staged diff's ADDED lines only**
+(`scrub-check.py --staged-added`) and blocks the commit before anything is
+written, because that is the last point where the fix is an edit rather than a
+history rewrite — and rewriting history is the step the permission classifier
+refuses an agent. Editing a file whose UNTOUCHED lines already carry a match is
+not refused; that is the point, and widening it back to whole blobs is how a
+gate becomes a tax people turn off. Merge commits are skipped (their staged
+diff re-presents everything the other parent carried); the push gate reads them
+with `--cc`.
 
 `.githooks/pre-push` runs a regex scanner (denylist + registry project names)
 on every push, and a Haiku scanner only on pushes to fryanpan-owned remotes
@@ -215,8 +225,16 @@ takes paths / `--diff-range` / `--staged` and ignores stdin (piping scans
 nothing, exits 0). Git-addressed modes scan the PUSHED BLOB, not the working
 tree; `.ydoc`/`.jsonl`/`.csv`/`.svg`/`.xml`/images/extension-less files are
 always scanned and cannot be allowlisted; `scrub-allow` counts only as a
-trailing comment. Setup once: `git config core.hooksPath .githooks`. Bypass
-sparingly: `SCRUB_SKIP=1`, or `SCRUB_SKIP_HAIKU=1` for Haiku alone.
+trailing comment. Push findings name the commit that wrote each line — the
+remedy is a rewrite only for one this push publishes, a forward commit for one
+already on the remote.
+
+Setup once: `git config core.hooksPath .githooks`. Until then the clone is
+unprotected and looks identical to a protected one; `bun install` warns
+(`bun run check:hooks` asks directly). Both hooks share one config source and
+one self-test: `bun run check:scrub-gate` (pre-commit runs its `--only commit`
+subset). Bypass sparingly: `SCRUB_SKIP=1`, or `SCRUB_SKIP_HAIKU=1` for Haiku
+alone.
 
 **Linear:** Team Bryan Chan (BRY), team ID
 `01328a7f-d761-4176-8bbf-004a397dc6f7`
