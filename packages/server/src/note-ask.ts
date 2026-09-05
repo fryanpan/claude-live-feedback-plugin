@@ -110,9 +110,16 @@ const ACT_NOUN =
  * noun with at most one word in between ("your final call"). The board's own
  * people arrive as `personNames`, because hard-coding one person's name into
  * product code in a public repo is a leak, not a rule.
+ *
+ * `my` and `our` are NOT possessives here, and their absence is a fix rather
+ * than an omission (PR 691 review). The possessive says whose ACT is being
+ * waited for, and the writer of a task note is the agent: "Pending my review
+ * of the diff" and "waiting on our own rerun" are the agent describing its
+ * OWN next step, which is the opposite of an ask to a person. Every other
+ * possessive here points away from the writer, which is what makes it an ask.
  */
 const PRONOUN_HEAD = 'you|him|her|them|us|person|owner|human|somebody|someone';
-const POSSESSIVE = 'your|his|her|their|our|my';
+const POSSESSIVE = 'your|his|her|their';
 
 function escapeForRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

@@ -138,6 +138,13 @@ export function resolveServerConfig(opts: {
   // told in the same tool result, and revising is one call.
   const heldReviewItemMs = positiveEnvDuration(env, 'CW_HELD_ITEM_MINUTES', MINUTE_MS);
 
+  // How long a row the lead was ALREADY TOLD ABOUT may stay stuck before the
+  // board files over the lead's head, onto the reader's own queue
+  // (stall-escalation.ts). Minutes, like the stall window, and tunable
+  // without a release for the same reason the repeat window is: it decides
+  // how often a person is interrupted by their own board.
+  const stallEscalateMs = positiveEnvDuration(env, 'CW_STALL_ESCALATE_MINUTES', MINUTE_MS);
+
   // Extra hostnames to treat as LOCAL. Loopback, the tailnet name, this
   // machine's LAN names, and private IPv4 ranges are detected automatically;
   // this covers anything we can't detect (a reverse proxy in front, a custom
@@ -567,6 +574,7 @@ export function resolveServerConfig(opts: {
     stallBuilderSilentMultiplier,
     stallNudgeRepeatMs,
     heldReviewItemMs,
+    stallEscalateMs,
     allowedOrigins,
     sharingEnvLocked,
     requireEmailAuth,
