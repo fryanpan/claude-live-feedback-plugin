@@ -26,7 +26,7 @@ async function withServer(
   extraArgs: string[],
   body: (port: number, headers: Record<string, string>) => Promise<void>,
 ): Promise<void> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'lf-deploy-wiring-'));
+  const dataDir = mkdtempSync(join(tmpdir(), 'cw-deploy-wiring-'));
   const port = 9700 + Math.floor(Math.random() * 250);
   const child = spawn(
     'bun',

@@ -36,7 +36,7 @@ afterEach(async () => {
 
 /** A workspaces-app dist with the files the root aliases point at. */
 function fakeClient(): string {
-  const dir = tmp('lf-push-app-');
+  const dir = tmp('cw-push-app-');
   writeFileSync(join(dir, 'app.js'), '//app\n');
   writeFileSync(join(dir, 'index.html'), '<!--shell-->\n');
   writeFileSync(join(dir, 'sw.js'), '/*service worker marker*/\n');
@@ -47,7 +47,7 @@ function fakeClient(): string {
 }
 
 async function start(opts: { client?: boolean; publicBaseUrl?: string } = {}) {
-  const dataDir = tmp('lf-push-data-');
+  const dataDir = tmp('cw-push-data-');
   const server = createServer({
     port: 0,
     dataDir,

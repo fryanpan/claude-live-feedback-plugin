@@ -95,7 +95,7 @@ describe('doc homes through the binding', () => {
   let rooms: Rooms;
 
   beforeEach(() => {
-    tmp = realpathSync(mkdtempSync(join(tmpdir(), 'lf-homebind-')));
+    tmp = realpathSync(mkdtempSync(join(tmpdir(), 'cw-homebind-')));
     dataDir = join(tmp, 'data');
     mkdirSync(dataDir);
     main = join(tmp, 'repo');

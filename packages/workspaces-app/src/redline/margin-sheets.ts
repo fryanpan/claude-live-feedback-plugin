@@ -14,7 +14,7 @@ import type { MountScope } from '../mount-scope.ts';
 
 /**
  * The mobile fallback for a deletion balloon: a bottom sheet showing the
- * deleted markdown, opened by tapping a `.lf-del-chip` (live-markup.ts).
+ * deleted markdown, opened by tapping a `.cw-del-chip` (live-markup.ts).
  *
  * Built from the SAME DOM structure and CSS classes as review-chrome.ts's
  * full-screen thread view (`.thread-view` / `.thread-view-header` /
@@ -23,13 +23,13 @@ import type { MountScope } from '../mount-scope.ts';
  * already knows. A distinct element rather than the literal `#thread-view`
  * singleton: that element's state machine (`threadViewId`, the reply bar,
  * resolve/reopen) is thread-specific, and overloading it for plain deleted
- * text would tangle two unrelated concerns. `.lf-del-sheet` is the only
+ * text would tangle two unrelated concerns. `.cw-del-sheet` is the only
  * extra class — every positioning/animation rule comes from `.thread-view`
  * for free.
  */
 export function mountDeletionSheet(scope: MountScope): { open: (text: string) => void } {
   const sheet = document.createElement('div');
-  sheet.className = 'thread-view lf-del-sheet hidden';
+  sheet.className = 'thread-view cw-del-sheet hidden';
   sheet.setAttribute('role', 'dialog');
   sheet.setAttribute('aria-label', 'Deleted text');
   sheet.setAttribute('aria-hidden', 'true');
@@ -39,10 +39,10 @@ export function mountDeletionSheet(scope: MountScope): { open: (text: string) =>
       <h2 class="thread-view-title">Deleted</h2>
       <button type="button" class="icon-btn thread-view-close" aria-label="Close" title="Close">×</button>
     </header>
-    <div class="thread-view-body"><div class="lf-del-sheet-text"></div></div>
+    <div class="thread-view-body"><div class="cw-del-sheet-text"></div></div>
   `;
   document.body.appendChild(sheet);
-  const textEl = sheet.querySelector('.lf-del-sheet-text') as HTMLElement;
+  const textEl = sheet.querySelector('.cw-del-sheet-text') as HTMLElement;
 
   function close(): void {
     sheet.classList.add('hidden');
@@ -63,7 +63,7 @@ export function mountDeletionSheet(scope: MountScope): { open: (text: string) =>
 /**
  * The mobile fallback for a suggestion balloon: a bottom sheet showing the
  * SAME card the balloon renders (author, age, "replace X with Y", Accept /
- * Reject), opened by tapping a `.lf-suggest-chip` (suggestion-chips.ts).
+ * Reject), opened by tapping a `.cw-suggest-chip` (suggestion-chips.ts).
  * `render` builds that card — passed in rather than duplicated, so
  * accept/reject wire to the identical fetch calls the balloon uses.
  * Structurally identical to `mountDeletionSheet` above.
@@ -73,7 +73,7 @@ export function mountSuggestionSheet(
   render: (s: suggestOps.SuggestionSummary) => HTMLElement,
 ): { open: (s: suggestOps.SuggestionSummary) => void; closeIfShowing: (sid: string) => void } {
   const sheet = document.createElement('div');
-  sheet.className = 'thread-view lf-suggest-sheet hidden';
+  sheet.className = 'thread-view cw-suggest-sheet hidden';
   sheet.setAttribute('role', 'dialog');
   sheet.setAttribute('aria-label', 'Suggested edit');
   sheet.setAttribute('aria-hidden', 'true');
@@ -83,10 +83,10 @@ export function mountSuggestionSheet(
       <h2 class="thread-view-title">Suggestion</h2>
       <button type="button" class="icon-btn thread-view-close" aria-label="Close" title="Close">×</button>
     </header>
-    <div class="thread-view-body"><div class="lf-suggest-sheet-body"></div></div>
+    <div class="thread-view-body"><div class="cw-suggest-sheet-body"></div></div>
   `;
   document.body.appendChild(sheet);
-  const bodyEl = sheet.querySelector('.lf-suggest-sheet-body') as HTMLElement;
+  const bodyEl = sheet.querySelector('.cw-suggest-sheet-body') as HTMLElement;
 
   let openSid: string | null = null;
   function close(): void {

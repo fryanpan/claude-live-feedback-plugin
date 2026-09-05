@@ -42,7 +42,7 @@ describe('the bound-file write lane', () => {
 
   beforeEach(() => {
     boundFiles.reset();
-    dataDir = mkdtempSync(join(tmpdir(), 'lf-write-lane-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-write-lane-'));
     path = join(dataDir, 'Notes.md');
     writeFileSync(path, 'first line\n');
     rooms = new Rooms({

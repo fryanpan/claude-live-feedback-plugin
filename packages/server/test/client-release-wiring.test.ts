@@ -10,7 +10,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..', '..', '..');
 
 function fakeBuild(marker: string): { dir: string; widget: string; markdownApp: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'lf-build-'));
+  const dir = mkdtempSync(join(tmpdir(), 'cw-build-'));
   const widget = join(dir, 'widget');
   const markdownApp = join(dir, 'workspaces-app');
   mkdirSync(widget, { recursive: true });
@@ -32,7 +32,7 @@ function fakeBuild(marker: string): { dir: string; widget: string; markdownApp: 
  */
 describe('prepareClientRelease', () => {
   it('publishes a good build and reports it fresh', () => {
-    const root = mkdtempSync(join(tmpdir(), 'lf-releases-'));
+    const root = mkdtempSync(join(tmpdir(), 'cw-releases-'));
     const build = fakeBuild('gen-1');
     try {
       const got = prepareClientRelease({ root, sources: build });
@@ -45,7 +45,7 @@ describe('prepareClientRelease', () => {
   });
 
   it('keeps the live release when the new build is broken', () => {
-    const root = mkdtempSync(join(tmpdir(), 'lf-releases-'));
+    const root = mkdtempSync(join(tmpdir(), 'cw-releases-'));
     const good = fakeBuild('gen-1');
     const broken = fakeBuild('gen-2');
     rmSync(join(broken.markdownApp, 'app.js'));
@@ -61,7 +61,7 @@ describe('prepareClientRelease', () => {
   });
 
   it('reports nothing serveable when the first ever build is broken', () => {
-    const root = mkdtempSync(join(tmpdir(), 'lf-releases-'));
+    const root = mkdtempSync(join(tmpdir(), 'cw-releases-'));
     const broken = fakeBuild('gen-1');
     rmSync(join(broken.widget, 'widget.iife.js'));
     try {
@@ -83,8 +83,8 @@ describe('prepareClientRelease', () => {
  */
 describe('bin.ts --workspaces-app-dist / --widget-dist', () => {
   it('serves the release passed on the command line, not the repo dist', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'lf-releases-'));
-    const dataDir = mkdtempSync(join(tmpdir(), 'lf-data-'));
+    const root = mkdtempSync(join(tmpdir(), 'cw-releases-'));
+    const dataDir = mkdtempSync(join(tmpdir(), 'cw-data-'));
     const build = fakeBuild('published-release-marker');
     const rel = publishClientRelease({ root, sources: build });
     const port = 9100 + Math.floor(Math.random() * 400);
@@ -133,8 +133,8 @@ describe('bin.ts --workspaces-app-dist / --widget-dist', () => {
   it('forwards --client-release-root, so the board can see a stale client', async () => {
     // The signal is worth nothing if the flag that arms it is dropped in
     // argv parsing — and argv parsing here is hand-written string matching.
-    const root = mkdtempSync(join(tmpdir(), 'lf-releases-'));
-    const dataDir = mkdtempSync(join(tmpdir(), 'lf-data-'));
+    const root = mkdtempSync(join(tmpdir(), 'cw-releases-'));
+    const dataDir = mkdtempSync(join(tmpdir(), 'cw-data-'));
     const good = fakeBuild('gen-1');
     const broken = fakeBuild('gen-2');
     rmSync(join(broken.markdownApp, 'app.js'));

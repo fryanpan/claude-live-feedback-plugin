@@ -70,7 +70,7 @@ describe('doc.sync_error broadcast (in-process Rooms)', () => {
   let rooms: Rooms;
 
   beforeEach(() => {
-    dataDir = mkdtempSync(join(tmpdir(), 'lf-syncerr-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-syncerr-'));
     path = join(dataDir, 'doc.md');
     writeFileSync(path, DOC);
     sse = new SseHub();
@@ -157,7 +157,7 @@ describe('doc.sync_error reaches a watching SSE stream (HTTP end-to-end)', () =>
   let path: string;
 
   beforeEach(() => {
-    dataDir = mkdtempSync(join(tmpdir(), 'lf-syncerr-http-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-syncerr-http-'));
     path = join(dataDir, 'doc.md');
     writeFileSync(path, DOC);
     handle = createServer({ port: 0, dataDir });

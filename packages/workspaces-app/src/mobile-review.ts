@@ -183,7 +183,7 @@ export function mountMobileReview(opts: MobileReviewOpts): MobileReview {
         // reason: someone else's reply must not wipe what you were typing.
         const draft = entry?.el.querySelector<HTMLTextAreaElement>('textarea')?.value;
         const el = opts.renderCard(t, draft || undefined);
-        el.classList.add('lf-inline-card');
+        el.classList.add('cw-inline-card');
         // A widget decoration is outside the document's content model, but
         // nothing stops native editing INSIDE the injected DOM unless the
         // widget opts out itself (same rule live-markup.ts's chip follows).
@@ -211,10 +211,10 @@ export function mountMobileReview(opts: MobileReviewOpts): MobileReview {
 
   function flash(el: HTMLElement): void {
     if (flashTimer) clearTimeout(flashTimer);
-    for (const other of Array.from(document.querySelectorAll('.lf-nav-flash')))
-      other.classList.remove('lf-nav-flash');
-    el.classList.add('lf-nav-flash');
-    flashTimer = setTimeout(() => el.classList.remove('lf-nav-flash'), NAV_FLASH_MS);
+    for (const other of Array.from(document.querySelectorAll('.cw-nav-flash')))
+      other.classList.remove('cw-nav-flash');
+    el.classList.add('cw-nav-flash');
+    flashTimer = setTimeout(() => el.classList.remove('cw-nav-flash'), NAV_FLASH_MS);
   }
 
   function centreCard(el: HTMLElement): void {

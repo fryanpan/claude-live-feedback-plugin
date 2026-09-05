@@ -38,7 +38,7 @@ describe('reparseFromDisk (markdown)', () => {
   let rooms: Rooms;
 
   beforeEach(() => {
-    dataDir = mkdtempSync(join(tmpdir(), 'lf-reparse-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-reparse-'));
     path = join(dataDir, 'doc.md');
     writeFileSync(path, DOC);
     rooms = makeRooms(dataDir);

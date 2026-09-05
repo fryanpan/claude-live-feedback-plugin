@@ -3128,7 +3128,7 @@ body.redline-mode #editor {
   overflow-y: auto;
 }
 
-body.redline-mode .ProseMirror ins.lf-ins {
+body.redline-mode .ProseMirror ins.cw-ins {
   background: #e6ffec;
   color: inherit;
   text-decoration: underline;
@@ -3139,7 +3139,7 @@ body.redline-mode .ProseMirror ins.lf-ins {
   padding: 0 1px;
 }
 
-body.redline-mode .ProseMirror del.lf-del {
+body.redline-mode .ProseMirror del.cw-del {
   background: #ffebe9;
   color: #57606a;
   text-decoration: line-through;
@@ -3151,12 +3151,12 @@ body.redline-mode .ProseMirror del.lf-del {
 
 /* Whole-block changes get a change bar, mirroring the source view's changed
    lines. The bar is on the block; the inline marks stay the fine detail. */
-body.redline-mode .ProseMirror [data-lf-change] {
+body.redline-mode .ProseMirror [data-cw-change] {
   position: relative;
   padding-left: 10px;
 }
 
-body.redline-mode .ProseMirror [data-lf-change]::before {
+body.redline-mode .ProseMirror [data-cw-change]::before {
   content: "";
   position: absolute;
   left: 0;
@@ -3167,29 +3167,29 @@ body.redline-mode .ProseMirror [data-lf-change]::before {
   background: #d0d7de;
 }
 
-body.redline-mode .ProseMirror .lf-block-ins::before {
+body.redline-mode .ProseMirror .cw-block-ins::before {
   background: var(--green-strong);
 }
 
-body.redline-mode .ProseMirror .lf-block-del::before {
+body.redline-mode .ProseMirror .cw-block-del::before {
   background: var(--red-strong);
 }
 
-body.redline-mode .ProseMirror .lf-block-changed::before {
+body.redline-mode .ProseMirror .cw-block-changed::before {
   background: #9a6700;
 }
 
 /* A deleted block is context, not the live document — recede it so the
    reviewer's eye lands on what the file says NOW. */
-body.redline-mode .ProseMirror .lf-block-del {
+body.redline-mode .ProseMirror .cw-block-del {
   opacity: 0.75;
 }
 
 /* Long unbreakable strings (URLs, hashes) inside a redlined block must wrap
    rather than force the page to scroll sideways — see the CSS Grid `1fr`
    overflow trap in docs/process/learnings.md. */
-body.redline-mode .ProseMirror ins.lf-ins,
-body.redline-mode .ProseMirror del.lf-del {
+body.redline-mode .ProseMirror ins.cw-ins,
+body.redline-mode .ProseMirror del.cw-del {
   overflow-wrap: anywhere;
 }
 
@@ -3210,7 +3210,7 @@ body.redline-mode #toggle-suggest-mode {
 
 /* The three-way toggle must not overflow a 430px viewport. */
 @media (max-width: 480px) {
-  body.redline-mode .ProseMirror [data-lf-change] {
+  body.redline-mode .ProseMirror [data-cw-change] {
     padding-left: 8px;
   }
 
@@ -3221,12 +3221,12 @@ body.redline-mode #toggle-suggest-mode {
 }
 
 @media (prefers-color-scheme: dark) {
-  body.redline-mode .ProseMirror ins.lf-ins {
+  body.redline-mode .ProseMirror ins.cw-ins {
     background: rgba(46, 160, 67, 0.2);
     text-decoration-color: #3fb950;
   }
 
-  body.redline-mode .ProseMirror del.lf-del {
+  body.redline-mode .ProseMirror del.cw-del {
     background: rgba(248, 81, 73, 0.15);
     color: #8b949e;
     text-decoration-color: #f85149;
@@ -3285,7 +3285,7 @@ body.redline-mode #toggle-suggest-mode {
    balloon column on a wide screen, at the pane's corners on a phone. Words
    on a wide screen (`.w`); glyph + count + arrow (`.m`) on a phone — see the
    INLINE THREAD CARDS block for that switch. */
-.lf-offscreen {
+.cw-offscreen {
   position: absolute;
   z-index: 25;
   display: inline-flex;
@@ -3309,32 +3309,32 @@ body.redline-mode #toggle-suggest-mode {
   text-align: center;
   white-space: normal;
 }
-.lf-offscreen[hidden] {
+.cw-offscreen[hidden] {
   display: none;
 }
-.lf-offscreen:hover {
+.cw-offscreen:hover {
   background: var(--bg-hover);
 }
-.lf-offscreen-top {
+.cw-offscreen-top {
   top: 8px;
 }
-.lf-offscreen-bottom {
+.cw-offscreen-bottom {
   bottom: 12px;
 }
-.lf-offscreen b {
+.cw-offscreen b {
   font-weight: 700;
 }
-.lf-offscreen .m {
+.cw-offscreen .m {
   display: none;
   font-size: 9px;
   color: var(--fg-muted);
 }
-.lf-offscreen-new {
+.cw-offscreen-new {
   color: var(--red);
 }
 
 /* One overlay for every leader line; never intercepts clicks. */
-.lf-leader-overlay {
+.cw-leader-overlay {
   position: absolute;
   top: 0;
   left: 0;
@@ -3342,14 +3342,14 @@ body.redline-mode #toggle-suggest-mode {
   overflow: visible;
 }
 
-.lf-leader {
+.cw-leader {
   stroke: var(--red-strong);
   stroke-width: 1.25;
   fill: none;
   opacity: 0.5;
 }
 
-.lf-balloon {
+.cw-balloon {
   position: absolute;
   left: 4px;
   right: 4px;
@@ -3365,7 +3365,7 @@ body.redline-mode #toggle-suggest-mode {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
 }
 
-.lf-balloon-label {
+.cw-balloon-label {
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
@@ -3375,13 +3375,13 @@ body.redline-mode #toggle-suggest-mode {
 }
 
 /* Deleted markdown shown verbatim; long tokens wrap instead of overflowing. */
-.lf-balloon-text {
+.cw-balloon-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   color: #57606a;
 }
 
-.lf-balloon-text.is-clamped {
+.cw-balloon-text.is-clamped {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 6;
@@ -3389,7 +3389,7 @@ body.redline-mode #toggle-suggest-mode {
   overflow: hidden;
 }
 
-.lf-balloon-expand {
+.cw-balloon-expand {
   margin-top: 4px;
   border: none;
   background: none;
@@ -3399,29 +3399,29 @@ body.redline-mode #toggle-suggest-mode {
   cursor: pointer;
 }
 
-.lf-balloon-expand:hover,
-.lf-balloon-expand:focus-visible {
+.cw-balloon-expand:hover,
+.cw-balloon-expand:focus-visible {
   text-decoration: underline;
 }
 
 /* Comment balloons ARE the drawer's `.thread` card (ThreadPanel.renderThread,
-   reused) plus these positioning/colour overrides — `.lf-balloon` gives it
+   reused) plus these positioning/colour overrides — `.cw-balloon` gives it
    the absolute-positioned box, this gives it an accent (not red) edge so it
    reads as a comment, not a deletion. Two classes on one element by design:
    see markup-margin.ts. */
-.lf-balloon-comment {
+.cw-balloon-comment {
   border-left-color: var(--accent);
   cursor: pointer;
 }
 
 /* The card's edge says what it is, in the same three colours as its glyph:
    amber for an open review item, green once answered or resolved. */
-.lf-balloon-comment.thread-kind-question {
+.cw-balloon-comment.thread-kind-question {
   border-left-color: var(--warn-fg, #b25e09);
   background: #fffaf3;
 }
-.lf-balloon-comment.thread-kind-answered,
-.lf-balloon-comment.thread-kind-resolved {
+.cw-balloon-comment.thread-kind-answered,
+.cw-balloon-comment.thread-kind-resolved {
   border-left-color: var(--green);
 }
 
@@ -3437,7 +3437,7 @@ body.redline-mode #toggle-suggest-mode {
    `offsetHeight`, which honours a max-height, so the column stacks the
    clamped height rather than the natural one. Same `min(<n>vh, <n>px)` shape
    as every other thing in this file that can outgrow its viewport. */
-.lf-balloon-comment.expanded {
+.cw-balloon-comment.expanded {
   max-height: min(70vh, 560px);
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -3454,33 +3454,33 @@ body.redline-mode #toggle-suggest-mode {
    click through the modal's scrim) and every one of them folds the card in
    place without telling the column. The stylesheet already uses `:has()` for
    the live zone's grid. */
-.markup-margin:has(.thread.active) .lf-balloon-comment:not(.active) {
+.markup-margin:has(.thread.active) .cw-balloon-comment:not(.active) {
   opacity: 0.42;
 }
-.markup-margin .lf-balloon-comment {
+.markup-margin .cw-balloon-comment {
   transition: opacity 0.12s ease;
 }
 @media (prefers-reduced-motion: reduce) {
-  .markup-margin .lf-balloon-comment {
+  .markup-margin .cw-balloon-comment {
     transition: none;
   }
 }
 /* Forward: out of the wash the others are in, above them in the stack, and
    lifted off the page. The border says which one without moving anything. */
-.markup-margin .lf-balloon-comment.active {
+.markup-margin .cw-balloon-comment.active {
   z-index: 3;
   background: var(--bg);
   border-color: var(--accent);
   box-shadow: 0 6px 18px rgba(27, 31, 35, 0.16);
 }
-/* The leader follows its balloon. `lf-leader-on` / `lf-leader-dim` are
+/* The leader follows its balloon. `cw-leader-on` / `cw-leader-dim` are
    written by positionBalloons — an SVG line in a detached overlay has no
    ancestor that knows which thread is selected. */
-.lf-leader-on {
+.cw-leader-on {
   stroke-width: 1.4;
   opacity: 1;
 }
-.lf-leader-dim {
+.cw-leader-dim {
   opacity: 0.35;
 }
 
@@ -3514,41 +3514,41 @@ body.redline-mode #toggle-suggest-mode {
 
 /* Balloon hover/focus: a subtle lift so the margin reads as a column of
    interactive cards, matching the drawer's own :hover treatment. Keyed off
-   `.lf-balloon` (not `.lf-balloon-del`, which has no click target of its
+   `.cw-balloon` (not `.cw-balloon-del`, which has no click target of its
    own — only its nested Show more/expand button and the sheet chip do). */
-.lf-balloon-comment:hover,
-.lf-balloon-comment:focus-visible {
+.cw-balloon-comment:hover,
+.cw-balloon-comment:focus-visible {
   border-color: var(--accent);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
 }
-.lf-balloon-comment:focus-visible {
+.cw-balloon-comment:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
-.lf-leader-comment {
+.cw-leader-comment {
   stroke: var(--accent);
 }
 
 /* The leader line lives in a separate SVG overlay, not nested inside the
-   balloon, so the balloon's inline `--lf-suggest-color` custom property
+   balloon, so the balloon's inline `--cw-suggest-color` custom property
    isn't in scope here — accent is the closest stand-in (same simplification
-   `.lf-leader-comment` already makes). */
-.lf-leader-suggestion {
+   `.cw-leader-comment` already makes). */
+.cw-leader-suggestion {
   stroke: var(--accent);
 }
 
 /* Suggestion balloon (redline-suggestions Phase 2, commit 5) — a THIRD kind
-   sharing the `.lf-balloon` card + the same layoutBalloons pass as deletions
+   sharing the `.cw-balloon` card + the same layoutBalloons pass as deletions
    and comments (markup-margin.ts). Author color drives the accent (the
-   `--lf-suggest-color` custom property set inline by buildSuggestionBalloon,
+   `--cw-suggest-color` custom property set inline by buildSuggestionBalloon,
    same hex-validated pattern as the live-doc marks in suggest-marks.ts);
    falls back to --accent for an unsafe/missing color. */
-.lf-balloon-suggestion {
-  border-left-color: var(--lf-suggest-color, var(--accent));
+.cw-balloon-suggestion {
+  border-left-color: var(--cw-suggest-color, var(--accent));
 }
 
-.lf-suggest-header {
+.cw-suggest-header {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -3556,30 +3556,30 @@ body.redline-mode #toggle-suggest-mode {
   font-size: 12px;
 }
 
-.lf-suggest-swatch {
+.cw-suggest-swatch {
   width: 8px;
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
 }
 
-.lf-suggest-author {
+.cw-suggest-author {
   font-weight: 600;
   color: var(--fg);
 }
 
-.lf-suggest-age {
+.cw-suggest-age {
   color: var(--fg-muted);
 }
 
 /* Old struck / new underlined — color never carries the meaning alone,
    same rule as the live-doc marks (styles.css, Suggested edits section). */
-.lf-suggest-old {
+.cw-suggest-old {
   text-decoration: line-through;
   color: var(--fg-muted);
 }
 
-.lf-suggest-new {
+.cw-suggest-new {
   text-decoration: underline;
   text-decoration-thickness: 2px;
   text-underline-offset: 2px;
@@ -3591,7 +3591,7 @@ body.redline-mode #toggle-suggest-mode {
    card; at most one is expanded at a time (markup-margin.ts owns the state).
    The nowrap + ellipsis pair does the truncation; min-width: 0 on the
    preview lets it actually shrink inside the flex row. */
-.lf-balloon-collapsed {
+.cw-balloon-collapsed {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -3599,17 +3599,17 @@ body.redline-mode #toggle-suggest-mode {
   cursor: pointer;
   white-space: nowrap;
 }
-.lf-balloon-collapsed .lf-balloon-label {
+.cw-balloon-collapsed .cw-balloon-label {
   margin-bottom: 0;
   flex: none;
 }
-.lf-collapsed-swatch {
+.cw-collapsed-swatch {
   flex: none;
   width: 8px;
   height: 8px;
   border-radius: 50%;
 }
-.lf-collapsed-name {
+.cw-collapsed-name {
   flex: none;
   max-width: 45%;
   overflow: hidden;
@@ -3617,7 +3617,7 @@ body.redline-mode #toggle-suggest-mode {
   font-size: 12px;
   font-weight: 600;
 }
-.lf-collapsed-preview {
+.cw-collapsed-preview {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -3625,7 +3625,7 @@ body.redline-mode #toggle-suggest-mode {
   font-size: 12px;
   color: var(--fg-muted, #656d76);
 }
-.lf-collapsed-count {
+.cw-collapsed-count {
   flex: none;
   min-width: 16px;
   padding: 0 4px;
@@ -3639,12 +3639,12 @@ body.redline-mode #toggle-suggest-mode {
 }
 /* Compact ✓ / ✕ on a collapsed suggestion — same classes (and therefore the
    same delegated behaviour) as the full card's Accept/Reject. */
-.lf-collapsed-actions {
+.cw-collapsed-actions {
   flex: none;
   display: flex;
   gap: 2px;
 }
-.lf-collapsed-actions button {
+.cw-collapsed-actions button {
   padding: 0 6px;
   font-size: 12px;
   line-height: 1.6;
@@ -3653,16 +3653,16 @@ body.redline-mode #toggle-suggest-mode {
   background: var(--bg-panel);
   cursor: pointer;
 }
-.lf-collapsed-actions .lf-suggest-accept:hover {
+.cw-collapsed-actions .cw-suggest-accept:hover {
   border-color: var(--green-strong);
   color: var(--green-strong);
 }
-.lf-collapsed-actions .lf-suggest-reject:hover {
+.cw-collapsed-actions .cw-suggest-reject:hover {
   border-color: var(--red-strong);
   color: var(--red-strong);
 }
 /* Collapse control on an expanded balloon, top-right. */
-.lf-balloon-collapse {
+.cw-balloon-collapse {
   position: absolute;
   top: 4px;
   right: 6px;
@@ -3674,18 +3674,18 @@ body.redline-mode #toggle-suggest-mode {
   line-height: 1.4;
   cursor: pointer;
 }
-.lf-balloon-collapse:hover,
-.lf-balloon-collapse:focus-visible {
+.cw-balloon-collapse:hover,
+.cw-balloon-collapse:focus-visible {
   color: var(--fg);
 }
 
-.lf-suggest-actions {
+.cw-suggest-actions {
   display: flex;
   gap: 8px;
   margin-top: 6px;
 }
 
-.lf-suggest-actions button {
+.cw-suggest-actions button {
   border: 1px solid var(--border);
   background: var(--bg);
   border-radius: var(--radius-pill);
@@ -3695,16 +3695,16 @@ body.redline-mode #toggle-suggest-mode {
   cursor: pointer;
 }
 
-.lf-suggest-actions button:hover {
+.cw-suggest-actions button:hover {
   background: var(--bg-hover);
 }
 
-.lf-suggest-accept {
+.cw-suggest-accept {
   color: var(--green-strong);
   border-color: var(--green-strong);
 }
 
-.lf-suggest-reject {
+.cw-suggest-reject {
   color: var(--red-strong);
   border-color: var(--red-strong);
 }
@@ -3718,13 +3718,13 @@ body.redline-mode #toggle-suggest-mode {
    much room there was and never what device this was.
 
    Everywhere the margin is not in force, the column and leader lines
-   disappear and `.lf-del-chip` (live-markup.ts, one per deletion group — same
-   grouping as the balloon) and `.lf-suggest-chip` (suggestion-chips.ts, one
+   disappear and `.cw-del-chip` (live-markup.ts, one per deletion group — same
+   grouping as the balloon) and `.cw-suggest-chip` (suggestion-chips.ts, one
    per sid) take over as the fallback. `display: block` restores the
    single-column flow — no 260px track means no horizontal scroll at 430px.
 
    BOTH chips are revealed from here, in the EDITOR sheet, though only the
-   deletion chip is styled here. `.lf-suggest-chip`'s shape stays in
+   deletion chip is styled here. `.cw-suggest-chip`'s shape stays in
    styles.css because SuggestionChips is a base extension and the board's
    task-body editor mints that chip too — but the board writes no
    `body[data-cards]`, so a reveal keyed on placement would fire there at
@@ -3736,12 +3736,12 @@ body:not([data-cards="balloon"]) #editor.redline-layout {
 }
 
 body:not([data-cards="balloon"]) .markup-margin,
-body:not([data-cards="balloon"]) .lf-leader-overlay {
+body:not([data-cards="balloon"]) .cw-leader-overlay {
   display: none;
 }
 
-body:not([data-cards="balloon"]) .lf-del-chip,
-body:not([data-cards="balloon"]) .lf-suggest-chip {
+body:not([data-cards="balloon"]) .cw-del-chip,
+body:not([data-cards="balloon"]) .cw-suggest-chip {
   display: inline-flex;
 }
 
@@ -3755,7 +3755,7 @@ body[data-cards="inline"]:not(.is-reading-width) #editor.redline-layout > .Prose
   max-width: min(100%, 900px);
 }
 
-/* Mobile deletion chip (`.lf-del-chip`, live-markup.ts widget decoration) —
+/* Mobile deletion chip (`.cw-del-chip`, live-markup.ts widget decoration) —
    a compact, tappable inline marker standing in for the balloon that's
    hidden at this width. Hidden by default (desktop shows the balloon
    instead); the media query above is what actually reveals it ≤1100px, so
@@ -3763,7 +3763,7 @@ body[data-cards="inline"]:not(.is-reading-width) #editor.redline-layout > .Prose
    fixed 36px box — gives the tap target room without blowing out the
    surrounding line's height; see docs/product/design-mobile.md's tap-target
    guidance, relaxed here because this chip sits inline in flowing prose. */
-.lf-del-chip {
+.cw-del-chip {
   display: none;
   align-items: center;
   gap: 3px;
@@ -3779,23 +3779,23 @@ body[data-cards="inline"]:not(.is-reading-width) #editor.redline-layout > .Prose
   white-space: nowrap;
 }
 
-.lf-del-chip:hover {
+.cw-del-chip:hover {
   background: var(--bg-hover);
   border-color: var(--border-strong);
 }
-.lf-del-chip:focus-visible {
+.cw-del-chip:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
 /* The mobile deletion sheet (mountDeletionSheet, markup-margin.ts) — opened
-   by tapping a `.lf-del-chip`. `.thread-view` (styles.css, FULL-SCREEN THREAD
+   by tapping a `.cw-del-chip`. `.thread-view` (styles.css, FULL-SCREEN THREAD
    VIEW section above) supplies the fixed slide-up sheet, header, drag handle,
-   and close button for free; `.lf-del-sheet` adds nothing positional, only
+   and close button for free; `.cw-del-sheet` adds nothing positional, only
    marks this as a distinct instance from the comment thread-view. The text
    itself wraps rather than overflowing — same long-unbreakable-token rule as
-   the balloon (`.lf-balloon-text`) and docs/product/design-mobile.md. */
-.lf-del-sheet-text {
+   the balloon (`.cw-balloon-text`) and docs/product/design-mobile.md. */
+.cw-del-sheet-text {
   font-family: var(--prose);
   font-size: 16px;
   line-height: 1.6;
@@ -3806,18 +3806,18 @@ body[data-cards="inline"]:not(.is-reading-width) #editor.redline-layout > .Prose
 }
 
 /* The mobile suggestion sheet (mountSuggestionSheet, markup-margin.ts) —
-   opened by tapping a `.lf-suggest-chip`. Reuses `.thread-view` for the
+   opened by tapping a `.cw-suggest-chip`. Reuses `.thread-view` for the
    sheet chrome AND reuses `buildSuggestionBalloon`'s own card for the body
    (same DOM the desktop balloon renders) — these overrides only neutralize
    the balloon's absolute-positioning rules, which apply only inside the
    margin column. */
-.lf-suggest-sheet .lf-balloon {
+.cw-suggest-sheet .cw-balloon {
   position: static;
   left: auto;
   right: auto;
   box-shadow: none;
   border: none;
-  border-left: 3px solid var(--lf-suggest-color, var(--accent));
+  border-left: 3px solid var(--cw-suggest-color, var(--accent));
   border-radius: 0;
   padding: 4px 4px 4px 12px;
   font-size: 15px;
@@ -3835,41 +3835,41 @@ body[data-cards="inline"]:not(.is-reading-width) #editor.redline-layout > .Prose
   }
 
   .markup-margin,
-  .lf-leader-overlay,
-  .lf-del-chip,
-  .lf-del-sheet,
-  .lf-suggest-sheet {
+  .cw-leader-overlay,
+  .cw-del-chip,
+  .cw-del-sheet,
+  .cw-suggest-sheet {
     display: none !important;
   }
 }
 
 @media (prefers-color-scheme: dark) {
-  .lf-balloon {
+  .cw-balloon {
     border-left-color: #f85149;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
   }
 
-  .lf-balloon-label {
+  .cw-balloon-label {
     color: #f85149;
   }
 
-  .lf-balloon-text {
+  .cw-balloon-text {
     color: #8b949e;
   }
 
-  .lf-leader {
+  .cw-leader {
     stroke: #f85149;
   }
 
-  .lf-del-chip {
+  .cw-del-chip {
     color: #f85149;
   }
 
   /* --accent is not theme-varying (styles.css defines it once at :root), so
-     .lf-balloon-comment / .lf-leader-comment / .lf-balloon-suggestion /
-     .lf-leader-suggestion need no dark override — they already read
+     .cw-balloon-comment / .cw-leader-comment / .cw-balloon-suggestion /
+     .cw-leader-suggestion need no dark override — they already read
      var(--accent) via the base rules above. The suggestion marks and chip
-     read the author's own --lf-suggest-color the same way, and are in
+     read the author's own --cw-suggest-color the same way, and are in
      styles.css. */
 }
 
@@ -3883,7 +3883,7 @@ body[data-cards="inline"]:not(.is-reading-width) #editor.redline-layout > .Prose
    Only threads with a line to sit beside appear here (open, resolvable
    anchor). Orphaned and resolved threads live in the bottom sheet, which is
    the THREADS PANE block above. */
-.lf-inline-card {
+.cw-inline-card {
   margin: 10px 0 14px;
   /* Code scrolls sideways; the card must not, or reading a comment on a long
      line would need a horizontal scroll of its own. */
@@ -3897,12 +3897,12 @@ body[data-cards="inline"]:not(.is-reading-width) #editor.redline-layout > .Prose
   padding: 10px 12px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
 }
-.lf-inline-card.thread-kind-question {
+.cw-inline-card.thread-kind-question {
   border-left-color: var(--warn-fg, #b25e09);
   background: #fffaf3;
 }
-.lf-inline-card.thread-kind-answered,
-.lf-inline-card.thread-kind-resolved {
+.cw-inline-card.thread-kind-answered,
+.cw-inline-card.thread-kind-resolved {
   border-left-color: var(--green);
 }
 /* The off-screen hints at phone widths float over the prose — the margin
@@ -3912,22 +3912,22 @@ body[data-cards="inline"]:not(.is-reading-width) #editor.redline-layout > .Prose
    dock that grows a line can never cover it. Glyph + count + arrow only —
    the words are the wide screen's. */
 @media (max-width: 1100px) {
-  .lf-offscreen {
+  .cw-offscreen {
     gap: 6px;
     padding: 6px 10px;
     min-height: 34px;
   }
-  .lf-offscreen-top {
+  .cw-offscreen-top {
     right: 12px;
   }
-  .lf-offscreen-bottom {
+  .cw-offscreen-bottom {
     left: 12px;
   }
-  .lf-offscreen .w,
+  .cw-offscreen .w,
   .doc-asks .w {
     display: none;
   }
-  .lf-offscreen .m {
+  .cw-offscreen .m {
     display: inline;
   }
   .doc-asks {
@@ -3937,7 +3937,7 @@ body[data-cards="inline"]:not(.is-reading-width) #editor.redline-layout > .Prose
 }
 /* Inside CodeMirror the card is a block widget in a monospace, pre-wrapped
    context — reset both, or the comment renders as code. */
-.cm-content .lf-inline-card {
+.cm-content .cw-inline-card {
   font-family: var(--sans);
   font-size: 14px;
   white-space: normal;
@@ -3953,16 +3953,16 @@ body[data-cards="inline"]:not(.is-reading-width) #editor.redline-layout > .Prose
   position: sticky;
   left: 0;
   box-sizing: border-box;
-  width: var(--lf-inline-card-w, 100%);
-  max-width: var(--lf-inline-card-w, 100%);
+  width: var(--cw-inline-card-w, 100%);
+  max-width: var(--cw-inline-card-w, 100%);
 }
 /* Where the ‹ › nav just landed. Deliberately brief and colour-only: the
    card has already been scrolled to the middle of the screen, so this only
    has to answer "which one". */
-.lf-inline-card.lf-nav-flash {
-  animation: lf-inline-flash 900ms ease-out;
+.cw-inline-card.cw-nav-flash {
+  animation: cw-inline-flash 900ms ease-out;
 }
-@keyframes lf-inline-flash {
+@keyframes cw-inline-flash {
   0% {
     background: var(--accent-soft, rgba(46, 125, 215, 0.16));
   }
@@ -3971,7 +3971,7 @@ body[data-cards="inline"]:not(.is-reading-width) #editor.redline-layout > .Prose
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .lf-inline-card.lf-nav-flash {
+  .cw-inline-card.cw-nav-flash {
     animation: none;
     outline: 2px solid var(--accent);
   }
@@ -3981,6 +3981,6 @@ body[data-cards="inline"]:not(.is-reading-width) #editor.redline-layout > .Prose
    over from a placement flip can never sit in the middle of the prose. Keyed
    on `body[data-cards]` — the same attribute the margin reads — so exactly one
    comment surface is on screen at a time, whatever the width. */
-body:not([data-cards="inline"]) .lf-inline-card {
+body:not([data-cards="inline"]) .cw-inline-card {
   display: none;
 }

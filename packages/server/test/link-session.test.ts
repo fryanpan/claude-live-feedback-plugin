@@ -65,7 +65,7 @@ describe('cookie plumbing', () => {
 
 describe('key file', () => {
   it('generates once, is stable, and is mode 600', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'lf-cookie-key-'));
+    const dir = mkdtempSync(join(tmpdir(), 'cw-cookie-key-'));
     try {
       const first = loadCookieKey(dir);
       expect(first.length).toBeGreaterThanOrEqual(32);
@@ -78,8 +78,8 @@ describe('key file', () => {
   });
 
   it('differs per data dir', () => {
-    const a = mkdtempSync(join(tmpdir(), 'lf-key-a-'));
-    const b = mkdtempSync(join(tmpdir(), 'lf-key-b-'));
+    const a = mkdtempSync(join(tmpdir(), 'cw-key-a-'));
+    const b = mkdtempSync(join(tmpdir(), 'cw-key-b-'));
     try {
       expect(loadCookieKey(a)).not.toBe(loadCookieKey(b));
     } finally {

@@ -111,5 +111,10 @@ export function isMintedDocId(docId: string): boolean {
  * product, so it should reach the same agent from every hub rather than
  * whoever happens to own the workspace you were standing in. The anchor's
  * url carries which hub it came from.
+ *
+ * The value keeps the prefix of the old product name on purpose. It is not a
+ * class name: it names a doc that already exists in the corpus, so changing
+ * the string orphans every comment written on the hub so far. Renaming it is
+ * a migration, not a rename pass.
  */
 export const HUB_FEEDBACK_DOC_ID = 'lf-hub-feedback';
