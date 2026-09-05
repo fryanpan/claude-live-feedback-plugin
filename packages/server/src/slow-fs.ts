@@ -36,7 +36,42 @@
  * consumed on first use, never served twice.
  */
 import { readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { basename, sep } from 'node:path';
 import { ROOM_TIMINGS } from './room-timings.ts';
+
+/**
+ * The folders whose full paths must not reach a log line.
+ *
+ * A quarantine line names the file that stopped answering, and the whole
+ * point of naming it is that the next incident is diagnosable from the error
+ * log. But the paths most likely to appear in one are exactly the private
+ * ones — a cloud-sync folder is where the hostile files live — and this
+ * server's logs are read, pasted into tickets and quoted in PR bodies. A
+ * basename says which file without saying whose folder it sits in or what
+ * else is filed beside it.
+ *
+ * Only these two roots are redacted, not every path. A bound doc under a
+ * checkout is the ordinary case and its path is what makes the line useful.
+ */
+const PRIVATE_ROOTS = ['Dropbox', 'Documents'];
+
+/**
+ * A path safe to log: the basename alone when it sits under a private root,
+ * otherwise the path itself.
+ *
+ * Exported for the test that asserts a quarantine line cannot carry a
+ * `~/Dropbox` path — the assertion has to run the real function, or it is
+ * only checking a string this file could stop using.
+ */
+export function redactBoundPath(path: string): string {
+  const home = homedir();
+  for (const root of PRIVATE_ROOTS) {
+    const prefix = `${home}${sep}${root}${sep}`;
+    if (path.startsWith(prefix)) return `<${root}>/${basename(path)}`;
+  }
+  return path;
+}
 
 /**
  * The deadline and the backoff live in `room-timings.ts` with every other
@@ -105,6 +140,11 @@ export type BoundStatResult =
 function isEnoent(err: unknown): boolean {
   const code = (err as NodeJS.ErrnoException | undefined)?.code;
   return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
+/** The errno of a failed syscall, for the quarantine line's reason. */
+function errnoOf(err: unknown): string | undefined {
+  return (err as NodeJS.ErrnoException | undefined)?.code;
 }
 
 /**
@@ -214,7 +254,7 @@ class BoundFileReader {
       // trouble as a timeout one step earlier, so they earn the same backoff
       // — otherwise a provider that errors fast gets retried as hard as the
       // reconnect loop can ask.
-      this.markStalled(path, raced.err);
+      this.markStalled(path, errnoOf(raced.err) ?? 'read failed', raced.err);
       return { status: 'unavailable', reason: 'error' };
     }
     const result: Extract<BoundReadResult, { status: 'ok' }> = {
@@ -319,7 +359,7 @@ class BoundFileReader {
         this.noteUnusable(path, raced.err, 'read');
         return { status: 'unavailable', reason: 'error' };
       }
-      this.markStalled(path, raced.err);
+      this.markStalled(path, errnoOf(raced.err) ?? 'stat failed', raced.err);
       return { status: 'unavailable', reason: 'error' };
     }
     return { status: 'ok', exists: true, mtimeMs: raced.value.mtimeMs };
@@ -374,17 +414,33 @@ class BoundFileReader {
         if (now - at >= RETRY_MS) this.unusableLoggedAt.delete(seen);
       }
     }
-    console.error(`[slow-fs] ${path} could not be ${verb}; the doc keeps its .ydoc content`, err);
+    console.error(
+      `[slow-fs] ${redactBoundPath(path)} could not be ${verb}; the doc keeps its .ydoc content`,
+      err,
+    );
   }
 
-  private markStalled(path: string, err?: unknown): void {
+  /**
+   * Quarantine a path, and say so once.
+   *
+   * `reason` is what the next incident is read back through: a `timeout` is a
+   * provider that never answered (a download, or a consent dialog), while an
+   * errno is a provider that answered badly. The two call for different
+   * things and the log line is the only place that distinction survives.
+   *
+   * The FIRST missed deadline quarantines. There is no counter to reach:
+   * `BOUND_READ_MAX_OVERDUE` gates the whole pool, not this path, so a file
+   * that hangs once is skipped by every later caller for the backoff rather
+   * than being given three more chances to hold a thread.
+   */
+  private markStalled(path: string, reason: string, err?: unknown): void {
     const first = !this.stalledUntil.has(path);
     this.stalledUntil.set(path, Date.now() + RETRY_MS);
     // Once per stall, not once per attempt: the reconnect loop that exposed
     // this bug would otherwise write a log line per second per subscriber.
     if (first) {
       console.error(
-        `[slow-fs] ${path} did not answer within ${DEADLINE_MS}ms; parking it for ${Math.round(RETRY_MS / 1000)}s`,
+        `[slow-fs] quarantined ${redactBoundPath(path)} for ${Math.round(RETRY_MS / 1000)}s (${reason}); callers park their doc and keep its .ydoc content`,
         err ?? '',
       );
     }
@@ -445,7 +501,7 @@ class BoundFileReader {
         counted = true;
         this.leaked++;
       }
-      this.markStalled(path);
+      this.markStalled(path, `no answer in ${DEADLINE_MS}ms`);
     }
     return outcome;
   }

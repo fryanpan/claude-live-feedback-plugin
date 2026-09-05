@@ -106,7 +106,7 @@ import {
 import { type ArchivedDoc, type ArchivedReview } from './review-archive.ts';
 import { CONTENT_REVISION_ORIGIN, RoomFanout, type RoomFanoutHost } from './room-fanout.ts';
 import { ROOM_TIMINGS } from './room-timings.ts';
-import { boundFiles } from './slow-fs.ts';
+import { boundFiles, redactBoundPath } from './slow-fs.ts';
 import type { SseHub } from './sse.ts';
 import type { ScheduleArgs, ThreadSummarizer } from './summarize.ts';
 import type { WebhookDispatcher } from './webhooks.ts';
@@ -1217,7 +1217,12 @@ export class Rooms {
    * hydration exists to prevent — so a second, drifting copy of this logic is
    * the thing most worth not having.
    */
-  private hydrateDoc(docId: string): boolean {
+  private hydrateDoc(docId: string, opts: { defer?: boolean } = {}): boolean {
+    // Whether a path nobody has read yet may be handed to the thread pool and
+    // the bind retried when it lands. True for every ordinary caller; false
+    // only for the retry itself, so one deferred bind can never schedule
+    // another and loop.
+    const defer = opts.defer !== false;
     // Server authority: hydration re-admits ids that ALREADY EXIST on disk,
     // including the `task:` and `ws:` rooms the projection wrote. Refusing
     // them here would not close a hole — the room is already persisted — it
@@ -1249,7 +1254,7 @@ export class Rooms {
         );
         return false;
       }
-      const homePre = this.prereadFor(docId, placement.absPath);
+      const homePre = this.prereadFor(docId, placement.absPath, defer);
       if (homePre === 'unavailable') return false;
       this.bindings.retargetHomeBinding(room, placement.absPath, {
         liveWins,
@@ -1258,9 +1263,9 @@ export class Rooms {
       return this.bindings.has(docId);
     }
     if (!src) return false;
-    const preread = this.prereadFor(docId, src);
+    const preread = this.prereadFor(docId, src, defer);
     if (preread === 'unavailable') return false;
-    if (preread ? !preread.exists : !existsSync(src)) return false;
+    if (!preread.exists) return false;
     const attachOpts: AttachOpts = { liveWins, ...(preread ? { preread } : {}) };
     if (contentKind(room.meta.type) === 'prose') {
       return this.attachFile(docId, src, attachOpts).ok;
@@ -1302,7 +1307,11 @@ export class Rooms {
    * are already parked in the pool with their threads unreturned, which is
    * the signature of a folder that has stopped answering.
    */
-  private prereadFor(docId: string, path: string): PrereadFile | 'unavailable' | undefined {
+  private prereadFor(
+    docId: string,
+    path: string,
+    defer: boolean,
+  ): PrereadFile | 'unavailable' {
     const fresh = boundFiles.takeFresh(path);
     if (fresh) {
       return fresh.exists
@@ -1310,14 +1319,77 @@ export class Rooms {
         : { exists: false };
     }
     if (boundFiles.quarantined(path)) {
-      console.warn(`[rooms] ${docId}: bound file is not answering; writes parked (${path})`);
+      console.warn(
+        `[rooms] ${docId}: bound file is not answering; writes parked (${redactBoundPath(path)})`,
+      );
       return 'unavailable';
     }
     if (boundFiles.busy()) {
-      console.warn(`[rooms] ${docId}: bound reads are backed up; writes parked (${path})`);
+      console.warn(
+        `[rooms] ${docId}: bound reads are backed up; writes parked (${redactBoundPath(path)})`,
+      );
       return 'unavailable';
     }
-    return undefined;
+    // Nobody prewarmed this path, and that used to fall through to a
+    // BLOCKING read inside `attachFile`. That is the door the 2026-09-04
+    // outage came through, and closing only the request routes left it wide:
+    // the per-request prewarm reads docIds out of the URL, so a docId in a
+    // request BODY (`POST /api/docs`), a route that fans out over a board's
+    // docIds (`listThreads` from the home queue, the workspace listing, the
+    // archive route) and every background timer reached this line with
+    // nothing in hand and opened the file on the only thread that runs
+    // JavaScript.
+    //
+    // So there is no synchronous read left to fall through to. The doc parks
+    // exactly as it does for a quarantined path — content from its `.ydoc`,
+    // no binding, nothing written over bytes we have not read — and the read
+    // is handed to the pool, which either brings the bytes back and binds a
+    // moment later or quarantines the path and says so once.
+    if (defer) this.bindAfterRead(docId, path);
+    return 'unavailable';
+  }
+
+  /**
+   * Docs whose binding is waiting on a pool read. One retry in flight per doc:
+   * a board's fan-out asks for the same doc from several callers in the same
+   * tick, and each of those must not start its own read.
+   */
+  private readonly deferredBinds = new Set<string>();
+
+  /**
+   * Read a doc's bound file off the main thread, then bind it.
+   *
+   * The asynchronous half of a hydrate that could not read its file inline.
+   * `hydrateDoc` is synchronous and stays that way — dozens of callers depend
+   * on `get` answering in one turn — so a doc whose bytes are not in hand
+   * comes back UNBOUND and binds a moment later, rather than blocking
+   * everything else while its file is opened.
+   *
+   * Re-running `hydrateDoc` is deliberate over re-implementing the attach
+   * here: it is the same code that decides doc-home placement, prose versus
+   * flat, and write-back eligibility, and a second copy of that decision is
+   * exactly the drift this method would be worth avoiding. `defer: false`
+   * stops it scheduling another retry, so this runs at most once per hydrate.
+   */
+  private bindAfterRead(docId: string, path: string): void {
+    if (this.deferredBinds.has(docId)) return;
+    this.deferredBinds.add(docId);
+    void boundFiles
+      .read(path)
+      .then(() => {
+        // Evicted while the read ran, or bound by somebody else — either way
+        // there is nothing here to do, and re-hydrating an evicted doc would
+        // pull it back into memory as a side effect of a read it never asked
+        // for.
+        if (!this.rooms.has(docId) || this.bindings.has(docId)) return;
+        this.hydrateDoc(docId, { defer: false });
+      })
+      .catch((err) => {
+        console.error(`[rooms] ${docId}: deferred bind failed:`, err);
+      })
+      .finally(() => {
+        this.deferredBinds.delete(docId);
+      });
   }
 
   /**
