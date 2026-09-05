@@ -20,7 +20,7 @@ import { createWebhookDispatcher } from '../src/webhooks.ts';
 import { pastExternalRead, waitFor, waitForFile } from './wait-for.ts';
 
 /**
- * Doc homes through the real binding machinery: a pinned doc's file is "the
+ * Doc origin repos through the real binding machinery: a pinned doc's file is "the
  * declared relPath in whichever worktree has the declared branch checked
  * out", re-verified before every flush and every disk→doc apply. The
  * incident being pinned down: a checkout switching branches under a bound
@@ -87,7 +87,7 @@ function writeExternal(path: string, content: string): void {
 
 const REL = 'docs/plans/triage.md';
 
-describe('doc homes through the binding', () => {
+describe('doc origin repos through the binding', () => {
   let tmp: string;
   let dataDir: string;
   let main: string;
@@ -116,7 +116,7 @@ describe('doc homes through the binding', () => {
   });
 
   it('pinning exports the doc into the branch worktree and flushes land there', async () => {
-    const res = docStore.setDocHome('d1', { repoRoot: main, branch: 'plans', relPath: REL });
+    const res = docStore.setDocOriginRepo('d1', { repoRoot: main, branch: 'plans', relPath: REL });
     if (!res.ok) throw new Error(JSON.stringify(res));
     expect(res.placement).toEqual({ placed: true, path: join(wt, REL) });
     expect(readFileSync(join(wt, REL), 'utf8')).toContain('first pass');
@@ -129,18 +129,22 @@ describe('doc homes through the binding', () => {
 
   it('refuses homes that are not homes', () => {
     expect(
-      docStore.setDocHome('d1', { repoRoot: join(tmp, 'nope'), branch: 'x', relPath: 'a.md' }),
+      docStore.setDocOriginRepo('d1', {
+        repoRoot: join(tmp, 'nope'),
+        branch: 'x',
+        relPath: 'a.md',
+      }),
     ).toMatchObject({ ok: false, error: 'invalid-home' });
     expect(
-      docStore.setDocHome('d1', { repoRoot: main, branch: 'main', relPath: '../escape.md' }),
+      docStore.setDocOriginRepo('d1', { repoRoot: main, branch: 'main', relPath: '../escape.md' }),
     ).toMatchObject({ ok: false, error: 'invalid-home' });
     expect(
-      docStore.setDocHome('ghost', { repoRoot: main, branch: 'main', relPath: 'a.md' }),
+      docStore.setDocOriginRepo('ghost', { repoRoot: main, branch: 'main', relPath: 'a.md' }),
     ).toMatchObject({ ok: false, error: 'not-found' });
   });
 
   it('a checkout that switches branches is never written again; the flush follows the branch', async () => {
-    docStore.setDocHome('d1', { repoRoot: main, branch: 'plans', relPath: REL });
+    docStore.setDocOriginRepo('d1', { repoRoot: main, branch: 'plans', relPath: REL });
     // Drain the export's own write-back instead of outwaiting it: flush() is
     // the shutdown path, so the file is on disk before git looks at it.
     docStore.flush();
@@ -161,11 +165,11 @@ describe('doc homes through the binding', () => {
 
     // The old checkout — now on somebody's feature branch — is untouched.
     expect(readFileSync(join(wt, REL), 'utf8')).toBe(before);
-    expect(docStore.docHomeStatus('d1')?.boundPath).toBe(join(wt2, REL));
+    expect(docStore.docOriginRepoStatus('d1')?.boundPath).toBe(join(wt2, REL));
   });
 
   it('no checkout on the branch parks writes, says why, and resumes when one appears', async () => {
-    docStore.setDocHome('d1', { repoRoot: main, branch: 'plans', relPath: REL });
+    docStore.setDocOriginRepo('d1', { repoRoot: main, branch: 'plans', relPath: REL });
     // Drain the export's own write-back instead of outwaiting it: flush() is
     // the shutdown path, so the file is on disk before git looks at it.
     docStore.flush();
@@ -185,7 +189,7 @@ describe('doc homes through the binding', () => {
     expect(readFileSync(join(wt, REL), 'utf8')).toBe(before);
     // The live doc kept the edit and the park is named.
     expect(docText(docStore, 'd1')).toContain('parked pass');
-    expect(docStore.docHomeStatus('d1')?.placement).toEqual({
+    expect(docStore.docOriginRepoStatus('d1')?.placement).toEqual({
       placed: false,
       reason: 'no-checkout-on-branch',
     });
@@ -197,7 +201,7 @@ describe('doc homes through the binding', () => {
   });
 
   it('a branch switch rewriting the bound file must not leak foreign content into the live doc', async () => {
-    docStore.setDocHome('d1', { repoRoot: main, branch: 'plans', relPath: REL });
+    docStore.setDocOriginRepo('d1', { repoRoot: main, branch: 'plans', relPath: REL });
     // Drain the export's own write-back instead of outwaiting it: flush() is
     // the shutdown path, so the file is on disk before git looks at it.
     docStore.flush();
@@ -215,7 +219,7 @@ describe('doc homes through the binding', () => {
   });
 
   it('a direct write at the home colliding with un-flushed live edits loses to the live copy', async () => {
-    docStore.setDocHome('d1', { repoRoot: main, branch: 'plans', relPath: REL });
+    docStore.setDocOriginRepo('d1', { repoRoot: main, branch: 'plans', relPath: REL });
     // Settle the export's write-back so the edit below is the only un-flushed
     // one when the external write collides with it.
     docStore.flush();
@@ -234,7 +238,7 @@ describe('doc homes through the binding', () => {
    * parked instance and the path a re-checkout will get.
    */
   async function parkAtHydrate(): Promise<{ docStore2: DocStore; wt2: string }> {
-    docStore.setDocHome('d1', { repoRoot: main, branch: 'plans', relPath: REL });
+    docStore.setDocOriginRepo('d1', { repoRoot: main, branch: 'plans', relPath: REL });
     // Drain the export's own write-back instead of outwaiting it: flush() is
     // the shutdown path, so the file is on disk before git looks at it.
     docStore.flush();
@@ -247,7 +251,7 @@ describe('doc homes through the binding', () => {
 
     const docStore2 = makeDocStore(dataDir);
     expect(docText(docStore2, 'd1')).toContain('first pass');
-    expect(docStore2.docHomeStatus('d1')?.placement).toEqual({
+    expect(docStore2.docOriginRepoStatus('d1')?.placement).toEqual({
       placed: false,
       reason: 'no-checkout-on-branch',
     });
@@ -258,7 +262,7 @@ describe('doc homes through the binding', () => {
     const { docStore2, wt2 } = await parkAtHydrate();
 
     // The branch gets a checkout again; the next EDIT must re-place the
-    // home — the recovery homeGuard provides for live parks hangs off a
+    // home — the recovery originRepoGuard provides for live parks hangs off a
     // binding this doc doesn't have.
     git(main, 'worktree', 'add', wt2, 'plans');
     setProse(docStore2, 'd1', '# Triage\n\nback from the dead\n');
@@ -266,7 +270,7 @@ describe('doc homes through the binding', () => {
     // checkout's stale copy win, the doc is already reverted HERE — assert
     // it now so a failure names the revert, not a write that never came.
     expect(docText(docStore2, 'd1')).toContain('back from the dead');
-    expect(docStore2.docHomeStatus('d1')?.boundPath).toBe(join(wt2, REL));
+    expect(docStore2.docOriginRepoStatus('d1')?.boundPath).toBe(join(wt2, REL));
     await waitForFileText(join(wt2, REL), 'back from the dead');
     expect(readFileSync(join(wt2, REL), 'utf8')).toContain('back from the dead');
     await docStore2.flush();
@@ -287,7 +291,7 @@ describe('doc homes through the binding', () => {
     setProse(docStore2, 'd1', '# Triage\n\nback from the dead\n');
     expect(docText(docStore2, 'd1')).toContain('back from the dead');
     expect(docText(docStore2, 'd1')).not.toContain('first pass');
-    expect(docStore2.docHomeStatus('d1')?.boundPath).toBe(join(wt2, REL));
+    expect(docStore2.docOriginRepoStatus('d1')?.boundPath).toBe(join(wt2, REL));
     await waitForFileText(join(wt2, REL), 'back from the dead');
     // The losing side is backed up, never silently discarded.
     const backups = readdirSync(join(dataDir, 'clobber-backups')).map((f) =>
@@ -298,7 +302,7 @@ describe('doc homes through the binding', () => {
   }, 15_000);
 
   it('a forced reparse must not pull a switched checkout’s branch copy into the doc', async () => {
-    docStore.setDocHome('d1', { repoRoot: main, branch: 'plans', relPath: REL });
+    docStore.setDocOriginRepo('d1', { repoRoot: main, branch: 'plans', relPath: REL });
     // Drain the export's own write-back instead of outwaiting it: flush() is
     // the shutdown path, so the file is on disk before git looks at it.
     docStore.flush();
@@ -320,16 +324,16 @@ describe('doc homes through the binding', () => {
     const wt2 = join(tmp, 'wt-plans-again');
     git(main, 'worktree', 'add', wt2, 'plans');
     expect(docStore.reparseFromDisk('d1').ok).toBe(true);
-    expect(docStore.docHomeStatus('d1')?.boundPath).toBe(join(wt2, REL));
+    expect(docStore.docOriginRepoStatus('d1')?.boundPath).toBe(join(wt2, REL));
     expect(docText(docStore, 'd1')).toContain('first pass');
   });
 
   it('a home declared from a linked worktree survives that worktree’s removal', async () => {
     // Declared via the LINKED checkout's path — the stored root must be the
     // repo's durable identity, not the spelling the caller happened to use.
-    const res = docStore.setDocHome('d1', { repoRoot: wt, branch: 'plans', relPath: REL });
+    const res = docStore.setDocOriginRepo('d1', { repoRoot: wt, branch: 'plans', relPath: REL });
     if (!res.ok) throw new Error(JSON.stringify(res));
-    expect(docStore.docHomeStatus('d1')?.home.repoRoot).toBe(main);
+    expect(docStore.docOriginRepoStatus('d1')?.home.repoRoot).toBe(main);
     docStore.flush();
     git(wt, 'add', '-A');
     git(wt, 'commit', '-m', 'plan v1');
@@ -341,14 +345,14 @@ describe('doc homes through the binding', () => {
 
     setProse(docStore, 'd1', '# Triage\n\noutlived the checkout\n');
     await waitForFileText(join(wt2, REL), 'outlived the checkout');
-    expect(docStore.docHomeStatus('d1')?.placement).toEqual({
+    expect(docStore.docOriginRepoStatus('d1')?.placement).toEqual({
       placed: true,
       path: join(wt2, REL),
     });
   });
 
   it('a restart re-resolves the home, including a worktree that moved while the server was down', async () => {
-    docStore.setDocHome('d1', { repoRoot: main, branch: 'plans', relPath: REL });
+    docStore.setDocOriginRepo('d1', { repoRoot: main, branch: 'plans', relPath: REL });
     // Drain the export's own write-back instead of outwaiting it: flush() is
     // the shutdown path, so the file is on disk before git looks at it.
     docStore.flush();

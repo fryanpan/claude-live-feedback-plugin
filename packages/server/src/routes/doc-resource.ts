@@ -1,7 +1,7 @@
 /**
  * The `/api/docs/:id/...` resource block's first family: the doc's own
  * surface — read, delete, its task chips, the plan/review/research asks the
- * meeting floats fire, its repo home, and the read-only content/status/diff
+ * meeting floats fire, its origin repo, and the read-only content/status/diff
  * views. Split out of `routes/docs.ts`'s `handleDocResourceRoutes`, which
  * still owns the `/api/docs/:id/...` match and the `docId`/`room`/`rest`
  * resolution — see that file's header for why call order across the three
@@ -309,25 +309,25 @@ export async function handleDocResourceCore(
       placeholder: placed.ok,
     });
   }
-  // --- The doc's repo home: pin, read, unpin. OWNER ONLY — a home is
+  // --- The doc's origin repo: pin, read, unpin. OWNER ONLY — a home is
   // host paths, which a share visitor must never see. The visitor
   // allowlist in host-guard already refuses unknown doc subroutes;
   // this is the local stop for the collab-host path.
   if (rest === 'home') {
     if (visitor) return j(403, { error: 'not available on a share' });
     if (req.method === 'GET') {
-      const status = docStore.docHomeStatus(docId);
+      const status = docStore.docOriginRepoStatus(docId);
       return status ? j(200, { docId, ...status }) : j(404, { error: 'no home pinned' });
     }
     if (req.method === 'PUT') {
       const body = await safeJson(req);
       // Accept `{ home: {...} }` or the three fields at top level.
-      const res = docStore.setDocHome(docId, body?.home ?? body);
+      const res = docStore.setDocOriginRepo(docId, body?.home ?? body);
       if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
       return j(200, { docId, home: res.home, placement: res.placement });
     }
     if (req.method === 'DELETE') {
-      const res = docStore.clearDocHome(docId);
+      const res = docStore.clearDocOriginRepo(docId);
       return res.ok ? j(200, { docId, ok: true }) : j(404, { error: 'no home pinned' });
     }
     return j(405, { error: 'method not allowed' });

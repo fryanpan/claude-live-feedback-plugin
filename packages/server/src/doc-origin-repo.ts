@@ -8,27 +8,27 @@ import {
   resolve as resolvePath,
   sep,
 } from 'node:path';
-import type { DocHome } from '@feedback/core';
+import type { DocOriginRepo } from '@feedback/core';
 
 /**
- * A doc's HOME: the repo+branch+path where its on-disk copy belongs.
+ * A doc's ORIGIN REPO: the repo+branch+path where its on-disk copy belongs.
  *
  * The model (Bryan, 2026-08-20): the workspace holds the doc's identity and
  * primary copy; the file is an artifact whose location may move. A checkout
  * is not a location — the same path serves every branch that checkout ever
  * switches to, which is how a triage doc once flushed onto another session's
- * feature branch. So a home names the BRANCH, and resolving it means asking
+ * feature branch. So an origin repo names the BRANCH, and resolving it means asking
  * "which worktree of this repo has that branch checked out right now?".
  *
  * Everything here is pure filesystem reads of git's own plumbing files
  * (`.git`, `commondir`, `worktrees/<name>/gitdir`, `HEAD`) — no subprocess. That
- * is deliberate: `verifyPathInHome` runs on the synchronous flush path in
+ * is deliberate: `verifyPathInOriginRepo` runs on the synchronous flush path in
  * doc-store.ts, where a spawn would need the budget-and-SIGKILL machinery
  * git-provenance.ts carries (and it earns it only by running on a rare
  * conflict arm; a per-flush guard cannot). The layout read here is the same
  * one `git worktree list` prints from, stable across git versions.
  *
- * Every reader returns null / a refusal on anything unexpected — a home that
+ * Every reader returns null / a refusal on anything unexpected — an origin repo that
  * cannot be resolved must degrade to "writes parked, doc stays durable in
  * the .ydoc", never to a throw on the flush path.
  */
@@ -72,7 +72,7 @@ export function gitCommonDir(worktreeRoot: string): string | null {
 }
 
 /**
- * The durable spelling of a repoRoot: the MAIN checkout's root. A home (or
+ * The durable spelling of a repoRoot: the MAIN checkout's root. An origin repo (or
  * notes home) declared from a linked worktree would otherwise die with that
  * worktree — every resolver starts at `gitCommonDir(repoRoot)`, which needs
  * the declared path to still exist — even though the repo and the pinned
@@ -116,13 +116,13 @@ export function findWorktreeRoot(absPath: string): string | null {
   }
 }
 
-export type HomePlacement =
+export type OriginRepoPlacement =
   | { placed: true; worktreeRoot: string; absPath: string }
   | { placed: false; reason: 'repo-missing' | 'no-checkout-on-branch' | 'path-escapes-checkout' };
 
 /**
  * Does `root`/`relPath` stay inside `root` once symlinks are resolved? The
- * lexical checks in normalizeDocHome catch `..` spellings, but a SYMLINKED
+ * lexical checks in normalizeDocOriginRepo catch `..` spellings, but a SYMLINKED
  * parent directory inside the checkout can point anywhere — the joined path
  * looks contained while the bytes land outside the repo. Resolve the nearest
  * EXISTING ancestor (the file itself may not exist yet) and compare real
@@ -188,46 +188,54 @@ function listWorktrees(common: string): Array<{ root: string; branch: string | n
 }
 
 /**
- * Where a home's file belongs RIGHT NOW: the worktree with `home.branch`
+ * Where an origin repo's file belongs RIGHT NOW: the worktree with `originRepo.branch`
  * checked out (git itself guarantees at most one), joined with the relPath.
  * `repoRoot` may be ANY checkout of the repo — the common dir is the
- * identity, so the home keeps resolving after the checkout it was declared
+ * identity, so the origin repo keeps resolving after the checkout it was declared
  * from is gone.
  */
-export function resolveHomeCheckout(home: DocHome): HomePlacement {
-  const common = gitCommonDir(home.repoRoot);
+export function resolveOriginRepoCheckout(originRepo: DocOriginRepo): OriginRepoPlacement {
+  const common = gitCommonDir(originRepo.repoRoot);
   if (!common) return { placed: false, reason: 'repo-missing' };
   for (const wt of listWorktrees(common)) {
-    if (wt.branch === home.branch) {
-      if (placementEscapesRoot(wt.root, home.relPath)) {
+    if (wt.branch === originRepo.branch) {
+      if (placementEscapesRoot(wt.root, originRepo.relPath)) {
         return { placed: false, reason: 'path-escapes-checkout' };
       }
-      return { placed: true, worktreeRoot: wt.root, absPath: join(wt.root, home.relPath) };
+      return { placed: true, worktreeRoot: wt.root, absPath: join(wt.root, originRepo.relPath) };
     }
   }
   return { placed: false, reason: 'no-checkout-on-branch' };
 }
 
-export type HomeVerdict = 'ok' | 'wrong-branch' | 'wrong-path' | 'outside-repo' | 'repo-missing';
+export type OriginRepoVerdict =
+  | 'ok'
+  | 'wrong-branch'
+  | 'wrong-path'
+  | 'outside-repo'
+  | 'repo-missing';
 
 /**
- * Is `absFilePath` still the home's file? The per-flush guard: cheap enough
+ * Is `absFilePath` still the origin repo's file? The per-flush guard: cheap enough
  * to run before every write AND every disk→doc apply on a pinned doc, so a
  * checkout that switched branches under the binding is caught before either
  * direction moves bytes — not after the flush already landed on someone
  * else's feature branch, and not after the poll already pulled that branch's
  * copy into the live doc.
  */
-export function verifyPathInHome(absFilePath: string, home: DocHome): HomeVerdict {
-  const common = gitCommonDir(home.repoRoot);
+export function verifyPathInOriginRepo(
+  absFilePath: string,
+  originRepo: DocOriginRepo,
+): OriginRepoVerdict {
+  const common = gitCommonDir(originRepo.repoRoot);
   if (!common) return 'repo-missing';
   const wtRoot = findWorktreeRoot(absFilePath);
   if (!wtRoot) return 'outside-repo';
   if (gitCommonDir(wtRoot) !== common) return 'outside-repo';
-  if (checkoutBranch(wtRoot) !== home.branch) return 'wrong-branch';
+  if (checkoutBranch(wtRoot) !== originRepo.branch) return 'wrong-branch';
   const rel = relative(wtRoot, resolvePath(absFilePath)).split(sep).join('/');
-  if (rel !== home.relPath) return 'wrong-path';
-  // The lexical spelling is the home's; make sure the BYTES stay in the
+  if (rel !== originRepo.relPath) return 'wrong-path';
+  // The lexical spelling is the origin repo's; make sure the BYTES stay in the
   // checkout too — a symlinked parent directory would pass every check
   // above while the write lands outside the repo.
   if (placementEscapesRoot(wtRoot, rel)) return 'outside-repo';
@@ -235,13 +243,13 @@ export function verifyPathInHome(absFilePath: string, home: DocHome): HomeVerdic
 }
 
 /**
- * Validate a caller-supplied home into the canonical shape, or say what is
+ * Validate a caller-supplied origin repo into the canonical shape, or say what is
  * wrong with it in words the caller can act on. relPath is the one field
  * that can reach outside the worktree, so it gets the traversal checks.
  */
-export function normalizeDocHome(
+export function normalizeDocOriginRepo(
   input: unknown,
-): { ok: true; home: DocHome } | { ok: false; error: string } {
+): { ok: true; home: DocOriginRepo } | { ok: false; error: string } {
   if (typeof input !== 'object' || input === null) {
     return { ok: false, error: 'home must be an object { repoRoot, branch, relPath }' };
   }

@@ -36,7 +36,7 @@
  * `defaultBoardWorkspaceId` stay internal: nothing outside this module reached
  * them before the move, and a wider surface is a wider thing to keep true.
  */
-import { type DocMeta, normalizeEmail, reviewIdOf } from '@feedback/core';
+import { type DocMeta, attachmentIdOf, normalizeEmail } from '@feedback/core';
 import type { DocStore } from './doc-store.ts';
 import type { ShareTarget } from './middleware/host-guard.ts';
 import { renderShareLinkUnavailable } from './share/share-link-page.ts';
@@ -139,10 +139,10 @@ export interface WatchCoverage {
  * So a review goes on its workspace as ONE row and its members stay off,
  * because a hundred-file review is one unit of work, not a hundred.
  *
- * A REVIEW (`meta.setId`, returned as `reviewId` by `bindDiff`) is the tag
+ * A REVIEW (`meta.setId`, returned as `attachmentId` by `bindDiff`) is the tag
  * binding the member docs of one folder bind or diff review together. It is
  * content, not a container of tasks: it has no doc room of its own, and it
- * is read through `/api/reviews/<setId>/tree|threads`. `reviewIdOf` in
+ * is read through `/api/reviews/<setId>/tree|threads`. `attachmentIdOf` in
  * `@feedback/core` is the one place a member's review id is derived.
  *
  * Note the board page no longer LISTS attachments: the Docs and
@@ -202,7 +202,7 @@ export interface BoardMembership {
   /** The coverage readout for one agent's watch set. */
   watchCoverageFor: (agentId: string, keys: string[]) => WatchCoverage;
   /** The board a doc's "back" affordance should return to, or null. */
-  backTargetFor: (docId: string, reviewId?: string) => { id: string; name: string } | null;
+  backTargetFor: (docId: string, attachmentId?: string) => { id: string; name: string } | null;
   /** Put an attachment on a board workspace and answer which one. */
   fileUnderBoardWorkspace: (attachmentId: string, requested?: string) => string;
   /** Filing onto a real board takes it out of the default holding pen. */
@@ -254,10 +254,10 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
     // fix belongs here and not in each of them.
     const id = docStore.resolveDocId(rawId);
     const out = new Set<string>();
-    const reviewId = reviewIdOf(docStore.peekMeta(id) ?? {});
-    if (reviewId) out.add(reviewId);
+    const attachmentId = attachmentIdOf(docStore.peekMeta(id) ?? {});
+    if (attachmentId) out.add(attachmentId);
     for (const board of boardWorkspacesHolding(id)) out.add(board);
-    if (reviewId) for (const board of boardWorkspacesHolding(reviewId)) out.add(board);
+    if (attachmentId) for (const board of boardWorkspacesHolding(attachmentId)) out.add(board);
     return Array.from(out);
   };
 
@@ -458,8 +458,8 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
    */
   function boardsForDoc(docId: string): Set<string> {
     const boards = new Set(boardWorkspacesHolding(docId));
-    const reviewId = reviewIdOf(docStore.peekMeta(docId) ?? {});
-    if (reviewId) for (const board of boardWorkspacesHolding(reviewId)) boards.add(board);
+    const attachmentId = attachmentIdOf(docStore.peekMeta(docId) ?? {});
+    if (attachmentId) for (const board of boardWorkspacesHolding(attachmentId)) boards.add(board);
     return boards;
   }
 
@@ -519,8 +519,8 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
    *  row's meta, so the review id is read from it rather than re-fetched. */
   function boardsForDocIndexed(index: Map<string, string[]>, meta: DocMeta): Set<string> {
     const boards = new Set(heldByIndexed(index, meta.docId));
-    const reviewId = reviewIdOf(meta);
-    if (reviewId) for (const board of heldByIndexed(index, reviewId)) boards.add(board);
+    const attachmentId = attachmentIdOf(meta);
+    if (attachmentId) for (const board of heldByIndexed(index, attachmentId)) boards.add(board);
     return boards;
   }
 
@@ -539,7 +539,7 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
       id && taskStore.getWorkspace(id) ? id : null;
     return (
       pick(heldByIndexed(index, meta.docId)[0]) ??
-      pick(heldByIndexed(index, reviewIdOf(meta) ?? '')[0])
+      pick(heldByIndexed(index, attachmentIdOf(meta) ?? '')[0])
     );
   }
 
@@ -726,14 +726,17 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
    * than none, because "back to one of this doc's boards" beats "back to the
    * index of everything on the machine", which is what the arrow does today.
    */
-  const backTargetFor = (docId: string, reviewId?: string): { id: string; name: string } | null => {
+  const backTargetFor = (
+    docId: string,
+    attachmentId?: string,
+  ): { id: string; name: string } | null => {
     const pick = (id: string | undefined): { id: string; name: string } | null => {
       if (!id) return null;
       const ws = taskStore.getWorkspace(id);
       return ws ? { id: ws.id, name: ws.name } : null;
     };
     return (
-      pick(boardWorkspacesHolding(docId)[0]) ?? pick(boardWorkspacesHolding(reviewId ?? '')[0])
+      pick(boardWorkspacesHolding(docId)[0]) ?? pick(boardWorkspacesHolding(attachmentId ?? '')[0])
     );
   };
 
