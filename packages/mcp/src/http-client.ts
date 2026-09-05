@@ -54,16 +54,30 @@ export function resolveBaseUrl(deps: DiscoveryDeps): string {
 
 export type Http = (method: string, path: string, body?: unknown) => Promise<unknown>;
 
-/** The REST call every tool goes through; throws on a non-2xx. */
+/**
+ * The REST call every tool goes through; throws on a non-2xx.
+ *
+ * `authHeaders` is this session's agent bearer (see agent-token.ts). It goes
+ * on EVERY call rather than only on the two agent-id-keyed routes, because
+ * this whole process is that one agent and a header the server does not read
+ * costs nothing — while a per-route allowlist here would be a second place
+ * for the route list to drift out of step with the server's. It resolves to
+ * `{}` whenever no token could be had, which is what this client sent before
+ * the header existed.
+ */
 export function createHttp(
   resolve: () => string,
   fetchFn: (url: string, init?: RequestInit) => Promise<Response> = fetch,
+  authHeaders: () => Promise<Record<string, string>> = async () => ({}),
 ): Http {
   return async (method, path, body) => {
     const baseUrl = resolve();
     const res = await fetchFn(`${baseUrl}${path}`, {
       method,
-      headers: body ? { 'content-type': 'application/json' } : {},
+      headers: {
+        ...(body ? { 'content-type': 'application/json' } : {}),
+        ...(await authHeaders()),
+      },
       body: body ? JSON.stringify(body) : undefined,
     });
     const text = await res.text();

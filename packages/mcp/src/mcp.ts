@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { createAgentTokenStore } from './agent-token.ts';
 import { createAttachmentKeepalive } from './attachment-keepalive.ts';
 import { createAttachments } from './attachments.ts';
 import { resolveAgentAuthor } from './author.ts';
@@ -282,6 +283,21 @@ const watchers = new Map<string, Watcher>();
 const IDENTITY_IS_SHARED = isSharedIdentity(AUTHOR.id);
 
 /**
+ * This session's proof that it is AUTHOR and not some other agent whose name
+ * happens to be readable on the board. See agent-token.ts — fetched once,
+ * held for the process, and never fatal: no token means the header is absent,
+ * which is what this client sent before the header existed and what the
+ * server still accepts through its deprecation window.
+ */
+const agentTokens = createAgentTokenStore({
+  agentId: AUTHOR.id,
+  resolveBaseUrl,
+  fetch: (url, init) => fetch(url, init),
+  log: (...args) => console.error(...args),
+  identityIsShared: IDENTITY_IS_SHARED,
+});
+
+/**
  * This session's attachments, bound to this process. See attachments.ts — the
  * heartbeat rides real tool calls because that is the only honest evidence
  * this agent is alive AND working.
@@ -357,6 +373,8 @@ const muxLoop = createMuxLoop({
   log: (...args) => console.error(...args),
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   timers: loopTimers,
+  authHeaders: () => agentTokens.headers(),
+  forgetToken: () => agentTokens.forget(),
 });
 
 /**
@@ -398,7 +416,11 @@ const restore = createWatchRestore({
 const { ensureWatchesRestored } = restore;
 
 /** The REST call every tool goes through; throws on a non-2xx. */
-const http = createHttp(resolveBaseUrl);
+const http = createHttp(
+  resolveBaseUrl,
+  (url, init) => fetch(url, init),
+  () => agentTokens.headers(),
+);
 
 const transport = new StdioServerTransport();
 // Once the client has finished initializing (not merely connected — the MCP

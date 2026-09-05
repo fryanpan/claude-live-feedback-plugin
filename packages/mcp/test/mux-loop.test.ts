@@ -75,7 +75,11 @@ type Attempt = { url: string; headers: Record<string, string> | undefined };
 
 function harness(
   script: Array<() => Response | Promise<Response>>,
-  opts: { keys?: string[]; handleFrame?: (raw: string) => Promise<void> } = {},
+  opts: {
+    keys?: string[];
+    handleFrame?: (raw: string) => Promise<void>;
+    authHeaders?: () => Promise<Record<string, string>>;
+  } = {},
 ) {
   const watchers = new Map<string, Watcher>();
   for (const key of opts.keys ?? ['doc-a']) {
@@ -87,6 +91,7 @@ function harness(
   const sleeps: number[] = [];
   let resets = 0;
   let next = 0;
+  let forgotten = 0;
   let stopAfterScript: (() => void) | null = null;
   const loop = createMuxLoop({
     watchers,
@@ -119,9 +124,22 @@ function harness(
     // are readable and nothing samples a real random.
     random: () => 0.5,
     timers: { set: () => 0, clear: () => {} },
+    ...(opts.authHeaders ? { authHeaders: opts.authHeaders } : {}),
+    forgetToken: () => {
+      forgotten += 1;
+    },
   });
   stopAfterScript = () => loop.stop();
-  return { loop, watchers, attempts, delivered, logged, sleeps, resets: () => resets };
+  return {
+    loop,
+    watchers,
+    attempts,
+    delivered,
+    logged,
+    sleeps,
+    resets: () => resets,
+    forgotten: () => forgotten,
+  };
 }
 
 /** Let the loop's own awaits run. */
@@ -178,7 +196,11 @@ describe('the reconnect presents a per-key cursor', () => {
     await settle();
     await settle();
 
-    expect(h.attempts[0]?.headers).toBeUndefined();
+    // Named rather than asserting the whole header bag is absent: the
+    // connect now always carries one (the agent bearer rides in it), and
+    // what this case is about is that a FRESH subscription asks for no
+    // replay.
+    expect(h.attempts[0]?.headers?.['Last-Event-ID']).toBeUndefined();
     // Most-recently-advanced first, so a budget cut drops the quiet key.
     expect(h.attempts[1]?.headers?.['Last-Event-ID']).toBe('mux1:doc-b=boot1:5,doc-a=boot1:4');
     h.loop.stop();
@@ -393,5 +415,47 @@ describe('a position is not held forever', () => {
     }
     expect(cursors.size).toBe(MUX_CURSOR_MAX_KEYS);
     expect(cursors.get('busy')).toBe(`b:${MUX_CURSOR_MAX_KEYS}`);
+  });
+});
+
+describe('the stream proves which agent it is', () => {
+  it('carries the agent bearer on the connect, alongside the cursor', async () => {
+    const h = harness([() => sse(':ok\n\n')], {
+      authHeaders: async () => ({ authorization: 'Bearer at1.agent-mira.macbytes' }),
+    });
+    await h.loop.ensureOpen();
+    await settle();
+    expect(h.attempts[0]?.headers?.authorization).toBe('Bearer at1.agent-mira.macbytes');
+  });
+
+  it('sends no authorization when no token could be had', async () => {
+    // The deprecation window from this side: a client that cannot mint one
+    // connects exactly as it did before the header existed.
+    const h = harness([() => sse(':ok\n\n')], { authHeaders: async () => ({}) });
+    await h.loop.ensureOpen();
+    await settle();
+    expect(h.attempts[0]?.headers?.authorization).toBeUndefined();
+  });
+
+  it('forgets a token the server refuses, so the redial mints a fresh one', async () => {
+    // What a server-side key rotation looks like from here. Without the
+    // drop the loop would redial the same dead value until the session ends.
+    const h = harness([() => sse('', 403), () => sse(':ok\n\n')], {
+      authHeaders: async () => ({ authorization: 'Bearer at1.agent-mira.stale' }),
+    });
+    await h.loop.ensureOpen();
+    await settle();
+    expect(h.forgotten()).toBe(1);
+  });
+
+  it('does not forget the token on an ordinary connect failure', async () => {
+    // A 502 from a restarting server says nothing about the token. Dropping
+    // it there would mint on every blip.
+    const h = harness([() => sse('', 502), () => sse(':ok\n\n')], {
+      authHeaders: async () => ({ authorization: 'Bearer at1.agent-mira.fine' }),
+    });
+    await h.loop.ensureOpen();
+    await settle();
+    expect(h.forgotten()).toBe(0);
   });
 });
