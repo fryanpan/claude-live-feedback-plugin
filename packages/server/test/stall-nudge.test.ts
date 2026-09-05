@@ -547,6 +547,75 @@ describe('a finding that flickers off the list is not an escalation', () => {
     expect(sent).toHaveLength(1);
   });
 
+  /**
+   * The hold expires WITH the row that earned it.
+   *
+   * Holding the board's high-water bucket until the board went wholly clean
+   * made it a ratchet: a board that always has at least one finding would keep
+   * a number some long-gone row set, and every later row's repeat window would
+   * be swallowed until it passed that number. The repeat window is the whole
+   * reason a bad board is ever said twice, so a hold that outlives its own row
+   * switches it off (found reviewing this fix, with this probe).
+   */
+  it('lets the NEXT row escalate on its own clock once the held row is forgotten', () => {
+    const { world, sent, nudger } = harness({ repeatMs: 60 * MIN });
+    world.boards[0]!.stalled = [{ ...ROW }];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    // The old row is picked up and worked; a different row goes quiet. News,
+    // because nobody has ever been told about it.
+    world.now += MIN;
+    world.boards[0]!.stalled = [{ ...YOUNGER, quietMs: 5 * MIN }];
+    nudger.tick();
+    expect(sent).toHaveLength(2);
+
+    // Past the old row's whole repeat window: it is forgotten, and with it the
+    // bucket it was speaking for. The new row has now crossed a window of its
+    // own, which is exactly what the repeat is for.
+    world.now += 61 * MIN;
+    world.boards[0]!.stalled = [{ ...YOUNGER, quietMs: 61 * MIN }];
+    nudger.tick();
+
+    expect(sent).toHaveLength(3);
+    expect(sent[2]?.frame.changed?.escalated).toBe(true);
+
+    // And again a window later, unchanged in every other way.
+    world.now += 61 * MIN;
+    world.boards[0]!.stalled = [{ ...YOUNGER, quietMs: 122 * MIN }];
+    nudger.tick();
+
+    expect(sent).toHaveLength(4);
+  });
+
+  /**
+   * The same flicker through the SILENT re-arm site. Nothing woke anybody on
+   * the middle tick — the remaining row was already known — and that path
+   * re-arms the board too, so it lowered the bucket just as the delivered one
+   * did.
+   */
+  it('says nothing when the row returns after a tick that woke nobody', () => {
+    const { world, sent, nudger } = harness({ repeatMs: 60 * MIN });
+    const older = { ...ROW };
+    const known = { ...YOUNGER, quietMs: 2 * 60 * MIN };
+    world.boards[0]!.stalled = [older, known];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    // The older row is masked. The row left behind is one the lead has already
+    // been told about, so this tick says nothing at all.
+    world.now += MIN;
+    world.boards[0]!.stalled = [known];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    world.now += MIN;
+    world.boards[0]!.stalled = [older, known];
+    nudger.tick();
+
+    expect(sent).toHaveLength(1);
+  });
+
   it('POSITIVE CONTROL: a row nobody was ever told about still wakes the lead', () => {
     const { world, sent, nudger } = harness();
     world.boards[0]!.stalled = [{ ...ROW }];

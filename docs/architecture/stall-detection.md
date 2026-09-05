@@ -293,8 +293,12 @@ wakes correctly:
   a row flicker without moving: an escalation item masks its anchor row from
   the gate until it is withdrawn or re-anchored, and a row on the parallelism
   cap's boundary leaves the judged set whenever another row starts or stops
-  being runnable. The bucket now only rises, and resets when the board goes
-  wholly clean and drops its arming.
+  being runnable. The bucket is now held UP with the row that earned it, and
+  the hold expires with that row: `told` forgets a row that has been off the
+  list for a whole repeat window, and the next row then escalates on its own
+  clock. Holding until the board went wholly clean was tried first and is a
+  ratchet — on a board that always has a finding, a number set hours ago
+  swallows every later row's repeat window, which is the repeat switched off.
 - **An unreachable lead escalates, and only then costs nothing**: the wake
   goes to any other session holding a stream on that board, carrying
   `escalatedFrom: <lead>` so the stand-in knows why it was told. The frame
