@@ -62,6 +62,14 @@ run for a request whatever path it named. `server-options.ts` holds
 `review-gate-types.ts` holds the two verdict shapes a route and the gate both
 need. Full rule: [.claude/rules/code-health.md](../../.claude/rules/code-health.md).
 
+**What runs on a clock.** Three loops in the server tick rather than answer a
+request, and all three take an injected `now` so a test moves the clock
+instead of waiting: the two board wakes in the Keep-moving group, and
+`task-scheduler.ts`, which files an instance each time a row's schedule comes
+due ([scheduled-tasks](scheduled-tasks.md)). The scheduler joins the Board
+group under its `task-*.ts` glob rather than changing the picture — it reads
+and writes the same rows through the same store, and only its clock is new.
+
 **Which channel carries what.** *Yjs*, one WebSocket per document, carries what
 two people watch change under each other's cursors: text, threads, replies,
 suggestions, anchors, presence, live notes. Agents hold no replica, so an agent
