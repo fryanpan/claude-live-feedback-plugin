@@ -85,11 +85,13 @@ import {
   handleRecallWebhookRoute,
 } from './routes/recall-webhook.ts';
 import { type ReviewFileRoutesContext, handleReviewFileRoutes } from './routes/review-files.ts';
+import { createShellStatic } from './routes/shell-static.ts';
 import {
   type TaskRoutesContext,
   handleDispatchAndNoteRoutes,
   handleTaskRoutes,
 } from './routes/tasks.ts';
+import { createUpgradeStream } from './routes/upgrade-stream.ts';
 import {
   type WorkspaceRoutesContext,
   handleWorkspaceAttachmentRoutes,
@@ -101,8 +103,7 @@ import { captureServerError, routePatternForSpan, withRouteSpan } from './sentry
 import type { ServerOptions } from './server-options.ts';
 import { Shares } from './share/shares.ts';
 import { SharingGate } from './share/sharing-gate.ts';
-import { createShellStatic } from './shell-static.ts';
-import { createSocketHandlers } from './socket-handlers.ts';
+import { type UpgradeData, createSocketHandlers } from './socket-handlers.ts';
 import { claimReplayMarks, saveReplayMarks } from './sse-marks.ts';
 import { HTTP_IDLE_TIMEOUT_SEC, SseHub } from './sse.ts';
 import { createStallWiring } from './stall-wiring.ts';
@@ -115,7 +116,6 @@ import {
 } from './tasks.ts';
 import { ThreadRequestDedup } from './thread-request-dedup.ts';
 import type { TranscriptionEngine } from './transcribe.ts';
-import { type UpgradeData, createUpgradeStream } from './upgrade-stream.ts';
 import { UptimeMonitor } from './uptime.ts';
 import { VoiceRouter } from './voice.ts';
 import { type WebhookLogEntry, createWebhookDispatcher } from './webhooks.ts';
@@ -1374,7 +1374,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   });
 
   /**
-   * Which page or asset an address gets — see shell-static.ts. Composed
+   * Which page or asset an address gets — see routes/shell-static.ts. Composed
    * HERE rather than beside the other helpers because `emailCodeSignIn`
    * comes out of the identity setup just above, and the landing page's
    * counter comes out of the Home pane above that.
@@ -1400,7 +1400,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
   /**
    * The requests that end in a connection rather than a body — see
-   * upgrade-stream.ts. Composed HERE because `requireSignInToWrite` comes out
+   * routes/upgrade-stream.ts. Composed HERE because `requireSignInToWrite` comes out
    * of the identity setup above and `policyFor` out of the origin policy
    * above that; everything else it reads is a store built with the rest.
    *
@@ -1860,7 +1860,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (handled) return handled;
         }
 
-        // ── Upgrade and stream ── see upgrade-stream.ts.
+        // ── Upgrade and stream ── see routes/upgrade-stream.ts.
         // Six blocks that end in a long-lived connection rather than a body:
         // the three websocket upgrades and the three SSE openers. Called from
         // the position the run held, so the `/recall/` upgrade still sits
@@ -2134,7 +2134,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (handled) return handled;
         }
 
-        // ── Shell and static serving ── see shell-static.ts.
+        // ── Shell and static serving ── see routes/shell-static.ts.
         // The tail of the router: an HTML shell, a built asset, a mockup's
         // own file, or a redirect to the address that has one. Null means no
         // block there claimed this address, which is the same fall-through
