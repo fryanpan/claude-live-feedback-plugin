@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as Y from 'yjs';
 import { diffFiles, isSafeRef, resolveCommit, showFile } from '../src/git-diff.ts';
-import { Rooms } from '../src/rooms.ts';
+import { Rooms } from '../src/doc-store.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 

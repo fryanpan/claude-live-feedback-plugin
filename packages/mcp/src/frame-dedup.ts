@@ -26,7 +26,7 @@
  *     that is correct by construction, and it is what a current server sends.
  *  2. `${event}#${docId}#${seq}` — the fallback for a server older than that
  *     stamp (a new bundle against an un-restarted box is normal here).
- *     `rooms.ts` bumps a PER-ROOM monotonic `seq` on every thread and
+ *     `doc-store.ts` bumps a PER-ROOM monotonic `seq` on every thread and
  *     suggestion event, so within one room `seq` separates two real events
  *     and across rooms it collides freely — hence `docId`, and hence `seq`
  *     alone is not a key at all.

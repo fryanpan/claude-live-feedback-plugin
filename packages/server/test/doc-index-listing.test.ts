@@ -28,7 +28,7 @@ import { join } from 'node:path';
 import { type DocMeta, createThread, setStatus } from '@feedback/core';
 import type * as Y from 'yjs';
 import { moveDocIndex } from '../src/doc-index.ts';
-import { Rooms } from '../src/rooms.ts';
+import { Rooms } from '../src/doc-store.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 

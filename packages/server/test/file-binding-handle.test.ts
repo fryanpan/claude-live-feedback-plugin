@@ -35,8 +35,8 @@ import { join } from 'node:path';
 import { type DocMeta, type WebhookPayload, prose } from '@feedback/core';
 import * as Y from 'yjs';
 import { type FileBindingHost, FileBindings } from '../src/file-binding.ts';
-import { ROOM_TIMINGS } from '../src/room-timings.ts';
-import type { DocRoom } from '../src/rooms.ts';
+import { ROOM_TIMINGS } from '../src/doc-store-timings.ts';
+import type { DocRoom } from '../src/doc-store.ts';
 import { waitFor } from './wait-for.ts';
 
 const DOC_ID = 'bound-doc';

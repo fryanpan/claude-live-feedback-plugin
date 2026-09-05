@@ -33,7 +33,7 @@ import { type Task, legacyDecisionItem, taskAskedBy } from './tasks.ts';
  *
  * What that settles, deliberately: a body room never gets a second, prettier
  * name, so the alias layer that generated DOC ids need does not extend here.
- * `isHubOwnedRoom` (rooms.ts) is already the prefix authority; making the
+ * `isHubOwnedRoom` (doc-store.ts) is already the prefix authority; making the
  * prefixes unwritable by an outside caller belongs with the doc-id half of
  * this work, and is noted there rather than claimed here.
  */

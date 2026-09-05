@@ -11,7 +11,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ElementAnchor, User } from '@feedback/core';
-import { decideReconcile } from '../src/rooms.ts';
+import { decideReconcile } from '../src/doc-store.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { waitFor, waitForFile } from './wait-for.ts';
 

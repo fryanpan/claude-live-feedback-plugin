@@ -14,7 +14,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { prose } from '@feedback/core';
-import { Rooms } from '../src/rooms.ts';
+import { Rooms } from '../src/doc-store.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 import { pastExternalRead, waitFor, waitForFile } from './wait-for.ts';

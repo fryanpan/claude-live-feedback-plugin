@@ -130,7 +130,7 @@ describe('the marker a release carries', () => {
     // One exempt path must never launder the ones beside it.
     const d = describeDeploySource({
       describe: 'a822618',
-      modifiedPaths: ['docs/x.md', 'packages/server/src/rooms.ts'],
+      modifiedPaths: ['docs/x.md', 'packages/server/src/doc-store.ts'],
     });
     expect(d.sourceRef).toBe('a822618-dirty');
     expect(d.dirtyPathCount).toBe(2);

@@ -39,7 +39,7 @@ import {
   readerKey,
 } from './home-brief.ts';
 import { type ReviewItemRow, reviewItemRows } from './review-queue.ts';
-import type { Rooms } from './rooms.ts';
+import type { Rooms } from './doc-store.ts';
 import type { ThreadSummarizer } from './summarize.ts';
 import { taskBodyDocId } from './task-projection.ts';
 import {

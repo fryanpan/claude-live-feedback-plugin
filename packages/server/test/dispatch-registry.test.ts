@@ -3,7 +3,7 @@
  * test gated to darwin.
  *
  * The fake is the deterministic seam: CI runs Bun on Linux, where a recursive
- * directory watch has measurably dropped events (see rooms.ts,
+ * directory watch has measurably dropped events (see doc-store.ts,
  * "deliberately do NOT use fs.watch"), so a test that waits for a real event
  * would fail on exactly the platform where the design says the right outcome
  * is silent degradation. The rules under test — registration, replacement,

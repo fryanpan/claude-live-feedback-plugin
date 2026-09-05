@@ -14,7 +14,7 @@
  * hard way (see the git history of this file and docs/process/learnings.md):
  *
  *  1. **Recency is real events, never `meta.lastActivityAt`.** That field is
- *     derived from the `.ydoc` file's mtime (`rooms.ts` `withActivity`), so a
+ *     derived from the `.ydoc` file's mtime (`doc-store.ts` `withActivity`), so a
  *     server-side snapshot rewrite refreshes it: on the live server all 3,741
  *     docs reported activity inside 7 days, in identical-millisecond
  *     clusters. `lastActivity` here is computed by the collector from task

@@ -14,8 +14,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { classifyExternalContent } from '../src/git-provenance.ts';
-import { ROOM_TIMINGS } from '../src/room-timings.ts';
-import { Rooms } from '../src/rooms.ts';
+import { ROOM_TIMINGS } from '../src/doc-store-timings.ts';
+import { Rooms } from '../src/doc-store.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 import { waitFor, waitForFile } from './wait-for.ts';

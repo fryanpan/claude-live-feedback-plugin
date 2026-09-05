@@ -35,7 +35,7 @@ import { browserCannotOperateBody, isBrowserRequest } from '../middleware/write-
 import type { PluginRefresher } from '../plugin-refresh.ts';
 import type { PushNotifier } from '../push-notify.ts';
 import type { PushStore } from '../push-store.ts';
-import type { Rooms } from '../rooms.ts';
+import type { Rooms } from '../doc-store.ts';
 import type { WebhookLogEntry } from '../webhooks.ts';
 
 /** The long-lived collaborators these routes need, built once per server. */

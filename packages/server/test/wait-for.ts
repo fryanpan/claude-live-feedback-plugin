@@ -10,7 +10,7 @@
  * See .claude/rules/testing-standards.md, standard 2.
  */
 
-import { ROOM_TIMINGS } from '../src/room-timings.ts';
+import { ROOM_TIMINGS } from '../src/doc-store-timings.ts';
 
 export type WaitOptions = {
   /** Give up after this long. Default 5000ms — generous, since it is only paid on failure. */

@@ -10,7 +10,7 @@ import { pastWriteBack, waitForFileToBe } from './wait-for.ts';
  * HTTP-level tests for the suggested-edits route layer (redline-suggestions
  * phase 2, commit 3): `suggest: true` on find_and_replace / rewrite_region,
  * plus list/accept/reject/resolve_all — exercised through the REAL routes,
- * not by calling rooms.ts directly. Per the route-layer learnings ("groups"
+ * not by calling doc-store.ts directly. Per the route-layer learnings ("groups"
  * silently dropped by the route that fronted it), a rooms-level unit test
  * proves nothing about whether the HTTP layer actually forwards a new param
  * — only a real fetch() through server.ts does.
@@ -69,7 +69,7 @@ describe('suggested edits — HTTP routes', () => {
 
     // The normal debounced write-back window passes and disk is untouched —
     // proposal isolation (outcome 1 of the plan), proven at the ROUTE, not
-    // just at rooms.ts.
+    // just at doc-store.ts.
     // timed: the assertion is that the pending proposal NEVER reaches disk,
     // so the whole debounced write-back window has to elapse first.
     await sleep(pastWriteBack());

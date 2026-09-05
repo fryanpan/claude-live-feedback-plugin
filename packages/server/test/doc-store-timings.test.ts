@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { DEFAULT_ROOM_TIMINGS, ROOM_TIMINGS, resolveRoomTimings } from '../src/room-timings.ts';
+import { DEFAULT_ROOM_TIMINGS, ROOM_TIMINGS, resolveRoomTimings } from '../src/doc-store-timings.ts';
 
 /**
  * `CW_TEST_TIMING_SCALE` exists so the suite can run the server's debounces
@@ -43,7 +43,7 @@ describe('room timings', () => {
         process.execPath,
         '-e',
         [
-          "const m = await import('./packages/server/src/room-timings.ts');",
+          "const m = await import('./packages/server/src/doc-store-timings.ts');",
           'console.log(JSON.stringify(m.ROOM_TIMINGS));',
         ].join(''),
       ],

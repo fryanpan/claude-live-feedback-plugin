@@ -32,7 +32,7 @@ import {
 import { taskDeepLink } from './home-brief.ts';
 import type { ReviewGate, ThreadReviewGate } from './review-gate-types.ts';
 import type { ReviewJudge, ReviewJudgeVerdict } from './review-judge.ts';
-import type { Rooms } from './rooms.ts';
+import type { Rooms } from './doc-store.ts';
 import type { SseHub } from './sse.ts';
 import { REVIEW_ITEM_HELD_EVENT, type ReviewItemHeldFrame } from './stall-nudge.ts';
 import type { TaskProjection } from './task-projection.ts';

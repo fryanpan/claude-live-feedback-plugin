@@ -2,7 +2,7 @@
  * The websocket fan-out of a doc room: who hears about a change, and over
  * which channel.
  *
- * The other half of `rooms.ts`, which keeps the room LIFECYCLE — hydrate,
+ * The other half of `doc-store.ts`, which keeps the room LIFECYCLE — hydrate,
  * evict, tear down, persist the `.ydoc` and its index row. This half is
  * everything that happens because a room changed rather than because it
  * exists: the `ydoc.on('update')` wiring and the meta guards that ride it,
@@ -21,7 +21,7 @@
  * walk.
  *
  * Timings, ordering and log lines are unchanged from when this lived in
- * `rooms.ts`: the re-anchor debounce, the one-eid-per-broadcast rule, the
+ * `doc-store.ts`: the re-anchor debounce, the one-eid-per-broadcast rule, the
  * order the SSE channels are written in and the presence tick are all
  * observable contracts, and this file moved them without touching them.
  */
@@ -40,8 +40,8 @@ import * as awarenessProtocol from 'y-protocols/awareness';
 import * as Y from 'yjs';
 import { newEventId } from './event-id.ts';
 import { isPrivateMetaKey } from './private-meta.ts';
-import { ROOM_TIMINGS } from './room-timings.ts';
-import type { DocRoom, FeedbackWs, ShareAuthorizedSocket } from './rooms.ts';
+import { ROOM_TIMINGS } from './doc-store-timings.ts';
+import type { DocRoom, FeedbackWs, ShareAuthorizedSocket } from './doc-store.ts';
 import type { SseHub } from './sse.ts';
 import type { ThreadSummarizer } from './summarize.ts';
 import type { WebhookDispatcher } from './webhooks.ts';
@@ -546,7 +546,7 @@ export class RoomFanout {
     // from a subscription you never made is indistinguishable from nobody
     // having commented. The workspace fan-out lives in server.ts's
     // `onDocRoomEvent`, which resolves `workspace.docIds` at broadcast time;
-    // rooms.ts has no view of workspaces.
+    // doc-store.ts has no view of workspaces.
     const reviewId = reviewIdOf(room.meta);
     if (reviewId) {
       this.host.sse().broadcast(`ws~${reviewId}`, payload);

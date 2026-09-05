@@ -22,7 +22,7 @@ import {
   listArchivedReviews,
   readDocArchiveManifest,
 } from '../src/review-archive.ts';
-import { Rooms } from '../src/rooms.ts';
+import { Rooms } from '../src/doc-store.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 import { waitForFile } from './wait-for.ts';

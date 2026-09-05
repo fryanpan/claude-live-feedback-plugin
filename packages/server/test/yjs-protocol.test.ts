@@ -17,7 +17,7 @@ import * as encoding from 'lib0/encoding';
 import * as awarenessProtocol from 'y-protocols/awareness';
 import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
-import type { DocRoom, FeedbackWs } from '../src/rooms.ts';
+import type { DocRoom, FeedbackWs } from '../src/doc-store.ts';
 import { MSG_AWARENESS, MSG_SYNC, onClose, onMessage, onOpen } from '../src/yjs-protocol.ts';
 
 /** Everything created in a test, torn down after it. Awareness starts a 3s

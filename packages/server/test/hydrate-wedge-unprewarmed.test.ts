@@ -13,7 +13,7 @@
  *     328 s on production.
  *   - A route that FANS OUT over a board's docIds. `listThreads` is called
  *     for every doc on the board by the home queue (`home-pane.ts`), the
- *     workspace listing (`rooms-workspaces.ts`) and the archive route; none
+ *     workspace listing (`doc-store-workspaces.ts`) and the archive route; none
  *     of those ids is in the URL, so none of them is prewarmed.
  *   - A background TIMER. The stall scan walks the same docIds on its own
  *     clock with no request anywhere, so there is nothing to prewarm it.

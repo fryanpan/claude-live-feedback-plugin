@@ -47,7 +47,7 @@ import {
 } from '../mockup-capture.ts';
 import { injectWidget } from '../mockup-widget.ts';
 import type { ReviewItemRow } from '../review-queue.ts';
-import type { Rooms } from '../rooms.ts';
+import type { Rooms } from '../doc-store.ts';
 import {
   HTML_SHELL_HEADERS,
   appCacheControl,

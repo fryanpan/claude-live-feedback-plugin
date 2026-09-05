@@ -41,7 +41,7 @@ import type {
   LandingWorkspaceInput,
   LandingWorkspaceRow,
 } from './landing.ts';
-import type { Rooms, WorkspaceDirNode, WorkspaceFileNode } from './rooms.ts';
+import type { Rooms, WorkspaceDirNode, WorkspaceFileNode } from './doc-store.ts';
 import { isWithinRoot } from './safe-path.ts';
 import { type HubWorkspace, type TaskStore, isRetired } from './tasks.ts';
 

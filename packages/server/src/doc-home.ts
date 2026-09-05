@@ -23,7 +23,7 @@ import type { DocHome } from '@feedback/core';
  * Everything here is pure filesystem reads of git's own plumbing files
  * (`.git`, `commondir`, `worktrees/<name>/gitdir`, `HEAD`) — no subprocess. That
  * is deliberate: `verifyPathInHome` runs on the synchronous flush path in
- * rooms.ts, where a spawn would need the budget-and-SIGKILL machinery
+ * doc-store.ts, where a spawn would need the budget-and-SIGKILL machinery
  * git-provenance.ts carries (and it earns it only by running on a rare
  * conflict arm; a per-flush guard cannot). The layout read here is the same
  * one `git worktree list` prints from, stable across git versions.

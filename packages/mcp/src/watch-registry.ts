@@ -255,7 +255,7 @@ async function watchDoc(
  * it meant.
  *
  *  - A GROUPING (a diff review / folder bind): its member docs carry the
- *    review tag and `rooms.ts` has always double-broadcast on it. True from
+ *    review tag and `doc-store.ts` has always double-broadcast on it. True from
  *    the start.
  *  - A hub BOARD: it holds docs through `workspace.docIds`, which is NOT that
  *    tag. Until the board fan-out landed in server.ts's `onDocRoomEvent`, a

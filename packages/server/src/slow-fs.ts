@@ -38,7 +38,7 @@
 import { readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, sep } from 'node:path';
-import { ROOM_TIMINGS } from './room-timings.ts';
+import { ROOM_TIMINGS } from './doc-store-timings.ts';
 
 /**
  * Home-relative folders whose full paths must not reach a log line. The files
@@ -63,7 +63,7 @@ export function redactBoundPath(path: string): string {
 }
 
 /**
- * The deadline and the backoff live in `room-timings.ts` with every other
+ * The deadline and the backoff live in `doc-store-timings.ts` with every other
  * cadence a bound doc runs on, and for the same reason: the suite would
  * otherwise spend its wall clock waiting them out. Production values are
  * three seconds and one minute.

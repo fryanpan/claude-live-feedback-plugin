@@ -19,7 +19,7 @@ import type { createLeadPresenceMonitor } from '../lead-presence.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
 import type { ReadyWorkNudger } from '../ready-nudge.ts';
 import type { ThreadReviewGate } from '../review-gate-types.ts';
-import type { DocRoom, Rooms } from '../rooms.ts';
+import type { DocRoom, Rooms } from '../doc-store.ts';
 import type { ThreadSummarizer } from '../summarize.ts';
 import type { TaskProjection } from '../task-projection.ts';
 import type { Task, TaskStore } from '../tasks.ts';

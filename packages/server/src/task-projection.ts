@@ -1,6 +1,6 @@
 import { listThreads, prose } from '@feedback/core';
 import * as Y from 'yjs';
-import type { Rooms } from './rooms.ts';
+import type { Rooms } from './doc-store.ts';
 import { projectBody, projectTask, taskBodyDocId, taskIdOfBodyDoc } from './task-row.ts';
 
 export {

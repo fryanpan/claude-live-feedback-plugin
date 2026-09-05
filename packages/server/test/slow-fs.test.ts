@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_ROOM_TIMINGS, ROOM_TIMINGS } from '../src/room-timings.ts';
+import { DEFAULT_ROOM_TIMINGS, ROOM_TIMINGS } from '../src/doc-store-timings.ts';
 import { BOUND_READ_MAX_OVERDUE, boundFiles, redactBoundPath } from '../src/slow-fs.ts';
 import { makeFifo, releaseFifo, releaseFifosIn } from './fifo.ts';
 import { waitFor } from './wait-for.ts';

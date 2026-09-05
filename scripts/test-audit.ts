@@ -215,7 +215,7 @@ function moduleReadsSource(lines: string[]): boolean {
  * An import specifier is not a read.
  *
  * `packages/server/test/wait-for.ts` polls files at runtime paths and imports
- * `../src/room-timings.ts` for the cadence constants. Counting that specifier
+ * `../src/doc-store-timings.ts` for the cadence constants. Counting that specifier
  * as a source path made every one of its thirty-two importers a source-shape
  * test — a bigger false positive than the blind spot this check was fixing.
  */

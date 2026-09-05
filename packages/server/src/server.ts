@@ -56,7 +56,7 @@ import { listArchivedReviews, readDocArchiveManifest } from './review-archive.ts
 import { backfillReviewFiling } from './review-backfill.ts';
 import { createReviewGate } from './review-gate.ts';
 import type { ReviewThreadItem } from './review-queue.ts';
-import { Rooms } from './rooms.ts';
+import { Rooms } from './doc-store.ts';
 import {
   type AgentIdentityRoutesContext,
   handleAgentIdentityRoutes,
@@ -2527,7 +2527,7 @@ function isValidDocId(s: string): boolean {
   // can't masquerade as hidden files on disk. Length cap protects the
   // filename from being pathological. `~` is permitted because workspace
   // member docIds encode the relPath's `/` separators as `~`
-  // (`${workspaceId}:${relPath.replaceAll('/', '~')}` in rooms.ts), so any
+  // (`${workspaceId}:${relPath.replaceAll('/', '~')}` in doc-store.ts), so any
   // file in a subdirectory of a bound folder needs `~` to be reachable via
   // the /api/docs/:docId routes. `~` is RFC 3986 unreserved (URL-safe) and a
   // valid filename char, matching the .ydoc-on-disk naming.

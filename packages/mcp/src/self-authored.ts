@@ -52,7 +52,7 @@
 const COMMENT_EVENTS = new Set(['thread.created', 'thread.replied']);
 
 /**
- * Status changes. `rooms.ts` stamps `actor` on these precisely because there
+ * Status changes. `doc-store.ts` stamps `actor` on these precisely because there
  * is no comment to read an author off — see the `fireEvent` signature.
  */
 const STATUS_EVENTS = new Set(['thread.resolved', 'thread.reopened']);
@@ -86,12 +86,12 @@ function idOf(who: unknown): string | undefined {
  * be — which is a real outcome, not a defect, and the caller must deliver.
  *
  * `thread.created` fires with `comment: undefined` and the opening comment
- * inside the thread (rooms.ts:829), so it reads the thread's newest comment —
+ * inside the thread (doc-store.ts:829), so it reads the thread's newest comment —
  * the same fallback `queueCommentRows` in server.ts uses, deliberately spelled
  * to match rather than invented a second time.
  *
  * `thread.replied` gets NO such fallback. It also fires with no comment on the
- * undo-answer path (rooms.ts:1023), where nothing was said and a stamp was
+ * undo-answer path (doc-store.ts:1023), where nothing was said and a stamp was
  * removed; the thread's newest comment is somebody's words, not the actor, and
  * reading it there would suppress on a stranger's identity.
  */

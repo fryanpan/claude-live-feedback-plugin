@@ -119,7 +119,7 @@ const GIT_TIMEOUT_MS = 120_000;
 export const INSTALL_TIMEOUT_MS = 300_000;
 
 /** How long a busy bound document is given to finish before the deploy
- *  refuses over it. The write-back debounce is ~800ms (`rooms.ts`), so this
+ *  refuses over it. The write-back debounce is ~800ms (`doc-store.ts`), so this
  *  covers a flush that was already in flight when the deploy arrived,
  *  without covering someone who is still typing. */
 export const BUSY_SETTLE_MS = 1500;
