@@ -108,6 +108,13 @@ describe('security docs are wired together', () => {
       // re-keys an agent's deliveries fleet-wide, which is exactly the kind
       // of change the security pass exists to catch.
       'packages/server/src/routes/agent-identity.ts',
+      // …and the fourth: the request-admission run — the default-deny host
+      // gate, the Access branch each host decision selects, and the
+      // external-access master switch — came out of `fetch` in A17. It is
+      // the door itself, so a PR that edits only this file must still answer
+      // the checklist; without this row the split would have taken the whole
+      // host gate off the trigger.
+      'packages/server/src/request-admission.ts',
     ];
     for (const path of security) expect(pattern.test(path)).toBe(true);
 
