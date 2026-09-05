@@ -46,7 +46,7 @@
  */
 import { type Anchor, type DocMeta, type DocType, reviewIdOf } from '@feedback/core';
 import { classifyActor } from '../actor-identity.ts';
-import { normalizeDocHome, resolveHomeCheckout } from '../doc-home.ts';
+import { normalizeDocHome, resolveHomeCheckout } from '../doc-origin-repo.ts';
 import { RESERVED_DOC_PREFIXES } from '../doc-ids.ts';
 import { compactDocRow, matchesDocFilters, pageDocs, parseListDocsQuery } from '../doc-listing.ts';
 import { browserCannotBindBody, isBrowserRequest } from '../middleware/write-gate.ts';

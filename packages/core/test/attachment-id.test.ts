@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isReviewMember, reviewIdOf } from '../src/review.ts';
+import { isReviewMember, reviewIdOf } from '../src/attachment.ts';
 import type { DocMeta } from '../src/types.ts';
 
 const meta = (over: Partial<DocMeta>): DocMeta => ({

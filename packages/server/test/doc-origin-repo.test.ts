@@ -11,7 +11,7 @@ import {
   normalizeDocHome,
   resolveHomeCheckout,
   verifyPathInHome,
-} from '../src/doc-home.ts';
+} from '../src/doc-origin-repo.ts';
 
 /**
  * The doc-home resolvers read git's plumbing files directly (no subprocess),
