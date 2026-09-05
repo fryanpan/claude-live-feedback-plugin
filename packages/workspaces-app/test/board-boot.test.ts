@@ -115,12 +115,12 @@ async function boot(url: string, seed: Record<string, string> = {}): Promise<Boo
 beforeEach(() => {
   server.reset();
   server.on('/api/auth/session', { authenticated: false, canWrite: true });
-  server.on(`/api/workspaces/${WS}`, {
+  server.on(`/workspaces/${WS}`, {
     workspace: { id: WS, name: 'Kitchen rebuild', goals: [], createdAt: 1_700_000_000_000 },
   });
-  server.on(`/api/workspaces/${WS}/agents`, { agents: [] });
-  server.on(`/api/workspaces/${WS}/review-items`, { items: [] });
-  server.on(`/api/workspaces/${WS}/home`, {
+  server.on(`/workspaces/${WS}/agents`, { agents: [] });
+  server.on(`/workspaces/${WS}/review-items`, { items: [] });
+  server.on(`/workspaces/${WS}/home`, {
     workspaceId: WS,
     lastReadAt: 0,
     since: NOW - 86_400_000,
@@ -128,7 +128,7 @@ beforeEach(() => {
     brief: { markdown: 'Nothing new since yesterday.', generatedAt: NOW, source: 'deterministic' },
     generating: false,
   });
-  server.on(`/api/workspaces/${WS}/settings`, {});
+  server.on(`/workspaces/${WS}/settings`, {});
 });
 
 afterEach(() => {
@@ -161,7 +161,7 @@ describe('the board reads its workspace out of the address', () => {
   });
 
   it('falls back to the id when the workspace read answers nothing', async () => {
-    server.on(`/api/workspaces/${WS}`, {}, 500);
+    server.on(`/workspaces/${WS}`, {}, 500);
     const sockets = fakeSockets();
     shell();
     await bootBoard({

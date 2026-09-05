@@ -136,7 +136,7 @@ describe('share links over HTTP', () => {
   };
 
   const boardWith = async (name: string, docName: string) => {
-    const created = await postLocal('/api/workspaces', { name });
+    const created = await postLocal('/workspaces', { name });
     expect(created.status).toBe(200);
     const id = ((await created.json()) as { workspace: { id: string } }).workspace.id;
     const path = join(dataDir, `${docName}.md`);
@@ -148,7 +148,7 @@ describe('share links over HTTP', () => {
     });
     expect(doc.status).toBe(200);
     const mintedDocId = ((await doc.json()) as { docId: string }).docId;
-    const filed = await postLocal(`/api/workspaces/${encodeURIComponent(id)}/docs`, {
+    const filed = await postLocal(`/workspaces/${encodeURIComponent(id)}/docs`, {
       docId: docName,
     });
     expect(filed.status).toBe(200);
@@ -202,7 +202,7 @@ describe('share links over HTTP', () => {
         },
       });
       const probeBase = `http://localhost:${probe.port}`;
-      const made = await fetch(`${probeBase}/api/workspaces`, {
+      const made = await fetch(`${probeBase}/workspaces`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: 'Probe board' }),
@@ -268,7 +268,10 @@ describe('share links over HTTP', () => {
       expect(r.status).toBe(302);
       expect(r.headers.get('location')).toBe(`/workspaces/${encodeURIComponent(board)}`);
       // …and the membership is what the next request is judged on.
-      const meta = await onShareHost(`/api/workspaces/${encodeURIComponent(board)}`, REVIEWER);
+      const meta = await onShareHost(
+        `/workspaces/${encodeURIComponent(board)}?format=json`,
+        REVIEWER,
+      );
       expect(meta.status).toBe(200);
     });
 
@@ -327,7 +330,10 @@ describe('share links over HTTP', () => {
       expect(await unknown.text()).toBe(revokedBody);
 
       // Nobody was admitted by either.
-      const after = await onShareHost(`/api/workspaces/${encodeURIComponent(board)}`, STRANGER);
+      const after = await onShareHost(
+        `/workspaces/${encodeURIComponent(board)}?format=json`,
+        STRANGER,
+      );
       expect(after.status).toBe(403);
     });
 
@@ -351,7 +357,8 @@ describe('share links over HTTP', () => {
       expect(r.status).toBe(404);
       expect(await r.text()).toContain('This link no longer works');
       expect(
-        (await onShareHost(`/api/workspaces/${encodeURIComponent(board)}`, STRANGER)).status,
+        (await onShareHost(`/workspaces/${encodeURIComponent(board)}?format=json`, STRANGER))
+          .status,
       ).toBe(403);
       // Positive control on the same restarted server: a live link still
       // admits, so the refusal above is the expiry rather than a dead store.
@@ -408,7 +415,7 @@ describe('share links over HTTP', () => {
 
     it('opens the board it was given, and the docs filed on it', async () => {
       expect(
-        (await onShareHost(`/api/workspaces/${encodeURIComponent(board)}`, member)).status,
+        (await onShareHost(`/workspaces/${encodeURIComponent(board)}?format=json`, member)).status,
       ).toBe(200);
       const doc = await onShareHost(`/api/docs/${docId}`, member);
       expect(doc.status).toBe(200);
@@ -418,11 +425,13 @@ describe('share links over HTTP', () => {
 
     it('is refused every workspace it was not given', async () => {
       expect(
-        (await onShareHost(`/api/workspaces/${encodeURIComponent(otherBoard)}`, member)).status,
+        (await onShareHost(`/workspaces/${encodeURIComponent(otherBoard)}?format=json`, member))
+          .status,
       ).toBe(403);
       expect((await onShareHost(`/api/docs/${otherDocId}`, member)).status).toBe(403);
       expect(
-        (await onShareHost(`/workspaces/${encodeURIComponent(otherBoard)}`, member)).status,
+        (await onShareHost(`/workspaces/${encodeURIComponent(otherBoard)}?format=json`, member))
+          .status,
       ).toBe(403);
     });
 
@@ -432,15 +441,15 @@ describe('share links over HTTP', () => {
       for (const [path, init] of [
         ['/api/docs', {}],
         ['/api/share', {}],
-        [`/api/workspaces/${encodeURIComponent(board)}/rename`, { method: 'POST' }],
-        [`/api/workspaces/${encodeURIComponent(board)}/retired`, { method: 'PUT' }],
-        [`/api/workspaces/${encodeURIComponent(board)}/lead`, { method: 'PUT' }],
-        [`/api/workspaces/${encodeURIComponent(board)}/voice`, { method: 'POST' }],
+        [`/workspaces/${encodeURIComponent(board)}/rename`, { method: 'POST' }],
+        [`/workspaces/${encodeURIComponent(board)}/retired`, { method: 'PUT' }],
+        [`/workspaces/${encodeURIComponent(board)}/lead`, { method: 'PUT' }],
+        [`/workspaces/${encodeURIComponent(board)}/voice`, { method: 'POST' }],
       ] as Array<[string, RequestInit]>) {
         const r = await onShareHost(path, member, init);
         expect(r.status, path).toBe(403);
       }
-      const del = await onShareHost(`/api/workspaces/${encodeURIComponent(board)}`, member, {
+      const del = await onShareHost(`/workspaces/${encodeURIComponent(board)}`, member, {
         method: 'DELETE',
       });
       expect(del.status).toBe(403);
@@ -450,15 +459,11 @@ describe('share links over HTTP', () => {
       // Bryan, 2026-09-03: "Let's allow everything for now." A member is a
       // participant, so this is the positive control the refusals above are
       // measured against.
-      const filed = await onShareHost(
-        `/api/workspaces/${encodeURIComponent(board)}/tasks`,
-        member,
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ title: 'Filed by a member', assignee: 'human' }),
-        },
-      );
+      const filed = await onShareHost(`/workspaces/${encodeURIComponent(board)}/tasks`, member, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title: 'Filed by a member', assignee: 'human' }),
+      });
       expect(filed.status, await filed.clone().text()).toBe(200);
       const { task } = (await filed.json()) as { task: { id: string; createdBy?: string } };
       // Attributed to the address Cloudflare Access verified, not to a claim.
@@ -483,10 +488,13 @@ describe('share links over HTTP', () => {
     });
 
     it('is refused a row on a board it was never given', async () => {
-      const other = await postLocal(`/api/workspaces/${encodeURIComponent(otherBoard)}/tasks`, {
-        title: 'On the private board',
-        assignee: 'human',
-      });
+      const other = await postLocal(
+        `/workspaces/${encodeURIComponent(otherBoard)}/tasks?format=json`,
+        {
+          title: 'On the private board',
+          assignee: 'human',
+        },
+      );
       expect(other.status).toBe(200);
       const otherTask = ((await other.json()) as { task: { id: string } }).task.id;
       const r = await onShareHost(`/api/tasks/${otherTask}/transition`, member, {
@@ -499,7 +507,7 @@ describe('share links over HTTP', () => {
     });
 
     it('gets nothing useful from root or any path naming no workspace', async () => {
-      for (const path of ['/', '/api/workspaces', '/api/diffs', '/demos']) {
+      for (const path of ['/', '/workspaces', '/api/diffs', '/demos']) {
         const r = await onShareHost(path, member);
         expect(r.status, path).toBe(403);
         expect(await r.json(), path).toEqual({ error: 'out_of_share_scope' });
@@ -510,7 +518,10 @@ describe('share links over HTTP', () => {
       // Same body as the out-of-scope refusal on purpose: two different
       // replies would tell an admitted stranger which guessed ids are real.
       for (const wsId of [board, otherBoard]) {
-        const r = await onShareHost(`/api/workspaces/${encodeURIComponent(wsId)}`, STRANGER);
+        const r = await onShareHost(
+          `/workspaces/${encodeURIComponent(wsId)}?format=json`,
+          STRANGER,
+        );
         expect(r.status, wsId).toBe(403);
         expect(await r.json(), wsId).toEqual({ error: 'out_of_share_scope' });
       }
@@ -519,7 +530,7 @@ describe('share links over HTTP', () => {
     it('is refused everything while the sharing switch is off', async () => {
       expect((await postLocal('/api/share/enabled', { enabled: false })).status).toBe(200);
       try {
-        const r = await onShareHost(`/api/workspaces/${encodeURIComponent(board)}`, member);
+        const r = await onShareHost(`/workspaces/${encodeURIComponent(board)}?format=json`, member);
         expect(r.status).toBe(403);
         expect(await r.json()).toEqual({ error: 'sharing_disabled' });
       } finally {
@@ -527,7 +538,7 @@ describe('share links over HTTP', () => {
       }
       // Positive control: back on, the same member reaches the board again.
       expect(
-        (await onShareHost(`/api/workspaces/${encodeURIComponent(board)}`, member)).status,
+        (await onShareHost(`/workspaces/${encodeURIComponent(board)}?format=json`, member)).status,
       ).toBe(200);
     });
   });
@@ -566,7 +577,7 @@ describe('share links over HTTP', () => {
       });
 
     it('starts a meeting on its own board, and is refused one on another', async () => {
-      const started = await postAsMember(`/api/workspaces/${encodeURIComponent(board)}/huddles`, {
+      const started = await postAsMember(`/workspaces/${encodeURIComponent(board)}/huddles`, {
         kind: 'discussion',
         topic: 'Member meeting',
       });
@@ -589,7 +600,7 @@ describe('share links over HTTP', () => {
       expect(JSON.stringify(body.meta)).not.toContain(dataDir);
 
       const elsewhere = await postAsMember(
-        `/api/workspaces/${encodeURIComponent(otherBoard)}/huddles`,
+        `/workspaces/${encodeURIComponent(otherBoard)}/huddles`,
         { kind: 'discussion' },
       );
       expect(elsewhere.status).toBe(403);
@@ -605,7 +616,7 @@ describe('share links over HTTP', () => {
       // this fixture has no folder bind, so the reachable case is asserted on
       // the board's own doc, where the call is a no-op that still has to be
       // ALLOWED for the boundary below to mean anything.
-      const reachable = await postAsMember(`/api/workspaces/${encodeURIComponent(board)}/docs`, {
+      const reachable = await postAsMember(`/workspaces/${encodeURIComponent(board)}/docs`, {
         docId,
       });
       expect(reachable.status, await reachable.clone().text()).toBe(200);
@@ -613,7 +624,7 @@ describe('share links over HTTP', () => {
       // The private board's doc is what this must never reach. The path names
       // the member's own board, so the scope check says yes; what refuses it
       // is the target.
-      const stolen = await postAsMember(`/api/workspaces/${encodeURIComponent(board)}/docs`, {
+      const stolen = await postAsMember(`/workspaces/${encodeURIComponent(board)}/docs`, {
         docId: otherDocId,
       });
       expect(stolen.status).toBe(403);
@@ -629,10 +640,9 @@ describe('share links over HTTP', () => {
       // read `otherDocId` as the doc this member cannot see.
 
       // Refused a board it was never given, whatever the target.
-      const elsewhere = await postAsMember(
-        `/api/workspaces/${encodeURIComponent(otherBoard)}/docs`,
-        { docId },
-      );
+      const elsewhere = await postAsMember(`/workspaces/${encodeURIComponent(otherBoard)}/docs`, {
+        docId,
+      });
       expect(elsewhere.status).toBe(403);
       expect(await elsewhere.json()).toEqual({ error: 'out_of_share_scope' });
     });
@@ -644,10 +654,10 @@ describe('share links over HTTP', () => {
       // slugs, and the doc LIST is refused precisely to stop that
       // enumeration — answering it one id at a time is the same disclosure
       // through a narrower window.
-      const real = await postAsMember(`/api/workspaces/${encodeURIComponent(board)}/docs`, {
+      const real = await postAsMember(`/workspaces/${encodeURIComponent(board)}/docs`, {
         docId: otherDocId,
       });
-      const invented = await postAsMember(`/api/workspaces/${encodeURIComponent(board)}/docs`, {
+      const invented = await postAsMember(`/workspaces/${encodeURIComponent(board)}/docs`, {
         docId: 'no-such-doc-anywhere',
       });
       expect(real.status).toBe(403);
@@ -661,7 +671,7 @@ describe('share links over HTTP', () => {
       // The owner is unaffected — a typo from the box still says what went
       // wrong, which is what makes the member's answer a redaction rather
       // than a route that stopped working.
-      const owner = await postLocal(`/api/workspaces/${encodeURIComponent(board)}/docs`, {
+      const owner = await postLocal(`/workspaces/${encodeURIComponent(board)}/docs`, {
         docId: 'no-such-doc-anywhere',
       });
       expect(owner.status).toBe(404);
@@ -672,7 +682,7 @@ describe('share links over HTTP', () => {
       // A notes home is `repoRoot` on the owner's disk. Set from the box, so
       // the member's read below is measured against a board that really has
       // one — without this the assertion passes on an absent field.
-      const wrote = await local(`/api/workspaces/${encodeURIComponent(board)}/settings`, {
+      const wrote = await local(`/workspaces/${encodeURIComponent(board)}/settings`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -681,7 +691,7 @@ describe('share links over HTTP', () => {
         }),
       });
       expect(wrote.status, await wrote.clone().text()).toBe(200);
-      const owner = await local(`/api/workspaces/${encodeURIComponent(board)}/settings`);
+      const owner = await local(`/workspaces/${encodeURIComponent(board)}/settings`);
       expect(owner.status).toBe(200);
       const ownerView = (await owner.json()) as { notesHome?: { repoRoot?: string } };
       // Read back rather than compared to what was sent: the store keeps the
@@ -689,7 +699,7 @@ describe('share links over HTTP', () => {
       storedRepoRoot = ownerView.notesHome?.repoRoot ?? '';
       expect(storedRepoRoot.length).toBeGreaterThan(0);
 
-      const read = await asMember(`/api/workspaces/${encodeURIComponent(board)}/settings`);
+      const read = await asMember(`/workspaces/${encodeURIComponent(board)}/settings`);
       expect(read.status, await read.clone().text()).toBe(200);
       const view = (await read.json()) as {
         reviewItemCriteria?: { value?: string };
@@ -705,11 +715,11 @@ describe('share links over HTTP', () => {
     it('shows who moved the parallelism cap by name, on both doors that say so', async () => {
       // The settings panel says "set by X". The actor behind it is a full
       // `TaskActor`, and the settings read handed a member the whole record —
-      // id included — while `GET /api/workspaces/<id>`, the other door onto
+      // id included — while `GET /workspaces/<id>`, the other door onto
       // the same fact, had been reducing it to name and kind since the cap
       // shipped. Two doors onto one fact cannot answer differently.
       const moverId = 'agent-cap-mover-probe';
-      const moved = await local(`/api/workspaces/${encodeURIComponent(board)}/settings`, {
+      const moved = await local(`/workspaces/${encodeURIComponent(board)}/settings`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -721,7 +731,7 @@ describe('share links over HTTP', () => {
 
       // Positive control: the id IS on the owner's read, so the member's read
       // below is measured against a payload that has something to hide.
-      const owner = await local(`/api/workspaces/${encodeURIComponent(board)}/settings`);
+      const owner = await local(`/workspaces/${encodeURIComponent(board)}/settings`);
       expect(owner.status).toBe(200);
       const ownerText = await owner.text();
       expect(ownerText).toContain('lastChange');
@@ -733,7 +743,7 @@ describe('share links over HTTP', () => {
           lastChange?: { from?: number; to?: number; actor?: Record<string, unknown> };
         };
       };
-      const read = await asMember(`/api/workspaces/${encodeURIComponent(board)}/settings`);
+      const read = await asMember(`/workspaces/${encodeURIComponent(board)}/settings`);
       expect(read.status, await read.clone().text()).toBe(200);
       const settingsText = await read.clone().text();
       const settingsView = (await read.json()) as CapView;
@@ -747,7 +757,7 @@ describe('share links over HTTP', () => {
       expect(settingsText).not.toContain(moverId);
 
       // The board record answers the same fact the same way.
-      const record = await asMember(`/api/workspaces/${encodeURIComponent(board)}`);
+      const record = await asMember(`/workspaces/${encodeURIComponent(board)}?format=json`);
       expect(record.status, await record.clone().text()).toBe(200);
       const recordText = await record.clone().text();
       const recordView = (await record.json()) as CapView;
@@ -759,13 +769,13 @@ describe('share links over HTTP', () => {
     });
 
     it('edits the board settings it can see, and is refused the one field it cannot', async () => {
-      const saved = await asMember(`/api/workspaces/${encodeURIComponent(board)}/settings`, {
+      const saved = await asMember(`/workspaces/${encodeURIComponent(board)}/settings`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ reviewItemCriteria: 'Written by a member.' }),
       });
       expect(saved.status, await saved.clone().text()).toBe(200);
-      const after = await local(`/api/workspaces/${encodeURIComponent(board)}/settings`);
+      const after = await local(`/workspaces/${encodeURIComponent(board)}/settings`);
       expect(
         ((await after.json()) as { reviewItemCriteria: { value: string } }).reviewItemCriteria
           .value,
@@ -776,7 +786,7 @@ describe('share links over HTTP', () => {
       // that validation runs, so the refusal is the same for a real path and
       // an invented one — no oracle either way.
       for (const repoRoot of [process.cwd(), '/definitely/not/a/checkout']) {
-        const r = await asMember(`/api/workspaces/${encodeURIComponent(board)}/settings`, {
+        const r = await asMember(`/workspaces/${encodeURIComponent(board)}/settings`, {
           method: 'PUT',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ notesHome: { repoRoot, branch: 'main', dir: 'docs' } }),
@@ -787,19 +797,16 @@ describe('share links over HTTP', () => {
         });
       }
       // …and the stored value did not move.
-      const unchanged = await local(`/api/workspaces/${encodeURIComponent(board)}/settings`);
+      const unchanged = await local(`/workspaces/${encodeURIComponent(board)}/settings`);
       const home = ((await unchanged.json()) as { notesHome?: { repoRoot?: string } }).notesHome;
       expect(home?.repoRoot).toBe(storedRepoRoot);
 
       // Refused on the board it was not given, whatever the field.
-      const elsewhere = await asMember(
-        `/api/workspaces/${encodeURIComponent(otherBoard)}/settings`,
-        {
-          method: 'PUT',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ reviewItemCriteria: 'Not yours.' }),
-        },
-      );
+      const elsewhere = await asMember(`/workspaces/${encodeURIComponent(otherBoard)}/settings`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ reviewItemCriteria: 'Not yours.' }),
+      });
       expect(elsewhere.status).toBe(403);
       expect(await elsewhere.json()).toEqual({ error: 'out_of_share_scope' });
     });
@@ -809,20 +816,20 @@ describe('share links over HTTP', () => {
       // visitor. The audit log is the same bytes modulo transport, so it has
       // to refuse the same thing — this is the door nothing was checking.
       const actorId = 'agent-activity-probe';
-      const filed = await postLocal(`/api/workspaces/${encodeURIComponent(board)}/tasks`, {
+      const filed = await postLocal(`/workspaces/${encodeURIComponent(board)}/tasks`, {
         title: 'Row that writes an audit line',
         assignee: 'human',
         author: { id: actorId, name: 'Activity Probe', kind: 'agent' },
       });
       expect(filed.status, await filed.clone().text()).toBe(200);
 
-      const owner = await local(`/api/workspaces/${encodeURIComponent(board)}/events`);
+      const owner = await local(`/workspaces/${encodeURIComponent(board)}/events`);
       expect(owner.status).toBe(200);
       // The positive control: the id IS in the log, so the member's read
       // below is measured against a payload that has something to hide.
       expect(await owner.text()).toContain(actorId);
 
-      const read = await asMember(`/api/workspaces/${encodeURIComponent(board)}/events`);
+      const read = await asMember(`/workspaces/${encodeURIComponent(board)}/events`);
       expect(read.status, await read.clone().text()).toBe(200);
       const text = await read.clone().text();
       expect(text).not.toContain(actorId);
@@ -831,7 +838,7 @@ describe('share links over HTTP', () => {
       const { events } = (await read.json()) as { events: unknown[] };
       expect(events.length).toBeGreaterThan(0);
 
-      const elsewhere = await asMember(`/api/workspaces/${encodeURIComponent(otherBoard)}/events`);
+      const elsewhere = await asMember(`/workspaces/${encodeURIComponent(otherBoard)}/events`);
       expect(elsewhere.status).toBe(403);
       expect(await elsewhere.json()).toEqual({ error: 'out_of_share_scope' });
     });
@@ -843,7 +850,7 @@ describe('share links over HTTP', () => {
       // answer to the very same ask, was reduced to name and kind.
       const askerId = 'agent-review-item-probe';
       const asker = { id: askerId, name: 'Review Item Probe', kind: 'agent' };
-      const filed = await postLocal(`/api/workspaces/${encodeURIComponent(board)}/tasks`, {
+      const filed = await postLocal(`/workspaces/${encodeURIComponent(board)}/tasks`, {
         title: 'Row that carries a review item',
         assignee: 'human',
         author: asker,
@@ -864,13 +871,13 @@ describe('share links over HTTP', () => {
 
       // Positive control: the id IS in the log, so the member's read below is
       // measured against a payload that has something to hide.
-      const owner = await local(`/api/workspaces/${encodeURIComponent(board)}/events`);
+      const owner = await local(`/workspaces/${encodeURIComponent(board)}/events`);
       expect(owner.status).toBe(200);
       const ownerText = await owner.text();
       expect(ownerText).toContain('review_item.added');
       expect(ownerText).toContain(askerId);
 
-      const read = await asMember(`/api/workspaces/${encodeURIComponent(board)}/events`);
+      const read = await asMember(`/workspaces/${encodeURIComponent(board)}/events`);
       expect(read.status, await read.clone().text()).toBe(200);
       const text = await read.text();
       expect(text).not.toContain(askerId);
@@ -903,20 +910,19 @@ describe('share links over HTTP', () => {
         path,
         '# Tracker\n\n## Now\n\n| Task | Status | Owner |\n| --- | --- | --- |\n',
       );
-      const asClient = await postAsMember(
-        `/api/workspaces/${encodeURIComponent(board)}/import-tasks`,
-        { path },
-      );
+      const asClient = await postAsMember(`/workspaces/${encodeURIComponent(board)}/import-tasks`, {
+        path,
+      });
       expect(asClient.status).toBe(403);
       expect(await asClient.json()).toEqual({ error: 'out_of_share_scope' });
 
       // Positive control on the same client shape and the same board: a
       // route the member DOES hold answers, so the refusal is the route.
-      const allowed = await asMember(`/api/workspaces/${encodeURIComponent(board)}/settings`);
+      const allowed = await asMember(`/workspaces/${encodeURIComponent(board)}/settings`);
       expect(allowed.status).toBe(200);
 
       // …and the owner, over loopback, still imports.
-      const byOwner = await postLocal(`/api/workspaces/${encodeURIComponent(board)}/import-tasks`, {
+      const byOwner = await postLocal(`/workspaces/${encodeURIComponent(board)}/import-tasks`, {
         path,
         author: { id: 'owner', name: 'Owner', kind: 'person' },
       });
@@ -970,8 +976,8 @@ describe('share links over HTTP', () => {
     it('is still refused everything outside the board it was given', async () => {
       const cases: Array<[string, RequestInit]> = [
         // The list of boards, and every other board's rows.
-        ['/api/workspaces', {}],
-        [`/api/workspaces/${encodeURIComponent(otherBoard)}/tasks`, {}],
+        ['/workspaces', {}],
+        [`/workspaces/${encodeURIComponent(otherBoard)}/tasks?format=json`, {}],
         // Share administration: minting, revoking, the member list, the switch.
         ['/api/share', {}],
         ['/api/share/workspace', { method: 'POST' }],
@@ -980,12 +986,12 @@ describe('share links over HTTP', () => {
         ['/api/deploy', { method: 'POST' }],
         ['/api/plugin/refresh', { method: 'POST' }],
         // Anything that names a path on the owner's machine.
-        ['/api/workspaces', { method: 'POST' }],
+        ['/workspaces', { method: 'POST' }],
         ['/api/docs', { method: 'POST' }],
         ['/api/diffs', { method: 'POST' }],
         // This board's own lifecycle: it was given to work on, not to retire.
-        [`/api/workspaces/${encodeURIComponent(board)}/retired`, { method: 'PUT' }],
-        [`/api/workspaces/${encodeURIComponent(board)}`, { method: 'DELETE' }],
+        [`/workspaces/${encodeURIComponent(board)}/retired`, { method: 'PUT' }],
+        [`/workspaces/${encodeURIComponent(board)}`, { method: 'DELETE' }],
       ];
       for (const [path, init] of cases) {
         const r = await asMember(path, {
@@ -996,7 +1002,9 @@ describe('share links over HTTP', () => {
         expect(r.status, `${init.method ?? 'GET'} ${path}`).toBe(403);
       }
       // The board is still there, which a status code alone does not say.
-      expect((await asMember(`/api/workspaces/${encodeURIComponent(board)}`)).status).toBe(200);
+      expect((await asMember(`/workspaces/${encodeURIComponent(board)}?format=json`)).status).toBe(
+        200,
+      );
     });
 
     /**
@@ -1038,7 +1046,9 @@ describe('share links over HTTP', () => {
       // this member is still on the board. A 403 alone would not say either.
       const newcomer = 'still-admitted@partner.example';
       expect((await onShareHost(`/s/${linkId}`, newcomer)).status).toBe(302);
-      expect((await asMember(`/api/workspaces/${encodeURIComponent(board)}`)).status).toBe(200);
+      expect((await asMember(`/workspaces/${encodeURIComponent(board)}?format=json`)).status).toBe(
+        200,
+      );
     });
   });
 
@@ -1098,7 +1108,7 @@ describe('share links over HTTP', () => {
       // …and nothing landed there. A 403 whose row was already written is
       // the failure this test exists for, so the board is read back rather
       // than the status being trusted.
-      const listed = await local(`/api/workspaces/${encodeURIComponent(otherBoard)}/tasks`);
+      const listed = await local(`/workspaces/${encodeURIComponent(otherBoard)}/tasks?format=json`);
       expect(listed.status).toBe(200);
       const { tasks } = (await listed.json()) as { tasks: Array<{ title: string }> };
       expect(tasks.map((t) => t.title)).not.toContain('Promoted by a member');
@@ -1115,17 +1125,23 @@ describe('share links over HTTP', () => {
       // `backlinksFor` walks every workspace, because a ref may cross one.
       // Read through a member's scope that is a private row's title, id,
       // status and assignee arriving on a route the member is allowed.
-      const onShared = await postLocal(`/api/workspaces/${encodeURIComponent(board)}/tasks`, {
-        title: 'The shared row',
-        assignee: 'human',
-      });
+      const onShared = await postLocal(
+        `/workspaces/${encodeURIComponent(board)}/tasks?format=json`,
+        {
+          title: 'The shared row',
+          assignee: 'human',
+        },
+      );
       expect(onShared.status).toBe(200);
       const sharedTask = ((await onShared.json()) as { task: { id: string } }).task.id;
 
-      const onPrivate = await postLocal(`/api/workspaces/${encodeURIComponent(otherBoard)}/tasks`, {
-        title: 'Secret roadmap row',
-        assignee: 'human',
-      });
+      const onPrivate = await postLocal(
+        `/workspaces/${encodeURIComponent(otherBoard)}/tasks?format=json`,
+        {
+          title: 'Secret roadmap row',
+          assignee: 'human',
+        },
+      );
       expect(onPrivate.status).toBe(200);
       const privateTask = ((await onPrivate.json()) as { task: { id: string } }).task.id;
       const linked = await postLocal(`/api/tasks/${privateTask}/links`, {
@@ -1156,7 +1172,7 @@ describe('share links over HTTP', () => {
       // function, `.includes` on it is undefined, and the TypeError escaped
       // the handler — so the connection closed with no response at all, which
       // is neither an allow nor a deny.
-      const filed = await postLocal(`/api/workspaces/${encodeURIComponent(board)}/tasks`, {
+      const filed = await postLocal(`/workspaces/${encodeURIComponent(board)}/tasks?format=json`, {
         title: 'Row for the prototype probe',
         assignee: 'human',
       });
@@ -1173,7 +1189,7 @@ describe('share links over HTTP', () => {
         // Also on the board prefix and the goal prefix, which read their own
         // tables the same way.
         const board2 = await onShareHost(
-          `/api/workspaces/${encodeURIComponent(board)}/${seg}`,
+          `/api/reviews/${encodeURIComponent(board)}/${seg}`,
           member,
         );
         expect([403, 404], `board ${seg} status`).toContain(board2.status);
@@ -1212,7 +1228,7 @@ describe('share links over HTTP', () => {
 
     it('leaves the agents on this machine unauthenticated', async () => {
       const probe = withoutOldMode();
-      const r = await fetch(`http://localhost:${probe.port}/api/workspaces`, {
+      const r = await fetch(`http://localhost:${probe.port}/workspaces`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: 'Board on a share-link-only server' }),
@@ -1230,7 +1246,7 @@ describe('share links over HTTP', () => {
       // restart too.
       const probe = withoutOldMode();
       const probeBase = `http://localhost:${probe.port}`;
-      const made = await fetch(`${probeBase}/api/workspaces`, {
+      const made = await fetch(`${probeBase}/workspaces`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: 'Switch board' }),
@@ -1258,7 +1274,7 @@ describe('share links over HTTP', () => {
         );
 
       expect((await visit(`/s/${link.linkId}`)).status).toBe(302);
-      const boardPath = `/api/workspaces/${encodeURIComponent(probeBoard)}`;
+      const boardPath = `/workspaces/${encodeURIComponent(probeBoard)}?format=json`;
       expect((await visit(boardPath)).status).toBe(200);
 
       const off = await flip(false);
@@ -1277,7 +1293,7 @@ describe('share links over HTTP', () => {
     it('still serves the share hostname, and still refuses a stranger there', async () => {
       const probe = withoutOldMode();
       const probeBase = `http://localhost:${probe.port}`;
-      const made = await fetch(`${probeBase}/api/workspaces`, {
+      const made = await fetch(`${probeBase}/workspaces`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: 'Share-link-only board' }),
@@ -1300,7 +1316,7 @@ describe('share links over HTTP', () => {
         );
 
       expect((await visit(`/s/${link.linkId}`, REVIEWER)).status).toBe(302);
-      const board = `/api/workspaces/${encodeURIComponent(probeBoard)}`;
+      const board = `/workspaces/${encodeURIComponent(probeBoard)}?format=json`;
       expect((await visit(board, REVIEWER)).status).toBe(200);
       expect((await visit(board, STRANGER)).status).toBe(403);
       await probe.stop();
@@ -1318,7 +1334,7 @@ describe('share links over HTTP', () => {
       expect(await revoke.json()).toMatchObject({ revoked: 'link', members: 'unchanged' });
       // Still in.
       expect(
-        (await onShareHost(`/api/workspaces/${encodeURIComponent(board)}`, staying)).status,
+        (await onShareHost(`/workspaces/${encodeURIComponent(board)}?format=json`, staying)).status,
       ).toBe(200);
       // But nobody new.
       const newcomer = await onShareHost(`/s/${linkId}`, STRANGER);
@@ -1331,14 +1347,17 @@ describe('share links over HTTP', () => {
         email: staying,
       });
       expect(removed.status).toBe(200);
-      const after = await onShareHost(`/api/workspaces/${encodeURIComponent(board)}`, staying);
+      const after = await onShareHost(
+        `/workspaces/${encodeURIComponent(board)}?format=json`,
+        staying,
+      );
       expect(after.status).toBe(403);
       // Positive control: another member of the same board is unaffected.
       const { linkId } = await mintLink(board);
       const other = 'unaffected@partner.example';
       expect((await onShareHost(`/s/${linkId}`, other)).status).toBe(302);
       expect(
-        (await onShareHost(`/api/workspaces/${encodeURIComponent(board)}`, other)).status,
+        (await onShareHost(`/workspaces/${encodeURIComponent(board)}?format=json`, other)).status,
       ).toBe(200);
     });
 
@@ -1512,7 +1531,7 @@ describe('share links over HTTP', () => {
           headers: { host: `localhost:${before.port}`, 'content-type': 'application/json' },
           body: JSON.stringify(body),
         });
-      const created = await post('/api/workspaces', { name: 'Board shared the old way' });
+      const created = await post('/workspaces', { name: 'Board shared the old way' });
       expect(created.status).toBe(200);
       oldBoard = ((await created.json()) as { workspace: { id: string } }).workspace.id;
       const minted = await post('/api/share/link', {
@@ -1558,7 +1577,7 @@ describe('share links over HTTP', () => {
       // served, and the mint being gone does not touch that.
       const after = migrated();
       const visitor = await fetch(
-        `http://localhost:${after.port}/api/workspaces/${encodeURIComponent(oldBoard)}`,
+        `http://localhost:${after.port}/workspaces/${encodeURIComponent(oldBoard)}?format=json`,
         {
           headers: {
             host: oldShare.hostname,

@@ -256,12 +256,12 @@ describe('goal archive + restore routes', () => {
   // agent would leave them in triage, and every "gone from the board" claim
   // below would then pass whether the archive did anything or not.
   const makeTask = async (title: string, goal: string): Promise<{ id: string }> => {
-    const r = await post(`/api/workspaces/${wsId}/tasks`, { author: PERSON, title, goal });
+    const r = await post(`/workspaces/${wsId}/tasks`, { author: PERSON, title, goal });
     return ((await r.json()) as { task: { id: string } }).task;
   };
 
   const listIds = async (query = ''): Promise<string[]> => {
-    const r = await local(`/api/workspaces/${wsId}/tasks${query}`);
+    const r = await local(`/workspaces/${wsId}/tasks?format=json${query.replace('?', '&')}`);
     const { tasks } = (await r.json()) as { tasks: Array<{ id: string }> };
     return tasks.map((t) => t.id);
   };
@@ -270,7 +270,7 @@ describe('goal archive + restore routes', () => {
     routesDir = mkdtempSync(join(tmpdir(), 'goal-archive-routes-'));
     handle = createServer({ port: 0, dataDir: routesDir });
     base = `http://localhost:${handle.port}`;
-    const r = await post('/api/workspaces', { name: 'search-revamp' });
+    const r = await post('/workspaces', { name: 'search-revamp' });
     wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
     G = await seedGoalsOverHttp(
       base,
@@ -290,18 +290,25 @@ describe('goal archive + restore routes', () => {
   });
 
   it('400s without an author, and 404s an unknown band', async () => {
-    expect((await post(`/api/goals/${G.trust}/archive`, {})).status).toBe(400);
-    expect((await post(`/api/goals/${G.trust}/restore`, {})).status).toBe(400);
-    expect((await post('/api/goals/g-nope/archive', { author: PERSON })).status).toBe(404);
-    expect((await local('/api/goals/g-nope/cascade')).status).toBe(404);
+    expect((await post(`/workspaces/${wsId}/goals/${G.trust}/archive`, {})).status).toBe(400);
+    expect((await post(`/workspaces/${wsId}/goals/${G.trust}/restore`, {})).status).toBe(400);
+    expect(
+      (await post(`/workspaces/${wsId}/goals/g-nope/archive`, { author: PERSON })).status,
+    ).toBe(404);
+    expect((await local(`/workspaces/${wsId}/goals/g-nope/cascade`)).status).toBe(404);
     // Positive control: with an author the same call lands, so the 400s above
     // are about the author rather than about the route not existing.
-    expect((await post(`/api/goals/${G.trust}/archive`, { author: PERSON })).status).toBe(200);
-    await post(`/api/goals/${G.trust}/restore`, { author: PERSON });
+    expect(
+      (await post(`/workspaces/${wsId}/goals/${G.trust}/archive`, { author: PERSON })).status,
+    ).toBe(200);
+    await post(`/workspaces/${wsId}/goals/${G.trust}/restore`, { author: PERSON });
   });
 
   it('projects the band’s archive, so the board can take it off the lanes', async () => {
-    await post(`/api/goals/${G.trust}/archive`, { author: PERSON, reason: 'shipped' });
+    await post(`/workspaces/${wsId}/goals/${G.trust}/archive`, {
+      author: PERSON,
+      reason: 'shipped',
+    });
     // The board renders bands off the `ws:` room's projected `goals` and
     // nothing else, so an archive only the store can see is the
     // store-has-it/surface-can't-show-it bug for the field that hides it.
@@ -317,7 +324,7 @@ describe('goal archive + restore routes', () => {
     // every band would pass the half above on its own.
     expect((goals ?? []).find((g) => g.id === G.fast)?.archivedAt).toBeUndefined();
 
-    await post(`/api/goals/${G.trust}/restore`, { author: PERSON });
+    await post(`/workspaces/${wsId}/goals/${G.trust}/restore`, { author: PERSON });
     const after = handle.docStore.get(`ws:${wsId}`)?.ydoc.getMap('workspace').get('goals') as
       | Array<{ id: string; archivedAt?: number }>
       | undefined;
@@ -328,7 +335,7 @@ describe('goal archive + restore routes', () => {
   // archive reaches exactly one of them. The projection has to say so: a walk
   // that stamped a neighbour would take a live band off the lanes.
   it('stamps only the archived band, leaving the one next to it on the board', async () => {
-    await post(`/api/goals/${G.fast}/archive`, { author: PERSON });
+    await post(`/workspaces/${wsId}/goals/${G.fast}/archive`, { author: PERSON });
     const read = () =>
       (handle.docStore.get(`ws:${wsId}`)?.ydoc.getMap('workspace').get('goals') as
         | Array<{ id: string; archivedAt?: number }>
@@ -336,7 +343,7 @@ describe('goal archive + restore routes', () => {
     expect(read().find((g) => g.id === G.fast)?.archivedAt).toBeGreaterThan(0);
     expect(read().find((g) => g.id === G.index)?.archivedAt).toBeUndefined();
 
-    await post(`/api/goals/${G.fast}/restore`, { author: PERSON });
+    await post(`/workspaces/${wsId}/goals/${G.fast}/restore`, { author: PERSON });
     expect(read().find((g) => g.id === G.fast)?.archivedAt).toBeUndefined();
   });
 
@@ -345,12 +352,12 @@ describe('goal archive + restore routes', () => {
     const crawl = await makeTask('Crawl the corpus', G.index);
     const audit = await makeTask('Audit the trail', G.trust);
 
-    const pre = (await (await local(`/api/goals/${G.fast}/cascade`)).json()) as {
+    const pre = (await (await local(`/workspaces/${wsId}/goals/${G.fast}/cascade`)).json()) as {
       taskIds: string[];
     };
     expect(pre.taskIds).toEqual([wire.id]);
 
-    const res = await post(`/api/goals/${G.fast}/archive`, {
+    const res = await post(`/workspaces/${wsId}/goals/${G.fast}/archive`, {
       author: PERSON,
       reason: 'goal moved past',
     });
@@ -368,7 +375,7 @@ describe('goal archive + restore routes', () => {
     expect((await listIds()).sort()).toEqual([crawl.id, audit.id].sort());
     expect((await listIds('?includeArchived=true')).length).toBe(3);
 
-    const back = await post(`/api/goals/${G.fast}/restore`, { author: PERSON });
+    const back = await post(`/workspaces/${wsId}/goals/${G.fast}/restore`, { author: PERSON });
     expect(back.status).toBe(200);
     expect((await listIds()).sort()).toEqual([wire.id, crawl.id, audit.id].sort());
   });

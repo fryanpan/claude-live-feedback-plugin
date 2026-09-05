@@ -160,7 +160,7 @@ async function handshakeAndSync(
 
 describe('yjs websocket compression', () => {
   it('negotiates permessage-deflate and sends the sync frames compressed', async () => {
-    const created = await fetch(`http://localhost:${handle.port}/api/workspaces`, {
+    const created = await fetch(`http://localhost:${handle.port}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'deflate board', goal: 'Load Home fast.' }),
@@ -169,18 +169,15 @@ describe('yjs websocket compression', () => {
     const { workspace } = (await created.json()) as { workspace: { id: string } };
     // Enough board state that sync step 2 is a real frame, not a header.
     for (let i = 0; i < 20; i++) {
-      const r = await fetch(
-        `http://localhost:${handle.port}/api/workspaces/${workspace.id}/tasks`,
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            title: `Row ${i}`,
-            assignee: 'human',
-            body: `Bryan can open Home so that the board paints fast. ${'Detail. '.repeat(40)}`,
-          }),
-        },
-      );
+      const r = await fetch(`http://localhost:${handle.port}/workspaces/${workspace.id}/tasks`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          title: `Row ${i}`,
+          assignee: 'human',
+          body: `Bryan can open Home so that the board paints fast. ${'Detail. '.repeat(40)}`,
+        }),
+      });
       expect(r.status).toBe(200);
     }
     const path = `/y/${encodeURIComponent(workspaceDocId(workspace.id))}?type=workspace`;

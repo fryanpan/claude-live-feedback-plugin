@@ -99,7 +99,7 @@ describe('share mutation routes refuse browser callers', () => {
     base = `http://localhost:${handle.port}`;
 
     boardId = (
-      (await post('/api/workspaces', { name: 'Share board' }).then((r) => r.json())) as {
+      (await post('/workspaces', { name: 'Share board' }).then((r) => r.json())) as {
         workspace: { id: string };
       }
     ).workspace.id;

@@ -56,7 +56,7 @@ describe('a goal is at parity with a task: description + comments', () => {
     dir = mkdtempSync(join(tmpdir(), 'goal-parity-'));
     handle = await createServer({ dataDir: dir, port: 0 });
     base = `http://127.0.0.1:${handle.port}`;
-    const ws = await fetch(`${base}/api/workspaces`, {
+    const ws = await fetch(`${base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'Board', author: PERSON }),
@@ -81,7 +81,7 @@ describe('a goal is at parity with a task: description + comments', () => {
   const readWorkspace = async (): Promise<{
     goalSummary: Array<{ id: string; bodyDocId?: string; commentCount?: number }>;
   }> => {
-    const res = await fetch(`${base}/api/workspaces/${encodeURIComponent(workspaceId)}`);
+    const res = await fetch(`${base}/workspaces/${encodeURIComponent(workspaceId)}?format=json`);
     return (await res.json()) as {
       goalSummary: Array<{ id: string; bodyDocId?: string; commentCount?: number }>;
     };
@@ -197,9 +197,7 @@ describe('a goal is at parity with a task: description + comments', () => {
     // the fixture was simply rejected, so the filing is asserted first.
     expect(filed.status).toBeLessThan(300);
     await settle();
-    const res = await fetch(
-      `${base}/api/workspaces/${encodeURIComponent(workspaceId)}/review-items`,
-    );
+    const res = await fetch(`${base}/workspaces/${encodeURIComponent(workspaceId)}/review-items`);
     const rows = (await res.json()) as { items?: Array<{ kind?: string; docId?: string }> };
     const mine = (rows.items ?? []).filter((i) => i.docId === `task:${goalId}`);
     expect(mine.length).toBeGreaterThan(0);

@@ -181,7 +181,7 @@ describe('both names reach the same code, not merely the same switch', () => {
       { folderPath: '/tmp/synthetic', workspaceId: 'grp-1', subscribe: false },
       { ok: true },
     );
-    expect(calls[0]?.[1]).toBe('/api/workspaces');
+    expect(calls[0]?.[1]).toBe('/workspaces');
   });
 
   it('attach_mockup / bind_mock post the same mockup doc', async () => {
@@ -215,7 +215,7 @@ describe('both names reach the same code, not merely the same switch', () => {
       { workspaceId: 'w1', reason: 'superseded' },
       { changed: true, workspace: { name: 'A board' } },
     );
-    expect(calls[0]?.[1]).toBe('/api/workspaces/w1/retired');
+    expect(calls[0]?.[1]).toBe('/workspaces/w1/retired');
     expect(calls[0]?.[2]).toMatchObject({ retired: true, reason: 'superseded' });
   });
 });

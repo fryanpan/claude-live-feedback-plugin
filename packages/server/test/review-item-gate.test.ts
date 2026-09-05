@@ -195,10 +195,10 @@ describe('the review-item quality gate', () => {
 
   async function board(): Promise<{ workspaceId: string; taskId: string }> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'index-rebuild', leadAgentId: LEAD.id }),
+      await post('/workspaces', { name: 'index-rebuild', leadAgentId: LEAD.id }),
     );
     const { task } = await jj<{ task: { id: string } }>(
-      await post(`/api/workspaces/${workspace.id}/tasks`, {
+      await post(`/workspaces/${workspace.id}/tasks`, {
         title: 'Rebuild the index nightly',
         body: 'Agent can rebuild the index so that search stays fresh.',
         assignee: FILER.name,
@@ -218,7 +218,7 @@ describe('the review-item quality gate', () => {
 
   async function queue(workspaceId: string): Promise<QueueRow[]> {
     const { items } = await jj<{ items: QueueRow[] }>(
-      await get(`/api/workspaces/${workspaceId}/review-items`),
+      await get(`/workspaces/${workspaceId}/review-items`),
     );
     return items.filter((i) => i.kind === 'task-review');
   }
@@ -249,19 +249,19 @@ describe('the review-item quality gate', () => {
     it('reads the default until somebody writes, and round-trips a write', async () => {
       const { workspaceId } = await board();
       const before = await jj<{ reviewItemCriteria: { value: string; isDefault: boolean } }>(
-        await get(`/api/workspaces/${workspaceId}/settings`),
+        await get(`/workspaces/${workspaceId}/settings`),
       );
       expect(before.reviewItemCriteria.isDefault).toBe(true);
       expect(before.reviewItemCriteria.value).toBe(DEFAULT_REVIEW_ITEM_CRITERIA);
 
       await jj(
-        await put(`/api/workspaces/${workspaceId}/settings`, {
+        await put(`/workspaces/${workspaceId}/settings`, {
           reviewItemCriteria: 'Every headline is a question.',
           author: PERSON,
         }),
       );
       const after = await jj<{ reviewItemCriteria: { value: string; isDefault: boolean } }>(
-        await get(`/api/workspaces/${workspaceId}/settings`),
+        await get(`/workspaces/${workspaceId}/settings`),
       );
       expect(after.reviewItemCriteria).toMatchObject({
         value: 'Every headline is a question.',
@@ -269,7 +269,7 @@ describe('the review-item quality gate', () => {
       });
       // The workspace payload carries it too, so get_workspace can show it.
       const { workspace } = await jj<{ workspace: { reviewItemCriteria?: string } }>(
-        await get(`/api/workspaces/${workspaceId}`),
+        await get(`/workspaces/${workspaceId}?format=json`),
       );
       expect(workspace.reviewItemCriteria).toBe('Every headline is a question.');
     });
@@ -277,31 +277,31 @@ describe('the review-item quality gate', () => {
     it('a null write returns the board to the default', async () => {
       const { workspaceId } = await board();
       await jj(
-        await put(`/api/workspaces/${workspaceId}/settings`, {
+        await put(`/workspaces/${workspaceId}/settings`, {
           reviewItemCriteria: 'custom',
           author: PERSON,
         }),
       );
       await jj(
-        await put(`/api/workspaces/${workspaceId}/settings`, {
+        await put(`/workspaces/${workspaceId}/settings`, {
           reviewItemCriteria: null,
           author: PERSON,
         }),
       );
       const after = await jj<{ reviewItemCriteria: { isDefault: boolean } }>(
-        await get(`/api/workspaces/${workspaceId}/settings`),
+        await get(`/workspaces/${workspaceId}/settings`),
       );
       expect(after.reviewItemCriteria.isDefault).toBe(true);
     });
 
     it('refuses a non-string criteria and an unknown board', async () => {
       const { workspaceId } = await board();
-      const bad = await put(`/api/workspaces/${workspaceId}/settings`, {
+      const bad = await put(`/workspaces/${workspaceId}/settings`, {
         reviewItemCriteria: 42,
         author: PERSON,
       });
       expect(bad.status).toBe(400);
-      const missing = await get('/api/workspaces/w-nope/settings');
+      const missing = await get('/workspaces/w-nope/settings');
       expect(missing.status).toBe(404);
     });
 
@@ -310,7 +310,7 @@ describe('the review-item quality gate', () => {
       await jj(await post(`/api/tasks/${taskId}/review-items`, { review: GOOD, author: FILER }));
       expect(calls.at(-1)?.criteria).toBe(DEFAULT_REVIEW_ITEM_CRITERIA);
       await jj(
-        await put(`/api/workspaces/${workspaceId}/settings`, {
+        await put(`/workspaces/${workspaceId}/settings`, {
           reviewItemCriteria: 'Every headline is a question.',
           author: PERSON,
         }),
@@ -357,7 +357,7 @@ describe('the review-item quality gate', () => {
           id: string;
           reviews?: Array<{ id: string; judge?: { verdict: string; reason: string } }>;
         }>;
-      }>(await get(`/api/workspaces/${workspaceId}/tasks`));
+      }>(await get(`/workspaces/${workspaceId}/tasks?format=json`));
       const stored = tasks.find((t) => t.id === taskId)?.reviews?.find((r) => r.id === res.item.id);
       expect(stored?.judge).toMatchObject({
         verdict: 'held',
@@ -424,7 +424,7 @@ describe('the review-item quality gate', () => {
       verdict = { ok: false, reason: 'No stakes.' };
       const { workspaceId } = await board();
       const res = await jj<{ task: { id: string }; held?: boolean; heldReason?: string }>(
-        await post(`/api/workspaces/${workspaceId}/tasks`, {
+        await post(`/workspaces/${workspaceId}/tasks`, {
           title: 'Pick the eviction policy',
           body: 'Agent can pick a policy so that the cache stays warm.',
           review: BAD,
@@ -446,7 +446,7 @@ describe('the review-item quality gate', () => {
       expect(await queue(workspaceId)).toEqual([]);
       const { tasks } = await jj<{
         tasks: Array<{ id: string; reviews?: Array<{ id: string; judge?: { verdict: string } }> }>;
-      }>(await get(`/api/workspaces/${workspaceId}/tasks`));
+      }>(await get(`/workspaces/${workspaceId}/tasks?format=json`));
       expect(tasks.find((t) => t.id === taskId)?.reviews?.[0]?.judge?.verdict).toBe('pending');
       // The control: the verdict arriving is what puts it on the queue.
       parked[0]?.({ ok: true, reason: 'fine' });
@@ -477,7 +477,7 @@ describe('the review-item quality gate', () => {
       base = `http://localhost:${handle.port}`;
       const { tasks } = await jj<{
         tasks: Array<{ id: string; reviews?: Array<{ id: string; judge?: { verdict: string } }> }>;
-      }>(await get(`/api/workspaces/${workspaceId}/tasks`));
+      }>(await get(`/workspaces/${workspaceId}/tasks?format=json`));
       const row = tasks.find((t) => t.id === taskId)?.reviews?.[0];
       expect(row?.judge?.verdict).toBe('unavailable');
       expect((await queue(workspaceId)).map((r) => r.reviewItemId)).toEqual([row?.id]);
@@ -498,7 +498,7 @@ describe('the review-item quality gate', () => {
       // store, so a revision can land on it now.
       while (parked.length < 1) await settle(10);
       const { tasks } = await jj<{ tasks: Array<{ id: string; reviews?: Array<{ id: string }> }> }>(
-        await get(`/api/workspaces/${workspaceId}/tasks`),
+        await get(`/workspaces/${workspaceId}/tasks?format=json`),
       );
       const itemId = tasks.find((t) => t.id === taskId)?.reviews?.[0]?.id;
       expect(itemId).toBeTruthy();
@@ -531,7 +531,7 @@ describe('the review-item quality gate', () => {
       const filing = post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER });
       while (parked.length < 1) await settle(10);
       const { tasks } = await jj<{ tasks: Array<{ id: string; reviews?: Array<{ id: string }> }> }>(
-        await get(`/api/workspaces/${workspaceId}/tasks`),
+        await get(`/workspaces/${workspaceId}/tasks?format=json`),
       );
       const itemId = tasks.find((t) => t.id === taskId)?.reviews?.[0]?.id;
       const revising = post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
@@ -636,7 +636,7 @@ describe('the review-item quality gate', () => {
 
     async function batchBoard(): Promise<string> {
       const { workspace } = await jj<{ workspace: { id: string } }>(
-        await post('/api/workspaces', { name: 'index-rebuild', leadAgentId: LEAD.id }),
+        await post('/workspaces', { name: 'index-rebuild', leadAgentId: LEAD.id }),
       );
       return workspace.id;
     }
@@ -649,7 +649,7 @@ describe('the review-item quality gate', () => {
     it('puts its rows in front of the judge together, not one after the next', async () => {
       verdict = 'defer';
       const workspaceId = await batchBoard();
-      const sent = post(`/api/workspaces/${workspaceId}/tasks/batch`, {
+      const sent = post(`/workspaces/${workspaceId}/tasks/batch`, {
         tasks: [row(1), row(2), row(3)],
         author: FILER,
       });
@@ -682,7 +682,7 @@ describe('the review-item quality gate', () => {
       verdict = { ok: true, reason: 'Fine.' };
       const workspaceId = await batchBoard();
       const res = await jj<{ tasks: Array<{ id: string }>; held?: unknown[] }>(
-        await post(`/api/workspaces/${workspaceId}/tasks/batch`, {
+        await post(`/workspaces/${workspaceId}/tasks/batch`, {
           tasks: [row(1), row(2)],
           author: FILER,
         }),
@@ -725,7 +725,7 @@ describe('the review-item quality gate', () => {
       const filing = post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER });
       while (parked.length < 1) await settle(10);
       const { tasks } = await jj<{ tasks: Array<{ id: string; reviews?: Array<{ id: string }> }> }>(
-        await get(`/api/workspaces/${workspaceId}/tasks`),
+        await get(`/workspaces/${workspaceId}/tasks?format=json`),
       );
       const itemId = tasks.find((t) => t.id === taskId)?.reviews?.[0]?.id as string;
       // The control: while the judge is out the item is off the queue, so the
@@ -749,7 +749,7 @@ describe('the review-item quality gate', () => {
           id: string;
           reviews?: Array<{ judge?: { verdict: string; reason: string } }>;
         }>;
-      }>(await get(`/api/workspaces/${workspaceId}/tasks`));
+      }>(await get(`/workspaces/${workspaceId}/tasks?format=json`));
       const judge = seen.tasks.find((t) => t.id === taskId)?.reviews?.[0]?.judge;
       expect(judge?.verdict).toBe('ok');
       expect(judge?.reason).toContain(PERSON.name);
@@ -935,7 +935,7 @@ describe('the review-item quality gate', () => {
     /** The queue rows a comment-borne declaration produces. */
     async function threadQueue(workspaceId: string): Promise<QueueRow[]> {
       const { items } = await jj<{ items: QueueRow[] }>(
-        await get(`/api/workspaces/${workspaceId}/review-items`),
+        await get(`/workspaces/${workspaceId}/review-items`),
       );
       return items.filter((i) => i.kind === 'task-thread' || i.kind === 'doc-thread');
     }
@@ -1219,13 +1219,13 @@ describe('the review-item quality gate', () => {
     /** File one row through the batch door — what `create_tasks` calls. */
     async function createTasks(workspaceId: string, row: unknown): Promise<BatchReply> {
       return jj<BatchReply>(
-        await post(`/api/workspaces/${workspaceId}/tasks/batch`, { author: FILER, tasks: [row] }),
+        await post(`/workspaces/${workspaceId}/tasks/batch`, { author: FILER, tasks: [row] }),
       );
     }
     /** The queue rows the ticket's OWN decision produces. */
     async function decisionQueue(workspaceId: string): Promise<QueueRow[]> {
       const { items } = await jj<{ items: QueueRow[] }>(
-        await get(`/api/workspaces/${workspaceId}/review-items`),
+        await get(`/workspaces/${workspaceId}/review-items`),
       );
       return items.filter((i) => i.reviewItemId === 'r-legacy');
     }
@@ -1393,7 +1393,7 @@ describe('the review-item quality gate', () => {
       verdict = { ok: false, reason: 'The headline is a ticket id, not a decision.' };
       await jj(await post(`/api/tasks/${taskId}/title`, { author: FILER, title: 'ri-77 cfg?' }));
       const { items } = await jj<{ items: QueueRow[] }>(
-        await get(`/api/workspaces/${workspaceId}/review-items`),
+        await get(`/workspaces/${workspaceId}/review-items`),
       );
       expect(items.filter((i) => i.reviewItemId === 'r-legacy')).toEqual([]);
     });
@@ -1445,7 +1445,7 @@ describe('the review-item quality gate', () => {
       expect(((await res.json()) as { error: string }).error).toBe('no-thread');
       // And the words did NOT move — the refusal happens before any write.
       const { items } = await jj<{ items: QueueRow[] }>(
-        await get(`/api/workspaces/${workspaceId}/review-items`),
+        await get(`/workspaces/${workspaceId}/review-items`),
       );
       expect(items.find((i) => i.reviewItemId === 'r-legacy')?.title).toBe(
         'Which cache size should the nightly rebuild use?',

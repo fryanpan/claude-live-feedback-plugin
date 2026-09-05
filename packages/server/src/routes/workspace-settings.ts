@@ -38,7 +38,7 @@ export async function handleWorkspaceSettings(
   // "goal set" for a write that never happened, and the MCP client
   // surfaces a non-2xx body verbatim, which is how the sentence below
   // reaches whoever needs to read it.
-  const wsGoalMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/goal$/);
+  const wsGoalMatch = pathname.match(/^\/workspaces\/([^/]+)\/goal$/);
   if (wsGoalMatch && req.method === 'PUT') {
     return j(410, {
       deprecated: true,
@@ -54,7 +54,7 @@ export async function handleWorkspaceSettings(
   // tasks sidecar and the events log, and this one writes a single
   // field on a record that is already serialized wholesale, so nothing
   // it does needs undoing beyond writing the field again.
-  const wsRetiredMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/retired$/);
+  const wsRetiredMatch = pathname.match(/^\/workspaces\/([^/]+)\/retired$/);
   if (wsRetiredMatch && req.method === 'PUT') {
     const workspaceId = decodeURIComponent(wsRetiredMatch[1] ?? '');
     const body = await safeJson(req);
@@ -93,7 +93,7 @@ export async function handleWorkspaceSettings(
   // on `/settings` because Team Lead's session calls REST directly to
   // manage cross-project capacity, and a one-field verb is the shape
   // that call wants; `/settings` still carries the field for the panel.
-  const wsCapMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/parallelism-cap$/);
+  const wsCapMatch = pathname.match(/^\/workspaces\/([^/]+)\/parallelism-cap$/);
   if (wsCapMatch && (req.method === 'GET' || req.method === 'PUT')) {
     const workspaceId = decodeURIComponent(wsCapMatch[1] ?? '');
     if (!taskStore.getWorkspace(workspaceId)) {
@@ -145,7 +145,7 @@ export async function handleWorkspaceSettings(
   // parse to the same JSON as one that omitted it entirely, so the two
   // cannot be told apart and are treated alike). String fields rather
   // than a rule table because the owner edits both in their own words.
-  const wsSettingsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/settings$/);
+  const wsSettingsMatch = pathname.match(/^\/workspaces\/([^/]+)\/settings$/);
   if (wsSettingsMatch && (req.method === 'GET' || req.method === 'PUT')) {
     const workspaceId = decodeURIComponent(wsSettingsMatch[1] ?? '');
     if (req.method === 'PUT') {
@@ -320,7 +320,7 @@ export async function handleWorkspaceSettings(
         // surface gives an actor: name and kind, no id. This route used to
         // pass the record through verbatim, and it carries a full
         // `TaskActor` whose id is derived from an email — the same field the
-        // board record beside it (`GET /api/workspaces/<id>`) has been
+        // board record beside it (`GET /workspaces/<id>`) has been
         // reducing since the cap shipped. The local surface keeps it whole.
         ...(capView.lastChange !== undefined
           ? {
@@ -340,7 +340,7 @@ export async function handleWorkspaceSettings(
   // rename_workspace. The name was set once at creation and nothing
   // changed it, which is how two live boards ended up sharing one — and
   // a name is how an agent picks which to work.
-  const wsBoardRenameMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/rename$/);
+  const wsBoardRenameMatch = pathname.match(/^\/workspaces\/([^/]+)\/rename$/);
   if (wsBoardRenameMatch && req.method === 'POST') {
     const workspaceId = decodeURIComponent(wsBoardRenameMatch[1] ?? '');
     const body = await safeJson(req);
@@ -356,7 +356,7 @@ export async function handleWorkspaceSettings(
   // set_workspace_lead: hand the board's lead-agent seat to someone
   // else. A standing assignment, not a session fact — the lead may be
   // away, and a goal edit still has an addressee to queue for.
-  const wsLeadMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/lead$/);
+  const wsLeadMatch = pathname.match(/^\/workspaces\/([^/]+)\/lead$/);
   if (wsLeadMatch && req.method === 'PUT') {
     const workspaceId = decodeURIComponent(wsLeadMatch[1] ?? '');
     const body = await safeJson(req);
@@ -389,7 +389,7 @@ export async function handleWorkspaceSettings(
   // ack out. EVERY utterance gets an explicit ack naming what was heard
   // and which route handles it — the router owns that invariant; this
   // handler only validates and forwards (transcript VERBATIM).
-  const wsVoiceMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/voice$/);
+  const wsVoiceMatch = pathname.match(/^\/workspaces\/([^/]+)\/voice$/);
   if (wsVoiceMatch && req.method === 'POST') {
     const workspaceId = decodeURIComponent(wsVoiceMatch[1] ?? '');
     const body = await safeJson(req);

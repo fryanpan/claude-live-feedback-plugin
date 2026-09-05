@@ -35,7 +35,7 @@ describe('plugin drift over the attachment routes', () => {
     local(path, { method: 'POST', body: JSON.stringify(body) });
 
   const makeWorkspace = async (name: string): Promise<string> => {
-    const r = await post('/api/workspaces', { name, goal: 'Ship it.' });
+    const r = await post('/workspaces', { name, goal: 'Ship it.' });
     return ((await r.json()) as { workspace: { id: string } }).workspace.id;
   };
 

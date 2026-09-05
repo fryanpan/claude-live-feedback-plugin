@@ -107,14 +107,14 @@ describe('the Unfiled board cannot be shared', () => {
     });
 
     // A real board, made the way create_workspace makes one.
-    const board = await local('/api/workspaces', { name: 'Partner review' });
+    const board = await local('/workspaces', { name: 'Partner review' });
     expect(board.status).toBe(200);
     boardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
     expect(boardId).toBeTruthy();
 
     // A bind that names NO board — exactly the stray this refusal protects.
     // The response says where it landed: the Unfiled board.
-    const bind = await local('/api/workspaces', { folderPath: folder });
+    const bind = await local('/workspaces', { folderPath: folder });
     expect(bind.status).toBe(200);
     unfiledBoardId = ((await bind.json()) as { hubWorkspaceId: string }).hubWorkspaceId;
     expect(unfiledBoardId).toBeTruthy();
@@ -180,7 +180,7 @@ describe('the Unfiled board cannot be shared', () => {
     // never cached, so the refusal must key on the same thing the lookup
     // does. A board a user deliberately names "Unfiled" answers that lookup
     // too (strays would land on it), so it is refused as well.
-    const named = await local('/api/workspaces', { name: 'Unfiled' });
+    const named = await local('/workspaces', { name: 'Unfiled' });
     // Whatever the create route thinks of a duplicate name, the share must
     // refuse any id whose board answers to the Unfiled lookup.
     if (named.status === 200) {

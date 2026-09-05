@@ -85,12 +85,12 @@ describe('per-doc sharing is removed', () => {
     const mk = await local('/api/docs', { docId: SOLO, type: 'markdown', sourceUrl: soloPath });
     expect(mk.status).toBe(200);
 
-    const board = await local('/api/workspaces', { name: 'Per-doc removal board' });
+    const board = await local('/workspaces', { name: 'Per-doc removal board' });
     expect(board.status).toBe(200);
     boardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
     expect(boardId).toBeTruthy();
 
-    const bind = await local('/api/workspaces', { folderPath: folder, hubWorkspaceId: boardId });
+    const bind = await local('/workspaces', { folderPath: folder, hubWorkspaceId: boardId });
     expect(bind.status).toBe(200);
     const bound = (await bind.json()) as {
       workspaceId: string;
@@ -300,12 +300,9 @@ describe('per-doc sharing is removed', () => {
       mkdirSync(dir, { recursive: true });
       writeFileSync(join(dir, 'note.md'), '# Note\n\nFiled, therefore shareable.\n');
 
-      const opened = await local(
-        `/api/workspaces/${encodeURIComponent(workspaceId)}/context-file`,
-        {
-          relPath: 'nested/note.md',
-        },
-      );
+      const opened = await local(`/api/reviews/${encodeURIComponent(workspaceId)}/context-file`, {
+        relPath: 'nested/note.md',
+      });
       expect(opened.status).toBe(200);
       const { docId } = (await opened.json()) as { docId: string };
       expect(docId).toBeTruthy();

@@ -53,7 +53,7 @@ export function postLoadReport(input: LoadReportInput): void {
   // did. Measured: unmarked, it raised the modal over the board within
   // four seconds of opening it.
   asBackgroundWrite(() => {
-    void fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/load-reports`, {
+    void fetch(`/workspaces/${encodeURIComponent(workspaceId)}/load-reports`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({

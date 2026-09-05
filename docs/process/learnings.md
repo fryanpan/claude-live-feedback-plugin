@@ -2450,7 +2450,7 @@ kernel-wide socket CREATION failing, and its cause is still unknown.**
   never as a gate.
 - **The hazard the precondition was reaching for is real, but it is one layer
   down: the REST route, not the verb.** An old bundle keeps calling
-  `POST /api/workspaces/:id/tasks` with whatever payload *that* bundle sends,
+  `POST /workspaces/:id/tasks` with whatever payload *that* bundle sends,
   and gets a failure it cannot explain from its own version. So the question
   worth asking at a removal is never "did I delete a tool somebody still
   calls" — it is **"did I narrow anything the old callers still send or still

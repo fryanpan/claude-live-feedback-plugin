@@ -241,7 +241,7 @@ describe('web app shells', () => {
 
   it('links the manifest from the board shell', async () => {
     const { base } = await start();
-    const created = await fetch(`${base}/api/workspaces`, {
+    const created = await fetch(`${base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'push-board', goal: 'Ship it.' }),

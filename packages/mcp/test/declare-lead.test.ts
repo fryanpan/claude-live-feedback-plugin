@@ -77,7 +77,7 @@ describe('declareWorkspaceLead — declaring yourself', () => {
     expect(shape(calls)).toEqual([
       `POST /workspaces/${WS}/agents`,
       `watch ${WS}`,
-      `PUT /api/workspaces/${WS}/lead`,
+      `PUT /workspaces/${WS}/lead`,
     ]);
   });
 
@@ -242,7 +242,7 @@ describe('POSITIVE CONTROL — handing the seat to somebody else is unchanged', 
     });
     const res = await declareWorkspaceLead({ workspaceId: WS, leadAgentId: 'agent-other' }, deps);
 
-    expect(shape(calls)).toEqual([`PUT /api/workspaces/${WS}/lead`]);
+    expect(shape(calls)).toEqual([`PUT /workspaces/${WS}/lead`]);
     expect(res).toEqual({ workspaceId: WS, changed: true, leadAgentId: 'agent-other' });
     // Nothing may claim this session subscribed on somebody else's behalf.
     expect(res.subscribed).toBeUndefined();
@@ -359,7 +359,7 @@ describe('declareWorkspaceLead — a shared identity is refused before the seat 
     };
     const res = await declareWorkspaceLead({ workspaceId: WS }, deps);
     expect(res.isError).toBeUndefined();
-    expect(shape(calls)).toContain(`PUT /api/workspaces/${WS}/lead`);
+    expect(shape(calls)).toContain(`PUT /workspaces/${WS}/lead`);
     // The failure is the FIRST thing in the payload, with the remedy beside it.
     expect(Object.keys(res)[0]).toBe('subscriptionPersisted');
     expect(res.subscriptionPersisted).toBe(false);

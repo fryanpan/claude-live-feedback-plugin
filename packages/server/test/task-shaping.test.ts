@@ -78,9 +78,9 @@ describe('triage shaping', () => {
     handle = await createServer({ port: 0, dataDir });
     base = `http://127.0.0.1:${handle.port}`;
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'shelf-planner', goal: 'Planning feels fast.' }),
+      await post('/workspaces', { name: 'shelf-planner', goal: 'Planning feels fast.' }),
     );
-    await fetch(`${base}/api/workspaces/${workspace.id}/goals`, {
+    await fetch(`${base}/workspaces/${workspace.id}/goals`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ author: AGENT, goals: [{ id: 'g-flow', title: 'Navigation flow' }] }),
@@ -94,7 +94,7 @@ describe('triage shaping', () => {
     extra: Record<string, unknown> = {},
   ): Promise<{ task: Task; placement: { placed: boolean } }> {
     return jj(
-      await post(`/api/workspaces/${workspaceId}/tasks`, {
+      await post(`/workspaces/${workspaceId}/tasks`, {
         author: PERSON,
         title: CAPTURE.title,
         body: CAPTURE.body,
@@ -105,7 +105,7 @@ describe('triage shaping', () => {
 
   const readTask = async (workspaceId: string, taskId: string): Promise<Task> => {
     const { tasks } = await jj<{ tasks: Task[] }>(
-      await fetch(`${base}/api/workspaces/${workspaceId}/tasks`),
+      await fetch(`${base}/workspaces/${workspaceId}/tasks?format=json`),
     );
     const found = tasks.find((t) => t.id === taskId);
     expect(found).toBeDefined();
@@ -181,7 +181,7 @@ describe('triage shaping', () => {
   it('falls back to the title when the row had no body to preserve', async () => {
     const wsId = await seedWorkspace();
     const { task } = await jj<{ task: Task }>(
-      await post(`/api/workspaces/${wsId}/tasks`, {
+      await post(`/workspaces/${wsId}/tasks`, {
         author: PERSON,
         title: 'shelf jumping is annoying',
       }),

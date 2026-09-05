@@ -347,7 +347,7 @@ describe('a comment posted while the subscriber is disconnected is delivered aft
   });
 
   async function board(name: string, agentId: string): Promise<string> {
-    const w = await post('/api/workspaces', { name, goal: 'Ship it.' });
+    const w = await post('/workspaces', { name, goal: 'Ship it.' });
     const { workspace } = (await w.json()) as { workspace: { id: string } };
     const att = await post(`/workspaces/${workspace.id}/agents`, {
       agentId,
@@ -416,7 +416,7 @@ describe('a comment posted while the subscriber is disconnected is delivered aft
 
     // The receipt — sent by the receiving process once the frame is in its
     // hands — is what takes the row off.
-    const acked = await post(`/api/workspaces/${workspaceId}/comment-queue/${rowId}/ack`, {});
+    const acked = await post(`/workspaces/${workspaceId}/comment-queue/${rowId}/ack`, {});
     expect((await acked.json()) as { cleared: boolean }).toMatchObject({ cleared: true });
     expect(handle.tasks.listQueuedComments(workspaceId)).toHaveLength(0);
   });
@@ -563,7 +563,7 @@ describe('a comment posted while the subscriber is disconnected is delivered aft
     );
     await settle();
     expect(rejoined.frames.find((f) => f.data.commentQueueId === rowId)).toBeDefined();
-    const acked = await post(`/api/workspaces/${workspaceId}/comment-queue/${rowId}/ack`, {});
+    const acked = await post(`/workspaces/${workspaceId}/comment-queue/${rowId}/ack`, {});
     expect((await acked.json()) as { cleared: boolean }).toMatchObject({ cleared: true });
     expect(handle.tasks.listQueuedComments(workspaceId)).toHaveLength(0);
   });

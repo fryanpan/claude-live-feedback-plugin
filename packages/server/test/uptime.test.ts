@@ -9,7 +9,7 @@
  *    of life; a gap wider than the tick grace is an outage).
  *  - UptimeMonitor: the liveness floor — periodic server.tick markers so an
  *    idle workspace's log still has density to analyze.
- *  - The route: GET /api/workspaces/:id/events carries the report and strips
+ *  - The route: GET /workspaces/:id/events carries the report and strips
  *    tick rows from the activity list (measurement substrate, not activity).
  *
  * All fixtures are synthetic — invented names, jordan@partner.example register.
@@ -160,7 +160,7 @@ describe('UptimeMonitor (liveness markers)', () => {
   });
 });
 
-describe('GET /api/workspaces/:id/events — uptime rendered into the activity payload', () => {
+describe('GET /workspaces/:id/events — uptime rendered into the activity payload', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
@@ -177,7 +177,7 @@ describe('GET /api/workspaces/:id/events — uptime rendered into the activity p
   });
 
   it('carries an uptime report computed from the log, and strips tick rows from the activity list', async () => {
-    const createRes = await fetch(`${base}/api/workspaces`, {
+    const createRes = await fetch(`${base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'deploy-check', goal: 'Stay up.' }),
@@ -186,7 +186,7 @@ describe('GET /api/workspaces/:id/events — uptime rendered into the activity p
     const { workspace } = (await createRes.json()) as { workspace: { id: string } };
 
     // One real store event so the activity list has a row to keep.
-    const taskRes = await fetch(`${base}/api/workspaces/${workspace.id}/tasks`, {
+    const taskRes = await fetch(`${base}/workspaces/${workspace.id}/tasks`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ title: 'Watch the gauges', assignee: 'human' }),
@@ -201,7 +201,7 @@ describe('GET /api/workspaces/:id/events — uptime rendered into the activity p
     const raw = readFileSync(eventsLogPath(dataDir, workspace.id), 'utf8');
     expect(raw).toContain(`"event":"${SERVER_TICK_EVENT}"`);
 
-    const res = await fetch(`${base}/api/workspaces/${workspace.id}/events`);
+    const res = await fetch(`${base}/workspaces/${workspace.id}/events`);
     expect(res.ok).toBe(true);
     const body = (await res.json()) as {
       events: Array<{ event: string }>;
@@ -235,7 +235,7 @@ describe('GET /api/workspaces/:id/events — uptime rendered into the activity p
     const handle2 = createServer({ port: 0, dataDir: dir2 });
     try {
       const base2 = `http://localhost:${handle2.port}`;
-      const createRes = await fetch(`${base2}/api/workspaces`, {
+      const createRes = await fetch(`${base2}/workspaces`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: 'outage-postmortem' }),
@@ -260,7 +260,7 @@ describe('GET /api/workspaces/:id/events — uptime rendered into the activity p
       mkdirSync(join(dir2, 'workspaces'), { recursive: true });
       appendFileSync(logPath, `${lines.map((l) => JSON.stringify(l)).join('\n')}\n`);
 
-      const res = await fetch(`${base2}/api/workspaces/${workspace.id}/events`);
+      const res = await fetch(`${base2}/workspaces/${workspace.id}/events`);
       const body = (await res.json()) as {
         events: Array<{ event: string }>;
         uptime: {
@@ -292,7 +292,7 @@ describe('GET /api/workspaces/:id/events — uptime rendered into the activity p
   });
 
   it('reports uptime: null for a workspace whose log has no lines yet', async () => {
-    const createRes = await fetch(`${base}/api/workspaces`, {
+    const createRes = await fetch(`${base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'unmeasured' }),
@@ -306,7 +306,7 @@ describe('GET /api/workspaces/:id/events — uptime rendered into the activity p
     const path = eventsLogPath(dataDir, workspace.id);
     const hasLines = () => existsSync(path) && readFileSync(path, 'utf8').trim().length > 0;
     const before = hasLines();
-    const res = await fetch(`${base}/api/workspaces/${workspace.id}/events`);
+    const res = await fetch(`${base}/workspaces/${workspace.id}/events`);
     const body = (await res.json()) as { events: unknown[]; uptime: unknown };
     const after = hasLines();
     if (before !== after) {

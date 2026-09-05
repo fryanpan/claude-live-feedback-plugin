@@ -64,7 +64,7 @@ describe('the decision.answered channel line only sends a reader to links that e
 
   /** Answer a fresh decision task carrying `links`, and render its row. */
   const answerDecisionWith = async (links: unknown[]): Promise<string> => {
-    const created = await post(`/api/workspaces/${wsId}/tasks`, {
+    const created = await post(`/workspaces/${wsId}/tasks`, {
       title: 'Rebuild the index now or after the freeze?',
       assignee: 'human',
       needs: 'decision',
@@ -86,7 +86,7 @@ describe('the decision.answered channel line only sends a reader to links that e
     dataDir = mkdtempSync(join(tmpdir(), 'decision-answered-line-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
-    const ws = await post('/api/workspaces', { name: 'index-rebuild' });
+    const ws = await post('/workspaces', { name: 'index-rebuild' });
     wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
   });
 

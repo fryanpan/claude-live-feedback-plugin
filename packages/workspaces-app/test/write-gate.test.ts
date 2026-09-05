@@ -442,7 +442,7 @@ describe('the fetch wrapper', () => {
     document.querySelector('.signin-required')?.remove();
     boardShell();
     next = jsonResponse(401, { error: 'sign_in_required', signInUrl: '/signin' });
-    const res = await fetch('/api/workspaces/w-1/tasks', {
+    const res = await fetch('/workspaces/w-1/tasks', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ title: 'a task' }),

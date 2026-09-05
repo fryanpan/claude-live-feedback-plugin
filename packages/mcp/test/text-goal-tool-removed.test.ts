@@ -49,7 +49,7 @@ describe('the text-goal tool is off the surface', () => {
     // not "the harness cannot make a request".
     const ok = await mcp.call('set_goal_list', { workspaceId: 'w-1', goals: [{ title: 'Speed' }] });
     expect(ok.isError).toBe(false);
-    expect(ok.sent.map((r) => r.path)).toEqual(['/api/workspaces/w-1/goals']);
+    expect(ok.sent.map((r) => r.path)).toEqual(['/workspaces/w-1/goals']);
   });
 
   it('no tool still teaches the north star or its re-triage', () => {

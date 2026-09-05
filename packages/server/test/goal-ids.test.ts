@@ -410,7 +410,7 @@ describe('the goal route refuses a caller-chosen id and names the way out', () =
   });
 
   const newWorkspace = async (): Promise<string> => {
-    const res = await fetch(`${base}/api/workspaces`, {
+    const res = await fetch(`${base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'search-revamp', goal: 'Ship search v2.' }),
@@ -428,7 +428,7 @@ describe('the goal route refuses a caller-chosen id and names the way out', () =
       PERSON,
     );
 
-    const res = await fetch(`${base}/api/workspaces/${wsId}/goals`, {
+    const res = await fetch(`${base}/workspaces/${wsId}/goals`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -445,7 +445,7 @@ describe('the goal route refuses a caller-chosen id and names the way out', () =
 
     // The board is untouched, and the id-less form of the same intent works —
     // the positive control that the route can still add a band at all.
-    const ok = await fetch(`${base}/api/workspaces/${wsId}/goals`, {
+    const ok = await fetch(`${base}/workspaces/${wsId}/goals`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -462,7 +462,7 @@ describe('the goal route refuses a caller-chosen id and names the way out', () =
 
   it('an empty-string id is malformed, not a create', async () => {
     const wsId = await newWorkspace();
-    const res = await fetch(`${base}/api/workspaces/${wsId}/goals`, {
+    const res = await fetch(`${base}/workspaces/${wsId}/goals`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ goals: [{ id: '', title: 'Reach' }], author: PERSON }),
@@ -470,7 +470,9 @@ describe('the goal route refuses a caller-chosen id and names the way out', () =
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string };
     expect(body.error).toContain('goals must be');
-    expect((await (await fetch(`${base}/api/workspaces/${wsId}`)).json()) as unknown).toBeDefined();
+    expect(
+      (await (await fetch(`${base}/workspaces/${wsId}?format=json`)).json()) as unknown,
+    ).toBeDefined();
   });
 });
 

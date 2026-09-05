@@ -86,13 +86,13 @@ describe('review-item comments and revisions', () => {
 
   async function seedWorkspace(): Promise<string> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'index-rebuild', goal: 'Rebuild the index nightly.' }),
+      await post('/workspaces', { name: 'index-rebuild', goal: 'Rebuild the index nightly.' }),
     );
     return workspace.id;
   }
   async function seedTask(workspaceId: string): Promise<Task> {
     const { task } = await jj<{ task: Task }>(
-      await post(`/api/workspaces/${workspaceId}/tasks`, {
+      await post(`/workspaces/${workspaceId}/tasks`, {
         title: 'Rebuild the index nightly',
         assignee: 'Index Keeper',
         author: AGENT,
@@ -108,7 +108,7 @@ describe('review-item comments and revisions', () => {
   }
   async function storedItem(workspaceId: string, taskId: string, itemId: string) {
     const { tasks } = await jj<{ tasks: Array<Task & { reviews?: StoredItem[] }> }>(
-      await fetch(`${base}/api/workspaces/${workspaceId}/tasks`),
+      await fetch(`${base}/workspaces/${workspaceId}/tasks?format=json`),
     );
     const item = tasks.find((t) => t.id === taskId)?.reviews?.find((r) => r.id === itemId);
     expect(item, 'the item is on the ticket').toBeTruthy();
@@ -116,7 +116,7 @@ describe('review-item comments and revisions', () => {
   }
   async function queueRows(workspaceId: string, taskId: string): Promise<ReviewRow[]> {
     const { items } = await jj<{ items: ReviewRow[] }>(
-      await fetch(`${base}/api/workspaces/${workspaceId}/review-items`),
+      await fetch(`${base}/workspaces/${workspaceId}/review-items`),
     );
     return items.filter((r) => r.taskId === taskId);
   }
@@ -491,7 +491,7 @@ describe('review-item comments and revisions', () => {
     it('revises the ticket’s own decision by rewriting the ticket’s words', async () => {
       const ws = await seedWorkspace();
       const { task } = await jj<{ task: Task }>(
-        await post(`/api/workspaces/${ws}/tasks`, {
+        await post(`/workspaces/${ws}/tasks`, {
           title: 'Pick a retry budget',
           body: 'How many times should the poller retry? Three tries costs a minute per failure; once loses the row on a blip. Blocked: the poller rollout.',
           assignee: 'human',
@@ -526,7 +526,7 @@ describe('review-item comments and revisions', () => {
     it('refuses to rewrite a decision a person has already answered', async () => {
       const ws = await seedWorkspace();
       const { task } = await jj<{ task: Task }>(
-        await post(`/api/workspaces/${ws}/tasks`, {
+        await post(`/workspaces/${ws}/tasks`, {
           title: 'Pick a retry budget',
           body: 'How many times should the poller retry? Three tries costs a minute per failure; once loses the row on a blip. Blocked: the poller rollout.',
           assignee: 'human',
@@ -590,7 +590,7 @@ describe('review-item comments and revisions', () => {
       'How many times should the poller retry? Three tries costs a minute per failure; once loses the row on a blip. Blocked: the poller rollout.';
     async function seedDecision(ws: string): Promise<Task> {
       const { task } = await jj<{ task: Task }>(
-        await post(`/api/workspaces/${ws}/tasks`, {
+        await post(`/workspaces/${ws}/tasks`, {
           title: 'Pick a retry budget',
           body: BODY,
           assignee: 'human',
@@ -616,7 +616,7 @@ describe('review-item comments and revisions', () => {
             }>;
           }
         >;
-      }>(await fetch(`${base}/api/workspaces/${ws}/tasks`));
+      }>(await fetch(`${base}/workspaces/${ws}/tasks?format=json`));
       const t = tasks.find((x) => x.id === taskId);
       expect(t, 'the task is on the board').toBeTruthy();
       return t as NonNullable<typeof t>;

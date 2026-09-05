@@ -85,14 +85,14 @@ describe('a report comes back with the link to hand over', () => {
     handle = createServer({ port: 0, dataDir, publicBaseUrl: PUBLIC_BASE });
     base = `http://localhost:${handle.port}`;
 
-    const ws = await post('/api/workspaces', {
+    const ws = await post('/workspaces', {
       name: 'search-revamp',
       goal: 'Ship the new search.',
     });
     expect(ws.status).toBe(200);
     wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
 
-    const t = await post(`/api/workspaces/${wsId}/tasks`, {
+    const t = await post(`/workspaces/${wsId}/tasks`, {
       title: 'Wire the results page',
       author: AGENT,
     });
@@ -152,7 +152,7 @@ describe('a report comes back with the link to hand over', () => {
   it('POSITIVE CONTROL: the id in the link is THIS task, not any task', async () => {
     // Without this, a hardcoded or first-task link passes every assertion
     // above and sends every reader to the same wrong row.
-    const second = await post(`/api/workspaces/${wsId}/tasks`, {
+    const second = await post(`/workspaces/${wsId}/tasks`, {
       title: 'A different piece of work',
       author: AGENT,
     });
@@ -249,9 +249,9 @@ describe('the handoff link is owner-only', () => {
     });
     base = `http://localhost:${handle.port}`;
 
-    const ws = await post('/api/workspaces', { name: 'shared-board', goal: 'Ship it.' });
+    const ws = await post('/workspaces', { name: 'shared-board', goal: 'Ship it.' });
     boardId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
-    const t = await post(`/api/workspaces/${boardId}/tasks`, {
+    const t = await post(`/workspaces/${boardId}/tasks`, {
       title: 'Something to discuss',
       author: AGENT,
     });

@@ -27,7 +27,7 @@ describe('postLoadReport', () => {
     const f = captureFetch();
     postLoadReport({ workspaceId: 'w 1', msToBoot: 120, msToFirstProjection: 900, sentry: null });
     expect(f.calls).toHaveLength(1);
-    expect(f.calls[0]?.url).toBe('/api/workspaces/w%201/load-reports');
+    expect(f.calls[0]?.url).toBe('/workspaces/w%201/load-reports');
     expect(f.calls[0]?.body.msToBoot).toBe(120);
     expect(f.calls[0]?.body.msToFirstProjection).toBe(900);
   });

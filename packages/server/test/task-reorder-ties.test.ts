@@ -87,7 +87,7 @@ describe('placing a row among tied orders', () => {
 
   async function seedTiedGoal(): Promise<Fixture> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
+      await post('/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
     );
     const G: GoalIds = await seedGoalsOverHttp(
       base,
@@ -104,7 +104,7 @@ describe('placing a row among tied orders', () => {
       // two random ids, which would make every assertion below a coin flip.
       await new Promise((r) => setTimeout(r, 2));
       const { task } = await jj<{ task: Task }>(
-        await post(`/api/workspaces/${workspace.id}/tasks`, {
+        await post(`/workspaces/${workspace.id}/tasks`, {
           author: AGENT,
           title: `${name} row`,
           goal,
@@ -118,7 +118,7 @@ describe('placing a row among tied orders', () => {
 
   async function tasksOf(wsId: string): Promise<Task[]> {
     const { tasks } = await jj<{ tasks: Task[] }>(
-      await fetch(`${base}/api/workspaces/${wsId}/tasks`),
+      await fetch(`${base}/workspaces/${wsId}/tasks?format=json`),
     );
     return tasks;
   }
@@ -254,7 +254,7 @@ describe('placing a row among tied orders', () => {
     // `after` has to survive the cross-goal case, which is the same gesture on
     // the board — drag a row into another section and drop it partway down.
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
+      await post('/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
     );
     const G = await seedGoalsOverHttp(
       base,
@@ -273,7 +273,7 @@ describe('placing a row among tied orders', () => {
     ] as const) {
       await new Promise((r) => setTimeout(r, 2));
       const { task } = await jj<{ task: Task }>(
-        await post(`/api/workspaces/${workspace.id}/tasks`, {
+        await post(`/workspaces/${workspace.id}/tasks`, {
           author: AGENT,
           title: `${name} row`,
           goal,

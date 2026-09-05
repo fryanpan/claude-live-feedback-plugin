@@ -203,7 +203,7 @@ describe('boardIdFor', () => {
    * doc has NO `meta.workspaceId` at all — its board is `backTo`. Reading the
    * wrong id gave the empty string, which is not `undefined`, so the
    * "is it on a board" guard passed and the create went to
-   * `/api/workspaces//tasks`. The person got a toast reading "404".
+   * `/workspaces//tasks`. The person got a toast reading "404".
    */
   it('prefers the board the doc was reached from', () => {
     expect(boardIdFor({ backTo: { workspaceId: 'w-board' }, workspaceId: 'w-grouping' })).toBe(
@@ -222,7 +222,7 @@ describe('boardIdFor', () => {
   });
 
   it('treats every empty shape as no board — not as a board named ""', () => {
-    // Each of these used to build `/api/workspaces//tasks`.
+    // Each of these used to build `/workspaces//tasks`.
     expect(boardIdFor({})).toBe('');
     expect(boardIdFor({ workspaceId: '' })).toBe('');
     expect(boardIdFor({ backTo: {}, workspaceId: '' })).toBe('');
@@ -246,7 +246,7 @@ describe('runSpinoff', () => {
     const made = await runSpinoff('task', d);
     expect(calls).toHaveLength(1);
     const call = calls[0]!;
-    expect(call.url).toBe('/api/workspaces/w-board/tasks');
+    expect(call.url).toBe('/workspaces/w-board/tasks');
     expect(call.method).toBe('POST');
     // The TITLE is derived, not the raw selection — the trailing full stop
     // is a seam between two sentences and not part of the row's name.

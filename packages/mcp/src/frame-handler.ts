@@ -101,7 +101,7 @@ async function ackCommentRow(deps: FrameHandlerDeps, payload: unknown): Promise<
   try {
     await deps.http(
       'POST',
-      `/api/workspaces/${encodeURIComponent(p.workspaceId)}/comment-queue/${encodeURIComponent(p.commentQueueId)}/ack`,
+      `/workspaces/${encodeURIComponent(p.workspaceId)}/comment-queue/${encodeURIComponent(p.commentQueueId)}/ack`,
       {},
     );
   } catch {

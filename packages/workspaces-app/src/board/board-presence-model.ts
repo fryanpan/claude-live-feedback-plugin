@@ -854,7 +854,7 @@ export function boardTabTitle(workspaceName: string, nav: BoardNav): string {
   return tabTitle(workspaceName, NAV_TAB_LABEL[nav]);
 }
 
-/** The brief as `GET /api/workspaces/:id/home` ships it. */
+/** The brief as `GET /workspaces/:id/home` ships it. */
 export interface HomeBriefView {
   markdown: string;
   generatedAt: number;

@@ -94,7 +94,7 @@ flowchart TD
     RW[flat scheduleFileWrite path\nlastWritten = raw bytes]
     RC[reconcileFromDisk flat branch\n+ conflict arm]
     OE[rooms.openEditableFile\ncompanion md doc for a diff member]
-    RT[route POST /api/workspaces/:id/editable-file]
+    RT[route POST /api/reviews/:id/editable-file]
   end
   subgraph packages/markdown-app
     MF[app.ts mountFor\nFile mode routing]

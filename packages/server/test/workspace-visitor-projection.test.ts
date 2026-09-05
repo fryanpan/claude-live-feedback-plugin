@@ -1,5 +1,5 @@
 /**
- * `GET /api/workspaces/<id>` answers a share visitor with a PROJECTION.
+ * `GET /workspaces/<id>` answers a share visitor with a PROJECTION.
  *
  * The route is on the share allowlist, documented there as "workspace name +
  * goal text", and it used to return the stored `BoardWorkspace` verbatim. That
@@ -99,7 +99,7 @@ describe('a share visitor reads a projected workspace, not the stored record', (
     });
     base = `http://localhost:${handle.port}`;
 
-    const ws = await post('/api/workspaces', { name: 'search-revamp' });
+    const ws = await post('/workspaces', { name: 'search-revamp' });
     expect(ws.status).toBe(200);
     workspaceId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
 
@@ -107,7 +107,7 @@ describe('a share visitor reads a projected workspace, not the stored record', (
     // this is the record a live board actually holds.
     expect(
       (
-        await put(`/api/workspaces/${workspaceId}/settings`, {
+        await put(`/workspaces/${workspaceId}/settings`, {
           author: OWNER,
           notesHome: { repoRoot, branch: 'main', dir: 'docs/notes' },
         })
@@ -117,12 +117,11 @@ describe('a share visitor reads a projected workspace, not the stored record', (
     // in the store, and this is the third host-describing value the read
     // has to project — the SSE feed already reduces the same actor.
     expect(
-      (await put(`/api/workspaces/${workspaceId}/parallelism-cap`, { cap: 2, author: OWNER }))
-        .status,
+      (await put(`/workspaces/${workspaceId}/parallelism-cap`, { cap: 2, author: OWNER })).status,
     ).toBe(200);
     expect(
       (
-        await put(`/api/workspaces/${workspaceId}/retired`, {
+        await put(`/workspaces/${workspaceId}/retired`, {
           retired: true,
           author: OWNER,
           reason: 'folded into the new board',
@@ -139,7 +138,7 @@ describe('a share visitor reads a projected workspace, not the stored record', (
   });
 
   it('positive control: the LOCAL read still carries the whole record', async () => {
-    const res = await local(`/api/workspaces/${workspaceId}`);
+    const res = await local(`/workspaces/${workspaceId}?format=json`);
     expect(res.status).toBe(200);
     const text = await res.text();
     // If this ever stops containing the path, the visitor assertion below is
@@ -157,7 +156,7 @@ describe('a share visitor reads a projected workspace, not the stored record', (
   });
 
   it('the visitor read carries no host path and no actor id', async () => {
-    const res = await pub(`/api/workspaces/${workspaceId}`);
+    const res = await pub(`/workspaces/${workspaceId}?format=json`);
     expect(res.status, await res.clone().text()).toBe(200);
     const text = await res.text();
     expect(text).not.toContain(repoRoot);

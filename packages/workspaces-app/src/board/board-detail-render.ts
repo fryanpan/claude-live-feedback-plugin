@@ -378,7 +378,7 @@ export interface DetailHandlers {
   focusTitle?: boolean;
   /**
    * This task's rows from the SERVER's review queue
-   * (`GET /api/workspaces/:id/review-items`) — the same computation the strip
+   * (`GET /workspaces/:id/review-items`) — the same computation the strip
    * reads, handed down rather than re-derived.
    *
    * Re-deriving "is this run waiting on a person" in the browser would be a

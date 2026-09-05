@@ -60,9 +60,9 @@ describe('board workspace + task routes', () => {
     for (const d of [dataDir, folder]) rmSync(d, { recursive: true, force: true });
   });
 
-  describe('POST /api/workspaces (board create)', () => {
+  describe('POST /workspaces (board create)', () => {
     it('creates a board workspace from a name and GET reads it back', async () => {
-      const r = await post('/api/workspaces', { name: 'search-revamp' });
+      const r = await post('/workspaces', { name: 'search-revamp' });
       expect(r.status).toBe(200);
       const { workspace } = (await r.json()) as {
         workspace: { id: string; name: string };
@@ -70,31 +70,31 @@ describe('board workspace + task routes', () => {
       expect(workspace.name).toBe('search-revamp');
       expect(workspace.id.length).toBeGreaterThanOrEqual(10);
 
-      const got = await local(`/api/workspaces/${workspace.id}`);
+      const got = await local(`/workspaces/${workspace.id}?format=json`);
       expect(got.status).toBe(200);
       const body = (await got.json()) as { workspace: { name: string } };
       expect(body.workspace.name).toBe('search-revamp');
     });
 
     it('still binds a folder when folderPath is given (the legacy shape is untouched)', async () => {
-      const r = await post('/api/workspaces', { folderPath: folder });
+      const r = await post('/workspaces', { folderPath: folder });
       expect(r.status).toBe(200);
       const body = (await r.json()) as { workspaceId: string };
       expect(body.workspaceId.length).toBeGreaterThan(0);
     });
 
     it('400s when neither name nor folderPath is present', async () => {
-      const r = await post('/api/workspaces', {});
+      const r = await post('/workspaces', {});
       expect(r.status).toBe(400);
     });
 
     it('404s a GET for an unknown workspace id', async () => {
-      const r = await local('/api/workspaces/w-nope');
+      const r = await local('/workspaces/w-nope');
       expect(r.status).toBe(404);
     });
   });
 
-  describe('POST /api/workspaces/:id/docs (attach_doc)', () => {
+  describe('POST /workspaces/:id/docs (attach_doc)', () => {
     it('attaches an existing doc; the workspace lists it; nothing is migrated', async () => {
       const mdPath = join(dataDir, 'plan.md');
       writeFileSync(mdPath, '# Plan\n\nBody.\n');
@@ -104,14 +104,14 @@ describe('board workspace + task routes', () => {
         ).json()) as { docId: string }
       ).docId;
 
-      const ws = (await (await post('/api/workspaces', { name: 'attach-ws' })).json()) as {
+      const ws = (await (await post('/workspaces', { name: 'attach-ws' })).json()) as {
         workspace: { id: string };
       };
       // Attached by the readable name…
-      const r = await post(`/api/workspaces/${ws.workspace.id}/docs`, { docId: 'board-plan-doc' });
+      const r = await post(`/workspaces/${ws.workspace.id}/docs`, { docId: 'board-plan-doc' });
       expect(r.status).toBe(200);
 
-      const got = (await (await local(`/api/workspaces/${ws.workspace.id}`)).json()) as {
+      const got = (await (await local(`/workspaces/${ws.workspace.id}?format=json`)).json()) as {
         workspace: { docIds: string[] };
       };
       // …and recorded under the doc's own id, so two spellings of one doc
@@ -125,30 +125,30 @@ describe('board workspace + task routes', () => {
     });
 
     it('attaches an existing review (legacy grouping workspace) by its id', async () => {
-      const bind = await post('/api/workspaces', { folderPath: folder });
+      const bind = await post('/workspaces', { folderPath: folder });
       const reviewId = ((await bind.json()) as { workspaceId: string }).workspaceId;
-      const ws = (await (await post('/api/workspaces', { name: 'attach-review-ws' })).json()) as {
+      const ws = (await (await post('/workspaces', { name: 'attach-review-ws' })).json()) as {
         workspace: { id: string };
       };
-      const r = await post(`/api/workspaces/${ws.workspace.id}/docs`, { docId: reviewId });
+      const r = await post(`/workspaces/${ws.workspace.id}/docs`, { docId: reviewId });
       expect(r.status).toBe(200);
     });
 
     it('404s an unknown doc and an unknown workspace', async () => {
-      const ws = (await (await post('/api/workspaces', { name: 'attach-404-ws' })).json()) as {
+      const ws = (await (await post('/workspaces', { name: 'attach-404-ws' })).json()) as {
         workspace: { id: string };
       };
-      const noDoc = await post(`/api/workspaces/${ws.workspace.id}/docs`, { docId: 'no-such' });
+      const noDoc = await post(`/workspaces/${ws.workspace.id}/docs`, { docId: 'no-such' });
       expect(noDoc.status).toBe(404);
-      const noWs = await post('/api/workspaces/w-nope/docs', { docId: 'board-plan-doc' });
+      const noWs = await post('/workspaces/w-nope/docs', { docId: 'board-plan-doc' });
       expect(noWs.status).toBe(404);
     });
 
     it('400s a missing docId', async () => {
-      const ws = (await (await post('/api/workspaces', { name: 'attach-400-ws' })).json()) as {
+      const ws = (await (await post('/workspaces', { name: 'attach-400-ws' })).json()) as {
         workspace: { id: string };
       };
-      const r = await post(`/api/workspaces/${ws.workspace.id}/docs`, {});
+      const r = await post(`/workspaces/${ws.workspace.id}/docs`, {});
       expect(r.status).toBe(400);
     });
   });
@@ -157,7 +157,7 @@ describe('board workspace + task routes', () => {
     let wsId: string;
 
     beforeAll(async () => {
-      const r = await post('/api/workspaces', { name: 'task-ws', goal: 'Ship.' });
+      const r = await post('/workspaces', { name: 'task-ws', goal: 'Ship.' });
       wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
     });
 
@@ -178,7 +178,7 @@ describe('board workspace + task routes', () => {
      */
     it('still honours the payload an OLDER bundle sends, and returns what it reads', async () => {
       const gate = (await (
-        await post(`/api/workspaces/${wsId}/tasks`, {
+        await post(`/workspaces/${wsId}/tasks`, {
           author: AGENT,
           title: 'gate for the legacy-shape check',
         })
@@ -201,7 +201,7 @@ describe('board workspace + task routes', () => {
         author: AGENT,
       };
 
-      const r = await post(`/api/workspaces/${wsId}/tasks`, legacyPayload);
+      const r = await post(`/workspaces/${wsId}/tasks`, legacyPayload);
       expect(r.status).toBe(200);
 
       const payload = (await r.json()) as { task: Task };
@@ -229,7 +229,7 @@ describe('board workspace + task routes', () => {
 
       // And every param it sent actually landed — read back through the list
       // route rather than trusting the create response.
-      const listed = (await (await local(`/api/workspaces/${wsId}/tasks`)).json()) as {
+      const listed = (await (await local(`/workspaces/${wsId}/tasks?format=json`)).json()) as {
         tasks: Task[];
       };
       const stored = listed.tasks.find((t) => t.id === payload.task.id);
@@ -245,7 +245,7 @@ describe('board workspace + task routes', () => {
     });
 
     it('forwards EVERY create param through the route (the groups lesson)', async () => {
-      const r = await post(`/api/workspaces/${wsId}/tasks`, {
+      const r = await post(`/workspaces/${wsId}/tasks`, {
         title: 'Pick the palette',
         assignee: 'human',
         needs: 'decision',
@@ -269,7 +269,7 @@ describe('board workspace + task routes', () => {
       expect(task.order).toBe(7);
 
       // Read the stored effect back through the OTHER route, not the response.
-      const listed = (await (await local(`/api/workspaces/${wsId}/tasks`)).json()) as {
+      const listed = (await (await local(`/workspaces/${wsId}/tasks?format=json`)).json()) as {
         tasks: Task[];
       };
       const stored = listed.tasks.find((t) => t.id === task.id);
@@ -280,7 +280,7 @@ describe('board workspace + task routes', () => {
 
     it('forwards after + afterEnforce (proved by the transition refusing)', async () => {
       const gate = (await (
-        await post(`/api/workspaces/${wsId}/tasks`, {
+        await post(`/workspaces/${wsId}/tasks`, {
           author: AGENT,
           title: 'your go',
           needs: 'decision',
@@ -288,7 +288,7 @@ describe('board workspace + task routes', () => {
         })
       ).json()) as { task: Task };
       const work = (await (
-        await post(`/api/workspaces/${wsId}/tasks`, {
+        await post(`/workspaces/${wsId}/tasks`, {
           author: AGENT,
           title: 'Open the PR',
           after: [gate.task.id],
@@ -319,7 +319,7 @@ describe('board workspace + task routes', () => {
     });
 
     it('filters the list by status via query params', async () => {
-      const r = await local(`/api/workspaces/${wsId}/tasks?status=done`);
+      const r = await local(`/workspaces/${wsId}/tasks?status=done&format=json`);
       expect(r.status).toBe(200);
       const { tasks } = (await r.json()) as { tasks: Task[] };
       expect(tasks.length).toBeGreaterThan(0);
@@ -327,9 +327,9 @@ describe('board workspace + task routes', () => {
     });
 
     it('400s a missing title and 404s an unknown workspace', async () => {
-      const noTitle = await post(`/api/workspaces/${wsId}/tasks`, {});
+      const noTitle = await post(`/workspaces/${wsId}/tasks`, {});
       expect(noTitle.status).toBe(400);
-      const noWs = await post('/api/workspaces/w-nope/tasks', { title: 'x' });
+      const noWs = await post('/workspaces/w-nope/tasks', { title: 'x' });
       expect(noWs.status).toBe(404);
     });
 
@@ -339,7 +339,7 @@ describe('board workspace + task routes', () => {
     // stored state differently.
     it('stores one edge when the caller names the same dependency twice', async () => {
       const gate = (await (
-        await post(`/api/workspaces/${wsId}/tasks`, {
+        await post(`/workspaces/${wsId}/tasks`, {
           author: AGENT,
           title: 'your go',
           needs: 'decision',
@@ -347,7 +347,7 @@ describe('board workspace + task routes', () => {
         })
       ).json()) as { task: Task };
 
-      const dup = await post(`/api/workspaces/${wsId}/tasks`, {
+      const dup = await post(`/workspaces/${wsId}/tasks`, {
         author: AGENT,
         title: 'Open the PR',
         after: [gate.task.id, gate.task.id],
@@ -366,7 +366,7 @@ describe('board workspace + task routes', () => {
     // the direction of letting work through.
     it('refuses afterEnforce ids that are not also in after', async () => {
       const gate = (await (
-        await post(`/api/workspaces/${wsId}/tasks`, {
+        await post(`/workspaces/${wsId}/tasks`, {
           author: AGENT,
           title: 'your go',
           needs: 'decision',
@@ -374,7 +374,7 @@ describe('board workspace + task routes', () => {
         })
       ).json()) as { task: Task };
 
-      const lopsided = await post(`/api/workspaces/${wsId}/tasks`, {
+      const lopsided = await post(`/workspaces/${wsId}/tasks`, {
         author: AGENT,
         title: 'Open the PR',
         afterEnforce: [gate.task.id],
@@ -383,7 +383,7 @@ describe('board workspace + task routes', () => {
       expect(((await lopsided.json()) as { error: string }).error).toBe('unknown-after-enforce');
 
       // Positive control: the same pair in BOTH arrays is accepted and gates.
-      const both = await post(`/api/workspaces/${wsId}/tasks`, {
+      const both = await post(`/workspaces/${wsId}/tasks`, {
         author: AGENT,
         title: 'Open the PR',
         after: [gate.task.id],
@@ -402,7 +402,7 @@ describe('board workspace + task routes', () => {
     // longer does — see the partial-accept test below for why the two fields
     // are now allowed to give different answers.
     it('still refuses a malformed `needs` on create', async () => {
-      const badNeeds = await post(`/api/workspaces/${wsId}/tasks`, {
+      const badNeeds = await post(`/workspaces/${wsId}/tasks`, {
         title: 'Approve the spend',
         assignee: 'human',
         needs: 'Decision', // capitalized — silently not a decision task
@@ -410,7 +410,7 @@ describe('board workspace + task routes', () => {
       expect(badNeeds.status).toBe(400);
 
       // Positive control: the well-formed forms are accepted and stored.
-      const good = await post(`/api/workspaces/${wsId}/tasks`, {
+      const good = await post(`/workspaces/${wsId}/tasks`, {
         title: 'Approve the spend',
         assignee: 'human',
         needs: 'decision',
@@ -432,7 +432,7 @@ describe('board workspace + task routes', () => {
       // Positive control FIRST: the identical ref in `links` is already
       // rejected, so this asserts the two fields agree rather than asserting
       // that nothing anywhere accepts it.
-      const viaLinks = await post(`/api/workspaces/${wsId}/tasks`, {
+      const viaLinks = await post(`/workspaces/${wsId}/tasks`, {
         author: AGENT,
         title: 'via links',
         links: [hostile],
@@ -441,7 +441,7 @@ describe('board workspace + task routes', () => {
       const kept = ((await viaLinks.json()) as { task: Task }).task;
       expect(kept.links).toHaveLength(0);
 
-      const viaOrigin = await post(`/api/workspaces/${wsId}/tasks`, {
+      const viaOrigin = await post(`/workspaces/${wsId}/tasks`, {
         author: AGENT,
         title: 'via origin',
         origin: hostile,
@@ -450,7 +450,7 @@ describe('board workspace + task routes', () => {
 
       // A well-formed url origin still goes through — the check is on the
       // scheme, not on the kind.
-      const good = await post(`/api/workspaces/${wsId}/tasks`, {
+      const good = await post(`/workspaces/${wsId}/tasks`, {
         author: AGENT,
         title: 'good origin',
         origin: { kind: 'url', url: 'https://example.com/pr/1' },
@@ -465,7 +465,7 @@ describe('board workspace + task routes', () => {
     // The nastiest shape: it persists, so it outlives the request that
     // created it and breaks readers on every subsequent boot.
     it('a null `origin` cannot poison backlink queries', async () => {
-      const created = await post(`/api/workspaces/${wsId}/tasks`, {
+      const created = await post(`/workspaces/${wsId}/tasks`, {
         author: AGENT,
         title: 'null origin',
         origin: null,
@@ -477,7 +477,7 @@ describe('board workspace + task routes', () => {
 
       // The route that used to 500: `refKey` reads `ref.kind` and threw on
       // null, across EVERY workspace, on the doc-open path.
-      const listed = await local(`/api/workspaces/${wsId}/tasks`);
+      const listed = await local(`/workspaces/${wsId}/tasks?format=json`);
       expect(listed.status).toBe(200);
       const tasks = ((await listed.json()) as { tasks: Task[] }).tasks;
       expect(tasks.some((t) => t.title === 'null origin')).toBe(true);
@@ -489,7 +489,7 @@ describe('board workspace + task routes', () => {
     // went into task bodies where nothing can render or count them.
     it('accepts an external URL as a link and keys it for backlinks', async () => {
       const pr = 'https://github.com/example-org/example-repo/pull/1669';
-      const r = await post(`/api/workspaces/${wsId}/tasks`, {
+      const r = await post(`/workspaces/${wsId}/tasks`, {
         author: AGENT,
         title: 'Land the watcher fix',
         links: [{ kind: 'url', url: pr }],
@@ -500,7 +500,7 @@ describe('board workspace + task routes', () => {
 
       // Read the stored effect back through the OTHER route — the response
       // body alone would pass even if the route dropped the field.
-      const listed = (await (await local(`/api/workspaces/${wsId}/tasks`)).json()) as {
+      const listed = (await (await local(`/workspaces/${wsId}/tasks?format=json`)).json()) as {
         tasks: Task[];
       };
       expect(listed.tasks.find((t) => t.id === task.id)?.links).toEqual([{ kind: 'url', url: pr }]);
@@ -511,7 +511,7 @@ describe('board workspace + task routes', () => {
     // first that can, which makes it the first that can carry `javascript:`.
     it('refuses a URL ref whose scheme is not http(s)', async () => {
       for (const url of ['javascript:alert(1)', 'data:text/html,<script>x</script>', 'not a url']) {
-        const r = await post(`/api/workspaces/${wsId}/tasks`, {
+        const r = await post(`/workspaces/${wsId}/tasks`, {
           author: AGENT,
           title: 'Hostile link',
           links: [{ kind: 'url', url }],
@@ -533,7 +533,7 @@ describe('board workspace + task routes', () => {
     // so a bad one already can't be trusted to point anywhere. Losing the
     // title, body, goal and assignee over one is out of proportion to that.
     it('drops a bad ref and creates the task, reporting it in ignoredLinks', async () => {
-      const r = await post(`/api/workspaces/${wsId}/tasks`, {
+      const r = await post(`/workspaces/${wsId}/tasks`, {
         title: 'Cancel the trial',
         body: 'Before the renewal date.',
         assignee: 'human',
@@ -554,7 +554,7 @@ describe('board workspace + task routes', () => {
 
       // Read back through the OTHER route — a response-only assertion would
       // pass even if the good ref was never stored.
-      const listed = (await (await local(`/api/workspaces/${wsId}/tasks`)).json()) as {
+      const listed = (await (await local(`/workspaces/${wsId}/tasks?format=json`)).json()) as {
         tasks: Task[];
       };
       const stored = listed.tasks.find((t) => t.id === task.id);
@@ -564,7 +564,7 @@ describe('board workspace + task routes', () => {
     // The dedicated links route is the opposite case: the ref IS the request,
     // so dropping it would mean answering 200 to a call that did nothing.
     it('still 400s on the dedicated links route, and names the accepted kinds', async () => {
-      const created = await post(`/api/workspaces/${wsId}/tasks`, {
+      const created = await post(`/workspaces/${wsId}/tasks`, {
         author: AGENT,
         title: 'Has links',
       });
@@ -600,12 +600,12 @@ describe('board workspace + task routes', () => {
     let wsId: string;
 
     beforeAll(async () => {
-      const r = await post('/api/workspaces', { name: 'risk-ws' });
+      const r = await post('/workspaces', { name: 'risk-ws' });
       wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
     });
 
     const mkTask = async (title: string, riskTier?: string): Promise<Task> => {
-      const r = await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title });
+      const r = await post(`/workspaces/${wsId}/tasks`, { author: AGENT, title });
       const task = ((await r.json()) as { task: Task }).task;
       if (riskTier) {
         // The 0.1.54-and-earlier set_task_goal payload, `riskTier` included.
@@ -623,7 +623,7 @@ describe('board workspace + task routes', () => {
       const t = await mkTask('Flip the repo public', 'red');
       // Not merely a 200: the REST of the payload must still take effect, or
       // "it accepted the field" would also be true of a route that did nothing.
-      const after = (await (await local(`/api/workspaces/${wsId}/tasks`)).json()) as {
+      const after = (await (await local(`/workspaces/${wsId}/tasks?format=json`)).json()) as {
         tasks: Task[];
       };
       const stored = after.tasks.find((x) => x.id === t.id);
@@ -650,7 +650,7 @@ describe('board workspace + task routes', () => {
         author: AGENT,
       });
       expect(moved.status).toBe(200);
-      const after = (await (await local(`/api/workspaces/${wsId}/tasks`)).json()) as {
+      const after = (await (await local(`/workspaces/${wsId}/tasks?format=json`)).json()) as {
         tasks: Task[];
       };
       expect(after.tasks.find((t) => t.id === red.id)?.status).toBe('in-progress');
@@ -678,7 +678,7 @@ describe('board workspace + task routes', () => {
       // working altogether rather than with one arm being removed.
       const blocker = await mkTask('Unblock me first');
       const dependent = (await (
-        await post(`/api/workspaces/${wsId}/tasks`, {
+        await post(`/workspaces/${wsId}/tasks`, {
           author: AGENT,
           title: 'Depends on the above',
           after: [blocker.id],
@@ -698,12 +698,12 @@ describe('board workspace + task routes', () => {
     let wsId: string;
 
     beforeAll(async () => {
-      const r = await post('/api/workspaces', { name: 'transition-ws' });
+      const r = await post('/workspaces', { name: 'transition-ws' });
       wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
     });
 
     const mkTask = async (title: string): Promise<Task> => {
-      const r = await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title });
+      const r = await post(`/workspaces/${wsId}/tasks`, { author: AGENT, title });
       return ((await r.json()) as { task: Task }).task;
     };
 
@@ -738,7 +738,7 @@ describe('board workspace + task routes', () => {
       });
       expect(r.status).toBe(200);
 
-      const listed = (await (await local(`/api/workspaces/${wsId}/tasks`)).json()) as {
+      const listed = (await (await local(`/workspaces/${wsId}/tasks?format=json`)).json()) as {
         tasks: Task[];
       };
       const stored = listed.tasks.find((x) => x.id === t.id);
@@ -776,17 +776,17 @@ describe('board workspace + task routes', () => {
     let wsId: string;
 
     beforeAll(async () => {
-      const r = await post('/api/workspaces', { name: 'evidence-ws' });
+      const r = await post('/workspaces', { name: 'evidence-ws' });
       wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
     });
 
     const mkTask = async (title: string): Promise<Task> => {
-      const r = await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title });
+      const r = await post(`/workspaces/${wsId}/tasks`, { author: AGENT, title });
       return ((await r.json()) as { task: Task }).task;
     };
 
     const readBack = async (taskId: string): Promise<Task | undefined> => {
-      const listed = (await (await local(`/api/workspaces/${wsId}/tasks`)).json()) as {
+      const listed = (await (await local(`/workspaces/${wsId}/tasks?format=json`)).json()) as {
         tasks: Task[];
       };
       return listed.tasks.find((x) => x.id === taskId);
@@ -832,10 +832,10 @@ describe('board workspace + task routes', () => {
     });
   });
 
-  describe('GET /api/workspaces/:id/next (the work queue)', () => {
+  describe('GET /workspaces/:id/next (the work queue)', () => {
     /** Goals a, b + a chores task, so priority order is observable. */
     async function seed(): Promise<{ wsId: string; ids: Record<string, string>; G: GoalIds }> {
-      const r = await post('/api/workspaces', { name: 'queue-ws', goal: 'Ship it.' });
+      const r = await post('/workspaces', { name: 'queue-ws', goal: 'Ship it.' });
       const wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
       const G = await seedGoalsOverHttp(
         base,
@@ -852,7 +852,7 @@ describe('board workspace + task routes', () => {
       // never returns. Filing as a person is the shortest way to put real
       // queueable work on the board without a vetting round-trip per row.
       const mk = async (opts: Record<string, unknown>): Promise<string> => {
-        const res = await post(`/api/workspaces/${wsId}/tasks`, { author: PERSON, ...opts });
+        const res = await post(`/workspaces/${wsId}/tasks`, { author: PERSON, ...opts });
         expect(res.status).toBe(200);
         return ((await res.json()) as { task: { id: string } }).task.id;
       };
@@ -869,7 +869,7 @@ describe('board workspace + task routes', () => {
 
     it('answers in priority order, with the goal title and the description line', async () => {
       const { wsId, ids } = await seed();
-      const res = await local(`/api/workspaces/${wsId}/next`);
+      const res = await local(`/workspaces/${wsId}/next`);
       expect(res.status).toBe(200);
       const { tasks } = (await res.json()) as {
         tasks: Array<{ id: string; goalTitle: string; body: string }>;
@@ -884,29 +884,29 @@ describe('board workspace + task routes', () => {
     });
 
     it('forwards assignee, limit and includeBlocked', async () => {
-      const r = await post('/api/workspaces', { name: 'filter-ws', goal: 'Ship it.' });
+      const r = await post('/workspaces', { name: 'filter-ws', goal: 'Ship it.' });
       const wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
       // PERSON for the same reason as `seed` above: queueable work, no triage.
       const mk = async (opts: Record<string, unknown>): Promise<string> => {
-        const res = await post(`/api/workspaces/${wsId}/tasks`, { author: PERSON, ...opts });
+        const res = await post(`/workspaces/${wsId}/tasks`, { author: PERSON, ...opts });
         return ((await res.json()) as { task: { id: string } }).task.id;
       };
       const dep = await mk({ title: 'dep', assignee: 'human' });
       const held = await mk({ title: 'held', after: [dep], afterEnforce: [dep] });
 
-      const mine = await local(`/api/workspaces/${wsId}/next?assignee=human`);
+      const mine = await local(`/workspaces/${wsId}/next?assignee=human`);
       const mineRows = (await mine.json()) as { tasks: Array<{ id: string }> };
       expect(mineRows.tasks.map((t) => t.id)).toEqual([dep]);
 
-      const capped = await local(`/api/workspaces/${wsId}/next?limit=1`);
+      const capped = await local(`/workspaces/${wsId}/next?limit=1`);
       expect(((await capped.json()) as { tasks: unknown[] }).tasks).toHaveLength(1);
 
       // Default hides the hard-blocked row; includeBlocked brings it back.
-      const plain = await local(`/api/workspaces/${wsId}/next`);
+      const plain = await local(`/workspaces/${wsId}/next`);
       expect(
         ((await plain.json()) as { tasks: Array<{ id: string }> }).tasks.map((t) => t.id),
       ).not.toContain(held);
-      const all = await local(`/api/workspaces/${wsId}/next?includeBlocked=true`);
+      const all = await local(`/workspaces/${wsId}/next?includeBlocked=true`);
       const allRows = (await all.json()) as {
         tasks: Array<{ id: string; ready: boolean; blockedBy: unknown[] }>;
       };
@@ -916,15 +916,15 @@ describe('board workspace + task routes', () => {
     });
 
     it('404s for an unknown workspace', async () => {
-      const res = await local('/api/workspaces/w-nope/next');
+      const res = await local('/workspaces/w-nope/next');
       expect(res.status).toBe(404);
     });
   });
 
-  describe('GET /api/workspaces/:id (goal summary)', () => {
+  describe('GET /workspaces/:id (goal summary)', () => {
     it('returns the ordered goals with counts, Backlog last', async () => {
       const { wsId, G } = await (async () => {
-        const r = await post('/api/workspaces', { name: 'summary-ws', goal: 'Ship it.' });
+        const r = await post('/workspaces', { name: 'summary-ws', goal: 'Ship it.' });
         const id = ((await r.json()) as { workspace: { id: string } }).workspace.id;
         const goals = await seedGoalsOverHttp(
           base,
@@ -938,12 +938,12 @@ describe('board workspace + task routes', () => {
         // PERSON, so these land in `todo` and the assertion below is about
         // the counts' PLACEMENT rather than about triage. The triage count is
         // covered on its own in task-triage-status.test.ts.
-        await post(`/api/workspaces/${id}/tasks`, {
+        await post(`/workspaces/${id}/tasks`, {
           author: PERSON,
           title: 'in the second band',
           goal: goals.oneA,
         });
-        await post(`/api/workspaces/${id}/tasks`, {
+        await post(`/workspaces/${id}/tasks`, {
           author: PERSON,
           title: 'a chore',
           goal: 'chores',
@@ -951,7 +951,7 @@ describe('board workspace + task routes', () => {
         return { wsId: id, G: goals };
       })();
 
-      const res = await local(`/api/workspaces/${wsId}`);
+      const res = await local(`/workspaces/${wsId}?format=json`);
       expect(res.status).toBe(200);
       const { goalSummary } = (await res.json()) as {
         goalSummary: Array<{ id: string; title: string; todo: number }>;
@@ -967,11 +967,11 @@ describe('board workspace + task routes', () => {
    * tests in review-queue.test.ts call the module directly, and every one of
    * them would still pass if the route forwarded nothing at all.
    */
-  describe('GET /api/workspaces/:id/review-items', () => {
+  describe('GET /workspaces/:id/review-items', () => {
     it('lists an agent question on a task discussion, and drops it once a person answers', async () => {
-      const r = await post('/api/workspaces', { name: 'review-ws', goal: 'Answer things.' });
+      const r = await post('/workspaces', { name: 'review-ws', goal: 'Answer things.' });
       const wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
-      const t = await post(`/api/workspaces/${wsId}/tasks`, {
+      const t = await post(`/workspaces/${wsId}/tasks`, {
         author: AGENT,
         title: 'Pick a colour',
       });
@@ -997,7 +997,7 @@ describe('board workspace + task routes', () => {
       );
       expect(askRes.status).toBe(200);
 
-      const listed = await local(`/api/workspaces/${wsId}/review-items`);
+      const listed = await local(`/workspaces/${wsId}/review-items`);
       expect(listed.status).toBe(200);
       const { items } = (await listed.json()) as {
         items: Array<{ kind: string; taskId?: string; threadId: string; ask: string }>;
@@ -1016,7 +1016,7 @@ describe('board workspace + task routes', () => {
         { author: PERSON, text: 'blue' },
       );
       expect(replied.status).toBe(200);
-      const after = await local(`/api/workspaces/${wsId}/review-items`);
+      const after = await local(`/workspaces/${wsId}/review-items`);
       expect(((await after.json()) as { items: unknown[] }).items).toEqual([]);
     });
 
@@ -1038,9 +1038,9 @@ describe('board workspace + task routes', () => {
      * one that has to leave a record the first one does not.
      */
     it('keeps a declared review item through an ordinary comment, and drops it on an answer', async () => {
-      const r = await post('/api/workspaces', { name: 'declared-ws', goal: 'Answer things.' });
+      const r = await post('/workspaces', { name: 'declared-ws', goal: 'Answer things.' });
       const wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
-      const t = await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title: 'Ship it' });
+      const t = await post(`/workspaces/${wsId}/tasks`, { author: AGENT, title: 'Ship it' });
       const taskId = ((await t.json()) as { task: { id: string } }).task.id;
       const bodyDoc = encodeURIComponent(`task:${taskId}`);
 
@@ -1072,7 +1072,7 @@ describe('board workspace + task routes', () => {
       });
       expect(chat.status).toBe(200);
 
-      const still = (await (await local(`/api/workspaces/${wsId}/review-items`)).json()) as {
+      const still = (await (await local(`/workspaces/${wsId}/review-items`)).json()) as {
         items: Array<{ band: string; review?: { options?: unknown[] } }>;
       };
       expect(still.items).toHaveLength(1);
@@ -1090,7 +1090,7 @@ describe('board workspace + task routes', () => {
         commentId,
       });
       expect(answered.status, await answered.clone().text()).toBe(200);
-      const gone = await local(`/api/workspaces/${wsId}/review-items`);
+      const gone = await local(`/workspaces/${wsId}/review-items`);
       expect(((await gone.json()) as { items: unknown[] }).items).toEqual([]);
     });
 
@@ -1104,10 +1104,10 @@ describe('board workspace + task routes', () => {
      * task used to empty the roster and silently downgrade a live question.
      */
     it('marks a question addressed to a person, and keeps it marked when an unrelated thread resolves', async () => {
-      const r = await post('/api/workspaces', { name: 'direct-ws', goal: 'Answer things.' });
+      const r = await post('/workspaces', { name: 'direct-ws', goal: 'Answer things.' });
       const wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
       const mkTask = async (title: string) => {
-        const t = await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title });
+        const t = await post(`/workspaces/${wsId}/tasks`, { author: AGENT, title });
         return `task:${((await t.json()) as { task: { id: string } }).task.id}`;
       };
       const seedDoc = await mkTask('Somewhere a person spoke');
@@ -1128,7 +1128,7 @@ describe('board workspace + task routes', () => {
       });
 
       const askItem = async () => {
-        const res = await local(`/api/workspaces/${wsId}/review-items`);
+        const res = await local(`/workspaces/${wsId}/review-items`);
         expect(res.status).toBe(200);
         const { items } = (await res.json()) as {
           items: Array<{ docId: string; direct?: boolean; askedAt?: number; ask: string }>;
@@ -1157,23 +1157,26 @@ describe('board workspace + task routes', () => {
     });
 
     it('404s an unknown workspace rather than answering with an empty queue', async () => {
-      const res = await local('/api/workspaces/w-absent/review-items');
+      const res = await local('/workspaces/w-absent/review-items');
       expect(res.status).toBe(404);
     });
   });
 
   describe('persistence through the server handle', () => {
     it('a created workspace survives into a fresh server on the same dataDir', async () => {
-      const r = await post('/api/workspaces', { name: 'durable-ws', goal: 'Persist.' });
+      const r = await post('/workspaces', { name: 'durable-ws', goal: 'Persist.' });
       const wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
-      await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title: 'survives' });
+      await post(`/workspaces/${wsId}/tasks`, { author: AGENT, title: 'survives' });
       handle.tasks.flush();
 
       const second = createServer({ port: 0, dataDir });
       try {
-        const got = await fetch(`http://localhost:${second.port}/api/workspaces/${wsId}/tasks`, {
-          headers: { host: `localhost:${second.port}` },
-        });
+        const got = await fetch(
+          `http://localhost:${second.port}/workspaces/${wsId}/tasks?format=json`,
+          {
+            headers: { host: `localhost:${second.port}` },
+          },
+        );
         expect(got.status).toBe(200);
         const { tasks } = (await got.json()) as { tasks: Task[] };
         expect(tasks.map((t) => t.title)).toEqual(['survives']);

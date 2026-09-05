@@ -103,11 +103,9 @@ describe('GET /api/docs/:docId/status', () => {
     expect((await post(`/api/docs/status-doc/threads/${resolvedId}/resolve`, {})).status).toBe(200);
 
     // Share the workspace the doc landed on so a visitor can reach it.
-    const ws = await post('/api/workspaces', { name: 'status-board', goal: 'Check status.' });
+    const ws = await post('/workspaces', { name: 'status-board', goal: 'Check status.' });
     const boardId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
-    expect((await post(`/api/workspaces/${boardId}/docs`, { docId: 'status-doc' })).status).toBe(
-      200,
-    );
+    expect((await post(`/workspaces/${boardId}/docs`, { docId: 'status-doc' })).status).toBe(200);
     visitorHeaders = (await mintAccessShare(base, access, boardId, { label: 'status share' }))
       .headers;
   });

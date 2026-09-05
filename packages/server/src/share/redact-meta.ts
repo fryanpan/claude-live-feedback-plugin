@@ -22,7 +22,7 @@ export function redactMetaForVisitor(
     /** True when the SHARE covers a whole workspace. A doc-scoped share of a
      *  workspace member must not advertise its `workspaceId`: the client reads
      *  a non-empty one as permission to render workspace navigation and starts
-     *  polling /api/workspaces/<id>/…, which `shareScopeAllows` refuses for a
+     *  polling /workspaces/<id>/…, which `shareScopeAllows` refuses for a
      *  doc share (`if (!target.workspaceId) return false`). The visitor gets a
      *  broken sidebar and a 30s loop of 403s. The doc renders fine without it —
      *  a single-doc share has no sibling files to navigate to. */
@@ -136,7 +136,7 @@ export function relativeReviewUrl(
 /**
  * Strip a workspace TREE down to what a share visitor may see.
  *
- * `GET /api/workspaces/<id>/tree` and `/files` are in a workspace visitor's
+ * `GET /workspaces/<id>/tree` and `/files` are in a workspace visitor's
  * scope — they're what makes the set browsable — but unlike `/api/docs/<id>`
  * they never passed through any redaction, because they build their payload
  * themselves rather than returning a DocMeta. Two things leaked to anyone
@@ -186,7 +186,7 @@ function redactNode(node: unknown, scopeWorkspaceId?: string): unknown {
 }
 
 /**
- * Same treatment for `GET /api/workspaces/<id>/grouped`, the diff review's
+ * Same treatment for `GET /workspaces/<id>/grouped`, the diff review's
  * sidebar model, whose payload nests the file nodes one level down inside
  * `groups`.
  *
@@ -212,7 +212,7 @@ export function redactWorkspaceGroupedForVisitor<
 }
 
 /**
- * Same treatment for `GET /api/workspaces/<id>/files`, whose payload is a
+ * Same treatment for `GET /workspaces/<id>/files`, whose payload is a
  * flat `files` array rather than a tree.
  */
 export function redactWorkspaceFilesForVisitor<T extends { root?: string; files?: unknown[] }>(

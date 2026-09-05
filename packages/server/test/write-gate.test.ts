@@ -129,10 +129,10 @@ describe('which requests the gate governs', () => {
     for (const p of [
       '/api/reviews/rev-1/editable-file',
       '/api/reviews/rev-1/context-file',
-      // Both prefixes: `/api/workspaces/<id>/…` is the live alias every open
+      // Both prefixes: `/workspaces/<id>/…` is the live alias every open
       // browser tab and un-restartable plugin bundle still calls.
-      '/api/workspaces/rev-1/editable-file',
-      '/api/workspaces/rev-1/context-file',
+      '/api/reviews/rev-1/editable-file',
+      '/api/reviews/rev-1/context-file',
     ]) {
       expect(isReadShapedPost(p)).toBe(true);
       expect(isGatedWrite('POST', p)).toBe(false);

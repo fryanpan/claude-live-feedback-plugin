@@ -125,7 +125,7 @@ describe('the sync channel leaks no host metadata', () => {
     // a PUBLIC meta field (it is how the sidebar groups), and no longer
     // shareable on its own. `workspaceRoot`, the absolute host path, is the
     // private one, and this test is about that distinction.
-    const board = await local('/api/workspaces', {
+    const board = await local('/workspaces', {
       method: 'POST',
       body: JSON.stringify({ name: 'Leak board' }),
     }).then((r) => r.json());

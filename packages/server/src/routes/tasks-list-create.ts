@@ -8,6 +8,7 @@ import { OUT_OF_SHARE_SCOPE, firstRefOutOfScope, refInVisitorScope } from '../sh
 import { createdVisibility, parseTaskCreate } from '../task-create.ts';
 import { placeableGoals } from '../task-queue.ts';
 import { type TaskStatus, isRetired, retiredRefusal } from '../tasks.ts';
+import { wantsJson } from '../workspace-path.ts';
 import type { ReviewGate, TaskRouteRequest, TaskRoutesContext } from './task-routes-context.ts';
 
 /** Answers the routes below, or `undefined` when the path is none of them. */
@@ -30,12 +31,15 @@ export async function handleTaskListCreate(
     workspacesOfDoc,
   } = ctx;
   const { req, pathname, url, authorFor, visitor } = rq;
-  const wsTasksMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/tasks$/);
-  if (wsTasksMatch && req.method === 'GET') {
+  const wsTasksMatch = pathname.match(/^\/workspaces\/([^/]+)\/tasks$/);
+  // `?format=json`, for the reason `GET /workspaces/<id>` carries the same
+  // gate: `tasks` is one of the board's four page tabs. The POST below needs
+  // no gate — no page is ever fetched with one.
+  if (wsTasksMatch && req.method === 'GET' && wantsJson(url)) {
     const workspaceId = decodeURIComponent(wsTasksMatch[1] ?? '');
-    if (!taskStore.getWorkspace(workspaceId)) {
-      return j(404, { error: 'workspace not found' });
-    }
+    // The board's existence is not asked here any more —
+    // `middleware/workspace-scope.ts` asked it once, above every handler, and
+    // refused with this same 404 when the answer was no.
     const status = url.searchParams.get('status') as TaskStatus | null;
     const tasks = taskStore.listTasks(workspaceId, {
       ...(status ? { status } : {}),

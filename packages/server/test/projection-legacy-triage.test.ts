@@ -30,13 +30,13 @@ describe('projection narrows legacy triagedAgainst rows', () => {
     // the sidecar can be aged into the legacy shape by hand.
     let seed: ServerHandle | null = createServer({ port: 0, dataDir });
     const seedBase = `http://localhost:${seed.port}`;
-    const mk = await fetch(`${seedBase}/api/workspaces`, {
+    const mk = await fetch(`${seedBase}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'aged board', goal: 'Ship it.' }),
     });
     wsId = ((await mk.json()) as { workspace: { id: string } }).workspace.id;
-    const mkTask = await fetch(`${seedBase}/api/workspaces/${wsId}/tasks`, {
+    const mkTask = await fetch(`${seedBase}/workspaces/${wsId}/tasks`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ author: AGENT, title: 'Old row', goal: 'chores' }),
@@ -76,7 +76,7 @@ describe('projection narrows legacy triagedAgainst rows', () => {
   });
 
   it('the store record keeps what the sidecar held — narrowing is wire-only', async () => {
-    const res = await fetch(`${base}/api/workspaces/${wsId}/tasks`);
+    const res = await fetch(`${base}/workspaces/${wsId}/tasks?format=json`);
     const body = (await res.json()) as {
       tasks: Array<{ id: string; triagedAgainst?: { goal?: string } }>;
     };

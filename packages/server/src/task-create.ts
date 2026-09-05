@@ -1,8 +1,8 @@
 /**
  * One reading of a task-create body, shared by every route that accepts one.
  *
- * There are now two: `POST /api/workspaces/<id>/tasks` (one task) and
- * `POST /api/workspaces/<id>/tasks/batch` (a burst). They must agree on every
+ * There are now two: `POST /workspaces/<id>/tasks` (one task) and
+ * `POST /workspaces/<id>/tasks/batch` (a burst). They must agree on every
  * field — validation, defaults, and above all who owns the result — and the
  * route layer is exactly the layer nothing type-checks, so two hand-copied
  * copies of this would drift the first time a field is added to one of them.
