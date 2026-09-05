@@ -24,6 +24,7 @@ import * as Y from 'yjs';
 import { type NotesLedger, withServerNotesSinks } from '../src/meeting-notes-doc.ts';
 import {
   type NotesComposeInput,
+  type NotesMeetingSummary,
   type TickScheduler,
   beginNotesSession,
 } from '../src/meeting-notes.ts';
@@ -133,12 +134,28 @@ export interface NotesTickHarness {
   tick(): Promise<TickSnapshot>;
   /** `say` then `tick` — the ordinary unit of a script. */
   speak(...utterances: Utterance[]): Promise<TickSnapshot>;
-  /** Stop the meeting and wait for the final compose. */
-  end(): Promise<void>;
+  /**
+   * A turn that starts and never settles — somebody is mid-sentence.
+   *
+   * `say` always settles what it says, which is every tick but the last one
+   * of a meeting that was stopped while a person was still talking. This is
+   * the frame the engine had emitted when the button was pressed.
+   */
+  sayPartial(text: string, speaker?: string): void;
+  /**
+   * Stop the meeting and wait for the final compose.
+   *
+   * Returns the final tick's snapshot, or `null` when the stop had nothing
+   * left to write — the meeting ended in a silence every earlier tick had
+   * already covered.
+   */
+  end(): Promise<TickSnapshot | null>;
   /** Every snapshot so far, in order. */
   readonly snapshots: readonly TickSnapshot[];
   /** Errors the session reported — an empty list is part of most assertions. */
   readonly errors: readonly string[];
+  /** What the meeting came to, once `end()` has run. Null before that. */
+  summary(): NotesMeetingSummary | null;
   readonly ydoc: Y.Doc;
   markdown(): string;
   notes(): string;
@@ -165,6 +182,7 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
   const schedule = new ManualScheduler();
   const snapshots: TickSnapshot[] = [];
   const errors: string[] = [];
+  let summary: NotesMeetingSummary | null = null;
   const settled = new Map<number, { input: NotesComposeInput; composed: string }>();
   const done = new Set<number>();
   let turnNo = 0;
@@ -186,6 +204,9 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
       cadenceMs: Number.POSITIVE_INFINITY,
       schedule,
       onError: (message) => errors.push(message),
+      onMeetingSummary: (s) => {
+        summary = s;
+      },
       onTickLifecycle: (event) => {
         if (event.phase === 'written' || event.phase === 'failed') done.add(event.tick);
       },
@@ -240,6 +261,7 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
   const harness: NotesTickHarness = {
     snapshots,
     errors,
+    summary: () => summary,
     ydoc,
     markdown,
     notes: () => sectionBody(MEETING_NOTES_HEADINGS),
@@ -276,8 +298,25 @@ export function createNotesTickHarness(opts: NotesTickHarnessOptions): NotesTick
       harness.say(...utterances);
       return harness.tick();
     },
+    sayPartial(text, speaker) {
+      const turn = turnNo++;
+      session.onTurn({
+        turn,
+        text,
+        final: false,
+        ...(speaker !== undefined ? { speaker } : {}),
+      });
+    },
     async end() {
+      // The end tick takes the next number in the same sequence the pause
+      // ticks use, so a script that has taken three ticks reads its final
+      // pass as the fourth.
+      const n = ++tickNo;
       await session.end();
+      if (!done.has(n)) return null;
+      const shot = snapshot(n);
+      snapshots.push(shot);
+      return shot;
     },
   };
   return harness;
