@@ -445,13 +445,13 @@ describe('the goal routes', () => {
   /** A board carrying an open AND a done task under the launch band. */
   async function seedWorkspace(): Promise<{ wsId: string; G: Bands; open: string; done: string }> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
+      await post('/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
     );
     const G = bands(await seedGoalsOverHttp(base, workspace.id, GOAL_SPEC, PERSON));
     const mk = async (title: string) =>
       (
         await jj<{ task: { id: string } }>(
-          await post(`/api/workspaces/${workspace.id}/tasks`, {
+          await post(`/workspaces/${workspace.id}/tasks`, {
             author: AGENT,
             title,
             goal: G.launch,
@@ -474,17 +474,18 @@ describe('the goal routes', () => {
   const readGoals = async (wsId: string): Promise<WorkspaceGoal[]> =>
     (
       await jj<{ workspace: { goals: WorkspaceGoal[] } }>(
-        await fetch(`${base}/api/workspaces/${wsId}`),
+        await fetch(`${base}/workspaces/${wsId}?format=json`),
       )
     ).workspace.goals;
 
   const readTasks = async (wsId: string): Promise<Task[]> =>
-    (await jj<{ tasks: Task[] }>(await fetch(`${base}/api/workspaces/${wsId}/tasks`))).tasks;
+    (await jj<{ tasks: Task[] }>(await fetch(`${base}/workspaces/${wsId}/tasks?format=json`)))
+      .tasks;
 
   it('forwards `goal`, `title` and `dueAt` — the stored list reads them back', async () => {
     const { wsId, G, open, done } = await seedWorkspace();
     const res = await jj<{ changed: boolean; goal: { id: string; title: string } }>(
-      await post(`/api/workspaces/${wsId}/goals/rename`, {
+      await post(`/workspaces/${wsId}/goals/rename`, {
         goal: G.launch,
         title: '1. Ship the relaunch post',
         dueAt: 1769000000000,
@@ -506,7 +507,7 @@ describe('the goal routes', () => {
   it('renames a band further down the list through the same route', async () => {
     const { wsId, G } = await seedWorkspace();
     await jj(
-      await post(`/api/workspaces/${wsId}/goals/rename`, {
+      await post(`/workspaces/${wsId}/goals/rename`, {
         goal: G.launchCopy,
         title: '1.2 Line edit',
         author: PERSON,
@@ -525,14 +526,14 @@ describe('the goal routes', () => {
     const { wsId } = await seedWorkspace();
     expect(
       (
-        await post(`/api/workspaces/${wsId}/goals/rename`, {
+        await post(`/workspaces/${wsId}/goals/rename`, {
           goal: 'g-nope',
           title: 'x',
           author: PERSON,
         })
       ).status,
     ).toBe(404);
-    const reserved = await post(`/api/workspaces/${wsId}/goals/rename`, {
+    const reserved = await post(`/workspaces/${wsId}/goals/rename`, {
       goal: CHORES_GOAL_ID,
       title: 'Errands',
       author: PERSON,
@@ -557,7 +558,7 @@ describe('the goal routes', () => {
     const { wsId, G, open, done } = await seedWorkspace();
     const goals = [{ title: '1. Ship the relaunch post' }];
 
-    const refused = await put(`/api/workspaces/${wsId}/goals`, { goals, author: PERSON });
+    const refused = await put(`/workspaces/${wsId}/goals`, { goals, author: PERSON });
     expect(refused.status).toBe(400);
     const body = (await refused.json()) as {
       error: string;
@@ -585,7 +586,7 @@ describe('the goal routes', () => {
       strandedDone: string[];
       created: Array<{ id: string }>;
     }>(
-      await put(`/api/workspaces/${wsId}/goals`, {
+      await put(`/workspaces/${wsId}/goals`, {
         goals,
         drop: [G.launch],
         author: PERSON,
@@ -598,7 +599,7 @@ describe('the goal routes', () => {
 
   it('rejects a malformed `drop` rather than treating it as absent', async () => {
     const { wsId, G } = await seedWorkspace();
-    const res = await put(`/api/workspaces/${wsId}/goals`, {
+    const res = await put(`/workspaces/${wsId}/goals`, {
       goals: boardFor(G),
       drop: G.launch,
       author: PERSON,
@@ -612,14 +613,14 @@ describe('the goal routes', () => {
   it('an acknowledged drop still leaves a non-reorderable orphan row in the read', async () => {
     const { wsId, G } = await seedWorkspace();
     await jj(
-      await put(`/api/workspaces/${wsId}/goals`, {
+      await put(`/workspaces/${wsId}/goals`, {
         goals: [{ id: G.perf, title: '2. Cut page weight' }],
         drop: [G.launch],
         author: PERSON,
       }),
     );
     const { goalSummary } = await jj<{ goalSummary: GoalSummaryRow[] }>(
-      await fetch(`${base}/api/workspaces/${wsId}`),
+      await fetch(`${base}/workspaces/${wsId}?format=json`),
     );
     const orphan = goalSummary.find((r) => r.id === G.launch);
     expect(orphan).toMatchObject({ reorderable: false, done: 1 });

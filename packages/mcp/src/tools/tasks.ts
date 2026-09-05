@@ -207,7 +207,7 @@ export async function handleTaskTool(
       };
       const res = (await http(
         'POST',
-        `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks/batch`,
+        `/workspaces/${encodeURIComponent(workspaceId)}/tasks/batch`,
         { tasks, author: AUTHOR, ...(sourceDoc !== undefined ? { sourceDoc } : {}) },
       )) as {
         tasks: TaskPayload[];
@@ -350,7 +350,7 @@ export async function handleTaskTool(
       const query = qs.size > 0 ? `?${qs.toString()}` : '';
       const res = (await http(
         'GET',
-        `/api/workspaces/${encodeURIComponent(workspaceId)}/next${query}`,
+        `/workspaces/${encodeURIComponent(workspaceId)}/next${query}`,
       )) as { tasks: unknown[]; retired?: { since: number; reason?: string; notice: string } };
       // This is the "what should I do next" call, so a retired board has to
       // say so HERE — the queue still ranks (in-flight work is finishable)
@@ -371,16 +371,19 @@ export async function handleTaskTool(
         fields?: string[];
         includeArchived?: boolean;
       };
-      const qs = new URLSearchParams();
+      // `format=json` is what tells `/workspaces/<id>/tasks` apart from the
+      // board's Tasks TAB, which is the same address in a browser now that
+      // the `/api` prefix is gone. Set unconditionally rather than folded
+      // into the optional filters: without it this read answers an HTML shell.
+      const qs = new URLSearchParams({ format: 'json' });
       if (goal !== undefined) qs.set('goal', goal);
       if (status !== undefined) qs.set('status', status);
       if (assignee !== undefined) qs.set('assignee', assignee);
       if (needs !== undefined) qs.set('needs', needs);
       if (includeArchived === true) qs.set('includeArchived', 'true');
-      const query = qs.size > 0 ? `?${qs.toString()}` : '';
       const res = (await http(
         'GET',
-        `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks${query}`,
+        `/workspaces/${encodeURIComponent(workspaceId)}/tasks?${qs.toString()}`,
       )) as { tasks: TaskPayload[] };
       // Trimmed handler-side, NOT at the route — an old bundle keeps
       // calling the REST route forever and must keep reading its shape.
@@ -572,7 +575,7 @@ export async function handleTaskTool(
         goals: unknown[];
         drop?: string[];
       };
-      const res = (await http('PUT', `/api/workspaces/${encodeURIComponent(workspaceId)}/goals`, {
+      const res = (await http('PUT', `/workspaces/${encodeURIComponent(workspaceId)}/goals`, {
         goals,
         ...(drop !== undefined ? { drop } : {}),
         author: AUTHOR,
@@ -616,7 +619,7 @@ export async function handleTaskTool(
       };
       const res = (await http(
         'POST',
-        `/api/workspaces/${encodeURIComponent(workspaceId)}/goals/rename`,
+        `/workspaces/${encodeURIComponent(workspaceId)}/goals/rename`,
         {
           goal,
           title,
@@ -633,7 +636,7 @@ export async function handleTaskTool(
       };
       const res = (await http(
         'POST',
-        `/api/workspaces/${encodeURIComponent(workspaceId)}/goals/reorder`,
+        `/workspaces/${encodeURIComponent(workspaceId)}/goals/reorder`,
         { order, author: AUTHOR },
       )) as { changed: boolean; order: string[] };
       return ok({
@@ -1021,7 +1024,7 @@ export async function handleTaskTool(
       // dry-run; ids + titles + counts (never full task objects) on apply.
       const res = await http(
         'POST',
-        `/api/workspaces/${encodeURIComponent(workspaceId)}/import-tasks`,
+        `/workspaces/${encodeURIComponent(workspaceId)}/import-tasks`,
         { path, ...(apply !== undefined ? { apply } : {}), author: AUTHOR },
       );
       return ok(res);

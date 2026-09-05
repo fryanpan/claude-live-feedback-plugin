@@ -121,7 +121,7 @@ describe('a doc answers to its readable alias everywhere it answers at all', () 
 
   describe('outside the canonicalizing block — the routes that got missed', () => {
     it('promotes a thread to a task through the alias', async () => {
-      const ws = (await (await post('/api/workspaces', { name: 'routes-board' })).json()) as {
+      const ws = (await (await post('/workspaces', { name: 'routes-board' })).json()) as {
         workspace: { id: string };
       };
       const { thread } = (await (
@@ -206,10 +206,10 @@ describe('a doc answers to its readable alias everywhere it answers at all', () 
     });
 
     it('files the doc on a board under the minted id when attached by the alias', async () => {
-      const ws = (await (await post('/api/workspaces', { name: 'attach-board' })).json()) as {
+      const ws = (await (await post('/workspaces', { name: 'attach-board' })).json()) as {
         workspace: { id: string };
       };
-      const attached = await post(`/api/workspaces/${ws.workspace.id}/docs`, { docId: ALIAS });
+      const attached = await post(`/workspaces/${ws.workspace.id}/docs`, { docId: ALIAS });
       expect(attached.status).toBe(200);
       const { workspace } = (await attached.json()) as { workspace: { docIds?: string[] } };
       expect(workspace.docIds).toContain(mintedId);

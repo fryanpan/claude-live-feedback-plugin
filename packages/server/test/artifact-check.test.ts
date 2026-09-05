@@ -476,9 +476,9 @@ describe('server wiring: REST done-transition triggers the check', () => {
   async function doneTaskOver(
     post: (path: string, payload: unknown) => Promise<Response>,
   ): Promise<string> {
-    const ws = await post('/api/workspaces', { name: 'launch-board' });
+    const ws = await post('/workspaces', { name: 'launch-board' });
     const { workspace } = (await ws.json()) as { workspace: { id: string } };
-    const created = await post(`/api/workspaces/${workspace.id}/tasks`, {
+    const created = await post(`/workspaces/${workspace.id}/tasks`, {
       author: REST_PERSON,
       title: 'Land the watcher fix',
       links: [{ kind: 'url', url: PR_URL }],

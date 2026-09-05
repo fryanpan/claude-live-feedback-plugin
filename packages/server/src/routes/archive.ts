@@ -11,7 +11,7 @@
  * it back on.
  *
  * `deleteReview` is built here and handed back to `createServer`, because
- * `DELETE /api/workspaces/:id` (routes/workspace-delete.ts) fronts both verbs
+ * `DELETE /workspaces/:id` (routes/workspace-delete.ts) fronts both verbs
  * and still calls it from further down the chain.
  *
  * Lifted verbatim out of `createServer`'s request closure, keeping its chain
@@ -26,7 +26,7 @@ import { listArchivedDocs, listArchivedReviews } from '../review-archive.ts';
 import type { TaskProjection } from '../task-projection.ts';
 import type { TaskStore } from '../tasks.ts';
 
-/** Review-only delete. `DELETE /api/workspaces/<id>` still fronts both. */
+/** Review-only delete. `DELETE /workspaces/<id>` still fronts both. */
 const REVIEW_DELETE = /^\/api\/reviews\/([^/]+)$/;
 
 /** The long-lived collaborators these routes need. */

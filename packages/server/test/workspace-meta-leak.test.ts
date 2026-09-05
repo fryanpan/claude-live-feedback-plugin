@@ -5,8 +5,8 @@
  * but the two WORKSPACE endpoints in a visitor's scope built their payload
  * themselves rather than returning a DocMeta, so nothing redacted them:
  *
- *   GET /api/workspaces/<id>/tree   → `root` (absolute host path) + every
- *   GET /api/workspaces/<id>/files     node's `reviewUrl` on the tailnet host
+ *   GET /workspaces/<id>/tree   → `root` (absolute host path) + every
+ *   GET /workspaces/<id>/files     node's `reviewUrl` on the tailnet host
  *
  * Found by probing the RUNNING server with a real workspace link over the
  * public hostname, not by reading the code — the unit layer was fine and the
@@ -74,7 +74,7 @@ describe('workspace share does not leak host details', () => {
     // A board is the unit of sharing; the bind is filed on one. What this
     // test measures — which meta fields a share visitor may see — is reached
     // through the grouping either way.
-    const board = await local('/api/workspaces', {
+    const board = await local('/workspaces', {
       method: 'POST',
       body: JSON.stringify({ name: 'Meta board' }),
     }).then((r) => r.json());
@@ -82,7 +82,7 @@ describe('workspace share does not leak host details', () => {
     expect(boardId).toBeTruthy();
 
     workspaceId = (
-      await local('/api/workspaces', {
+      await local('/workspaces', {
         method: 'POST',
         body: JSON.stringify({ folderPath: folder, hubWorkspaceId: boardId }),
       }).then((r) => r.json())
@@ -105,7 +105,7 @@ describe('workspace share does not leak host details', () => {
 
   for (const ep of ['tree', 'files'] as const) {
     it(`CONTROL: the owner's /${ep} DOES carry root and an absolute reviewUrl`, async () => {
-      const raw = await local(`/api/workspaces/${workspaceId}/${ep}`).then((r) => r.text());
+      const raw = await local(`/api/reviews/${workspaceId}/${ep}`).then((r) => r.text());
       // Without this, the visitor assertions below could pass on an empty body.
       expect(raw).toContain('"root"');
       expect(raw).toContain(folder);
@@ -113,7 +113,7 @@ describe('workspace share does not leak host details', () => {
     });
 
     it(`visitor's /${ep} omits root and the absolute path`, async () => {
-      const res = await visitor(`/api/workspaces/${workspaceId}/${ep}`);
+      const res = await visitor(`/api/reviews/${workspaceId}/${ep}`);
       expect(res.status).toBe(200);
       const raw = await res.text();
       expect(raw).not.toContain('"root"');
@@ -123,14 +123,14 @@ describe('workspace share does not leak host details', () => {
     });
 
     it(`visitor's /${ep} exposes no hostname at all`, async () => {
-      const raw = await visitor(`/api/workspaces/${workspaceId}/${ep}`).then((r) => r.text());
+      const raw = await visitor(`/api/reviews/${workspaceId}/${ep}`).then((r) => r.text());
       expect(hostsIn(raw)).toEqual([]);
       expect(raw).not.toContain(TAILNET);
       expect(raw).not.toContain('.ts.net');
     });
 
     it(`visitor's /${ep} keeps reviewUrl usable as a relative path`, async () => {
-      const raw = await visitor(`/api/workspaces/${workspaceId}/${ep}`).then((r) => r.text());
+      const raw = await visitor(`/api/reviews/${workspaceId}/${ep}`).then((r) => r.text());
       const urls = [...raw.matchAll(/"reviewUrl":"([^"]+)"/g)].map((m) => m[1] as string);
       expect(urls.length).toBeGreaterThan(0); // control: there ARE reviewUrls
       // Relative, AND under the workspace this visitor was actually shared.
@@ -151,7 +151,7 @@ describe('workspace share does not leak host details', () => {
     // Folder binds are LAZY: only the entry doc is bound up front, so the
     // tree has one node until a member is opened. Open the nested file first
     // — which also exercises the lazy-bind path a real visitor uses.
-    const opened = await fetch(`${base}/api/workspaces/${workspaceId}/context-file`, {
+    const opened = await fetch(`${base}/api/reviews/${workspaceId}/context-file`, {
       method: 'POST',
       headers: {
         ...visitorHeaders,
@@ -162,7 +162,7 @@ describe('workspace share does not leak host details', () => {
     });
     expect(opened.status).toBe(200);
 
-    const raw = await visitor(`/api/workspaces/${workspaceId}/tree`).then((r) => r.text());
+    const raw = await visitor(`/api/reviews/${workspaceId}/tree`).then((r) => r.text());
     // sub/two.md now lives one level down — a shallow redactor would miss it.
     expect(raw).toContain('two.md');
     expect(hostsIn(raw)).toEqual([]);

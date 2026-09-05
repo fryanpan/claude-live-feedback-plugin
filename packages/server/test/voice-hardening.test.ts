@@ -353,7 +353,7 @@ describe('voice actions, hardened: end to end', () => {
     context: unknown,
     author: unknown = PERSON,
   ): Promise<{ route: string; ack: string; navigate?: string }> => {
-    const r = await post(`/api/workspaces/${workspaceId}/voice`, { transcript, context, author });
+    const r = await post(`/workspaces/${workspaceId}/voice`, { transcript, context, author });
     expect(r.status).toBe(200);
     return (await r.json()) as { route: string; ack: string; navigate?: string };
   };
@@ -363,7 +363,7 @@ describe('voice actions, hardened: end to end', () => {
   };
 
   const newTask = async (workspaceId: string, body: Record<string, unknown>): Promise<string> => {
-    const r = await post(`/api/workspaces/${workspaceId}/tasks`, { author: PERSON, ...body });
+    const r = await post(`/workspaces/${workspaceId}/tasks`, { author: PERSON, ...body });
     expect(r.status).toBe(200);
     return ((await r.json()) as { task: { id: string } }).task.id;
   };
@@ -376,7 +376,7 @@ describe('voice actions, hardened: end to end', () => {
     const made = await post('/api/docs', { docId, type: 'markdown', sourceUrl: file });
     expect(made.status).toBe(200);
     const mintedId = ((await made.json()) as { docId: string }).docId;
-    expect((await post(`/api/workspaces/${boardId}/docs`, { docId: mintedId })).status).toBe(200);
+    expect((await post(`/workspaces/${boardId}/docs`, { docId: mintedId })).status).toBe(200);
     return mintedId;
   };
 
@@ -442,7 +442,7 @@ describe('voice actions, hardened: end to end', () => {
     });
     base = `http://localhost:${handle.port}`;
 
-    const ws = await post('/api/workspaces', {
+    const ws = await post('/workspaces', {
       name: 'search-revamp',
       goal: 'Ship the new search.',
     });
@@ -482,7 +482,7 @@ describe('voice actions, hardened: end to end', () => {
     mistargetTaskId = await newTask(boardId, { title: 'Write the migration guide' });
     bodyDocTaskId = await newTask(boardId, { title: 'Chase the upstream ticket' });
 
-    const quiet = await post('/api/workspaces', {
+    const quiet = await post('/workspaces', {
       name: 'billing-cleanup',
       goal: 'Retire the old invoicing path.',
     });

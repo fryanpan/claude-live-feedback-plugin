@@ -416,7 +416,7 @@ describe('TaskStore.reorderGoals names a RESERVED id as reserved', () => {
   });
 });
 
-describe('POST /api/workspaces/:id/goals/reorder', () => {
+describe('POST /workspaces/:id/goals/reorder', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
@@ -453,7 +453,7 @@ describe('POST /api/workspaces/:id/goals/reorder', () => {
 
   async function seedWorkspace(): Promise<{ wsId: string; G: Bands }> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
+      await post('/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
     );
     const G = bands(await seedGoalsOverHttp(base, workspace.id, GOAL_SPEC, PERSON));
     return { wsId: workspace.id, G };
@@ -461,7 +461,7 @@ describe('POST /api/workspaces/:id/goals/reorder', () => {
 
   async function readGoals(wsId: string): Promise<WorkspaceGoal[]> {
     const got = await jj<{ workspace: { goals: WorkspaceGoal[] } }>(
-      await fetch(`${base}/api/workspaces/${wsId}`),
+      await fetch(`${base}/workspaces/${wsId}?format=json`),
     );
     return got.workspace.goals;
   }
@@ -470,7 +470,7 @@ describe('POST /api/workspaces/:id/goals/reorder', () => {
     const { wsId, G } = await seedWorkspace();
     expect((await readGoals(wsId)).map((g) => g.id)).toEqual([G.launch, G.perf, G.docs]);
     const res = await jj<{ changed: boolean; order: string[] }>(
-      await post(`/api/workspaces/${wsId}/goals/reorder`, {
+      await post(`/workspaces/${wsId}/goals/reorder`, {
         order: [G.docs, G.launch, G.perf],
         author: PERSON,
       }),
@@ -482,7 +482,7 @@ describe('POST /api/workspaces/:id/goals/reorder', () => {
 
   it('refuses a `parent` scope over HTTP rather than reordering the whole board', async () => {
     const { wsId, G } = await seedWorkspace();
-    const res = await post(`/api/workspaces/${wsId}/goals/reorder`, {
+    const res = await post(`/workspaces/${wsId}/goals/reorder`, {
       order: [G.perf, G.docs],
       parent: G.launch,
       author: PERSON,
@@ -500,13 +500,13 @@ describe('POST /api/workspaces/:id/goals/reorder', () => {
     const off = handle.tasks.onEvent((e) => seen.push(e));
     try {
       await jj(
-        await post(`/api/workspaces/${wsId}/goals/reorder`, {
+        await post(`/workspaces/${wsId}/goals/reorder`, {
           order: [G.perf, G.launch, G.docs],
           author: PERSON,
         }),
       );
       await jj(
-        await post(`/api/workspaces/${wsId}/goals/reorder`, {
+        await post(`/workspaces/${wsId}/goals/reorder`, {
           order: [G.launch, G.perf, G.docs],
           author: AGENT,
         }),
@@ -524,7 +524,7 @@ describe('POST /api/workspaces/:id/goals/reorder', () => {
 
   it('refuses a mismatched order with 400 and the offending ids, leaving the list untouched', async () => {
     const { wsId, G } = await seedWorkspace();
-    const res = await post(`/api/workspaces/${wsId}/goals/reorder`, {
+    const res = await post(`/workspaces/${wsId}/goals/reorder`, {
       order: [G.perf, 'g-social'],
       author: PERSON,
     });
@@ -555,11 +555,11 @@ describe('POST /api/workspaces/:id/goals/reorder', () => {
       ['w-missing', { order: [G.launch], author: PERSON }, 404],
     ];
     for (const [id, body, status] of cases) {
-      const r = await post(`/api/workspaces/${id}/goals/reorder`, body);
+      const r = await post(`/workspaces/${id}/goals/reorder`, body);
       expect(r.status, `${id} ${JSON.stringify(body)}`).toBe(status);
     }
     // Positive control: the same route accepts a well-formed call.
-    const ok = await post(`/api/workspaces/${wsId}/goals/reorder`, {
+    const ok = await post(`/workspaces/${wsId}/goals/reorder`, {
       order: [G.perf, G.launch, G.docs],
       author: PERSON,
     });
@@ -569,20 +569,20 @@ describe('POST /api/workspaces/:id/goals/reorder', () => {
   it('leaves task placement alone across an HTTP reorder', async () => {
     const { wsId, G } = await seedWorkspace();
     const { task } = await jj<{ task: { id: string; goal: string } }>(
-      await post(`/api/workspaces/${wsId}/tasks`, {
+      await post(`/workspaces/${wsId}/tasks`, {
         author: AGENT,
         title: 'tune the ranking',
         goal: G.perf,
       }),
     );
     await jj(
-      await post(`/api/workspaces/${wsId}/goals/reorder`, {
+      await post(`/workspaces/${wsId}/goals/reorder`, {
         order: [G.docs, G.perf, G.launch],
         author: PERSON,
       }),
     );
     const { tasks } = await jj<{ tasks: Array<{ id: string; goal: string }> }>(
-      await fetch(`${base}/api/workspaces/${wsId}/tasks`),
+      await fetch(`${base}/workspaces/${wsId}/tasks?format=json`),
     );
     expect(tasks.find((t) => t.id === task.id)?.goal).toBe(G.perf);
   });
@@ -593,8 +593,11 @@ describe('POST /api/workspaces/:id/goals/reorder', () => {
    *  order the write ACCEPTS. */
   describe('the read is writable back into the reorder', () => {
     const readRows = async (wsId: string) =>
-      (await jj<{ goalSummary: GoalSummaryRow[] }>(await fetch(`${base}/api/workspaces/${wsId}`)))
-        .goalSummary;
+      (
+        await jj<{ goalSummary: GoalSummaryRow[] }>(
+          await fetch(`${base}/workspaces/${wsId}?format=json`),
+        )
+      ).goalSummary;
 
     /** A board with the two synthetic rows on it: Backlog holding work, and a
      *  goal id left behind on a done task. Without these the round trip
@@ -602,14 +605,14 @@ describe('POST /api/workspaces/:id/goals/reorder', () => {
     async function seedBoardWithBuckets(): Promise<{ wsId: string; G: Bands }> {
       const { wsId, G } = await seedWorkspace();
       await jj(
-        await post(`/api/workspaces/${wsId}/tasks`, {
+        await post(`/workspaces/${wsId}/tasks`, {
           author: AGENT,
           title: 'rotate the api key',
           goal: CHORES_GOAL_ID,
         }),
       );
       const { task } = await jj<{ task: { id: string } }>(
-        await post(`/api/workspaces/${wsId}/tasks`, {
+        await post(`/workspaces/${wsId}/tasks`, {
           author: AGENT,
           title: 'trim the bundle',
           goal: G.perf,
@@ -628,7 +631,7 @@ describe('POST /api/workspaces/:id/goals/reorder', () => {
       // removal deliberate rather than the accident a stale list produces.
       const board = boardFor(G);
       await jj(
-        await put(`/api/workspaces/${wsId}/goals`, {
+        await put(`/workspaces/${wsId}/goals`, {
           goals: [board[0], board[2]],
           drop: [G.perf],
           author: PERSON,
@@ -649,7 +652,7 @@ describe('POST /api/workspaces/:id/goals/reorder', () => {
       // The naive read → write, which is what an agent writes when the only
       // rule available is "every row in the summary": refused.
       const naive = rows.map((r) => r.id);
-      const naiveRes = await post(`/api/workspaces/${wsId}/goals/reorder`, {
+      const naiveRes = await post(`/workspaces/${wsId}/goals/reorder`, {
         order: [...naive].reverse(),
         author: PERSON,
       });
@@ -660,7 +663,7 @@ describe('POST /api/workspaces/:id/goals/reorder', () => {
       const scoped = rows.filter((r) => r.reorderable).map((r) => r.id);
       expect(scoped).toEqual([G.launch, G.docs]);
       const res = await jj<{ changed: boolean; order: string[] }>(
-        await post(`/api/workspaces/${wsId}/goals/reorder`, {
+        await post(`/workspaces/${wsId}/goals/reorder`, {
           order: [...scoped].reverse(),
           author: PERSON,
         }),
@@ -671,7 +674,7 @@ describe('POST /api/workspaces/:id/goals/reorder', () => {
 
     it('the refusal calls `chores` reserved, not unknown, and says what to send', async () => {
       const { wsId, G } = await seedWorkspace();
-      const res = await post(`/api/workspaces/${wsId}/goals/reorder`, {
+      const res = await post(`/workspaces/${wsId}/goals/reorder`, {
         order: [G.launch, G.perf, G.docs, CHORES_GOAL_ID],
         author: PERSON,
       });

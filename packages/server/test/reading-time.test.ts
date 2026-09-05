@@ -162,14 +162,14 @@ describe('server wiring: a read_session on a task body room updates Task.reading
 
   async function newTask(): Promise<string> {
     const { workspace } = await j<{ workspace: { id: string } }>(
-      await fetch(`${base}/api/workspaces`, {
+      await fetch(`${base}/workspaces`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: 'launch-board' }),
       }),
     );
     const { task } = await j<{ task: { id: string } }>(
-      await fetch(`${base}/api/workspaces/${workspace.id}/tasks`, {
+      await fetch(`${base}/workspaces/${workspace.id}/tasks`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ author: PERSON, title: 'Read this ticket' }),

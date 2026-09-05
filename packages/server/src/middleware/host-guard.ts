@@ -522,7 +522,7 @@ export function classifyHost(
  *
  * Every one of them is still asked the workspace question first. These tables
  * say WHICH ACT is a member's; `shareScopeAllows` says which board it may be
- * done on, and the ids in `/api/tasks/<id>` and `/api/goals/<id>` are resolved
+ * done on, and the ids in `/api/tasks/<id>` and `/workspaces/<id>/goals/<id>` are resolved
  * through the same `workspacesOf` every other scope question uses — as
  * `task:<id>`, which is the id a board holds a task's body under.
  */
@@ -535,8 +535,15 @@ const BOARD_MEMBER_ROUTES: Readonly<Record<string, readonly string[]>> = {
   // filing one. The board room syncs the same rows, so the GET is a
   // convenience rather than a new disclosure.
   tasks: ['GET', 'POST'],
-  // The Home pane and its per-person "caught up" marker.
+  // The Home pane and its per-person "caught up" marker. `home` is both the
+  // browser's tab and, with `?format=json`, the brief behind it — one address
+  // since the `/api` prefix went, so one entry.
   home: ['GET'],
+  // The two panes with no data twin. They are page addresses only, and they
+  // are in the table rather than admitted beside it because there is one
+  // prefix now and a second place to say yes is a second place to drift.
+  mine: ['GET'],
+  activity: ['GET'],
   'home/read': ['POST'],
   // The Home brief's own recipe — how this board's summary is written. Board
   // content in the owner's words, edited from the Home pane's own control.
@@ -571,6 +578,16 @@ const BOARD_MEMBER_ROUTES: Readonly<Record<string, readonly string[]>> = {
   // The board client's own boot report — one line per page load, written by
   // the page that just painted and read back on the same tab.
   'load-reports': ['GET', 'POST'],
+  // The presence strip's read. It was `attachments: ['GET']` here until the
+  // roster moved to `agents`, and it is in the TABLE rather than admitted by
+  // name beside the pages because there is now one prefix and one table: the
+  // board's pages and the board's data share `/workspaces/<id>/…`, so a
+  // second place to say yes would be a second place to drift.
+  agents: ['GET'],
+  // The live board feed, which was the `/events/workspace/<id>` allowance.
+  // Task events on it are redacted for visitors (actor display names only)
+  // before they reach the stream.
+  'events:stream': ['GET'],
 };
 
 /** The per-task verbs, under `/api/tasks/<taskId>/`. See BOARD_MEMBER_ROUTES. */
@@ -602,8 +619,11 @@ const TASK_MEMBER_ROUTES: Readonly<Record<string, readonly string[]>> = {
   'review-items/*/withdraw/undo': ['POST'],
 };
 
-/** The per-goal verbs, under `/api/goals/<goalId>/`. A goal row lives in the
- *  same `task:<id>` id space as a task body, so it resolves the same way. */
+/** The per-goal verbs, under `/workspaces/<id>/goals/<goalId>/`. A goal row
+ *  lives in the same `task:<id>` id space as a task body, so it resolves the
+ *  same way — and now that the board is in the path there are TWO questions,
+ *  not one: the segment must be the shared board AND the row must be inside
+ *  it. Either alone would admit a band on somebody else's board. */
 const GOAL_MEMBER_ROUTES: Readonly<Record<string, readonly string[]>> = {
   cascade: ['GET'],
   archive: ['POST'],
@@ -659,7 +679,7 @@ export function shareScopeAllows(
   /**
    * Every workspace an id belongs to, most specific first — empty when it
    * belongs to none. ONE rule, consulted at BOTH places a scope question is
-   * asked below (a member doc, and a `/api/workspaces/<id>/…` path segment),
+   * asked below (a member doc, and a `/workspaces/<id>/…` path segment),
    * because two rules that agree today drift apart later and the one that
    * drifts open is a breach.
    *
@@ -739,7 +759,7 @@ export function shareScopeAllows(
   const inScope = (segment: string): boolean => insideSharedWorkspace(safeDecode(segment));
 
   /**
-   * Does this `/api/workspaces/<seg>/…` segment name a workspace the share
+   * Does this `/api/reviews/<seg>/…` segment name a workspace the share
    * covers — the shared workspace itself, or a review filed on it?
    *
    * Deliberately NOT `inScope`: a workspace id and a doc id come from the
@@ -781,35 +801,50 @@ export function shareScopeAllows(
      * in that workspace's scope. Dropping the second would let a visitor read
      * any doc on the server by spelling their own workspace id in front of it.
      */
-    if (method === 'GET' && pathname.startsWith('/workspaces/')) {
+    if (pathname.startsWith('/workspaces/')) {
       const rest = pathname.slice('/workspaces/'.length);
       const slash = rest.indexOf('/');
       const wsSeg = slash === -1 ? rest : rest.slice(0, slash);
       if (safeDecode(wsSeg) === wsId) {
         const sub = slash === -1 ? '' : rest.slice(slash + 1);
-        // The workspace page itself and its nav tabs. A named list — a tab
-        // added later has to be added here too, on purpose.
-        if (sub === '' || ['home', 'tasks', 'mine', 'activity'].includes(sub)) return true;
-        // Two board collections that are NOT panes, admitted by name for the
-        // grants they carried at their old addresses:
-        //   agents         the presence strip's read, which was
-        //                  `attachments: ['GET']` in BOARD_MEMBER_ROUTES.
-        //   events:stream  the live board feed, which was the
-        //                  `/events/workspace/<id>` allowance. Task events on
-        //                  it are redacted for visitors (actor display names
-        //                  only) before they reach the stream.
-        // GET only, which is the whole of what moved: attaching an agent,
-        // detaching one and forging a heartbeat were never a member's, and
-        // this block admits no other method.
-        if (sub === 'agents' || sub === 'events:stream') return true;
-        // `<kind>/<id>` and nothing deeper. An id never contains a slash, so
-        // a third segment is a typo or a probe either way.
+        // `<kind>/<id>` and nothing deeper — the three resources a board
+        // addresses a PAGE for. An id never contains a slash, so a third
+        // segment is a typo or a probe either way. GET only: opening a
+        // document is a read, and every write on it goes to the doc's own
+        // REST surface, which is judged further down by `docSubrouteAllowed`.
         const cut = sub.indexOf('/');
-        if (cut !== -1) {
+        if (method === 'GET' && cut !== -1) {
           const kind = sub.slice(0, cut);
           const id = sub.slice(cut + 1);
           if (!id.includes('/') && ['docs', 'reviews', 'mockups'].includes(kind)) {
             return insideSharedWorkspace(safeDecode(id));
+          }
+        }
+        // The board's own surface, `<sub>` by `<sub>` and method by method:
+        // BOARD_MEMBER_ROUTES. It now covers the PAGES as well as the data,
+        // because the `/api` prefix is gone and both live at one address —
+        // `''`, `home` and `tasks` are a tab in a browser and a JSON body
+        // with `?format=json`, and a member is entitled to the same board
+        // either way, so one table entry says so once. `mine` and `activity`
+        // are panes with no data twin and are in the table for the same
+        // reason. Everything not in that table is refused here, so a route
+        // added to this prefix later is closed until someone puts it in the
+        // table on purpose.
+        if (memberRouteAllows(BOARD_MEMBER_ROUTES, sub, method)) return true;
+        // A goal band's own verbs, `goals/<goalId>/<verb>`. TWO independent
+        // checks, and both are load-bearing: the workspace segment above must
+        // be the shared board, and the ROW must be inside it. Dropping the
+        // second would let a member archive a band on any board on the server
+        // by spelling their own workspace id in front of it — which is a
+        // shape that did not exist while the path was `/api/goals/<id>` and
+        // named no board at all.
+        if (sub.startsWith('goals/')) {
+          const tail = sub.slice('goals/'.length);
+          const verbCut = tail.indexOf('/');
+          if (verbCut > 0) {
+            const goalId = safeDecode(tail.slice(0, verbCut));
+            if (!insideSharedWorkspace(`task:${goalId}`)) return false;
+            return memberRouteAllows(GOAL_MEMBER_ROUTES, tail.slice(verbCut + 1), method);
           }
         }
       }
@@ -860,15 +895,10 @@ export function shareScopeAllows(
     // rather than working the board. Board lifecycle (`DELETE`, `rename`, `retired`,
     // `lead`) stays closed: a member was given a board to work on, not to
     // retire.
-    if (pathname.startsWith('/api/workspaces/')) {
-      const rest = pathname.slice('/api/workspaces/'.length);
-      const slash = rest.indexOf('/');
-      const seg = slash < 0 ? rest : rest.slice(0, slash);
-      if (safeDecode(seg) === wsId) {
-        const sub = slash < 0 ? '' : rest.slice(slash + 1);
-        if (memberRouteAllows(BOARD_MEMBER_ROUTES, sub, method)) return true;
-      }
-    }
+    // BOARD_MEMBER_ROUTES is read in the `/workspaces/` block above and
+    // nowhere else. It used to be read here too, against the `/workspaces/`
+    // spelling of the same routes; that prefix is gone, and with it the second
+    // reading of one table.
   }
 
   /**
@@ -909,12 +939,12 @@ export function shareScopeAllows(
     return docSubrouteAllowed(slash < 0 ? '' : rest.slice(slash + 1), method);
   }
 
-  // Task and goal rows: `/api/tasks/<taskId>/<verb>` and
-  // `/api/goals/<goalId>/<verb>`. Neither path spells a workspace out, so the
-  // row's own id is resolved through `insideSharedWorkspace` — as
-  // `task:<rowId>`, the id a board holds a task body or a goal body under.
-  // That is the SAME resolver every other scope question here reads, which is
-  // what stops a second membership rule existing to drift open later.
+  // Task rows: `/api/tasks/<taskId>/<verb>`. The path does not spell a
+  // workspace out, so the row's own id is resolved through
+  // `insideSharedWorkspace` — as `task:<rowId>`, the id a board holds a task
+  // body under. That is the SAME resolver every other scope question here
+  // reads, which is what stops a second membership rule existing to drift
+  // open later.
   //
   // A row on another board answers false at that step, so `POST
   // /api/tasks/<someone-elses>/transition` is refused by the same line that
@@ -923,19 +953,23 @@ export function shareScopeAllows(
   // Bare `/api/tasks/<id>` is not in the table and therefore refused: the row
   // itself arrives over the board room, and a bare-path read would be a
   // second, unredacted spelling of it.
-  const rowPrefix = ['/api/tasks/', '/api/goals/'].find((p) => pathname.startsWith(p));
-  if (rowPrefix) {
-    const rest = pathname.slice(rowPrefix.length);
+  //
+  // GOALS used to be judged here, on the same lines, because
+  // `/api/goals/<goalId>/<verb>` named no board either. They are addressed
+  // under the board that holds them now, so they are judged in the
+  // `/workspaces/` block above — where the board segment is checked as well
+  // as the row, which is a question this shape cannot ask.
+  if (pathname.startsWith('/api/tasks/')) {
+    const rest = pathname.slice('/api/tasks/'.length);
     const slash = rest.indexOf('/');
     if (slash < 0) return false;
     const rowId = safeDecode(rest.slice(0, slash));
     if (!insideSharedWorkspace(`task:${rowId}`)) return false;
-    const table = rowPrefix === '/api/tasks/' ? TASK_MEMBER_ROUTES : GOAL_MEMBER_ROUTES;
-    const sub =
-      rowPrefix === '/api/tasks/'
-        ? taskSubroutePattern(rest.slice(slash + 1))
-        : rest.slice(slash + 1);
-    return memberRouteAllows(table, sub, method);
+    return memberRouteAllows(
+      TASK_MEMBER_ROUTES,
+      taskSubroutePattern(rest.slice(slash + 1)),
+      method,
+    );
   }
 
   // Workspace navigation — ONLY for a workspace share, and only its own
@@ -954,7 +988,7 @@ export function shareScopeAllows(
   // openEditableFile reject any relPath that escapes it ('bad-path').
   //
   // Two things stay closed: a workspace this share does not cover, and
-  // DELETE (bare /api/workspaces/<id>), which would let a visitor destroy
+  // DELETE (bare /workspaces/<id>), which would let a visitor destroy
   // the review.
   //
   // "Covers" is `inScope`, not string equality, and that is the whole of the
@@ -984,19 +1018,15 @@ export function shareScopeAllows(
   // spells it (Urgent-fixes ticket, 2026-09-02). This allowlist admits the
   // route; the listing decides the file.
   //
-  // TWO PREFIXES, ONE RULE. `/api/reviews/<setId>/…` is what these endpoints
-  // are called now — a review is not a workspace, and the old name is the
-  // vocabulary this change exists to remove. `/api/workspaces/<id>/…` still
-  // answers because the callers are plugin bundles in sessions nobody can
-  // restart. Both spellings are judged here, by the same lines: a second rule
-  // for the alias would agree today and drift later, and the one that drifts
-  // open is a breach.
-  const navPrefix = ['/api/reviews/', '/api/workspaces/'].find((p) => pathname.startsWith(p));
-  if (navPrefix) {
+  // ONE PREFIX. These endpoints answered at `/workspaces/<id>/…` as well
+  // as `/api/reviews/<setId>/…`, and the alias is gone with the cutover that
+  // took the `/api` prefix off the board's own routes — so the spelling that
+  // is left is the only one either the guard or the router now knows.
+  if (pathname.startsWith('/api/reviews/')) {
     if (!target.workspaceId) return false;
-    const rest = pathname.slice(navPrefix.length);
+    const rest = pathname.slice('/api/reviews/'.length);
     const slash = rest.indexOf('/');
-    if (slash < 0) return false; // bare /api/<prefix>/<id> is DELETE-only
+    if (slash < 0) return false; // bare /api/reviews/<id> is DELETE-only
     if (!inWorkspaceScope(rest.slice(0, slash))) return false;
     const sub = rest.slice(slash + 1);
     if (method === 'GET')
@@ -1005,7 +1035,7 @@ export function shareScopeAllows(
     return false;
   }
 
-  // Everything else — /api/share*, /api/docs (list), /api/workspaces (list
+  // Everything else — /api/share*, /api/docs (list), /workspaces (list
   // + create), /api/diffs, /demos, /mockup … — is out of scope.
   return false;
 }
@@ -1146,15 +1176,11 @@ function pathWorkspaces(pathname: string, workspacesOf?: (id: string) => string[
   // the workspace out, so there is nothing to resolve.
   const named = seg('/workspaces/') ?? seg('/api/reviews/');
   if (named) return [named];
-  // `/api/workspaces/` splits: `<id>/tree` names a workspace, and so does the
-  // bare `<id>`; the LIST route has no segment and falls through to none.
-  const wsApi = seg('/api/workspaces/');
-  if (wsApi) return [wsApi];
   // A task or goal row names its board through the id a board holds its BODY
   // under, `task:<rowId>` — the same spelling `shareScopeAllows` resolves, so
   // the workspace membership is asked about and the workspace the scope
   // verdict is made about cannot be two different boards.
-  const rowId = seg('/api/tasks/') ?? seg('/api/goals/');
+  const rowId = seg('/api/tasks/');
   if (rowId) {
     const rowOwners = workspacesOf?.(`task:${rowId}`);
     return Array.isArray(rowOwners) ? rowOwners : [];

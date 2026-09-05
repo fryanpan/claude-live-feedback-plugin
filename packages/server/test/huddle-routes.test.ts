@@ -67,7 +67,7 @@ interface TaskRow {
   assignee: string;
 }
 
-describe('POST /api/workspaces/:id/huddles and the empty task', () => {
+describe('POST /workspaces/:id/huddles and the empty task', () => {
   let handle: ServerHandle;
   let access: AccessHarness;
   let dataDir: string;
@@ -94,10 +94,9 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
   };
   const boardDocs = async (ws: string): Promise<DocRow[]> =>
     (await jj<{ docs: DocRow[] }>(await local(`/api/docs?workspaceId=${ws}`))).docs;
-  const startHuddle = (ws: string, body: unknown = {}) =>
-    post(`/api/workspaces/${ws}/huddles`, body);
+  const startHuddle = (ws: string, body: unknown = {}) => post(`/workspaces/${ws}/huddles`, body);
   const newBoard = async (name: string): Promise<string> =>
-    (await jj<{ workspace: { id: string } }>(await post('/api/workspaces', { name }))).workspace.id;
+    (await jj<{ workspace: { id: string } }>(await post('/workspaces', { name }))).workspace.id;
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'huddle-routes-'));
@@ -138,7 +137,7 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
     it('started for a task, links the doc onto that task — and refuses a task from elsewhere', async () => {
       const ws = await newBoard('for-a-task');
       const owner = await jj<{ task: TaskRow & { links?: unknown[] } }>(
-        await post(`/api/workspaces/${ws}/tasks`, { title: 'Plan the strip', author: PERSON }),
+        await post(`/workspaces/${ws}/tasks`, { title: 'Plan the strip', author: PERSON }),
       );
       const r = await jj<HuddleResponse & { taskId?: string }>(
         await startHuddle(ws, { kind: 'discussion', taskId: owner.task.id }),
@@ -146,7 +145,7 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
       expect(r.taskId).toBe(owner.task.id);
       const row = (
         await jj<{ tasks: Array<TaskRow & { links?: unknown[] }> }>(
-          await local(`/api/workspaces/${ws}/tasks`),
+          await local(`/workspaces/${ws}/tasks?format=json`),
         )
       ).tasks.find((t) => t.id === owner.task.id);
       expect(row?.links).toEqual([{ kind: 'doc', docId: r.docId }]);
@@ -156,7 +155,7 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
       // list is unchanged by either.
       const before = (await boardDocs(ws)).length;
       const stranger = await jj<{ task: TaskRow }>(
-        await post(`/api/workspaces/${workspaceId}/tasks`, { title: 'Elsewhere', author: PERSON }),
+        await post(`/workspaces/${workspaceId}/tasks`, { title: 'Elsewhere', author: PERSON }),
       );
       expect((await startHuddle(ws, { taskId: stranger.task.id })).status).toBe(404);
       expect((await startHuddle(ws, { taskId: 42 })).status).toBe(400);
@@ -284,7 +283,7 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
       expect((await startHuddle(workspaceId, { topic: 42 })).status).toBe(400);
       expect((await startHuddle(workspaceId, { topic: 'x'.repeat(201) })).status).toBe(400);
       // A missing body is the bare button press, and it is fine.
-      const bare = await local(`/api/workspaces/${workspaceId}/huddles`, { method: 'POST' });
+      const bare = await local(`/workspaces/${workspaceId}/huddles`, { method: 'POST' });
       expect(bare.status).toBe(200);
     });
   });
@@ -292,7 +291,7 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
   describe('filing an empty task', () => {
     it('lands as a placeholder-titled todo owned by the caller, flagged untitled', async () => {
       const { task } = await jj<{ task: TaskRow }>(
-        await post(`/api/workspaces/${workspaceId}/tasks`, { untitled: true, author: PERSON }),
+        await post(`/workspaces/${workspaceId}/tasks`, { untitled: true, author: PERSON }),
       );
       expect(task.title).toBe(UNTITLED_TASK_TITLE);
       expect(task.untitled).toBe(true);
@@ -303,15 +302,15 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
 
     it('still refuses a blank title that does not say so', async () => {
       // Negative control for the allowance: the flag is the only door.
-      const r = await post(`/api/workspaces/${workspaceId}/tasks`, { title: '', author: PERSON });
+      const r = await post(`/workspaces/${workspaceId}/tasks`, { title: '', author: PERSON });
       expect(r.status).toBe(400);
-      const r2 = await post(`/api/workspaces/${workspaceId}/tasks`, { author: PERSON });
+      const r2 = await post(`/workspaces/${workspaceId}/tasks`, { author: PERSON });
       expect(r2.status).toBe(400);
     });
 
     it('drops the flag once the row is named', async () => {
       const { task } = await jj<{ task: TaskRow }>(
-        await post(`/api/workspaces/${workspaceId}/tasks`, { untitled: true, author: PERSON }),
+        await post(`/workspaces/${workspaceId}/tasks`, { untitled: true, author: PERSON }),
       );
       const renamed = await jj<{ task: TaskRow }>(
         await post(`/api/tasks/${task.id}/title`, { title: 'Ship the huddle', author: PERSON }),
@@ -320,7 +319,7 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
       expect(renamed.task.untitled).toBeUndefined();
       // And the projected row the board reads agrees.
       const { tasks } = await jj<{ tasks: TaskRow[] }>(
-        await local(`/api/workspaces/${workspaceId}/tasks`),
+        await local(`/workspaces/${workspaceId}/tasks?format=json`),
       );
       const row = tasks.find((t) => t.id === task.id);
       expect(row?.untitled).toBeUndefined();
@@ -333,7 +332,7 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
       // and a flagged row's rename box shows blank, so it could never be
       // named again.
       const { task } = await jj<{ task: TaskRow }>(
-        await post(`/api/workspaces/${workspaceId}/tasks`, { untitled: true, author: PERSON }),
+        await post(`/workspaces/${workspaceId}/tasks`, { untitled: true, author: PERSON }),
       );
       const renamed = await jj<{ task: TaskRow }>(
         await post(`/api/tasks/${task.id}/title`, { title: UNTITLED_TASK_TITLE, author: PERSON }),
@@ -341,7 +340,7 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
       expect(renamed.task.title).toBe(UNTITLED_TASK_TITLE);
       expect(renamed.task.untitled).toBeUndefined();
       const { tasks } = await jj<{ tasks: TaskRow[] }>(
-        await local(`/api/workspaces/${workspaceId}/tasks`),
+        await local(`/workspaces/${workspaceId}/tasks?format=json`),
       );
       expect(tasks.find((t) => t.id === task.id)?.untitled).toBeUndefined();
     });
@@ -351,7 +350,7 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
       // write. A named row renamed to its own title stays unchanged and
       // unflagged.
       const { task } = await jj<{ task: TaskRow }>(
-        await post(`/api/workspaces/${workspaceId}/tasks`, { title: 'Plain row', author: PERSON }),
+        await post(`/workspaces/${workspaceId}/tasks`, { title: 'Plain row', author: PERSON }),
       );
       expect(task.untitled).toBeUndefined();
       const same = await jj<{ task: TaskRow; changed: boolean }>(
@@ -368,13 +367,15 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
       const visitor = await mintAccessShare(base, access, workspaceId, { label: 'board share' });
       const visitorHeaders = { ...visitor.headers, 'content-type': 'application/json' };
       // Presence: the cookie DOES reach the board page.
-      const page = await fetch(`${base}/workspaces/${workspaceId}`, { headers: visitorHeaders });
+      const page = await fetch(`${base}/workspaces/${workspaceId}?format=json`, {
+        headers: visitorHeaders,
+      });
       expect(page.status).toBe(200);
       const before = (await boardDocs(workspaceId)).length;
       // "Make a plan" / "Have a meeting" is a member's, since 2026-09-03: a
       // share link means full access to the board, and holding a meeting is
       // one of the things a board is for.
-      const huddle = await fetch(`${base}/api/workspaces/${workspaceId}/huddles`, {
+      const huddle = await fetch(`${base}/workspaces/${workspaceId}/huddles`, {
         method: 'POST',
         headers: visitorHeaders,
         body: JSON.stringify({}),
@@ -398,7 +399,7 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
 
       // Positive control on the same visitor: filing a row still answers, so
       // nothing above passed because the member had stopped working.
-      const task = await fetch(`${base}/api/workspaces/${workspaceId}/tasks`, {
+      const task = await fetch(`${base}/workspaces/${workspaceId}/tasks`, {
         method: 'POST',
         headers: visitorHeaders,
         body: JSON.stringify({ untitled: true, author: PERSON }),

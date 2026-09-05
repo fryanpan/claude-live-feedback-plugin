@@ -128,7 +128,7 @@ describe('the create ROUTES carry placement to the caller', () => {
 
   async function seedWorkspace(): Promise<{ wsId: string; G: GoalIds }> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
+      await post('/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
     );
     const G = await seedGoalsOverHttp(
       base,
@@ -156,7 +156,7 @@ describe('the create ROUTES carry placement to the caller', () => {
   it('single create: an unplaced task comes back with the bands it could go in', async () => {
     const { wsId, G } = await seedWorkspace();
     const res = await jj<{ placement: SinglePlacement }>(
-      await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title: 'Unplaced' }),
+      await post(`/workspaces/${wsId}/tasks`, { author: AGENT, title: 'Unplaced' }),
     );
     expect(res.placement.placed).toBe(false);
     // Ordered — the same order the board reads.
@@ -170,7 +170,7 @@ describe('the create ROUTES carry placement to the caller', () => {
   it('single create: a placed task carries no band list to wade through', async () => {
     const { wsId, G } = await seedWorkspace();
     const res = await jj<{ placement: SinglePlacement }>(
-      await post(`/api/workspaces/${wsId}/tasks`, {
+      await post(`/workspaces/${wsId}/tasks`, {
         author: AGENT,
         title: 'Placed',
         goal: G.index,
@@ -185,7 +185,7 @@ describe('the create ROUTES carry placement to the caller', () => {
       tasks: Array<{ id: string; title: string }>;
       placement: BatchPlacement;
     }>(
-      await post(`/api/workspaces/${wsId}/tasks/batch`, {
+      await post(`/workspaces/${wsId}/tasks/batch`, {
         author: AGENT,
         tasks: [
           { title: 'Placed row', goal: G.index },
@@ -207,7 +207,7 @@ describe('the create ROUTES carry placement to the caller', () => {
   it('batch: a fully placed burst carries no placement block at all', async () => {
     const { wsId, G } = await seedWorkspace();
     const res = await jj<{ placement?: BatchPlacement }>(
-      await post(`/api/workspaces/${wsId}/tasks/batch`, {
+      await post(`/workspaces/${wsId}/tasks/batch`, {
         author: AGENT,
         tasks: [
           { title: 'One', goal: G.ship },

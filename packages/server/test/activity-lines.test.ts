@@ -70,9 +70,9 @@ describe('the activity view renders the rows the server really wrote', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'activity-lines-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
-    const ws = await post('/api/workspaces', { name: 'search-revamp' });
+    const ws = await post('/workspaces', { name: 'search-revamp' });
     wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
-    const d = await post(`/api/workspaces/${wsId}/tasks`, {
+    const d = await post(`/workspaces/${wsId}/tasks`, {
       title: 'Ship Thursday or Friday?',
       assignee: 'human',
       needs: 'decision',
@@ -130,7 +130,7 @@ describe('the activity view renders the rows the server really wrote', () => {
   });
 
   it('attributes task.created, so an author can be told from a stranger', async () => {
-    const r = await post(`/api/workspaces/${wsId}/tasks`, {
+    const r = await post(`/workspaces/${wsId}/tasks`, {
       title: 'Wire the index',
       author: AGENT,
     });
@@ -146,7 +146,7 @@ describe('the activity view renders the rows the server really wrote', () => {
     // describeEvent's own suite hands it a hand-written row, so it proves
     // the switch has a case — not that the emitted row carries the keys the
     // case reads. That gap is the whole reason this file exists.
-    const created = await post(`/api/workspaces/${wsId}/tasks`, {
+    const created = await post(`/workspaces/${wsId}/tasks`, {
       title: 'Tune the ranking',
       author: AGENT,
       body: 'thin.',
@@ -176,7 +176,7 @@ describe('the activity view renders the rows the server really wrote', () => {
     // proves the case exists; only this proves the emitted row carries the
     // keys it reads — and that the ROUTE forwarded the date at all, which is
     // the layer nothing type-checks.
-    const created = await post(`/api/workspaces/${wsId}/tasks`, {
+    const created = await post(`/workspaces/${wsId}/tasks`, {
       title: 'Cut the release note',
       author: AGENT,
     });
@@ -215,7 +215,7 @@ describe('the activity view renders the rows the server really wrote', () => {
     // hand-written row, which proves the case exists and nothing about
     // whether the route emits those keys — the exact gap this file is for.
     const clipped = 'And also it is really hard to go from one shel…';
-    const created = await post(`/api/workspaces/${wsId}/tasks`, {
+    const created = await post(`/workspaces/${wsId}/tasks`, {
       title: clipped,
       author: AGENT,
       body: `${clipped}\n\nAnyway. Make a ticket from this or multiple`,
@@ -242,7 +242,7 @@ describe('the activity view renders the rows the server really wrote', () => {
     // The route layer hand-copies body fields into the store call, and the
     // route is the layer nothing type-checks — a dropped `reason` returns
     // 200 and discards it silently. So: real route, real log, real renderer.
-    const created = await post(`/api/workspaces/${wsId}/tasks`, {
+    const created = await post(`/workspaces/${wsId}/tasks`, {
       title: 'Index the archive',
       author: AGENT,
       body: 'thin.',
@@ -267,7 +267,7 @@ describe('the activity view renders the rows the server really wrote', () => {
     // Renames used to emit nothing at all, so this event is new twice over:
     // the route must emit it and the client must have a case for it —
     // "a new emitted event reaches the surface as a bare slug" otherwise.
-    const created = await post(`/api/workspaces/${wsId}/tasks`, {
+    const created = await post(`/workspaces/${wsId}/tasks`, {
       title: 'fix the thing with the search',
       author: PERSON,
       body: 'Person can find results so that search earns its keep.',
@@ -296,7 +296,7 @@ describe('the activity view renders the rows the server really wrote', () => {
   });
 
   it('a no-op rename (same title) emits no task.retitled row', async () => {
-    const created = await post(`/api/workspaces/${wsId}/tasks`, {
+    const created = await post(`/workspaces/${wsId}/tasks`, {
       title: 'Already well named',
       author: AGENT,
       body: 'fine.',
@@ -314,7 +314,7 @@ describe('the activity view renders the rows the server really wrote', () => {
 
   it('emits one batched workspace.goals_changed, with the regroups referencing it', async () => {
     const before = rowsOf('workspace.goals_changed').length;
-    const g = await local(`/api/workspaces/${wsId}/goals`, {
+    const g = await local(`/workspaces/${wsId}/goals`, {
       method: 'PUT',
       body: JSON.stringify({
         goals: [{ title: 'Ship the search, then measure it' }],

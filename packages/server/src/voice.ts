@@ -212,7 +212,7 @@ const RETRY_WINDOW_MS = 90_000;
  * not be able to run up a bill on a public tunnel URL. Voice states the same
  * rule as a STANDING refusal instead of a live gate, because the router has no
  * visitor flag to read and could only get one by threading request identity
- * down here. Today it would always be `true` — `/api/workspaces/<id>/voice` is
+ * down here. Today it would always be `true` — `/workspaces/<id>/voice` is
  * not on the share allowlist, so only a local speaker reaches it — and that is
  * exactly the argument that would make this line safe to omit right up until
  * the allowlist widened. The cost is the whole cost: a spoken comment gets no

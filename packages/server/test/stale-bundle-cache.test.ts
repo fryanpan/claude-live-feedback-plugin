@@ -101,7 +101,7 @@ describe('a reload cannot return the old bundle', () => {
     // are about that flow, so they ask for it explicitly.
     handle = createServer({ port: 0, dataDir, markdownAppDistDir: dist, emailCodeSignIn: true });
     base = `http://localhost:${handle.port}`;
-    const ws = await local('/api/workspaces', {
+    const ws = await local('/workspaces', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'cache-board', goal: 'Serve it fresh.' }),

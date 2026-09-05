@@ -331,7 +331,7 @@ describe('import banner + marker', () => {
   });
 });
 
-// ── The real route: POST /api/workspaces/:id/import-tasks ──────────────────
+// ── The real route: POST /workspaces/:id/import-tasks ──────────────────
 
 describe('import route (dry-run first, apply stamps the file)', () => {
   let handle: ServerHandle;
@@ -354,7 +354,7 @@ describe('import route (dry-run first, apply stamps the file)', () => {
 
   async function seedWorkspace(): Promise<string> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'harborlight', goal: 'Refresh the market site.' }),
+      await post('/workspaces', { name: 'harborlight', goal: 'Refresh the market site.' }),
     );
     return workspace.id;
   }
@@ -368,7 +368,7 @@ describe('import route (dry-run first, apply stamps the file)', () => {
 
   async function getTasks(workspaceId: string): Promise<Task[]> {
     const { tasks } = await jj<{ tasks: Task[] }>(
-      await fetch(`${base}/api/workspaces/${workspaceId}/tasks`),
+      await fetch(`${base}/workspaces/${workspaceId}/tasks?format=json`),
     );
     return tasks;
   }
@@ -393,7 +393,7 @@ describe('import route (dry-run first, apply stamps the file)', () => {
     const workspaceId = await seedWorkspace();
     const path = trackerCopy();
     const res = await jj<{ dryRun: boolean; mapping: ImportMapping }>(
-      await post(`/api/workspaces/${workspaceId}/import-tasks`, { path, author: PERSON }),
+      await post(`/workspaces/${workspaceId}/import-tasks`, { path, author: PERSON }),
     );
     expect(res.dryRun).toBe(true);
     expect(res.mapping.tasks).toHaveLength(6);
@@ -422,7 +422,7 @@ describe('import route (dry-run first, apply stamps the file)', () => {
       goalsCreated: Array<{ id: string; title: string }>;
       tasksCreated: Array<{ id: string; title: string; goal: string; status: string }>;
     }>(
-      await post(`/api/workspaces/${workspaceId}/import-tasks`, {
+      await post(`/workspaces/${workspaceId}/import-tasks`, {
         path,
         apply: true,
         author: PERSON,
@@ -444,7 +444,7 @@ describe('import route (dry-run first, apply stamps the file)', () => {
     // The board goals actually exist on the workspace — the reported ids are
     // the board's ids, which is the whole claim `goalsCreated` makes.
     const { workspace } = await jj<{ workspace: { goals: WorkspaceGoal[] } }>(
-      await fetch(`${base}/api/workspaces/${workspaceId}`),
+      await fetch(`${base}/workspaces/${workspaceId}?format=json`),
     );
     expect(workspace.goals.map((g) => g.id)).toEqual(res.goalsCreated.map((g) => g.id));
     expect(workspace.goals.map((g) => g.title)).toEqual([
@@ -493,13 +493,13 @@ describe('import route (dry-run first, apply stamps the file)', () => {
     const workspaceId = await seedWorkspace();
     const path = trackerCopy();
     await jj(
-      await post(`/api/workspaces/${workspaceId}/import-tasks`, {
+      await post(`/workspaces/${workspaceId}/import-tasks`, {
         path,
         apply: true,
         author: PERSON,
       }),
     );
-    const again = await post(`/api/workspaces/${workspaceId}/import-tasks`, {
+    const again = await post(`/workspaces/${workspaceId}/import-tasks`, {
       path,
       apply: true,
       author: PERSON,
@@ -510,7 +510,7 @@ describe('import route (dry-run first, apply stamps the file)', () => {
     expect(await getTasks(workspaceId)).toHaveLength(6);
 
     const dry = await jj<{ dryRun: boolean; alreadyImported?: string }>(
-      await post(`/api/workspaces/${workspaceId}/import-tasks`, { path, author: PERSON }),
+      await post(`/workspaces/${workspaceId}/import-tasks`, { path, author: PERSON }),
     );
     expect(dry.alreadyImported).toBe(workspaceId);
   });
@@ -528,7 +528,7 @@ describe('import route (dry-run first, apply stamps the file)', () => {
       goalsCreated: Array<{ id: string; title: string }>;
       tasksCreated: Array<{ id: string; goal: string; title: string }>;
     }>(
-      await post(`/api/workspaces/${workspaceId}/import-tasks`, {
+      await post(`/workspaces/${workspaceId}/import-tasks`, {
         path,
         apply: true,
         author: PERSON,
@@ -538,7 +538,7 @@ describe('import route (dry-run first, apply stamps the file)', () => {
     expect(res.goalsCreated.map((g) => g.title)).toEqual(['2. Newsletter signup']);
     expect(res.goalsCreated[0]?.id).toMatch(GENERATED);
     const { workspace } = await jj<{ workspace: { goals: WorkspaceGoal[] } }>(
-      await fetch(`${base}/api/workspaces/${workspaceId}`),
+      await fetch(`${base}/workspaces/${workspaceId}?format=json`),
     );
     expect(workspace.goals.map((g) => g.id)).toEqual([G.vendor, res.goalsCreated[0]?.id]);
     // The matched heading's rows went to the goal that was already there —
@@ -564,7 +564,7 @@ describe('import route (dry-run first, apply stamps the file)', () => {
     expect(before.plainText).not.toContain('Imported into');
 
     await jj(
-      await post(`/api/workspaces/${workspaceId}/import-tasks`, {
+      await post(`/workspaces/${workspaceId}/import-tasks`, {
         path,
         apply: true,
         author: PERSON,
@@ -577,16 +577,16 @@ describe('import route (dry-run first, apply stamps the file)', () => {
   it('validates: missing path, missing author, unknown workspace, missing file', async () => {
     const workspaceId = await seedWorkspace();
     const path = trackerCopy();
-    expect(
-      (await post(`/api/workspaces/${workspaceId}/import-tasks`, { author: PERSON })).status,
-    ).toBe(400);
-    expect((await post(`/api/workspaces/${workspaceId}/import-tasks`, { path })).status).toBe(400);
-    expect((await post('/api/workspaces/nope/import-tasks', { path, author: PERSON })).status).toBe(
+    expect((await post(`/workspaces/${workspaceId}/import-tasks`, { author: PERSON })).status).toBe(
+      400,
+    );
+    expect((await post(`/workspaces/${workspaceId}/import-tasks`, { path })).status).toBe(400);
+    expect((await post('/workspaces/nope/import-tasks', { path, author: PERSON })).status).toBe(
       404,
     );
     expect(
       (
-        await post(`/api/workspaces/${workspaceId}/import-tasks`, {
+        await post(`/workspaces/${workspaceId}/import-tasks`, {
           path: join(dataDir, 'no-such-tracker.md'),
           author: PERSON,
         })
@@ -603,7 +603,7 @@ describe('import route (dry-run first, apply stamps the file)', () => {
     const page = await fetch(`${base}/workspaces/${workspaceId}`, { headers: visitorHeaders });
     expect(page.status).toBe(200);
     // Absence: the same credentials cannot import.
-    const denied = await fetch(`${base}/api/workspaces/${workspaceId}/import-tasks`, {
+    const denied = await fetch(`${base}/workspaces/${workspaceId}/import-tasks`, {
       method: 'POST',
       headers: visitorHeaders,
       body: JSON.stringify({ path, apply: true, author: PERSON }),

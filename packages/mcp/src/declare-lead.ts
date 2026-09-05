@@ -78,7 +78,7 @@ export async function declareWorkspaceLead(
   // caller changing meaning — old bundles keep sending their own id.
   const declaring = named.length === 0 || named === deps.self.id;
   const leadAgentId = declaring ? deps.self.id : named;
-  const path = `/api/workspaces/${encodeURIComponent(workspaceId)}`;
+  const path = `/workspaces/${encodeURIComponent(workspaceId)}`;
 
   // Refused up front, with nothing issued. A session with no identity cannot
   // persist a watch, cannot attach, and must not take a seat — the seat is

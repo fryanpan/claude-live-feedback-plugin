@@ -165,7 +165,7 @@ export function decisionBlurb(body: string | undefined): { headline: string; bod
  * item the server computed for this task's threads.
  *
  * Nothing about storage changes and nothing is re-derived here: the thread
- * items arrive from `GET /api/workspaces/:id/review-items`, which is where
+ * items arrive from `GET /workspaces/:id/review-items`, which is where
  * "is this run waiting on a person" is decided, and this only merges and
  * orders. Ranking is the strip's own rule so the two cannot disagree —
  * declared before inferred, a named person before nobody, oldest first inside

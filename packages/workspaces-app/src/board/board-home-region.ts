@@ -115,7 +115,9 @@ export function createBoardHomeRegion(deps: BoardHomeDeps): BoardHomeRegion {
   let homePollTimer: ReturnType<typeof setTimeout> | null = null;
   async function loadHome(): Promise<void> {
     const res = await fetchJson<HomePayload>(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/home?user=${encodeURIComponent(user.name)}`,
+      // `format=json`: this address is also the board's Home TAB, and without
+      // it the brief request comes back as the page's own HTML shell.
+      `/workspaces/${encodeURIComponent(workspaceId)}/home?format=json&user=${encodeURIComponent(user.name)}`,
     );
     // A failed fetch keeps the previous payload — same rule as every other
     // REST-fed region: "the request did not complete" is not "there is
@@ -143,7 +145,7 @@ export function createBoardHomeRegion(deps: BoardHomeDeps): BoardHomeRegion {
   }
 
   async function markCaughtUp(): Promise<void> {
-    const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/home/read`, 'POST', {
+    const res = await send(`/workspaces/${encodeURIComponent(workspaceId)}/home/read`, 'POST', {
       author,
     });
     if (!res.ok) {
@@ -156,7 +158,7 @@ export function createBoardHomeRegion(deps: BoardHomeDeps): BoardHomeRegion {
 
   async function saveInstructions(text: string): Promise<void> {
     const res = await send(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/home/instructions`,
+      `/workspaces/${encodeURIComponent(workspaceId)}/home/instructions`,
       'PUT',
       { instructions: text, author },
     );

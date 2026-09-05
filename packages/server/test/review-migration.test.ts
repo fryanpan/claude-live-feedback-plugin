@@ -259,7 +259,7 @@ describe('against a running server, through the real routes', () => {
     docId: string;
     threadId: string;
   }> {
-    const r = await post(`/api/workspaces/${workspaceId}/tasks`, { author: PERSON, title });
+    const r = await post(`/workspaces/${workspaceId}/tasks`, { author: PERSON, title });
     expect(r.status, await r.clone().text()).toBe(200);
     const { task } = (await r.json()) as { task: { id: string } };
     const docId = taskBodyDocId(task.id);
@@ -284,7 +284,7 @@ describe('against a running server, through the real routes', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'review-migration-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
-    const w = await post('/api/workspaces', { name: 'picker-revamp', goal: 'Ship the picker.' });
+    const w = await post('/workspaces', { name: 'picker-revamp', goal: 'Ship the picker.' });
     workspaceId = ((await w.json()) as { workspace: { id: string } }).workspace.id;
 
     const receipt = await seedTask('Move the retry banner', 'Can you move this below the fold?', [

@@ -98,7 +98,7 @@ describe('the create handler forwards placement rather than dropping it', () => 
     expect(res.isError).toBe(false);
     const batch = res.sent.find((r) => r.path.endsWith('/tasks/batch'));
     expect(batch?.method).toBe('POST');
-    expect(batch?.path).toBe('/api/workspaces/w-1/tasks/batch');
+    expect(batch?.path).toBe('/workspaces/w-1/tasks/batch');
     expect((batch?.body as { tasks: unknown[] }).tasks).toHaveLength(2);
   });
 

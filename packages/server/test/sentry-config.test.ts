@@ -56,7 +56,7 @@ describe('the served shells carry the Sentry DSN and page type only when configu
   }
 
   async function seed(base: string): Promise<string> {
-    const mk = await post(base, '/api/workspaces', { name: 'monitoring board' });
+    const mk = await post(base, '/workspaces', { name: 'monitoring board' });
     const wsId = ((await mk.json()) as { workspace: { id: string } }).workspace.id;
     writeFileSync(join(srcDir, `${base.split(':').pop()}.md`), '# Doc\n\nBody.\n');
     await post(base, '/api/docs', {

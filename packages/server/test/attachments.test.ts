@@ -435,7 +435,7 @@ describe('attachment routes + lead-addressed delivery', () => {
     local(path, { method: 'PUT', body: JSON.stringify(body) });
 
   const makeWorkspace = async (name: string, leadAgentId?: string): Promise<string> => {
-    const r = await post('/api/workspaces', {
+    const r = await post('/workspaces', {
       name,
       goal: 'Ship it.',
       ...(leadAgentId !== undefined ? { leadAgentId } : {}),
@@ -598,7 +598,7 @@ describe('attachment routes + lead-addressed delivery', () => {
     // cold-only assertion would pass against the code this replaces.
     const coldWs = await makeWorkspace('cold-board');
     const coldSse = listen(await local(`/workspaces/${coldWs}/events:stream`));
-    const cold = await post(`/api/workspaces/${coldWs}/tasks`, {
+    const cold = await post(`/workspaces/${coldWs}/tasks`, {
       author: PERSON,
       title: 'Nobody home',
     });
@@ -618,7 +618,7 @@ describe('attachment routes + lead-addressed delivery', () => {
       runtime: 'claude-code-local',
     });
     const hotSse = listen(await local(`/workspaces/${hotWs}/events:stream`));
-    const hot = await post(`/api/workspaces/${hotWs}/tasks`, {
+    const hot = await post(`/workspaces/${hotWs}/tasks`, {
       author: PERSON,
       title: 'Somebody home',
     });
@@ -641,7 +641,7 @@ describe('attachment routes + lead-addressed delivery', () => {
     // board state (who is responsible), never evidence that an ATTACHMENT
     // reached the ydoc, and this test still refuses the latter.
     const wsId = await makeWorkspace('clean-room-board', 'agent-board-lead');
-    await post(`/api/workspaces/${wsId}/tasks`, { author: PERSON, title: 'A visible task' });
+    await post(`/workspaces/${wsId}/tasks`, { author: PERSON, title: 'A visible task' });
     await post(`/workspaces/${wsId}/agents`, {
       agentId: 'relay-agent',
       runtime: 'webhook',
@@ -698,7 +698,7 @@ describe('attachment routes + lead-addressed delivery', () => {
       runtime: 'claude-code-local',
     });
     declaredStreams.push(await openWorkspaceStream(base, wsId));
-    return put(`/api/workspaces/${wsId}/lead`, { leadAgentId: agentId, author: PERSON });
+    return put(`/workspaces/${wsId}/lead`, { leadAgentId: agentId, author: PERSON });
   };
 
   it('a self-declaration leaves the board holding a LIVE lead attachment', async () => {
@@ -760,7 +760,7 @@ describe('attachment routes + lead-addressed delivery', () => {
     const wsId = await makeWorkspace('voice-declare-board', 'agent-away');
     await declareSelf(wsId, 'agent-self');
 
-    const r = await post(`/api/workspaces/${wsId}/voice`, {
+    const r = await post(`/workspaces/${wsId}/voice`, {
       transcript: 'make cutting token usage the top goal',
       author: PERSON,
     });
@@ -787,7 +787,7 @@ describe('attachment routes + lead-addressed delivery', () => {
       agentId: 'agent-elsewhere',
       runtime: 'claude-code-local',
     });
-    const seat = await put(`/api/workspaces/${wsId}/lead`, {
+    const seat = await put(`/workspaces/${wsId}/lead`, {
       leadAgentId: 'agent-elsewhere',
       author: PERSON,
     });
@@ -801,7 +801,7 @@ describe('attachment routes + lead-addressed delivery', () => {
     expect(list.attachments.map((a) => a.agentId)).toEqual(['agent-elsewhere']);
 
     const voice = (await (
-      await post(`/api/workspaces/${wsId}/voice`, {
+      await post(`/workspaces/${wsId}/voice`, {
         transcript: 'make cutting token usage the top goal',
         author: PERSON,
       })

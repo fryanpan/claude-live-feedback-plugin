@@ -64,7 +64,7 @@ async function setBoardRetired(
   reason?: string,
 ): Promise<Record<string, unknown>> {
   const { http, AUTHOR } = ctx;
-  const res = (await http('PUT', `/api/workspaces/${encodeURIComponent(workspaceId)}/retired`, {
+  const res = (await http('PUT', `/workspaces/${encodeURIComponent(workspaceId)}/retired`, {
     retired,
     ...(retired && reason !== undefined ? { reason } : {}),
     author: AUTHOR,
@@ -113,7 +113,7 @@ export async function handleWorkspaceTool(
         leadAgentId?: string;
         subscribe?: boolean;
       };
-      const res = (await http('POST', '/api/workspaces', {
+      const res = (await http('POST', '/workspaces', {
         name: wsName,
         // The creating agent leads the board unless it says otherwise. A
         // board with no lead has nobody to address its asks to.
@@ -132,7 +132,7 @@ export async function handleWorkspaceTool(
     }
     case 'rename_workspace': {
       const { workspaceId, name: nextName } = a as { workspaceId: string; name: string };
-      const res = (await http('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/rename`, {
+      const res = (await http('POST', `/workspaces/${encodeURIComponent(workspaceId)}/rename`, {
         name: nextName,
         author: AUTHOR,
       })) as {
@@ -227,7 +227,7 @@ export async function handleWorkspaceTool(
       }
       const res = (await http(
         'PUT',
-        `/api/workspaces/${encodeURIComponent(effectiveWorkspaceId)}/settings`,
+        `/workspaces/${encodeURIComponent(effectiveWorkspaceId)}/settings`,
         {
           // `null` is the route's spelling of "back to the default"; an
           // omitted or blank string means the same thing to the caller.
@@ -243,14 +243,19 @@ export async function handleWorkspaceTool(
     }
     case 'attach_doc': {
       const { workspaceId, docId } = a as { workspaceId: string; docId: string };
-      const res = (await http('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/docs`, {
+      const res = (await http('POST', `/workspaces/${encodeURIComponent(workspaceId)}/docs`, {
         docId,
       })) as { workspace?: { docIds?: string[] } };
       return ok({ ok: true, workspaceId, docIds: res.workspace?.docIds ?? [] });
     }
     case 'get_workspace': {
       const { workspaceId } = a as { workspaceId: string };
-      const res = (await http('GET', `/api/workspaces/${encodeURIComponent(workspaceId)}`)) as {
+      // `?format=json`: `/workspaces/<id>` is the board's PAGE as well as its
+      // record now that the `/api` prefix is gone.
+      const res = (await http(
+        'GET',
+        `/workspaces/${encodeURIComponent(workspaceId)}?format=json`,
+      )) as {
         workspace: {
           id: string;
           name: string;
@@ -319,7 +324,7 @@ export async function handleWorkspaceTool(
       if (typeof limit === 'number' && Number.isFinite(limit)) params.set('limit', String(limit));
       const res = (await http(
         'GET',
-        `/api/workspaces/${encodeURIComponent(workspaceId)}/related-work?${params.toString()}`,
+        `/workspaces/${encodeURIComponent(workspaceId)}/related-work?${params.toString()}`,
       )) as { considered: number; matches: unknown[] };
       return ok({
         workspaceId,
@@ -402,7 +407,7 @@ export async function handleWorkspaceTool(
         try {
           await http(
             'POST',
-            `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(q.id)}/ack`,
+            `/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(q.id)}/ack`,
             {},
           );
         } catch {
@@ -528,7 +533,7 @@ export async function handleWorkspaceTool(
       // agent as the actor — `author: AUTHOR`, as every write tool sends.
       const res = (await http(
         'PUT',
-        `/api/workspaces/${encodeURIComponent(workspaceId)}/parallelism-cap`,
+        `/workspaces/${encodeURIComponent(workspaceId)}/parallelism-cap`,
         { cap: parsed.cap, author: AUTHOR },
       )) as {
         cap: number;

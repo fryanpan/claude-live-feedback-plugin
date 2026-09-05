@@ -3,7 +3,7 @@ import type { BoardWorkspace, ParallelismCapChange } from '../tasks.ts';
 /**
  * Strip a board's record down to what a share or collab visitor needs.
  *
- * `GET /api/workspaces/<id>` is on the visitor allowlist, documented there as
+ * `GET /workspaces/<id>` is on the visitor allowlist, documented there as
  * "workspace name + goal text", and it used to answer with the stored
  * `BoardWorkspace` verbatim. That record is partly a description of the HOST
  * rather than of the board: `notesHome.repoRoot` is an absolute path on this
@@ -52,7 +52,7 @@ export type VisitorCapChange = Omit<ParallelismCapChange, 'actor'> & {
  * `redactBoardEventForVisitor` strips from every board event's actor.
  *
  * ONE function because there are three doors onto this fact and they must
- * not answer differently: `GET /api/workspaces/<id>`, `GET …/settings`, and
+ * not answer differently: `GET /workspaces/<id>`, `GET …/settings`, and
  * the board's own SSE feed. The first had an inline reduction of its own and
  * the second had none, so a member reading the settings panel got the id the
  * board record beside it had been refusing since the cap shipped.

@@ -284,7 +284,7 @@ describe('the cap through the server', () => {
     lead: ReturnType<typeof listenFrames>;
   }> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id }),
+      await post('/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id }),
     );
     const workspaceId = workspace.id;
     await jj(
@@ -307,7 +307,7 @@ describe('the cap through the server', () => {
     to: 'todo' | 'in-progress' = 'todo',
   ): Promise<string> {
     const { task } = await jj<{ task: { id: string } }>(
-      await post(`/api/workspaces/${workspaceId}/tasks`, {
+      await post(`/workspaces/${workspaceId}/tasks`, {
         title,
         body: `Agent can ${title.toLowerCase()} so that the queue keeps moving.`,
         assignee: LEAD.name,
@@ -333,7 +333,7 @@ describe('the cap through the server', () => {
   describe('its own REST address', () => {
     it('GET reads the default with nothing in use', async () => {
       const { workspaceId, lead } = await boardWithLead();
-      const view = await jj<CapView>(await get(`/api/workspaces/${workspaceId}/parallelism-cap`));
+      const view = await jj<CapView>(await get(`/workspaces/${workspaceId}/parallelism-cap`));
       expect(view).toEqual({
         workspaceId,
         cap: 4,
@@ -359,7 +359,7 @@ describe('the cap through the server', () => {
           }),
         );
         const lowered = await jj<CapView>(
-          await put(`/api/workspaces/${workspaceId}/parallelism-cap`, { cap: 1, author: LEAD }),
+          await put(`/workspaces/${workspaceId}/parallelism-cap`, { cap: 1, author: LEAD }),
         );
         // The answer to a PUT is the whole view: the caller that just lowered
         // the cap sees in the same response that the board is already at it.
@@ -375,7 +375,7 @@ describe('the cap through the server', () => {
         expect(lowered.free).toBe(0);
 
         const restored = await jj<CapView>(
-          await put(`/api/workspaces/${workspaceId}/parallelism-cap`, { cap: null, author: LEAD }),
+          await put(`/workspaces/${workspaceId}/parallelism-cap`, { cap: null, author: LEAD }),
         );
         expect(restored).toMatchObject({ cap: 4, isDefault: true, inUse: 1, free: 3 });
         // And the settings panel's read agrees.
@@ -387,7 +387,7 @@ describe('the cap through the server', () => {
             lastChange?: unknown;
           };
           dispatchesInUse: number;
-        }>(await get(`/api/workspaces/${workspaceId}/settings`));
+        }>(await get(`/workspaces/${workspaceId}/settings`));
         expect(settings.parallelismCap).toMatchObject({ value: 4, isDefault: true, default: 4 });
         // The panel's read names who put it back and from what.
         expect(settings.parallelismCap.lastChange).toMatchObject({
@@ -405,31 +405,29 @@ describe('the cap through the server', () => {
     it('refuses zero, a fraction, a string, and a missing cap — the floor is one', async () => {
       const { workspaceId, lead } = await boardWithLead();
       for (const body of [{ cap: 0 }, { cap: -1 }, { cap: 1.5 }, { cap: '2' }, {}]) {
-        const res = await put(`/api/workspaces/${workspaceId}/parallelism-cap`, {
+        const res = await put(`/workspaces/${workspaceId}/parallelism-cap`, {
           ...body,
           author: LEAD,
         });
         expect(res.status, JSON.stringify(body)).toBe(400);
       }
       // Nothing above changed the stored value.
-      const view = await jj<CapView>(await get(`/api/workspaces/${workspaceId}/parallelism-cap`));
+      const view = await jj<CapView>(await get(`/workspaces/${workspaceId}/parallelism-cap`));
       expect(view.cap).toBe(4);
       expect(view.isDefault).toBe(true);
       await lead.stop();
     });
 
     it('404s a board that does not exist', async () => {
-      expect((await get('/api/workspaces/w-nope/parallelism-cap')).status).toBe(404);
-      expect((await put('/api/workspaces/w-nope/parallelism-cap', { cap: 2 })).status).toBe(404);
+      expect((await get('/workspaces/w-nope/parallelism-cap')).status).toBe(404);
+      expect((await put('/workspaces/w-nope/parallelism-cap', { cap: 2 })).status).toBe(404);
     });
 
     it('the workspace read carries the same numbers, so get_workspace can show them', async () => {
       const { workspaceId, lead } = await boardWithLead();
-      await jj(
-        await put(`/api/workspaces/${workspaceId}/parallelism-cap`, { cap: 2, author: LEAD }),
-      );
+      await jj(await put(`/workspaces/${workspaceId}/parallelism-cap`, { cap: 2, author: LEAD }));
       const ws = await jj<{ parallelismCap: Record<string, unknown> }>(
-        await get(`/api/workspaces/${workspaceId}`),
+        await get(`/workspaces/${workspaceId}?format=json`),
       );
       expect(ws.parallelismCap).toMatchObject({ value: 2, isDefault: false, inUse: 0, free: 2 });
       // And who moved it, when, from what — so a moved cap is never a mystery.
@@ -445,11 +443,11 @@ describe('the cap through the server', () => {
     it('a board never asked carries no last change at all', async () => {
       const { workspaceId, lead } = await boardWithLead();
       const ws = await jj<{ parallelismCap: Record<string, unknown> }>(
-        await get(`/api/workspaces/${workspaceId}`),
+        await get(`/workspaces/${workspaceId}?format=json`),
       );
       expect(ws.parallelismCap.lastChange).toBeUndefined();
       const view = await jj<CapView & { lastChange?: unknown }>(
-        await get(`/api/workspaces/${workspaceId}/parallelism-cap`),
+        await get(`/workspaces/${workspaceId}/parallelism-cap`),
       );
       expect(view.lastChange).toBeUndefined();
       await lead.stop();
@@ -458,10 +456,10 @@ describe('the cap through the server', () => {
     it('the settings route (the panel’s path) records the same actor the cap route does', async () => {
       const { workspaceId, lead } = await boardWithLead();
       await jj(
-        await put(`/api/workspaces/${workspaceId}/settings`, { author: PERSON, parallelismCap: 3 }),
+        await put(`/workspaces/${workspaceId}/settings`, { author: PERSON, parallelismCap: 3 }),
       );
       const view = await jj<CapView & { lastChange?: Record<string, unknown> }>(
-        await get(`/api/workspaces/${workspaceId}/parallelism-cap`),
+        await get(`/workspaces/${workspaceId}/parallelism-cap`),
       );
       expect(view.lastChange).toMatchObject({
         actor: { id: PERSON.id, name: PERSON.name, kind: 'person' },
@@ -470,9 +468,7 @@ describe('the cap through the server', () => {
       });
       // Both routes append to the one log; a second change through the other
       // route does not overwrite the first.
-      await jj(
-        await put(`/api/workspaces/${workspaceId}/parallelism-cap`, { cap: 1, author: LEAD }),
-      );
+      await jj(await put(`/workspaces/${workspaceId}/parallelism-cap`, { cap: 1, author: LEAD }));
       const rows = readFileSync(eventsLogPath(dataDir, workspaceId), 'utf8')
         .trim()
         .split('\n')
@@ -497,11 +493,9 @@ describe('the cap through the server', () => {
       const a = await addRow(workspaceId, 'Rank results by recency');
       await addRow(workspaceId, 'Dedupe near-identical rows');
       await addRow(workspaceId, 'Cache the second-page query');
-      await jj(
-        await put(`/api/workspaces/${workspaceId}/parallelism-cap`, { cap: 1, author: LEAD }),
-      );
+      await jj(await put(`/workspaces/${workspaceId}/parallelism-cap`, { cap: 1, author: LEAD }));
 
-      const next = await jj<NextView>(await get(`/api/workspaces/${workspaceId}/next`));
+      const next = await jj<NextView>(await get(`/workspaces/${workspaceId}/next`));
       expect(next.tasks.map((t) => t.id)).toEqual([a]);
       expect(next.capacity).toEqual({ cap: 1, inUse: 0, free: 1, heldForCapacity: 2 });
       await lead.stop();
@@ -511,13 +505,11 @@ describe('the cap through the server', () => {
       const { workspaceId, lead } = await boardWithLead();
       const busy = await addRow(workspaceId, 'Migrate the search index', 'in-progress');
       await addRow(workspaceId, 'Rank results by recency');
-      await jj(
-        await put(`/api/workspaces/${workspaceId}/parallelism-cap`, { cap: 1, author: LEAD }),
-      );
+      await jj(await put(`/workspaces/${workspaceId}/parallelism-cap`, { cap: 1, author: LEAD }));
       const worktree = mkdtempSync(join(tmpdir(), 'wt-cap-'));
       try {
         await jj(await post('/api/dispatches', { taskId: busy, worktreePath: worktree }));
-        const next = await jj<NextView>(await get(`/api/workspaces/${workspaceId}/next`));
+        const next = await jj<NextView>(await get(`/workspaces/${workspaceId}/next`));
         expect(next.tasks.map((t) => t.id)).toEqual([busy]);
         expect(next.capacity).toEqual({ cap: 1, inUse: 1, free: 0, heldForCapacity: 1 });
 
@@ -526,7 +518,7 @@ describe('the cap through the server', () => {
         await jj(
           await fetch(`${base}/api/dispatches/${encodeURIComponent(busy)}`, { method: 'DELETE' }),
         );
-        const after = await jj<NextView>(await get(`/api/workspaces/${workspaceId}/next`));
+        const after = await jj<NextView>(await get(`/workspaces/${workspaceId}/next`));
         expect(after.tasks).toHaveLength(2);
         expect(after.capacity).toEqual({ cap: 1, inUse: 0, free: 1 });
       } finally {
@@ -540,7 +532,7 @@ describe('the cap through the server', () => {
       for (const title of ['Rank results by recency', 'Dedupe near-identical rows']) {
         await addRow(workspaceId, title);
       }
-      const next = await jj<NextView>(await get(`/api/workspaces/${workspaceId}/next`));
+      const next = await jj<NextView>(await get(`/workspaces/${workspaceId}/next`));
       expect(next.tasks).toHaveLength(2);
       expect(next.capacity).toEqual({ cap: 4, inUse: 0, free: 4 });
       await lead.stop();
@@ -555,9 +547,7 @@ describe('the cap through the server', () => {
       // Two quiet in-progress rows, first-filed first in priority order.
       const top = await addRow(workspaceId, 'Rank results by recency', 'in-progress');
       const beyond = await addRow(workspaceId, 'Dedupe near-identical rows', 'in-progress');
-      await jj(
-        await put(`/api/workspaces/${workspaceId}/parallelism-cap`, { cap: 1, author: LEAD }),
-      );
+      await jj(await put(`/workspaces/${workspaceId}/parallelism-cap`, { cap: 1, author: LEAD }));
 
       // A zero window still needs the clock to tick past the last transition.
       await settle(10);

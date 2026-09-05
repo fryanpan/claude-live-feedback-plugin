@@ -71,7 +71,7 @@ export function wireBoardVoice(deps: BoardVoiceDeps): void {
         state.reviewItems,
       ),
     send: async (transcript, context) => {
-      const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/voice`, 'POST', {
+      const res = await send(`/workspaces/${encodeURIComponent(workspaceId)}/voice`, 'POST', {
         transcript,
         context,
         author,

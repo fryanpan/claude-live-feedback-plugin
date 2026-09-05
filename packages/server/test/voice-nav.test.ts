@@ -150,7 +150,7 @@ describe('voice navigation (route)', () => {
     transcript: string,
     workspaceId = boardId,
   ): Promise<{ route: string; ack: string; navigate?: string }> => {
-    const r = await post(`/api/workspaces/${workspaceId}/voice`, {
+    const r = await post(`/workspaces/${workspaceId}/voice`, {
       transcript,
       context: { surface: 'board' },
       author: PERSON,
@@ -172,12 +172,12 @@ describe('voice navigation (route)', () => {
     });
     base = `http://localhost:${handle.port}`;
 
-    const ws = await post('/api/workspaces', { name: 'QB', goal: 'Ship onboarding.' });
+    const ws = await post('/workspaces', { name: 'QB', goal: 'Ship onboarding.' });
     expect(ws.status).toBe(200);
     boardId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
 
     const goals = await post(
-      `/api/workspaces/${boardId}/goals`,
+      `/workspaces/${boardId}/goals`,
       {
         author: PERSON,
         goals: [
@@ -193,7 +193,7 @@ describe('voice navigation (route)', () => {
     expect(goalIds).toHaveLength(3);
 
     // The swallow control: a TASK whose title contains "home page".
-    const t = await post(`/api/workspaces/${boardId}/tasks`, {
+    const t = await post(`/workspaces/${boardId}/tasks`, {
       title: 'Home page redesign',
       author: PERSON,
     });

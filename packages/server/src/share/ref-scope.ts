@@ -21,7 +21,7 @@
  * deliberate and it is the whole reason the check reads this way rather than
  * "does it exist and is it mine": refusing only the foreign ones would turn
  * this route into the doc list one id at a time, which is the existence
- * oracle `POST /api/workspaces/<id>/docs` records in `workspace-content.ts`.
+ * oracle `POST /workspaces/<id>/docs` records in `workspace-content.ts`.
  * The cost is that a member cannot store a dangling annotation the owner
  * still can, which is a fair trade for not answering "is this id real".
  *

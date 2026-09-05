@@ -503,7 +503,7 @@ minutes. Complain."* The criteria are a per-workspace string
 (`reviewItemCriteria`, default in `packages/core/src/review-judge-prompt.ts`:
 headline in the reader's words, stakes and what to look at, a cost on every
 option, links inline, no raw ids or acronyms), read and written through
-`PUT /api/workspaces/:id/settings` and the `set_review_item_criteria` tool.
+`PUT /workspaces/:id/settings` and the `set_review_item_criteria` tool.
 No hub text field: the settings UI has only a select and a checkbox today,
 and a textarea pattern is its own piece of work. Reversible calls:
 
@@ -823,7 +823,7 @@ From the 2026-09-02 huddle: planning ignored work already on the board, and
 the goal it created had no description and no link to the notes it came out
 of. The step is now a verb the planner calls before writing anything —
 `find_related_work(workspaceId, text, docId?)`, `GET
-/api/workspaces/:id/related-work` underneath — plus the branch it feeds, in
+/workspaces/:id/related-work` underneath — plus the branch it feeds, in
 `claude-workspaces:leading-a-workspace`.
 
 - **Cheap matching, no model call.** Dice coefficient over title terms,

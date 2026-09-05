@@ -136,7 +136,7 @@ export interface WatchCoverage {
  *
  * A workspace (`taskStore`) has goals, tasks, a name, and a list of
  * ATTACHMENT ids in `docIds`. An attachment is a doc room id or an
- * ATTACHMENT SET id — `POST /api/workspaces/:id/docs` has accepted both since
+ * ATTACHMENT SET id — `POST /workspaces/:id/docs` has accepted both since
  * it was written. So a set goes on its workspace as ONE row and its members
  * stay off, because a hundred-file set is one unit of work, not a hundred.
  *
@@ -707,7 +707,7 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
     const created = taskStore.createWorkspace(DEFAULT_BOARD_WORKSPACE_NAME);
     // createWorkspace emits no event (nothing subscribes to a workspace that
     // doesn't exist yet), so bring the board room up by hand — same as the
-    // POST /api/workspaces route.
+    // POST /workspaces route.
     taskProjection.ensureWorkspace(created.id);
     return created.id;
   };

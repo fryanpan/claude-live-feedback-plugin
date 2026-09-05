@@ -106,7 +106,7 @@ export async function seedGoalsOverHttp(
   author: { id: string; name: string; kind?: string },
   opts: SeedGoalOpts = {},
 ): Promise<GoalIds> {
-  const res = await fetch(`${base}/api/workspaces/${encodeURIComponent(workspaceId)}/goals`, {
+  const res = await fetch(`${base}/workspaces/${encodeURIComponent(workspaceId)}/goals`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ goals: entriesFor(spec), author }),

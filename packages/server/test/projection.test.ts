@@ -174,14 +174,14 @@ describe('ydoc projection + workspace room', () => {
     local(path, { method: 'POST', body: JSON.stringify(body) });
 
   async function makeWorkspace(name: string): Promise<string> {
-    const r = await post('/api/workspaces', { name });
+    const r = await post('/workspaces', { name });
     expect(r.status).toBe(200);
     const body = (await r.json()) as { workspace: { id: string } };
     return body.workspace.id;
   }
 
   async function makeTask(wsId: string, opts: Record<string, unknown>): Promise<string> {
-    const r = await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, ...opts });
+    const r = await post(`/workspaces/${wsId}/tasks`, { author: AGENT, ...opts });
     expect(r.status).toBe(200);
     const body = (await r.json()) as { task: { id: string } };
     return body.task.id;
@@ -226,7 +226,7 @@ describe('ydoc projection + workspace room', () => {
     expect(after.transitions[0]?.by).toEqual({ name: 'Search Revamp', kind: 'agent' });
 
     // A goal-list edit through the route reaches the workspace map too.
-    const g = await local(`/api/workspaces/${wsId}/goals`, {
+    const g = await local(`/workspaces/${wsId}/goals`, {
       method: 'PUT',
       body: JSON.stringify({ goals: [{ title: 'Ship it faster' }], author: PERSON }),
     });

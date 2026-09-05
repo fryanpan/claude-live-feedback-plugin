@@ -291,7 +291,7 @@ export async function fetchQueueRows(
   workspaceId: string,
 ): Promise<{ docId: string; threadId: string }[]> {
   const payload = (await getJson(
-    `${base}/api/workspaces/${encodeURIComponent(workspaceId)}/review-items`,
+    `${base}/workspaces/${encodeURIComponent(workspaceId)}/review-items`,
   )) as { items?: { docId?: string; threadId?: string }[] };
   const seen = new Set<string>();
   const rows: { docId: string; threadId: string }[] = [];

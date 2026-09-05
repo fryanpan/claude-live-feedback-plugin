@@ -42,7 +42,7 @@ describe('deletedSnippet anchor hint (HTTP)', () => {
     writeFileSync(join(folder, 'README.md'), '# Project\n');
     writeFileSync(join(folder, 'src', 'index.ts'), 'export const answer = 42;\nconst x = 1;\n');
 
-    const r = await fetch(`${base}/api/workspaces`, {
+    const r = await fetch(`${base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ folderPath: folder, owner: '/cwd' }),
@@ -52,7 +52,7 @@ describe('deletedSnippet anchor hint (HTTP)', () => {
 
     // The bind is lazy — open the code file the way the all-files tree does.
     const cr = await fetch(
-      `${base}/api/workspaces/${encodeURIComponent(bind.workspaceId)}/context-file`,
+      `${base}/api/reviews/${encodeURIComponent(bind.workspaceId)}/context-file`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },

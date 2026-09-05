@@ -136,7 +136,7 @@ describe('builder dispatches through the server', () => {
     lead: ReturnType<typeof listenFrames>;
   }> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id }),
+      await post('/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id }),
     );
     await jj(
       await post(`/workspaces/${workspace.id}/agents`, {
@@ -153,7 +153,7 @@ describe('builder dispatches through the server', () => {
 
   async function inProgressRow(workspaceId: string, title: string): Promise<string> {
     const { task } = await jj<{ task: { id: string } }>(
-      await post(`/api/workspaces/${workspaceId}/tasks`, {
+      await post(`/workspaces/${workspaceId}/tasks`, {
         title,
         body: `Agent can ${title.toLowerCase()} so that the queue keeps moving.`,
         assignee: LEAD.name,
@@ -393,7 +393,7 @@ describe('builder dispatches through the server', () => {
     try {
       const ctx = await boardWithLead();
       await jj(
-        await fetch(`${base}/api/workspaces/${ctx.workspaceId}/parallelism-cap`, {
+        await fetch(`${base}/workspaces/${ctx.workspaceId}/parallelism-cap`, {
           method: 'PUT',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ cap: 2, author: LEAD }),
@@ -428,7 +428,7 @@ describe('builder dispatches through the server', () => {
           body: JSON.stringify(body),
         });
       await jj(
-        await put(`/api/workspaces/${ctx.workspaceId}/settings`, {
+        await put(`/workspaces/${ctx.workspaceId}/settings`, {
           author: LEAD,
           parallelismCap: 1,
         }),
@@ -440,7 +440,7 @@ describe('builder dispatches through the server', () => {
       expect(refused.status).toBe(409);
 
       await jj(
-        await put(`/api/workspaces/${ctx.workspaceId}/settings`, {
+        await put(`/workspaces/${ctx.workspaceId}/settings`, {
           author: LEAD,
           parallelismCap: 2,
         }),
@@ -462,14 +462,14 @@ describe('builder dispatches through the server', () => {
       const before = await jj<{
         parallelismCap: { value: number; isDefault: boolean; default: number };
         dispatchesInUse: number;
-      }>(await get(`/api/workspaces/${ctx.workspaceId}/settings`));
+      }>(await get(`/workspaces/${ctx.workspaceId}/settings`));
       expect(before.parallelismCap).toEqual({ value: 4, isDefault: true, default: 4 });
       expect(before.dispatchesInUse).toBe(0);
 
       const taskA = await inProgressRow(ctx.workspaceId, 'Rank results by recency');
       await jj(await post('/api/dispatches', { taskId: taskA, worktreePath: wtA }));
       const after = await jj<{ dispatchesInUse: number }>(
-        await get(`/api/workspaces/${ctx.workspaceId}/settings`),
+        await get(`/workspaces/${ctx.workspaceId}/settings`),
       );
       expect(after.dispatchesInUse).toBe(1);
       await ctx.lead.stop();

@@ -149,7 +149,7 @@ const READ_SHAPED_POSTS: ReadonlySet<string> = new Set(['/api/links/titles']);
  * Opening a doc the caller may already READ.
  *
  * `POST /api/reviews/<id>/editable-file` and `.../context-file` (and their
- * `/api/workspaces/` aliases) answer one question: what is the docId for this
+ * `/workspaces/` aliases) answer one question: what is the docId for this
  * file in this review? They are POSTs because a relPath does not belong in a
  * query string. Each one materialises the doc if it is not already there, at
  * a DETERMINISTIC id, under the review's own root, bounded by the same
@@ -171,8 +171,7 @@ const READ_SHAPED_POSTS: ReadonlySet<string> = new Set(['/api/links/titles']);
  * both stay lists of reads to EXEMPT, where a forgotten entry shows up as a
  * refused read rather than as a silent hole.
  */
-const OPEN_FOR_READING_POST =
-  /^\/api\/(?:reviews|workspaces)\/[^/]+\/(?:editable-file|context-file)$/;
+const OPEN_FOR_READING_POST = /^\/api\/reviews\/[^/]+\/(?:editable-file|context-file)$/;
 
 /** `true` for a non-GET route that only reads. Matched on the whole path —
  *  exactly for the fixed ones, and on a full-string pattern for the two that
@@ -202,8 +201,8 @@ export function isGatedWrite(method: string, pathname: string): boolean {
 /**
  * The file-binding routes are not for browsers at all.
  *
- * `POST /api/docs` (bind a file), `POST /api/workspaces` with a `folderPath`
- * (bind a folder) and `POST /api/workspaces/<id>/import-tasks` (read a
+ * `POST /api/docs` (bind a file), `POST /workspaces` with a `folderPath`
+ * (bind a folder) and `POST /workspaces/<id>/import-tasks` (read a
  * markdown file) each turn a host path into content this server will read
  * and serve. Every caller is an agent — an MCP tool, a hook, a curl — and
  * none of the browser apps call them. The cross-origin write gate refuses a

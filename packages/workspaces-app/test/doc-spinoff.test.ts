@@ -11,7 +11,7 @@ import { type EditorHandle, createEditor } from '../src/editor.ts';
  *
  * Two things this module has to keep true. The board it files against is
  * `backTo`, not `workspaceId` — reading the wrong one posted to
- * `/api/workspaces//tasks` and the person saw a toast reading "404". And the
+ * `/workspaces//tasks` and the person saw a toast reading "404". And the
  * receipt has to match what was actually made: the toast names the column the
  * row landed in, and its Undo archives that same row and un-links the words
  * it linked. An Undo that reported one thing and did another is the failure
@@ -87,7 +87,7 @@ describe('creating a task from a selection', () => {
     }));
     const { take, editor } = runner({ backTo: { workspaceId: 'w-board' }, workspaceId: 'w-group' });
     await take('task', selectionOver(editor, 1, 24), { from: 1, to: 24 });
-    expect(calls[0]?.url).toBe('/api/workspaces/w-board/tasks');
+    expect(calls[0]?.url).toBe('/workspaces/w-board/tasks');
   });
 
   it('names the column the row landed in, and offers to take it back', async () => {

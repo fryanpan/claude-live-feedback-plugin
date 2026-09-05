@@ -347,7 +347,7 @@ describe('the old vocabulary still lands on the old doors (positive controls)', 
     };
     const reply = await call('create_tasks', { workspaceId: 'w-1', tasks: [row] });
     okReply(reply);
-    expect(last().path).toBe('/api/workspaces/w-1/tasks/batch');
+    expect(last().path).toBe('/workspaces/w-1/tasks/batch');
     expect((last().body.tasks as unknown[])[0]).toEqual(row);
     const created = payload(reply).created as Array<Record<string, unknown>>;
     expect(created[0]?.taskId).toBe('t-9001');
@@ -493,7 +493,7 @@ describe('a ticket carries review items, and the tools reach them', () => {
     });
     okReply(reply);
     expect(last().method).toBe('PUT');
-    expect(last().path).toBe('/api/workspaces/w-1/settings');
+    expect(last().path).toBe('/workspaces/w-1/settings');
     expect(last().body.reviewItemCriteria).toBe('Every option names a cost.');
     expect(last().body.author).toBeTruthy();
     expect(payload(reply).criteria).toBe('Every option names a cost.');
@@ -852,7 +852,7 @@ describe('reviewItemId is a universal address', () => {
     okReply(reply);
     expect(seen.at(-2)?.path).toBe('/api/review-items/r-4b2e');
     expect(last().method).toBe('PUT');
-    expect(last().path).toBe('/api/workspaces/w-resolved/settings');
+    expect(last().path).toBe('/workspaces/w-resolved/settings');
     expect(payload(reply).workspaceId).toBe('w-resolved');
   });
 });

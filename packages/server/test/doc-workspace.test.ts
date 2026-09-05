@@ -71,7 +71,7 @@ describe('a doc always lands in a workspace', () => {
     // Positive control for every "it got a workspace" assertion below: when a
     // workspace IS supplied, that specific one is what comes back — so a
     // non-empty workspaceId in the other tests means something.
-    const ws = await post('/api/workspaces', { name: 'named-ws', goal: 'Ship.' });
+    const ws = await post('/workspaces', { name: 'named-ws', goal: 'Ship.' });
     const wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
     // The body an MCP `create_review_doc` call puts on the wire, so this also
     // covers the layer that hand-copies fields into the doc-store call.
@@ -90,7 +90,7 @@ describe('a doc always lands in a workspace', () => {
     // bind_mock's wire shape. The param is accepted on one route by one
     // handler, but two MCP tools reach it and only one of them was written
     // with a workspace in mind.
-    const ws = await post('/api/workspaces', { name: 'mock-ws', goal: 'Ship.' });
+    const ws = await post('/workspaces', { name: 'mock-ws', goal: 'Ship.' });
     const wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
     const r = await post('/api/docs', {
       docId: 'doc-named-mock-ws',
@@ -116,7 +116,7 @@ describe('a doc always lands in a workspace', () => {
     // And it's a REAL workspace — one the board can open, not just a string
     // stamped on the doc. This is the assertion that would catch "we set the
     // field and never created anything".
-    const ws = await local(`/api/workspaces/${body.hubWorkspaceId}`);
+    const ws = await local(`/workspaces/${body.hubWorkspaceId}?format=json`);
     expect(ws.status).toBe(200);
 
     // Attached, not merely reported: the doc has to be reachable FROM the
@@ -142,7 +142,7 @@ describe('a doc always lands in a workspace', () => {
     // Without this line the test passes vacuously today: `toContain` on an
     // undefined needle against a list that happens not to hold one.
     expect(wsId).toBeTruthy();
-    const list = await local('/api/workspaces');
+    const list = await local('/workspaces');
     const ids = ((await list.json()) as { boardWorkspaces: { id: string }[] }).boardWorkspaces.map(
       (w) => w.id,
     );
@@ -195,13 +195,13 @@ describe('a doc always lands in a workspace', () => {
     expect(holdingId).toBeTruthy();
     expect(handle.tasks.getWorkspace(holdingId)?.docIds).toContain(docId);
 
-    const ws = await post('/api/workspaces', { name: 'real-home', goal: 'Ship.' });
+    const ws = await post('/workspaces', { name: 'real-home', goal: 'Ship.' });
     const realId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
     // Attached by the READABLE name — the attach route resolves it, and the
     // membership it writes is still keyed by the minted id below.
-    expect(
-      (await post(`/api/workspaces/${realId}/docs`, { docId: 'doc-then-attached' })).status,
-    ).toBe(200);
+    expect((await post(`/workspaces/${realId}/docs`, { docId: 'doc-then-attached' })).status).toBe(
+      200,
+    );
 
     expect(handle.tasks.getWorkspace(realId)?.docIds).toContain(docId);
     expect(handle.tasks.getWorkspace(holdingId)?.docIds).not.toContain(docId);

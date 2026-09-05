@@ -195,7 +195,7 @@ interface CreateResponse {
   placement: { placed?: boolean; spinoff?: string };
 }
 
-describe('POST /api/workspaces/:id/tasks with spinoff: true', () => {
+describe('POST /workspaces/:id/tasks with spinoff: true', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
@@ -213,14 +213,14 @@ describe('POST /api/workspaces/:id/tasks with spinoff: true', () => {
   const board = async (name: string, leadAgentId?: string): Promise<string> =>
     (
       await jj<{ workspace: { id: string } }>(
-        await post('/api/workspaces', {
+        await post('/workspaces', {
           name,
           ...(leadAgentId ? { leadAgentId } : {}),
         }),
       )
     ).workspace.id;
   const spinoff = (workspaceId: string, over: Record<string, unknown> = {}) =>
-    post(`/api/workspaces/${workspaceId}/tasks`, {
+    post(`/workspaces/${workspaceId}/tasks`, {
       title: 'Check whether Access covers the mockup route',
       author: PERSON,
       origin: { kind: 'doc', docId: 'd-huddle' },
@@ -230,7 +230,7 @@ describe('POST /api/workspaces/:id/tasks with spinoff: true', () => {
   const rowOf = async (workspaceId: string, id: string): Promise<TaskRow | undefined> =>
     (
       await jj<{ tasks: TaskRow[] }>(
-        await fetch(`${base}/api/workspaces/${workspaceId}/tasks`, {
+        await fetch(`${base}/workspaces/${workspaceId}/tasks?format=json`, {
           headers: { host: `localhost:${handle.port}` },
         }),
       )
@@ -298,14 +298,14 @@ describe('POST /api/workspaces/:id/tasks with spinoff: true', () => {
       PERSON,
     );
     const owner = await jj<CreateResponse>(
-      await post(`/api/workspaces/${ws}/tasks`, {
+      await post(`/workspaces/${ws}/tasks`, {
         title: 'Plan the strip',
         goal: G.lower,
         author: PERSON,
       }),
     );
     const huddle = await jj<{ docId: string; taskId?: string }>(
-      await post(`/api/workspaces/${ws}/huddles`, { kind: 'discussion', taskId: owner.task.id }),
+      await post(`/workspaces/${ws}/huddles`, { kind: 'discussion', taskId: owner.task.id }),
     );
     expect(huddle.taskId).toBe(owner.task.id);
     const r = await jj<CreateResponse & { placement: { spinoffTask?: string } }>(
@@ -383,9 +383,8 @@ describe('a pill-made row is titled by its words and points at its doc', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'spinoff-title-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
-    ws = (
-      await jj<{ workspace: { id: string } }>(await post('/api/workspaces', { name: 'Titles' }))
-    ).workspace.id;
+    ws = (await jj<{ workspace: { id: string } }>(await post('/workspaces', { name: 'Titles' })))
+      .workspace.id;
   });
   afterAll(async () => {
     await handle.stop();
@@ -394,7 +393,7 @@ describe('a pill-made row is titled by its words and points at its doc', () => {
 
   it('the pill shape: the selected words are the title, the doc is the origin', async () => {
     const r = await jj<{ task: TaskRow & { untitled?: boolean; origin?: unknown } }>(
-      await post(`/api/workspaces/${ws}/tasks`, {
+      await post(`/workspaces/${ws}/tasks`, {
         title: 'Check whether Access covers the mockup route',
         body: 'Spun off from a line of the discussion "Widget rollout".\n\n> Check whether…',
         author: PERSON,
@@ -409,7 +408,7 @@ describe('a pill-made row is titled by its words and points at its doc', () => {
 
   it('the Board’s New-task shape is the one that stores "Untitled task" — the control', async () => {
     const r = await jj<{ task: TaskRow & { untitled?: boolean; origin?: unknown } }>(
-      await post(`/api/workspaces/${ws}/tasks`, { untitled: true, author: PERSON }),
+      await post(`/workspaces/${ws}/tasks`, { untitled: true, author: PERSON }),
     );
     expect(r.task.title).toBe('Untitled task');
     expect(r.task.untitled).toBe(true);
@@ -417,7 +416,7 @@ describe('a pill-made row is titled by its words and points at its doc', () => {
   });
 
   it('a pill create with words that reduce to nothing is refused, never filed untitled', async () => {
-    const res = await post(`/api/workspaces/${ws}/tasks`, {
+    const res = await post(`/workspaces/${ws}/tasks`, {
       title: '   ',
       author: PERSON,
       origin: { kind: 'doc', docId: 'd-huddle' },

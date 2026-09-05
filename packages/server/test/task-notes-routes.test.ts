@@ -53,7 +53,7 @@ describe('task status notes route', () => {
 
   async function board(): Promise<string> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'archive-index', leadAgentId: AGENT.id }),
+      await post('/workspaces', { name: 'archive-index', leadAgentId: AGENT.id }),
     );
     return workspace.id;
   }
@@ -62,7 +62,7 @@ describe('task status notes route', () => {
    *  task for the agent, which is exactly why an explicit route exists. */
   async function todoRow(workspaceId: string, title: string): Promise<string> {
     const { task } = await jj<{ task: { id: string } }>(
-      await post(`/api/workspaces/${workspaceId}/tasks`, {
+      await post(`/workspaces/${workspaceId}/tasks`, {
         title,
         body: `Agent can ${title.toLowerCase()} so that the queue keeps moving.`,
         author: PERSON,
