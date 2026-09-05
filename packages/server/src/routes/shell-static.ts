@@ -67,6 +67,7 @@ import {
   serveStaticUnder,
 } from '../shells.ts';
 import type { BoardWorkspace, TaskStore } from '../tasks.ts';
+import { BOARD_PAGE_PATH, BOARD_PAGE_RESOURCE_PATH } from '../workspace-path.ts';
 
 /** Files the workspaces-app build emits that must ALSO answer at the root
  *  path. See the route for why each one is here rather than under /app/. */
@@ -391,9 +392,12 @@ export function createShellStatic(ctx: ShellStaticContext): ShellStatic {
     // the product handed them. That is exactly what `/tasks`, `/mine` and
     // `/activity` did between the nav landing and this line — measured on
     // a staging build, 404 on all three while `/home` answered 200.
-    const boardPageMatch = pathname.match(
-      /^\/workspaces\/([^/]+?)(?:\/(?:home|tasks|mine|activity))?$/,
-    );
+    //
+    // The matcher is BUILT from that list rather than written out here, and
+    // it moved out of this file for a second reader: the workspace-scope
+    // middleware has to pass these paths over, or a browser asking for a tab
+    // would get a JSON body. See `workspace-path.ts`.
+    const boardPageMatch = pathname.match(BOARD_PAGE_PATH);
     if (boardPageMatch && req.method === 'GET') {
       const workspaceId = decodeURIComponent(boardPageMatch[1] ?? '');
       const workspace = taskStore.getWorkspace(workspaceId);
@@ -433,9 +437,7 @@ export function createShellStatic(ctx: ShellStaticContext): ShellStatic {
      * see this resource — belongs to the share guard, which checks the
      * workspace AND the resource and is the only thing that should.
      */
-    const wsResourceMatch = pathname.match(
-      /^\/workspaces\/([^/]+)\/(docs|mockups|reviews)\/([^/]+)$/,
-    );
+    const wsResourceMatch = pathname.match(BOARD_PAGE_RESOURCE_PATH);
     if (wsResourceMatch && req.method === 'GET') {
       const wsSeg = decodeURIComponent(wsResourceMatch[1] ?? '');
       const kind = wsResourceMatch[2] ?? '';

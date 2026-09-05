@@ -29,8 +29,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { matchWorkspaceRoute } from '../src/routes/workspace-path.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { matchWorkspaceRoute } from '../src/workspace-path.ts';
 
 describe('matchWorkspaceRoute', () => {
   it('splits a canonical path into the board and what was addressed under it', () => {
@@ -56,8 +56,15 @@ describe('matchWorkspaceRoute', () => {
     // `/workspaces//agents` would otherwise hand the store an empty id and
     // fail one route further down, where the message is about the store.
     expect(matchWorkspaceRoute('/workspaces//agents')).toBeUndefined();
+    // The board itself is not a collection: an empty remainder and "a
+    // collection nobody named" would otherwise be the same value.
     expect(matchWorkspaceRoute('/workspaces/w-1')).toBeUndefined();
+    // The parser reads the canonical prefix and only that. It used to be
+    // proven against `/api/workspaces/<id>/agents`, which is a path that no
+    // longer exists anywhere; a prefix that merely CONTAINS the canonical one
+    // is the shape still worth refusing.
     expect(matchWorkspaceRoute('/api/workspaces/w-1/agents')).toBeUndefined();
+    expect(matchWorkspaceRoute('/x/workspaces/w-1/agents')).toBeUndefined();
   });
 
   it('decodes the board segment, and answers itself on a malformed escape', () => {
@@ -86,7 +93,7 @@ describe('the board collections that moved under /workspaces/<id>', () => {
     local(path, { method: 'POST', body: JSON.stringify(body) });
 
   const makeWorkspace = async (name: string): Promise<string> => {
-    const r = await post('/api/workspaces', { name, goal: 'Ship it.' });
+    const r = await post('/workspaces', { name, goal: 'Ship it.' });
     return ((await r.json()) as { workspace: { id: string } }).workspace.id;
   };
 
@@ -170,16 +177,16 @@ describe('the board collections that moved under /workspaces/<id>', () => {
     // old spelling learns it immediately rather than working for another
     // release on a name that is going away.
     const ws = await makeWorkspace('canonical-old-paths');
-    expect((await local(`/api/workspaces/${ws}/attachments`)).status).toBe(404);
+    expect((await local(`/workspaces/${ws}/attachments`)).status).toBe(404);
     expect(
       (
-        await post(`/api/workspaces/${ws}/attachments`, {
+        await post(`/workspaces/${ws}/attachments`, {
           agentId: 'agent-ghost',
           runtime: 'claude-code-local',
         })
       ).status,
     ).toBe(404);
-    expect((await post(`/api/workspaces/${ws}/attachments/agent-ghost/heartbeat`, {})).status).toBe(
+    expect((await post(`/workspaces/${ws}/attachments/agent-ghost/heartbeat`, {})).status).toBe(
       404,
     );
     // The per-DOC stream still owns the `/events/` prefix, so the board's old
