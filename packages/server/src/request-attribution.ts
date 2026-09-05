@@ -234,6 +234,12 @@ export function createRequestAttribution(ctx: RequestAttributionContext): Reques
       return stampRosterAgent(claimed as User | undefined);
     };
 
+    /** The 400 every comment route answers the shared category with.
+     *  One message, the same fix named, so a peer launched without a
+     *  name learns it from the first refusal rather than from silence. */
+    const refuseCategoryAuthor = (): Response =>
+      j(400, { error: AUTHOR_REQUIRED_ERROR, message: AUTHOR_REQUIRED_MESSAGE });
+
     /**
      * A write signed by a roster AGENT is stamped with the roster's
      * name and canonical id — the board's record of who holds the seat
@@ -242,12 +248,6 @@ export function createRequestAttribution(ctx: RequestAttributionContext): Reques
      * roster does not know (a person's typed name, an old bundle's id
      * nothing attached under) passes through exactly as claimed.
      */
-    /** The 400 every comment route answers the shared category with.
-     *  One message, the same fix named, so a peer launched without a
-     *  name learns it from the first refusal rather than from silence. */
-    const refuseCategoryAuthor = (): Response =>
-      j(400, { error: AUTHOR_REQUIRED_ERROR, message: AUTHOR_REQUIRED_MESSAGE });
-
     const stampRosterAgent = (claimed: User | undefined): User | undefined => {
       if (!claimed || typeof claimed !== 'object' || typeof claimed.id !== 'string') {
         return claimed;
