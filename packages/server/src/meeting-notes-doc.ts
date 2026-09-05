@@ -597,6 +597,27 @@ export function withServerNotesSinks(
       console.error(`[meeting-notes] ${message}`);
       options.onError?.(message);
     },
+    // ONE LINE PER MEETING, and the reason it exists is that there were
+    // none. A meeting reported as "skipping chunks" left nothing in the log
+    // to check the claim against: the pipeline spoke only when a stage threw,
+    // so a meeting whose notes quietly covered half of what was said read
+    // exactly like a healthy one. This is the coverage, stated at the stop.
+    onMeetingSummary: (summary): void => {
+      const plural = (n: number, one: string): string => `${n} ${one}${n === 1 ? '' : 's'}`;
+      const line =
+        `[meeting-notes] ${summary.docId} meeting ${summary.meetingId}: ` +
+        `${plural(summary.ticks, 'tick')} over ${plural(summary.turnsSettled, 'settled turn')}, ` +
+        `${plural(summary.turnsLost, 'turn')} in no note` +
+        (summary.composeFailures > 0
+          ? `, ${plural(summary.composeFailures, 'failed compose')}`
+          : '');
+      // Only a meeting that actually lost words is an error. A clean one is
+      // still logged, because the absence of a line is not evidence that a
+      // meeting went well — it is evidence that nothing was written down.
+      if (summary.turnsLost > 0) console.error(line);
+      else console.log(line);
+      options.onMeetingSummary?.(summary);
+    },
     onSessionStart: (ids): void => {
       // A new recording on this doc: whatever the previous one wrote is
       // finished writing. Releasing the claims is what makes stop-and-restart
