@@ -24,6 +24,22 @@ they are not restated here.
 
 *Enforced by:* `bun run test:audit` (ratcheted, CI), on top of the four gates.
 
+## The architecture map is current
+
+A PR that adds, removes or moves a **top-level module** — a file or a
+directory sitting directly in `packages/<pkg>/src/` — updates
+[docs/architecture/overview.md](../../docs/architecture/overview.md) in the
+same PR. A file added *inside* a directory the diagram already draws is not
+one: the overview draws `routes/`, not its handlers.
+
+The gate checks that the doc changed, not that it names the module — the
+overview groups modules into subsystems and uses globs, so a name-matching
+check would demand a shape the doc deliberately does not have. If the module
+genuinely does not change the picture, say so in a line of the subsystem it
+joined, so the next reader knows it was considered rather than missed.
+
+*Enforced by:* `bun run check:architecture` (CI).
+
 ## Strict types
 
 `tsconfig.base.json` is `strict`, plus `noUnusedLocals`, `noUnusedParameters`,
