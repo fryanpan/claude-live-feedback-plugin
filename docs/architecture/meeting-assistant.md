@@ -1857,7 +1857,7 @@ microphone config) · `packages/server/src/recall.ts` (vendor
 client) · `recall-turns.ts` (frames → turns, naming) · `recall-status.ts` +
 `recall-webhook-auth.ts` (bot state, signatures) · `recall-meeting.ts` (the
 bot lifecycle) · `packages/core/src/meeting-bot.ts` (wire contract) ·
-`packages/workspaces-app/src/meeting-bot-row.ts` (UI) ·
+`packages/workspaces-app/src/meeting-bot-client.ts` (UI) ·
 `packages/core/src/meeting-timing.ts` +
 `packages/workspaces-app/src/meeting-timing-client.ts` (the `?timing=1`
 latency measurement) · `scripts/room-labels-check.ts` +
