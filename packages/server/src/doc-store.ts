@@ -11,8 +11,8 @@ import {
 import { join } from 'node:path';
 import {
   type Anchor,
-  type DocHome,
   type DocMeta,
+  type DocOriginRepo,
   type DocType,
   type ReviewItemJudgement,
   type ReviewPayload,
@@ -77,7 +77,6 @@ import {
   refreshWorkspace as refreshWorkspaceImpl,
   setWorkspaceGroups as setWorkspaceGroupsImpl,
 } from './binds.ts';
-import { resolveHomeCheckout } from './doc-home.ts';
 import {
   type DocIdAuthority,
   ReservedDocIdError,
@@ -96,6 +95,7 @@ import {
   unstageDocIndex,
   writeDocIndex,
 } from './doc-index.ts';
+import { resolveOriginRepoCheckout } from './doc-origin-repo.ts';
 import { DOC_STORE_TIMINGS } from './doc-store-timings.ts';
 import { deleteMockupCapture } from './mockup-capture.ts';
 import {
@@ -250,7 +250,7 @@ export interface DocRoom {
   revisionTimer?: ReturnType<typeof setTimeout> | null;
 }
 
-/** A file leaf in the workspace tree (a single bound review doc). */
+/** A file leaf in the workspace tree (a single bound attachment). */
 export interface WorkspaceFileNode {
   type: 'file';
   docId: string;
@@ -376,7 +376,7 @@ export class DocStore {
   /**
    * Everything that keeps a live doc and a file on disk saying the same
    * thing, behind the handle it needs from this lifecycle (`file-binding.ts`).
-   * The binding map, the mtime sweep, the write-back debounce and the doc-home
+   * The binding map, the mtime sweep, the write-back debounce and the doc-origin-repo
    * pin all live there; what stays here is the room they act on.
    */
   private readonly bindings = new FileBindings(this.bindingHost());
@@ -1066,7 +1066,7 @@ export class DocStore {
   }
 
   /**
-   * Permanently remove a review doc: drop the in-memory room, cancel its
+   * Permanently remove an attachment: drop the in-memory room, cancel its
    * timers, and delete the persisted `.ydoc` so it doesn't reload on the
    * next restart. The bound SOURCE file (sourceUrl) is the user's own file
    * and is left untouched.
@@ -1289,10 +1289,10 @@ export class DocStore {
     // .ydoc, no binding, the pin persists for the next resolve.
     const home = room.meta.docHome;
     if (home && !isBoardOwnedDoc(docId) && contentKind(room.meta.type) === 'prose') {
-      const placement = resolveHomeCheckout(home);
+      const placement = resolveOriginRepoCheckout(home);
       if (!placement.placed) {
         console.warn(
-          `[doc-store] ${docId}: doc home unplaced at hydrate (${placement.reason}); writes parked`,
+          `[doc-store] ${docId}: doc origin repo unplaced at hydrate (${placement.reason}); writes parked`,
         );
         return false;
       }
@@ -1341,7 +1341,7 @@ export class DocStore {
    * request the whole server is waiting on.
    *
    * `'unavailable'` means the path has already refused to answer inside the
-   * deadline. The doc parks exactly like an unplaced doc home: content stays
+   * deadline. The doc parks exactly like an unplaced doc origin repo: content stays
    * in the `.ydoc`, no binding, and the next hydrate after the backoff tries
    * again. Nothing here opens the file.
    *
@@ -1421,7 +1421,7 @@ export class DocStore {
    * everything else while its file is opened.
    *
    * Re-running `hydrateDoc` is deliberate over re-implementing the attach
-   * here: it is the same code that decides doc-home placement, prose versus
+   * here: it is the same code that decides doc-origin-repo placement, prose versus
    * flat, and write-back eligibility, and a second copy of that decision is
    * exactly the drift this method would be worth avoiding. The retry finds
    * the bytes in `boundFiles.takeFresh` and binds; a read that failed left a
@@ -1496,7 +1496,7 @@ export class DocStore {
     if (!meta) return;
     let path: string | undefined;
     if (meta.docHome && contentKind(meta.type) === 'prose') {
-      const placement = resolveHomeCheckout(meta.docHome);
+      const placement = resolveOriginRepoCheckout(meta.docHome);
       path = placement.placed ? placement.absPath : undefined;
     } else {
       path = meta.sourceUrl;
@@ -2381,7 +2381,7 @@ export class DocStore {
 
   /**
    * Bind a whole folder/worktree for review. Scans the folder for
-   * supported files, creates one review doc per file grouped under a
+   * supported files, creates one attachment per file grouped under a
    * single review id, and returns the resulting file list plus a
    * record of anything skipped.
    *
@@ -2532,34 +2532,34 @@ export class DocStore {
     return this.bindings.attachFlatFile(docId, filePath, opts);
   }
 
-  /** Pin a doc to its repo home: repo + branch + relPath. */
-  setDocHome(
+  /** Pin a doc to its origin repo: repo + branch + relPath. */
+  setDocOriginRepo(
     docId: string,
     input: unknown,
   ):
     | {
         ok: true;
-        home: DocHome;
+        home: DocOriginRepo;
         placement: { placed: true; path: string } | { placed: false; reason: string };
       }
     | { ok: false; error: 'not-found' | 'invalid-home' | 'not-markdown'; detail?: string } {
-    return this.bindings.setDocHome(docId, input);
+    return this.bindings.setDocOriginRepo(docId, input);
   }
 
   /** Unpin: the doc keeps whatever binding it has. */
-  clearDocHome(docId: string): { ok: boolean } {
-    return this.bindings.clearDocHome(docId);
+  clearDocOriginRepo(docId: string): { ok: boolean } {
+    return this.bindings.clearDocOriginRepo(docId);
   }
 
   /** The pin plus where it resolves right now — for doc status surfaces. */
-  docHomeStatus(docId: string):
+  docOriginRepoStatus(docId: string):
     | {
-        home: DocHome;
+        home: DocOriginRepo;
         placement: { placed: true; path: string } | { placed: false; reason: string };
         boundPath?: string;
       }
     | undefined {
-    return this.bindings.docHomeStatus(docId);
+    return this.bindings.docOriginRepoStatus(docId);
   }
 
   /** Force a re-parse of the bound file into the live doc. */

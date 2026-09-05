@@ -11,7 +11,7 @@ import { BOARD_BOOT_SOURCES } from './support/board-boot-sources.ts';
  * in the system font stack — while every nav icon beside it is a stroked
  * 24×24 SVG on `currentColor`. It achieved "distinct" and read as unfinished,
  * on the one control Bryan reaches for most. Two more emoji mics were on the
- * same screen: the capture composer's `🎤` and the review doc's own `🎙`.
+ * same screen: the capture composer's `🎤` and the attachment's own `🎙`.
  *
  * The focus half of that pass was reported as a MISSING ring and is not one.
  * Measured 2026-08-21 in headless Chrome, ten Tab presses from the top of a

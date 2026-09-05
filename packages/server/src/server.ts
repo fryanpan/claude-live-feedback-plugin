@@ -5,8 +5,8 @@ import {
   type User,
   type WebhookPayload,
   agentIdForName,
+  attachmentIdOf,
   contentKind,
-  reviewIdOf,
 } from '@feedback/core';
 import { createAccessDeps } from './access-deps.ts';
 import { releaseActivityLock } from './activity-lock.ts';
@@ -14,6 +14,7 @@ import { AgentNoteRing } from './agent-notes.ts';
 import { AgentWatches } from './agent-watches.ts';
 import { AllowRuleProposals } from './allow-rules.ts';
 import { ARTIFACT_CHECK_ACTOR, ArtifactChecker } from './artifact-check.ts';
+import { backfillAttachmentFiling } from './attachment-backfill.ts';
 import {
   createLegacyAgentWarner,
   agentTokenKey as deriveAgentTokenKey,
@@ -54,7 +55,6 @@ import { scanSettledDocRefs } from './refs-backfill.ts';
 import { createOriginPolicy, createRequestAdmission } from './request-admission.ts';
 import { createRequestAttribution } from './request-attribution.ts';
 import { listArchivedReviews, readDocArchiveManifest } from './review-archive.ts';
-import { backfillReviewFiling } from './review-backfill.ts';
 import { createReviewGate } from './review-gate.ts';
 import type { ReviewThreadItem } from './review-queue.ts';
 import {
@@ -1229,7 +1229,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * that is a security decision rather than an addressing one.
    */
   const resolveWorkspaceForDoc = (docId: string): string | null =>
-    backTargetFor(docId, reviewIdOf(docStore.peekMeta(docId) ?? {}))?.id ?? null;
+    backTargetFor(docId, attachmentIdOf(docStore.peekMeta(docId) ?? {}))?.id ?? null;
 
   // Browser push, and the review-item quality gate that decides whether an
   // item may be announced at all. Built HERE rather than beside the other
@@ -1269,29 +1269,31 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   });
 
   /**
-   * File every review that predates `fileUnderBoardWorkspace` onto a workspace,
-   * once per boot and never twice. See review-backfill.ts for why this is
-   * needed and why it is safe to re-run; the short version is that 20 of the
-   * 23 reviews in the live data dir were created before filing existed, and a
-   * review with no workspace has no address under `/workspaces/<id>/…`.
+   * File every attachment set that predates `fileUnderBoardWorkspace` onto a
+   * workspace, once per boot and never twice. See attachment-backfill.ts for
+   * why this is needed and why it is safe to re-run; the short version is that
+   * 20 of the 23 sets in the live data dir were created before filing existed,
+   * and a set with no workspace has no address under `/workspaces/<id>/…`.
    */
-  const runReviewBackfill = (): void => {
-    const res = backfillReviewFiling({
+  const runAttachmentBackfill = (): void => {
+    const res = backfillAttachmentFiling({
       docs: () => docStore.list(),
-      isFiled: (reviewId) => taskStore.workspaceOfDoc(reviewId) !== null,
-      file: (reviewId) => fileUnderBoardWorkspace(reviewId),
+      isFiled: (attachmentId) => taskStore.workspaceOfDoc(attachmentId) !== null,
+      file: (attachmentId) => fileUnderBoardWorkspace(attachmentId),
     });
     if (res.filed.length > 0) {
       console.log(
-        `[reviews] filed ${res.filed.length} previously unfiled review(s) onto a workspace:`,
-        res.filed.map((r) => `${r.reviewId}→${r.workspaceId}`).join(', '),
+        `[attachments] filed ${res.filed.length} previously unfiled attachment set(s) onto a workspace:`,
+        res.filed.map((r) => `${r.attachmentId}→${r.workspaceId}`).join(', '),
       );
     }
     if (res.failed.length > 0) {
-      console.error(`[reviews] could not file: ${res.failed.join(', ')} (will retry next boot)`);
+      console.error(
+        `[attachments] could not file: ${res.failed.join(', ')} (will retry next boot)`,
+      );
     }
   };
-  runReviewBackfill();
+  runAttachmentBackfill();
 
   /**
    * The origin policy every CORS decision and the cross-origin write gate
@@ -2233,7 +2235,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    *
    * Covers BOTH surfaces a thread can live on, and the second one is not a
    * nicety: the thread that asked you for something is very often a comment
-   * on a markdown review doc, not a task. A version of this that answered
+   * on a markdown attachment, not a task. A version of this that answered
    * only for `task:` docs would hand back nothing on the commonest reply
    * path — reintroducing, one surface over, exactly the friction the whole
    * change exists to remove.

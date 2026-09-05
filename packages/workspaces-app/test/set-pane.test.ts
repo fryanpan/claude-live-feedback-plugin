@@ -1,5 +1,5 @@
 /**
- * The review-set sidebar: collapsed by default, opened by choice, no title row.
+ * The attachment-set sidebar: collapsed by default, opened by choice, no title row.
  *
  * Two rounds of Bryan's feedback on an iPad, 2026-08-19, and the second one
  * retired the first's mechanism:
@@ -59,7 +59,7 @@ function chrome(width: number, open: boolean) {
   };
 }
 
-describe('review-set sidebar', () => {
+describe('attachment-set sidebar', () => {
   it('renders no title row above the doc list', () => {
     expect(HTML).not.toContain('set-pane-header');
     expect(HTML).not.toContain('In this review');
@@ -169,7 +169,7 @@ describe('initialSetPaneOpen', () => {
  * column with nothing in it; gate only the grid and the sidebar renders into a
  * track that no longer exists.
  */
-describe('review-set sidebar visibility', () => {
+describe('attachment-set sidebar visibility', () => {
   let sheets = () => {};
   beforeEach(() => {
     sheets = installSheets('styles.css', 'doc.css');

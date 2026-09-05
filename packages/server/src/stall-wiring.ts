@@ -33,10 +33,10 @@ import { join } from 'node:path';
 import {
   type WebhookPayload,
   agentIdCandidates,
+  attachmentIdOf,
   isReviewPayloadGated,
   isReviewPayloadHeld,
   pendingDeclaration,
-  reviewIdOf,
 } from '@feedback/core';
 import type { AgentWatches } from './agent-watches.ts';
 import type { DispatchRegistry } from './dispatch-registry.ts';
@@ -131,7 +131,7 @@ export interface StallWiringContext {
   boardsForDoc: (docId: string) => Set<string>;
   /** The board a doc belongs back to, for the lead-presence monitor. Same
    *  module, same reason it can be a value. */
-  backTargetFor: (docId: string, reviewId?: string) => { id: string; name: string } | null;
+  backTargetFor: (docId: string, attachmentId?: string) => { id: string; name: string } | null;
   /** The paste-ready call that ends a hold, per surface — the review gate's
    *  own spelling, so the lead's report cannot name a different verb from
    *  the one the filer was told to call. Same reason it is a function: the
@@ -872,7 +872,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
   // EVERY other doc room needs the same bridge, for the same reason and with
   // one extra hop. `docStore.broadcastToRoom` fans out on `ws~<meta.workspaceId>`
   // — the GROUPING tag a diff review or folder bind sets — and a board link is
-  // not that tag, so a plain review doc filed on a board reached that board's
+  // not that tag, so a plain attachment filed on a board reached that board's
   // agent never. Measured: a session with six docs under `watch_doc` and a
   // seat on the board heard nothing from any of them on the board channel, and
   // silence from a subscription you never made is indistinguishable from
@@ -988,14 +988,14 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
     // Exactly one hop from review to board — the same non-transitive rule
     // `shareWorkspacesOf` spells out, so what an agent HEARS about a review
     // and what a share visitor may OPEN in it cannot drift apart.
-    const reviewId = reviewIdOf(docStore.peekMeta(docId) ?? {});
+    const attachmentId = attachmentIdOf(docStore.peekMeta(docId) ?? {});
     for (const board of boardsForDoc(docId)) {
       const rows = queueCommentRows(board, docId, payload);
       // doc-store.ts already broadcast on the review's own channel; a second
       // send here would deliver the same comment twice to one listener. The
       // review frames carried no row id, so those rows are acked off the
       // grace-window redelivery instead — late receipt beats double frame.
-      if (board !== reviewId) {
+      if (board !== attachmentId) {
         sse.broadcast(`ws~${board}`, payload, (who) => {
           const rowId = who.agentId ? rows.get(who.agentId) : undefined;
           return rowId ? { ...payload, workspaceId: board, commentQueueId: rowId } : undefined;

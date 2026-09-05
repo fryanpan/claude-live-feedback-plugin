@@ -7,7 +7,7 @@
       content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1"
     />
     <!-- The product name alone, on purpose: this shell is served for EVERY
-         review doc, so any name here would be the same name on every tab.
+         attachment, so any name here would be the same name on every tab.
          The chrome replaces it with the doc's own name as soon as the label
          resolves (review-chrome.ts → tab-title.ts). -->
     <title>Workspaces</title>
@@ -33,11 +33,11 @@
     <div id="shell">
       <header id="topbar">
         <div class="doc-crumb">
-          <a href="/" class="back-link" title="All review docs" aria-label="Back to all review docs">←</a>
+          <a href="/" class="back-link" title="All attachments" aria-label="Back to all attachments">←</a>
           <!-- Opens the persistent doc list beside the prose. Collapsed by
                default so the prose gets the width; the choice is remembered
                per browser. Only rendered ≥1101px and only when the doc is
-               part of a review set — below that the topbar dropdown is the
+               part of an attachment set — below that the topbar dropdown is the
                whole nav. -->
           <button
             type="button"
@@ -45,7 +45,7 @@
             class="icon-btn"
             title="Show doc list"
             aria-pressed="false"
-            aria-label="Show the list of docs in this review"
+            aria-label="Show the list of docs in this attachment set"
           >
             ▤
           </button>
@@ -194,7 +194,7 @@
         id="doc-menu"
         class="doc-menu hidden"
         role="menu"
-        aria-label="Pick a doc in this review set"
+        aria-label="Pick a doc in this attachment set"
         aria-hidden="true"
       ></nav>
       <main id="main">
@@ -203,7 +203,7 @@
              visible and JS populates the list). On mobile (<1100px) the
              sidebar collapses to free up space; the dropdown above is
              the only nav. -->
-        <aside id="set-pane" aria-label="Docs in this review set" aria-hidden="true">
+        <aside id="set-pane" aria-label="Docs in this attachment set" aria-hidden="true">
           <ol id="set-pane-list"></ol>
         </aside>
         <section id="editor-pane">

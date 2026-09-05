@@ -33,7 +33,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
-import { reviewIdOf } from '@feedback/core';
+import { attachmentIdOf } from '@feedback/core';
 import type { DocType } from '@feedback/core';
 import type { BrowserSentryConfig, PageType } from '../browser-sentry.ts';
 import { injectSentryHead } from '../browser-sentry.ts';
@@ -178,8 +178,8 @@ export function createShellStatic(ctx: ShellStaticContext): ShellStatic {
    * `create_diff_review` returns. Alphabetical order would land the reviewer
    * on dotfile and config noise on any large review.
    */
-  const reviewEntryDocId = (reviewId: string): string | null => {
-    const members = docStore.list().filter((m) => reviewIdOf(m) === reviewId);
+  const reviewEntryDocId = (attachmentId: string): string | null => {
+    const members = docStore.list().filter((m) => attachmentIdOf(m) === attachmentId);
     if (members.length === 0) return null;
     const best = members.reduce((a, b) =>
       (b.diffAdditions ?? 0) + (b.diffDeletions ?? 0) >

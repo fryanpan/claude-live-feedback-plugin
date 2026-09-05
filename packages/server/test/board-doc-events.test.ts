@@ -3,7 +3,7 @@
  *
  * The measured gap: an agent that attached to a board and watches
  * `/events/workspace/<boardId>` hears task events and task-body comments, and
- * hears NOTHING from a plain review doc filed on that same board. The fan-out
+ * hears NOTHING from a plain attachment filed on that same board. The fan-out
  * in `doc-store.ts` is keyed on `meta.workspaceId` — the GROUPING tag a diff
  * review or folder bind sets — and a board link is not that tag. So a doc
  * created after the agent took its seat is silent, and silence from a

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
-import { type DocMeta, type DocType, reviewIdOf } from '@feedback/core';
+import { type DocMeta, type DocType, attachmentIdOf } from '@feedback/core';
 import type { BindDiffOpts } from './bind-diff.ts';
 import type { DocRoom } from './doc-store.ts';
 import type { DiffFileEntry } from './git-diff.ts';
@@ -145,7 +145,7 @@ export function rememberWorkspaceConfig(
   if (opts.maxFiles !== undefined) next.push(['workspaceMaxFiles', opts.maxFiles]);
   if (next.length === 0) return;
   for (const m of host.list()) {
-    if (reviewIdOf(m) === setId) writeMeta(host, m.docId, next);
+    if (attachmentIdOf(m) === setId) writeMeta(host, m.docId, next);
   }
 }
 

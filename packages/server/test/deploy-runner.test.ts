@@ -361,7 +361,7 @@ describe('runDeploy — the refusals', () => {
 
   it('deploys over a modified file the pull does not touch', async () => {
     // The positive control for the case above, on the same shape: a bound
-    // review doc under docs/ is modified for hours at a time in the deploy
+    // attachment under docs/ is modified for hours at a time in the deploy
     // source, and blocking on it would make the feature unusable.
     const git = fakeGit({ ...behindScript(), [STATUS]: { ok: true, stdout: ' M docs/plan.md\0' } });
     const res = await runDeploy(deps({ git: git.run, readSource: movingSource('a', 'b', git) }));

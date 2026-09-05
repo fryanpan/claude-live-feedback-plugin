@@ -31,7 +31,7 @@
  * change cannot restart. The filters below apply in both modes.
  */
 import type { DocMeta } from '@feedback/core';
-import { reviewIdOf } from '@feedback/core';
+import { attachmentIdOf } from '@feedback/core';
 
 /** The page size when a paged caller names none. */
 export const DEFAULT_PAGE_LIMIT = 50;
@@ -231,7 +231,7 @@ export function compactDocRow(
   if (meta.title !== undefined) row.title = meta.title;
   if (meta.sourceUrl !== undefined) row.sourceUrl = meta.sourceUrl;
   if (meta.relPath !== undefined) row.relPath = meta.relPath;
-  const setId = reviewIdOf(meta);
+  const setId = attachmentIdOf(meta);
   if (setId !== undefined) row.setId = setId;
   if (extras.boardId) row.boardId = extras.boardId;
   if (meta.lastActivityAt !== undefined) row.lastActivityAt = meta.lastActivityAt;

@@ -276,8 +276,8 @@ export function renderBoardShell(
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
     <title>${safeName} · Workspaces</title>
     <!-- Two shells, two copies. Kept in step with packages/workspaces-app/index.html
-         on purpose: an install started from the board and one started from a
-         review doc have to produce the same web app, and on iOS the Home
+         on purpose: an install started from the board and one started from
+         an attachment have to produce the same web app, and on iOS the Home
          Screen install is what makes push available at all. -->
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
@@ -357,7 +357,7 @@ export function renderReviewNotFound(docId: string): string {
 h1{font-size:22px}code{background:#f3f3f3;padding:1px 5px;border-radius:3px;font-size:90%}
 small{color:#777}</style>
 <h1>Doc not found</h1>
-<p>No review doc exists for <code>${safe}</code>. Markdown review docs are
+<p>No attachment exists for <code>${safe}</code>. Markdown attachments are
 created by an agent calling <code>POST /api/docs</code> with a
 <code>sourceUrl</code> pointing at a markdown file on disk.</p>
 <p>Ask the agent who shared this URL to create the doc, then refresh this page.</p>
@@ -369,7 +369,7 @@ created by an agent calling <code>POST /api/docs</code> with a
 // `/` is a list of active workspaces to open up — see the header of
 // `landing.ts` for what that sentence is quoting and what it deliberately
 // leaves out. The project → artifacts model below serves `/projects/<owner>`,
-// the on-demand index of review docs. It groups by PROJECT (the creating
+// the on-demand index of attachments. It groups by PROJECT (the creating
 // agent's cwd = doc.owner; 'ungrouped' when absent), and within a project
 // lists ARTIFACTS. An artifact is one of:
 //   - a workspace (bound folder/worktree; docs sharing a workspaceId) →
@@ -470,14 +470,14 @@ export function collectLandingWorkspaces(
   });
 }
 
-/** Every project owner that has at least one review doc — the links behind
- *  the review-docs fold. Names only; the artifacts stay on the project page. */
+/** Every project owner that has at least one attachment — the links behind
+ *  the attachments fold. Names only; the artifacts stay on the project page. */
 export function collectLandingProjects(
   docStore: DocStore,
 ): Array<{ owner: string; label: string }> {
   const owners = new Set<string>();
   for (const meta of docStore.list()) {
-    // Infrastructure, not review content: the shared hub-feedback doc exists
+    // Infrastructure, not attachment content: the shared hub-feedback doc exists
     // on every install from startup, and `ws:`/`task:` rooms are surfaces the
     // server owns for the boards the page already lists.
     if (meta.docId === BOARD_FEEDBACK_DOC_ID) continue;
@@ -704,7 +704,7 @@ details > summary{display:flex;align-items:baseline;gap:8px;cursor:pointer;list-
 details > summary::-webkit-details-marker{display:none}
 details > summary::before{content:'\\25B8';color:#8b95a1;font-size:11px;flex-shrink:0}
 details[open] > summary::before{content:'\\25BE'}
-/* The landing page's folded sections (inactive workspaces, review docs).
+/* The landing page's folded sections (inactive workspaces, attachments).
    Styled like the h2s so a fold reads as a section heading you can open —
    quiet on purpose: the page is the active list, the folds are the archive. */
 .fold{margin-top:26px}
@@ -801,13 +801,13 @@ export function renderLanding(
       ? ''
       : `<details class="fold"><summary>Retired workspaces <span class="count">${model.retired.length}</span></summary>
 <ul>${model.retired.map(renderLandingWorkspaceRow).join('')}</ul></details>`;
-  // The review-doc index stays reachable — one fold of per-project links,
-  // not a browser. The "hundreds of bound review items" live behind
+  // The attachment index stays reachable — one fold of per-project links,
+  // not a browser. The "hundreds of bound attachments" live behind
   // /projects/<owner>, fetched only when somebody opens one.
   const projects =
     model.projects.length === 0
       ? ''
-      : `<details class="fold"><summary>Review docs by project <span class="count">${model.projects.length}</span></summary>
+      : `<details class="fold"><summary>Attachments by project <span class="count">${model.projects.length}</span></summary>
 <ul>${model.projects.map(renderLandingProjectLink).join('')}</ul></details>`;
   // Every row with a waiting count, page order (active first, then the
   // quiet fold — an item on a quiet board still waits). The bar totals them

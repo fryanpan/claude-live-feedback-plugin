@@ -249,7 +249,7 @@ describe('web app shells', () => {
     const { workspace } = (await created.json()) as { workspace: { id: string } };
     const html = await (await fetch(`${base}/workspaces/${workspace.id}`)).text();
     // Two shells, two hand-written heads — an install started from the board
-    // has to produce the same web app as one started from a review doc.
+    // has to produce the same web app as one started from an attachment.
     expect(html).toContain('rel="manifest"');
   });
 });

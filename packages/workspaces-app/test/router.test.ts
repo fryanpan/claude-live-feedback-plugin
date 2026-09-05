@@ -221,7 +221,7 @@ describe('router', () => {
    */
   describe('back arrow', () => {
     const crumb = () =>
-      '<div class="doc-crumb"><a href="/" class="back-link" title="All review docs" aria-label="Back to all review docs">←</a></div>';
+      '<div class="doc-crumb"><a href="/" class="back-link" title="All attachments" aria-label="Back to all attachments">←</a></div>';
     const backHref = () =>
       document.querySelector('.doc-crumb .back-link')?.getAttribute('href') ?? null;
 

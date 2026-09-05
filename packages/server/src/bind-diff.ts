@@ -9,7 +9,7 @@
  */
 import { existsSync } from 'node:fs';
 import { join, relative, resolve as resolvePath, sep } from 'node:path';
-import { type DocMeta, type DocType, reviewIdOf } from '@feedback/core';
+import { type DocMeta, type DocType, attachmentIdOf } from '@feedback/core';
 import {
   type BindHost,
   DEFAULT_MAX_FILES,
@@ -246,7 +246,7 @@ export async function bindDiff(host: BindHost, opts: BindDiffOpts): Promise<Bind
   // working-tree mode only the base is pinned — the target side is live
   // by design.)
   for (const meta of host.list()) {
-    if (reviewIdOf(meta) !== reviewId || meta.type !== 'diff') continue;
+    if (attachmentIdOf(meta) !== reviewId || meta.type !== 'diff') continue;
     if (meta.diffBase !== base || (meta.diffTarget ?? null) !== target) {
       return { ok: false, error: 'review-exists-different-range' };
     }

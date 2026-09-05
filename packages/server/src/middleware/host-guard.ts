@@ -1184,7 +1184,7 @@ function pathWorkspaces(pathname: string, workspacesOf?: (id: string) => string[
  * websocket (that's the point of a live review) and comment through the
  * thread routes — but the doc's OPERATOR verbs stay local-only:
  *
- *   DELETE <doc>        destroys the review doc
+ *   DELETE <doc>        destroys the attachment
  *   POST content        replaces the whole document in one call
  *   POST reparse_from_disk  discards live state, including others' edits
  *   POST threads/<id>/{rewrite_region,insert_after,insert_blocks_after}

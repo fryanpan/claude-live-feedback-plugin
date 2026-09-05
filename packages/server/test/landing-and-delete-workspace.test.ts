@@ -104,7 +104,7 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     standaloneId = (await j<{ docId: string }>(sr)).docId;
   });
 
-  it('GET / renders a project LINK for the review docs and NOT their artifacts', async () => {
+  it('GET / renders a project LINK for the attachments and NOT their artifacts', async () => {
     const r = await fetch(`${base}/`);
     expect(r.ok).toBe(true);
     const html = await r.text();
@@ -113,10 +113,10 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     // MUST ship the responsive viewport meta or it renders at ~980px and
     // scales down to unreadable on a phone.
     expect(html).toContain('name="viewport"');
-    // The review docs surface as one per-project link behind the fold,
+    // The attachments surface as one per-project link behind the fold,
     // deriving from the owner cwd basename and linking to the project's own
     // on-demand page.
-    expect(html).toContain('Review docs by project');
+    expect(html).toContain('Attachments by project');
     expect(html).toContain('alpha');
     expect(html).toContain(`/projects/${encodeURIComponent('/proj/alpha')}`);
 

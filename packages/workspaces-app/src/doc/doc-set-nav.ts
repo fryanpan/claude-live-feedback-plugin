@@ -45,7 +45,7 @@ export interface DocSetNav {
 export function mountDocSetNav(opts: DocSetNavOptions): DocSetNav {
   const { docId, navDocId, ydoc, scope } = opts;
 
-  // ---- Review-set navigation ----
+  // ---- Attachment-set navigation ----
   // If the doc has a setId/workspaceId, render its siblings into the sidebar
   // and topbar dropdown. The sidebar renderers are idempotent per nav key, so
   // navigating between files in the same review keeps the sidebar (and its
@@ -139,7 +139,7 @@ export function mountDocSetNav(opts: DocSetNavOptions): DocSetNav {
       if (docMenu) docMenu.innerHTML = `<ol>${items}</ol>`;
       setSidebarSignature(sig);
       // On mobile, the desktop sidebar is hidden — the dropdown is the ONLY
-      // surface that shows the review set. Open it on first render so the
+      // surface that shows the attachment set. Open it on first render so the
       // reviewer sees siblings without discovering the doc-switcher tap
       // target. The scroll-to-close handler dismisses it once they engage.
       const isMobile = window.matchMedia('(max-width: 1100px)').matches;
