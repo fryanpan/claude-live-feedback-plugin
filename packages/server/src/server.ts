@@ -37,6 +37,7 @@ import { MeetingRelay } from './meeting-protocol.ts';
 import { MEETING_CAPTURE_ACTOR } from './meeting-task-capture.ts';
 import { MeetingStore } from './meetings.ts';
 import { isAllowedBrowserOrigin } from './middleware/browser-origin.ts';
+import { resolveWorkspaceScope } from './middleware/workspace-scope.ts';
 import { isGatedWrite, signInRequiredBody } from './middleware/write-gate.ts';
 import { spokenLinkRef } from './notes-link-intent.ts';
 import {
@@ -1913,6 +1914,39 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (streamed) {
           if (streamed.kind === 'upgraded') return undefined;
           return streamed.response;
+        }
+
+        // ── The workspace scope ── see middleware/workspace-scope.ts.
+        //
+        // ONE resolver for every canonical `/workspaces/<id>/…` request, run
+        // once here rather than at the top of each handler. It answers two
+        // questions and refuses on either: does this board exist, and does the
+        // row named under it belong to it. That second question only became
+        // askable when the board went into the path — `/api/goals/<id>` named
+        // a row and left the server to find its board, so "a goal on somebody
+        // else's board" was not a shape a request could have.
+        //
+        // Placed BELOW the stream block, because a websocket upgrade and an
+        // SSE open are taken over rather than answered, and ABOVE every REST
+        // handler, because the whole point is that no handler resolves a board
+        // for itself. Whether the CALLER may reach the board is not asked here
+        // — `shareScopeAllows` in the host guard has already answered it, and
+        // a second copy of that rule is the thing this file exists to remove.
+        //
+        // `pass` means the path is not its business: not under `/workspaces/`,
+        // or one of the board's HTML pages, which the shell at the tail of the
+        // chain serves with its own not-found.
+        {
+          const scoped = resolveWorkspaceScope(
+            {
+              workspaceExists: (id) => taskStore.getWorkspace(id) !== undefined,
+              workspaceOfRow: (rowId) =>
+                taskStore.getGoalRow(rowId)?.workspaceId ?? taskStore.getTask(rowId)?.workspaceId,
+              j,
+            },
+            { pathname, method: req.method, url },
+          );
+          if (scoped.kind === 'refused') return scoped.response;
         }
 
         // --- REST: run the summary backfill on request --- see
