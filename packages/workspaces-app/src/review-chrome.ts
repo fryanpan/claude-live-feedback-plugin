@@ -298,7 +298,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     max: () => Math.min(600, Math.round(window.innerWidth * 0.45)),
     widthFromPointer: (e) => e.clientX,
     handleClass: 'set-resize',
-    label: 'Resize review panel',
+    label: 'Resize the doc list',
   });
   // Desktop layout shows the drawer inline. Default open — EXCEPT when a
   // balloon margin is visible, where the drawer duplicates the balloons.

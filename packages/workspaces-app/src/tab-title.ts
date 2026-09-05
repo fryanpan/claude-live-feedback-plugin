@@ -31,7 +31,7 @@ export function tabTitle(...parts: Array<string | null | undefined>): string {
 /**
  * The tab-worthy part of a doc's label.
  *
- * A file-backed review doc labels itself with the full path on the host, which
+ * A file-backed attachment labels itself with the full path on the host, which
  * is the one shape a tab handles worst: truncation eats from the right, so
  * `/Volumes/Data/Users/…` would fill the title and the filename — the only
  * part that differs between two open docs — would never appear. An absolute

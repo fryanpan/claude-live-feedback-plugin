@@ -1,6 +1,6 @@
 /**
  * `-dirty` on a client release must mean "built from uncommitted code", and it
- * had stopped meaning that: prod's deploy source hosts bound review documents,
+ * had stopped meaning that: prod's deploy source hosts bound attachments,
  * so a tracked markdown file under `docs/` sits modified for as long as a
  * review is open and every release published in that window was stamped
  * `-dirty` for a reason that had nothing to do with the build. Observed both
@@ -81,7 +81,7 @@ describe('what a modified path means for a release', () => {
       'packages/widget/src/widget.ts',
       // Served live out of the deploy source (`bin.ts` → join(repoRoot,
       // 'demos'), `/demos/*`), so an uncommitted demo really is a changed
-      // artifact — even though demos hold bound review docs too.
+      // artifact — even though demos hold bound attachments too.
       'demos/mockup.html',
       'scripts/serve.ts',
       'package.json',
@@ -194,7 +194,7 @@ describe('against a real checkout', () => {
       const head = clean?.sourceRef ?? '';
       expect(head.length).toBeGreaterThan(0);
 
-      // A bound review doc's ~1s flush, in effect.
+      // A bound attachment's ~1s flush, in effect.
       write(repo, 'docs/product/plans/some-plan.md', '# plan\n\nsecond draft\n');
       const docDirty = readDeploySource(repo);
       expect(docDirty?.sourceRef).toBe(head);

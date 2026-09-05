@@ -1,13 +1,13 @@
 /**
- * The workspace surface of a review: what a bound folder or diff review
- * looks like from the outside, and how it is retired.
+ * The workspace surface of an attachment set: what a bound folder or diff
+ * review looks like from the outside, and how it is retired.
  *
  * Two clusters live here because they are the same subject seen twice. The
  * projections — the tree, the grouped diff, the all-files list, the thread
- * roll-up — all answer "what is in this review", and every one of them is
+ * roll-up — all answer "what is in this set", and every one of them is
  * built by walking `list()` and summing thread counts. The archive verbs
- * answer "this review is finished", and they are the only writers that treat
- * a review's member docs as one unit.
+ * answer "this set is finished", and they are the only writers that treat
+ * a set's member docs as one unit.
  *
  * What is NOT here is the room lifecycle they act on. Hydration, teardown,
  * alias release and the persisted index stay in `doc-store.ts`, reached through
@@ -67,7 +67,7 @@ import { boundFiles } from './slow-fs.ts';
  * `room` resolves an alias and hydrates; `residentRoom` returns only what is
  * already in memory. Archiving uses the second on purpose — it flushes a room
  * that happens to be open, and must not page in the several hundred members
- * of a review nobody is looking at just to retire them.
+ * of a set nobody is looking at just to retire them.
  */
 export interface DocStoreWorkspacePersistence {
   dataDir(): string;

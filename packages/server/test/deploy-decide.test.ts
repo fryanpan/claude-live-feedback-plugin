@@ -80,7 +80,7 @@ describe('decideDeploy', () => {
 
   it('a modified file the pull does not touch does NOT block the deploy', () => {
     // This is the case that decides whether the feature is usable at all.
-    // The deploy source hosts bound review documents, so `docs/**` is
+    // The deploy source hosts bound attachments, so `docs/**` is
     // modified for hours at a time during ordinary editing. A blanket
     // "refuse while dirty" would refuse almost every real deploy — and
     // `git merge --ff-only` itself only refuses when the incoming change

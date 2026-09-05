@@ -276,8 +276,8 @@ export function renderBoardShell(
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
     <title>${safeName} · Workspaces</title>
     <!-- Two shells, two copies. Kept in step with packages/workspaces-app/index.html
-         on purpose: an install started from the board and one started from a
-         attachment have to produce the same web app, and on iOS the Home
+         on purpose: an install started from the board and one started from
+         an attachment have to produce the same web app, and on iOS the Home
          Screen install is what makes push available at all. -->
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
@@ -802,7 +802,7 @@ export function renderLanding(
       : `<details class="fold"><summary>Retired workspaces <span class="count">${model.retired.length}</span></summary>
 <ul>${model.retired.map(renderLandingWorkspaceRow).join('')}</ul></details>`;
   // The attachment index stays reachable — one fold of per-project links,
-  // not a browser. The "hundreds of bound review items" live behind
+  // not a browser. The "hundreds of bound attachments" live behind
   // /projects/<owner>, fetched only when somebody opens one.
   const projects =
     model.projects.length === 0

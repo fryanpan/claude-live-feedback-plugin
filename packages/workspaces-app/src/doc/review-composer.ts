@@ -1,5 +1,5 @@
 /**
- * The two places a person writes on a review document: the comment composer
+ * The two places a person writes on an attachment: the comment composer
  * that opens off a selection, and the full-screen thread view with its reply
  * box.
  *

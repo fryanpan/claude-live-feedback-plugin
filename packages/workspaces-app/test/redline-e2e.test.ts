@@ -6,7 +6,7 @@ import { createRedlineEditor } from '../src/redline/redline-editor.ts';
 /**
  * End-to-end shape check on a realistic document: a reworded sentence, a
  * deleted section, a changed list item, an added section, and an untouched
- * blockquote — the mix a real review doc actually contains.
+ * blockquote — the mix a real attachment actually contains.
  *
  * These exact bytes were produced by a live server (`POST /api/diffs` over a
  * throwaway repo, then `GET /api/docs/:id/diff`), so this pins the behaviour

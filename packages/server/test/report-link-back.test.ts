@@ -21,7 +21,7 @@
  * owns the task path's shape, and `withReviewUrl` owns the doc path's.
  *
  * BOTH surfaces are covered on purpose. The thread that asked you for
- * something is very often a comment on a markdown review doc rather than a
+ * something is very often a comment on a markdown attachment rather than a
  * task, so a version answering only for `task:` docs would hand back nothing
  * on the commonest reply path.
  *
