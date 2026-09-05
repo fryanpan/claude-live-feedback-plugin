@@ -69,7 +69,7 @@ import { backfillReviewFiling } from './review-backfill.ts';
 import { createReviewGate } from './review-gate.ts';
 import { type ReviewJudge } from './review-judge.ts';
 import type { ReviewThreadItem } from './review-queue.ts';
-import { type FeedbackWs, Rooms } from './rooms.ts';
+import { Rooms } from './rooms.ts';
 import {
   type AgentIdentityRoutesContext,
   handleAgentIdentityRoutes,
@@ -110,6 +110,7 @@ import { Shares } from './share/shares.ts';
 import { SharingGate } from './share/sharing-gate.ts';
 import type { ShareConfig } from './share/types.ts';
 import { createShellStatic } from './shell-static.ts';
+import { createSocketHandlers } from './socket-handlers.ts';
 import { claimReplayMarks, saveReplayMarks } from './sse-marks.ts';
 import { HTTP_IDLE_TIMEOUT_SEC, SseHub } from './sse.ts';
 import { createStallWiring } from './stall-wiring.ts';
@@ -127,7 +128,6 @@ import { type UpgradeData, createUpgradeStream } from './upgrade-stream.ts';
 import { UptimeMonitor } from './uptime.ts';
 import { type VoiceComplete, VoiceRouter } from './voice.ts';
 import { type WebhookLogEntry, createWebhookDispatcher } from './webhooks.ts';
-import { onClose, onMessage, onOpen } from './yjs-protocol.ts';
 
 const DEFAULT_PORT = Number(process.env.PORT ?? 8787);
 
@@ -1959,6 +1959,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   });
 
   /**
+   * What an open socket does — see socket-handlers.ts. The partner of the
+   * upgrade run: that decides a socket may open and what is stamped on it,
+   * this is the trio Bun calls afterwards. Composed with the other factories
+   * because all three stores it reads are built above; the stores themselves
+   * are passed, never anything read out of them, so every frame sees the
+   * state as it is when the frame arrives.
+   */
+  const socketHandlers = createSocketHandlers({ rooms, meetingRelay, recallRelay });
+
+  /**
    * Whose name goes on a write — see request-attribution.ts. Composed
    * directly below admission because that is the order the two RUN in: the
    * gate proves who the boundary saw, and attribution ranks those proofs
@@ -2910,92 +2920,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         return new Response('not found', { status: 404 });
       }
     },
-    websocket: {
-      // Yjs sync step 2 hands a fresh tab the WHOLE room state in one binary
-      // frame. Measured over the live hub board's persisted state on
-      // 2026-08-29: 1,264,566 bytes, deflating to 431,733 — 2.9×, or 813 KB
-      // this server stops sending on every board open, every tab, every
-      // reconnect. Every browser offers the extension already; the server
-      // only had to accept it and ask for compression per send.
-      //
-      // How much WALL TIME that buys is a property of the reader's link, and
-      // this repo has no trustworthy measurement of Bryan's — so the claim
-      // here is the byte count, which is measured, and not a number of
-      // seconds, which would not be. Audio frames are opaque and already
-      // codec-compressed; they do not shrink, and the cost is one deflate
-      // context per socket.
-      perMessageDeflate: true,
-      open(ws) {
-        if (ws.data.kind === 'recall') return;
-        if (ws.data.kind === 'audio') {
-          // Before the relay, because the relay's own bookkeeping is a
-          // WeakMap nothing can enumerate: this is what makes the socket
-          // reachable by the share sweeps in `rooms.ts`. A socket carrying
-          // neither stamp — the owner's — is not tracked at all.
-          rooms.trackShareSocket(ws);
-          meetingRelay.onOpen(ws);
-          return;
-        }
-        const typed = ws as unknown as FeedbackWs;
-        const room = rooms.get(typed.data.docId);
-        if (!room) {
-          ws.close(1008, 'no room');
-          return;
-        }
-        onOpen(room, typed);
-      },
-      message(ws, message) {
-        if (ws.data.kind === 'recall') {
-          // Text only. Recall's realtime transcript events are JSON frames;
-          // this endpoint subscribes no binary media, so a binary frame here
-          // is not ours to interpret.
-          if (typeof message === 'string' && ws.data.token) {
-            recallRelay.onSocketText(ws.data.token, message);
-          }
-          return;
-        }
-        if (ws.data.kind === 'audio') {
-          if (typeof message === 'string') {
-            meetingRelay.onText(ws, message);
-            return;
-          }
-          const buf = message as unknown as ArrayBufferView;
-          // COPIED, unlike the yjs path below: audio can be held in the
-          // relay's pending queue across the handshake, and Bun is free to
-          // reuse the receive buffer the moment this returns.
-          meetingRelay.onAudio(
-            ws,
-            new Uint8Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)),
-          );
-          return;
-        }
-        const typed = ws as unknown as FeedbackWs;
-        const room = rooms.get(typed.data.docId);
-        if (!room) return;
-        let data: Uint8Array;
-        if (typeof message === 'string') {
-          data = new TextEncoder().encode(message);
-        } else {
-          // Bun's Buffer extends Uint8Array; copy to plain Uint8Array for y-protocols
-          const buf = message as unknown as ArrayBufferView;
-          data = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-        }
-        onMessage(room, typed, data);
-      },
-      close(ws) {
-        if (ws.data.kind === 'recall') {
-          // NOT the end of the meeting — see RecallMeetingRelay.onSocketClose.
-          if (ws.data.token) recallRelay.onSocketClose(ws.data.token);
-          return;
-        }
-        if (ws.data.kind === 'audio') {
-          rooms.untrackShareSocket(ws);
-          meetingRelay.onClose(ws);
-          return;
-        }
-        onClose(ws as unknown as FeedbackWs);
-      },
-    },
+    // ── Socket handlers ── see socket-handlers.ts. A19 decided the socket
+    // may open and what is stamped on it; this is what Bun calls for the
+    // life of that connection. `close` is synchronous on purpose — the
+    // drain in `stop` below fires it inside `server.stop(true)`, while the
+    // stores its writes land in are still up.
+    websocket: socketHandlers,
   });
 
   // The effort re-scoring pass starts HERE, after the port is bound, not
