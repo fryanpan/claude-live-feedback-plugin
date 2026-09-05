@@ -21,6 +21,7 @@
     "./goal-summary": "./src/goal-summary.ts",
     "./goal-effort": "./src/goal-effort.ts",
     "./identity": "./src/identity.ts",
+    "./note-suggestion": "./src/note-suggestion.ts",
     "./related-work": "./src/related-work.ts",
     "./review-item-id": "./src/review-item-id.ts",
     "./task-blocked": "./src/task-blocked.ts",

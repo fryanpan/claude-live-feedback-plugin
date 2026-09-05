@@ -42,8 +42,22 @@
  * type, no chip and no explanatory sentence.
  */
 
-import { type RelatedWorkCandidate, scoreRelatedWork } from '@feedback/core';
+import {
+  type RelatedWorkCandidate,
+  scoreRelatedWork,
+  suggestionHref,
+  suggestionLabel,
+} from '@feedback/core';
 import type { NoteReference } from './notes-references.ts';
+
+/**
+ * The marker and the words a suggestion is written with live in
+ * `@feedback/core/note-suggestion`, because the CLIENT reads back what this
+ * module writes and two spellings of that contract would drift into a
+ * question nobody can accept. Re-exported here so callers on the server keep
+ * one import.
+ */
+export { SUGGEST_PARAM, acceptedHref, suggestionHref, suggestionLabel } from '@feedback/core';
 
 /**
  * Enough score to LINK a row when somebody asked for one, deliberately below
@@ -87,18 +101,6 @@ export const ASK_AMBIGUITY_MARGIN = 0.08;
  * construction.
  */
 export const MAX_SUGGESTIONS = 2;
-
-/**
- * The query parameter that marks a written link as a QUESTION rather than a
- * citation.
- *
- * A parameter on the row's own URL, not a separate link shape, so everything
- * that already understands a workspace link still understands this one: the
- * href resolves to the task whether or not anything strips the marker, and a
- * reader with no client-side script gets a working link to the row being
- * asked about.
- */
-export const SUGGEST_PARAM = 'suggest';
 
 /** Verbs that ask for a link. Every inflection spelled out: speech conjugates
  *  and a stemmer here would have to be shared with nothing else. */
@@ -348,23 +350,6 @@ export function resolveNoteLinks(input: ResolveNoteLinksInput): NoteLinkOutcome 
  */
 export function spokenLinkRef(docId: string): { kind: 'doc'; docId: string } {
   return { kind: 'doc', docId };
-}
-
-/** The row's own URL, marked as a question rather than a citation. */
-export function suggestionHref(url: string): string {
-  return `${url}${url.includes('?') ? '&' : '?'}${SUGGEST_PARAM}=1`;
-}
-
-/**
- * The words a suggestion is written as.
- *
- * A question, because it is one, and short because it rides the end of a
- * note somebody is reading for the note's own sake. No prefix naming the
- * assistant and no sentence explaining what a tap will do: the link is the
- * affordance, and a caption beside it would only say what tapping it says.
- */
-export function suggestionLabel(title: string): string {
-  return `related: ${title}?`;
 }
 
 /** One suggestion, written. */
