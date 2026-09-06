@@ -764,15 +764,29 @@ said twice. An earlier rule kept a section the ledger still claimed items in
 as the target "once chosen", which put live notes above text typed below them.
 
 **The live transcript is one run of text at the end of the doc.** The
-markdown app appends a dashed "Live transcript" zone after the editor's
-content (`meeting-live-zone.ts`, plain DOM, never Yjs) where the engine's
-turns render as inline spans joined by a space: no per-turn time stamp and no
+markdown app appends a "Live transcript" zone after the editor's content
+(`meeting-live-zone.ts`, plain DOM, never Yjs) where the engine's turns
+render as inline spans joined by a space: no per-turn time stamp and no
 per-turn block, because a turn is the engine's unit of delivery, not anything
 a reader wants marked (owner, 2026-09-01: *"engine turns have no meaning or
 value to the viewer, I expect a stream of text"*). The only line breaks are
-ones the engine put in a turn's own text. When a tick fires, the settled
-words split off into a card above the stream; when the note lands they leave
-the zone, and the settle wash on the written note carries the eye up.
+ones the engine put in a turn's own text. The zone carries no frame and no
+side padding, so it sits on the notes' own left edge, and it is marked as
+secondary by type alone — smaller than the notes and set at `--fg-muted`.
+
+**A chunk settles by fading where it sits, never by moving.** The first cut
+split the settled words into a card ("Writing this into the notes above…",
+with a spinner) and faded it while the note above was still arriving, so the
+words drifted down the page as they went — 28 measured pixels of it, on top
+of the card's own box shifting the text it wrapped. The approved mock
+(round 2, on the board) is three rules: nothing is drawn around a
+settling chunk or in its place; the note above finishes landing BEFORE the
+fade starts (`NOTE_LAND_MS`); and the fade is opacity alone at a pinned
+height (`FADE_MS`), with the collapse that eases the stream up beginning only
+once the words are gone (`COLLAPSE_MS`). `prefers-reduced-motion` keeps the
+cross-fade and loses only the collapse's travel — less movement, not none
+(owner, 2026-09-05: the instant swap *"was too sudden"*). The settle wash on
+the written note carries the eye up.
 
 **Two clocks fire a tick, and whichever comes first wins.**
 

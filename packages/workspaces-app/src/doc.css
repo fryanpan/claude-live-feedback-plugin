@@ -2147,16 +2147,31 @@ body.has-set .doc-switcher-caret {
    floated into the top-right corner so the first line of words IS the first
    line of the box. Measured at 1180×820 and 430px: last prose line-box
    bottom to first transcript line-box top went from 69px / 51px to under one
-   prose line-height. */
+   prose line-height.
+   NO FRAME AND NO SIDE PADDING (approved settle mock, round 2). The dashed
+   border and the panel fill are gone, and with the side padding they took,
+   the transcript now sits on the same left edge as the notes it feeds. It is
+   marked as secondary by TYPE alone: smaller than the notes and set at
+   --fg-muted. */
 .live-zone {
-  margin: 0 0 4px;
-  padding: 4px 14px 10px;
-  border: 1.5px dashed var(--border-strong);
-  border-radius: var(--radius-lg);
-  background: var(--bg-panel);
+  /* The settle's two beats. meeting-live-zone.ts exports FADE_MS and
+     COLLAPSE_MS to match these; live-zone-css.test.ts fails if they part. */
+  --lz-fade-ms: 260ms;
+  --lz-collapse-ms: 440ms;
+  --lz-ease-settle: cubic-bezier(0.22, 0.61, 0.36, 1);
+  margin: 0;
+  padding: 2px 0 8px;
+  background: transparent;
   font-family: var(--sans);
   max-width: min(100%, 1200px);
   margin-inline: auto;
+}
+/* No click-to-type runway under the transcript while it is showing: its last
+   line sits against the bottom of the pane, not a screen above it. The base
+   rule's 160px is what put it there. The keyboard inset stays — on a phone
+   that runway is the only thing keeping the last line off the keyboard. */
+#editor:has(> .live-zone:not([hidden])) {
+  padding-bottom: calc(var(--safe-bottom) + max(8px, var(--kb-bottom, 0px)));
 }
 body.is-reading-width #editor > .live-zone {
   max-width: 36rem;
@@ -2189,9 +2204,9 @@ body.is-reading-width #editor > .live-zone {
    line breaks are the <br>s the engine's own text carried. */
 .lz-lines,
 .lz-chunk-lines {
-  font-size: 15.5px;
+  font-size: 15px;
   line-height: 1.55;
-  color: #4b535c;
+  color: var(--fg-muted);
   margin: 0;
   overflow-wrap: anywhere;
 }
@@ -2228,45 +2243,36 @@ body.is-reading-width #editor > .live-zone {
     opacity: 0;
   }
 }
-/* The splitting-off card: settled lines lift out of the dashed frame as a
-   solid card that says what is happening to them, while the remainder keeps
-   streaming below. */
-/* Not positioned: a positioned card would paint over the floated label in
-   the corner; unpositioned, the label stays visible and the card's lines
-   wrap short of it like the stream's do. */
+/* THE SETTLE. The split-off chunk is an unadorned block: no box of its own,
+   no label, and nothing drawn in its place. It fades exactly where it sits —
+   opacity alone, so not one word around it moves — and only once it is gone
+   does its slot collapse and ease the lines below up into the space. The
+   animation is the signal; there is nothing here to read. */
 .lz-chunk {
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--radius);
-  background: var(--bg);
-  box-shadow: 0 3px 12px rgba(27, 31, 35, 0.13);
-  padding: 8px 11px 10px;
-  margin: -2px -8px 12px -12px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  opacity: 1;
+  transition: opacity var(--lz-fade-ms) ease-out;
 }
-.lz-chunk-lines {
-  color: var(--fg);
+.lz-chunk.is-fading {
+  opacity: 0;
 }
-.lz-chunk-note {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--accent);
-  margin-top: 5px;
+.lz-slot {
+  margin: 0;
+  padding: 0;
 }
-.lz-spinner {
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  border-top-color: var(--accent);
-  animation: lz-spin 850ms linear infinite;
-}
-@keyframes lz-spin {
-  to {
-    transform: rotate(360deg);
-  }
+/* overflow is withheld until the collapse: as a block formatting context the
+   slot would refuse to sit beside the floated corner label, and the chunk's
+   words would jump the moment they were split off. By the time this lands the
+   chunk is at opacity 0 and its height is already pinned.
+   Under reduced motion meeting-live-zone.ts sets --lz-collapse-ms to 0 on the
+   slot, so the travel goes and the fade above stays — less movement, not none
+   (owner, 2026-09-05: the instant swap "was too sudden"). */
+.lz-slot.is-collapsing {
+  overflow: hidden;
+  transition: height var(--lz-collapse-ms) var(--lz-ease-settle);
 }
 /* The settle wash: the note a chunk just became, highlighted where it landed
    (settle-wash.ts decorates the block). ~1.5s held at full wash, then a
@@ -2290,7 +2296,6 @@ body.is-reading-width #editor > .live-zone {
 }
 @media (prefers-reduced-motion: reduce) {
   .lz-partial::after,
-  .lz-spinner,
   #editor > .ProseMirror .settle-wash {
     animation: none;
   }
