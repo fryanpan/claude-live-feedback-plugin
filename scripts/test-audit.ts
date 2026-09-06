@@ -154,13 +154,12 @@ function fixedSleeps(): Check {
 //
 //    What it still cannot see, so that nobody reads a clean table as proof:
 //
-//    - A read in a TEST file whose path literal is on a different line, or in
-//      a constant declared elsewhere. `packages/widget/test/css-minify.test.ts`
-//      wraps its `join(..., 'src', 'styles.ts')` onto the next line and goes
-//      uncounted; `review-item-tools.test.ts` reads a `BUNDLE` const the same
-//      way. The module-level form below is looser precisely because a harness
-//      always does this; test files are still matched per line, so the site
-//      list can point at one.
+//    - A read whose path is in a constant declared elsewhere.
+//      `review-item-tools.test.ts` reads a `BUNDLE` const built twenty lines
+//      up, and no window over the call site can see it. A WRAPPED call is no
+//      longer in this list: `readCallArgs` follows the call across the lines
+//      the formatter put it on, so the literal only has to be inside the
+//      call's own parentheses, not on the same line as its name.
 //    - A support module outside a `test/` directory. The walk stops at the
 //      edge of the test tree on purpose, and a reader parked in `src/` or in
 //      a sibling `helpers/` is therefore invisible.
@@ -196,6 +195,106 @@ function sourceLiterals(text: string): string[] {
 function readsSourceOnLine(text: string): boolean {
   if (!READ_CALL.test(text)) return false;
   return sourceLiterals(text).length > 0;
+}
+
+/**
+ * Every read call STARTING on a line, as an offset just past its `(`.
+ *
+ * A separate global regex because `READ_CALL` above is used with `.test()`,
+ * and a `g` flag makes `.test()` stateful across calls.
+ */
+const READ_CALL_G = /(?:readFileSync|readFile|Bun\.file)\(/g;
+
+/**
+ * How far a wrapped call may run. Twelve lines is far past anything biome
+ * produces and still a bound: the walk gives up rather than reading on.
+ */
+const MAX_CALL_LINES = 12;
+
+/**
+ * The text between a read call's parentheses, followed across the lines the
+ * formatter wrapped it onto.
+ *
+ * WHY THIS EXISTS. The per-line form above needs the call and its path
+ * literal on one line, and a formatter decides that. `bun run test:audit`
+ * counted 52 sites, then 51, and the site that vanished had not been
+ * converted: PR 718 renamed `src/hub/` to `src/board/`, the longer name
+ * pushed a `readFileSync(join(__dirname, '..', 'src', 'hub', …))` in
+ * `walk-handoff.test.ts` past biome's width, biome wrapped it, and the call
+ * and its literal landed on different lines. The site was still there and
+ * still grepping source. Two builders on unrelated PRs read the drop as
+ * harmless. A ratchet you can lower by renaming a directory is not a ratchet.
+ *
+ * WHY THE WINDOW IS THE PARENTHESES AND NOT N LINES. A fixed multi-line
+ * window finds "sites" that are not reads: a `readFileSync(tmp, 'utf8')`
+ * followed by an unrelated `resolve(dir, '../src/x.ts')` on the next line
+ * would count, and a detector that over-counts is as useless as one that
+ * under-counts. Balancing the parentheses means the text examined is exactly
+ * the call's own arguments — the next statement can never be inside it.
+ *
+ * Quoted strings do not move the depth (a path may legally contain a
+ * parenthesis) and `//` comments are dropped rather than walked: the marker
+ * comments inside `launcher.test.ts`'s `JSON.parse(` argument carry
+ * backticks, and treating those as string delimiters would swallow the rest
+ * of the call.
+ *
+ * Returns undefined when the parens do not balance inside the cap. The
+ * caller then falls back to the start line alone, so a pathological call
+ * never widens the window instead of narrowing it.
+ */
+function readCallArgs(lines: string[], start: number, from: number): string | undefined {
+  let depth = 1;
+  let out = '';
+  const last = Math.min(lines.length, start + MAX_CALL_LINES);
+  for (let i = start; i < last; i++) {
+    const line = lines[i] ?? '';
+    let quote = '';
+    for (let j = i === start ? from : 0; j < line.length; j++) {
+      const ch = line[j] ?? '';
+      if (quote) {
+        out += ch;
+        if (ch === '\\') {
+          out += line[j + 1] ?? '';
+          j++;
+        } else if (ch === quote) quote = '';
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === '`') {
+        quote = ch;
+        out += ch;
+        continue;
+      }
+      if (ch === '/' && line[j + 1] === '/') break;
+      if (ch === '(') depth++;
+      else if (ch === ')') {
+        depth--;
+        if (depth === 0) return out;
+      }
+      out += ch;
+    }
+    out += ' ';
+  }
+  return undefined;
+}
+
+/**
+ * Does a read call starting on this line name a source path in its arguments?
+ *
+ * The per-line form is kept as the first half of a union rather than replaced.
+ * It matches the whole line, so a read whose literal sits outside its own
+ * parentheses but on the same line — `const p = join(d, '../src/a.ts'); const
+ * t = readFileSync(p, 'utf8');` — stays counted. Narrowing to the arguments
+ * alone would have quietly dropped sites while claiming to add them.
+ */
+function readsSource(lines: string[], i: number): boolean {
+  const text = lines[i] ?? '';
+  if (readsSourceOnLine(text)) return true;
+  READ_CALL_G.lastIndex = 0;
+  for (const m of text.matchAll(READ_CALL_G)) {
+    const args = readCallArgs(lines, i, (m.index ?? 0) + m[0].length);
+    if (args !== undefined && sourceLiterals(args).length > 0) return true;
+  }
+  return false;
 }
 
 /**
@@ -429,7 +528,7 @@ function sourceShape(): Check {
     if (!lines.some((l) => TEXT_ASSERT.test(l))) continue;
     lines.forEach((text, i) => {
       if (COMMENT_LINE.test(text)) return;
-      if (readsSourceOnLine(text)) {
+      if (readsSource(lines, i)) {
         if (!isNotSource(lines, i)) sites.push({ file, line: i + 1, text: text.trim() });
         return;
       }
@@ -448,7 +547,9 @@ function sourceShape(): Check {
     pattern:
       'in a test that asserts with toContain/toMatch/toBe/toEqual/toStrictEqual or an ordered comparison: ' +
       'a readFileSync/readFile/Bun.file whose call names a path under src/ or dist/, a .css/.js file or ' +
-      'packages/plugin (fixtures/ excluded), OR an import of a test module that reads one. ' +
+      "packages/plugin (fixtures/ excluded) — on the call line or anywhere inside the call's own " +
+      'parentheses, so wrapping it across lines hides nothing — OR an import of a test module that ' +
+      'reads one. ' +
       'A reading module is assumed to hand the text on. It is exempt only when all three hold: a comment ' +
       'line holding nothing but the marker `audit: no-text`, every exported value carrying an explicit ' +
       'type or return annotation, and no annotation naming string. An unannotated export is not evidence, ' +
