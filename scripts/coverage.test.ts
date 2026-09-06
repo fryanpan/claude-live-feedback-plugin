@@ -7,7 +7,14 @@
  * part with no other check on it — has one.
  */
 import { describe, expect, it } from 'vitest';
-import { TARGET_PCT, codeLines, parseLcov, summarize, worstFiles } from './coverage.ts';
+import {
+  DENOMINATOR,
+  TARGET_PCT,
+  codeLines,
+  parseLcov,
+  summarize,
+  worstFiles,
+} from './coverage.ts';
 
 const record = (file: string, das: Array<[number, number]>) =>
   `TN:\nSF:${file}\n${das.map(([n, h]) => `DA:${n},${h}`).join('\n')}\nend_of_record\n`;
@@ -143,6 +150,73 @@ describe('summarize', () => {
     );
     expect(cold?.linesFound).toBe(files.length * 2);
     expect(cold?.linesHit).toBe(0);
+  });
+});
+
+describe('the denominator a shard cannot move', () => {
+  /** The lines a runner claims for a file, as an lcov record. */
+  const claim = (file: string, from: number, to: number, hits: number) =>
+    record(
+      file,
+      Array.from({ length: to - from + 1 }, (_, i): [number, number] => [from + i, hits]),
+    );
+
+  const filesOf = (pkg: string) =>
+    (summarize({ vitest: '', bun: '' }).find((p) => p.package === pkg)?.files ?? []).map(
+      (f) => f.file,
+    );
+
+  it('names where each runner’s denominator comes from', () => {
+    expect(DENOMINATOR.vitest).toBe('lcov');
+    expect(DENOMINATOR.bun).toBe('source');
+  });
+
+  it('does not move a bun package’s denominator when the tool reports more lines', () => {
+    // The measurement behind this: `bun test --coverage` reports the lines it
+    // learned about while running, so middleware/host-guard.ts came back with
+    // 298 lines from one run of the suite and 660 from the union of the same
+    // suite run in chunks — with the identical 295 hit both times. A floor
+    // over that denominator is a gate on how the suite was SCHEDULED. Two
+    // views of one execution must therefore produce one number.
+    const files = filesOf('server').slice(0, 20);
+    const narrow = files.map((f) => claim(f, 1, 10, 1)).join('');
+    const wide = narrow + files.map((f) => claim(f, 11, 60, 0)).join('');
+
+    const of = (bun: string) => summarize({ vitest: '', bun }).find((p) => p.package === 'server');
+    expect(of(wide)?.linesFound).toBe(of(narrow)?.linesFound);
+    expect(of(wide)?.linesHit).toBe(of(narrow)?.linesHit);
+    expect(of(wide)?.pct).toBe(of(narrow)?.pct);
+  });
+
+  it('still counts the hits a shard found, wherever the shard found them', () => {
+    const files = filesOf('server').slice(0, 5);
+    // Two shards, disjoint line ranges: the union is what ran.
+    const shardA = files.map((f) => claim(f, 1, 10, 1)).join('');
+    const shardB = files.map((f) => claim(f, 11, 20, 1)).join('');
+    const merged = summarize({ vitest: '', bun: shardA + shardB }).find(
+      (p) => p.package === 'server',
+    );
+    const alone = summarize({ vitest: '', bun: shardA }).find((p) => p.package === 'server');
+    expect(merged?.linesHit).toBe((alone?.linesHit ?? 0) + files.length * 10);
+  });
+
+  it('leaves a vitest package reading its own instrumentation', () => {
+    // Vitest’s `all: true` denominator is a property of the source, so it is
+    // already stable across shards — measured 2026-09-06, four shards merged
+    // report every package to the line. Nothing here reaches in to change it.
+    const files = filesOf('core');
+    const cold = summarize({ vitest: files.map((f) => claim(f, 1, 3, 0)).join(''), bun: '' }).find(
+      (p) => p.package === 'core',
+    );
+    expect(cold?.linesFound).toBe(files.length * 3);
+  });
+
+  it('cannot report more than 100%, whatever the two counting rules disagree about', () => {
+    const files = filesOf('server').slice(0, 3);
+    // Every line of a huge range hit: more lines than the sources have.
+    const absurd = files.map((f) => claim(f, 1, 100000, 1)).join('');
+    const pkg = summarize({ vitest: '', bun: absurd }).find((p) => p.package === 'server');
+    expect(pkg?.pct).toBeLessThanOrEqual(100);
   });
 });
 

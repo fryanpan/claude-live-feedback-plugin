@@ -8,20 +8,19 @@
  * something else. So the literal moved here as the DEFAULT, and the operator
  * can put a file beside the corpus to say something different.
  *
- * `<dataDir>/notes-prompt.md`, read at tick time. A file, not an environment
- * variable, because the value is paragraphs; beside the data rather than in
- * the repo, because it is this deployment's setting and not this project's
- * source. A settings page comes later and will write the same file.
+ * THE SETTINGS PAGE ARRIVED, AND THE STORE MOVED WITH IT. The header here
+ * used to say `<dataDir>/notes-prompt.md` was the whole override surface and
+ * that a settings page would come later and write the same file. The page
+ * covers seven prompts rather than one, so the override moved to
+ * `<dataDir>/prompts.json` (`prompt-store.ts`), which carries this file's
+ * three rules forward unchanged: read per call, empty means the default, and
+ * never throw.
  *
- * READ PER TICK, NOT CACHED AT BOOT. Editing the file and watching the next
- * note change is the whole loop this exists for, and a restart in the middle
- * of a meeting to pick up a wording change is not a loop anybody runs. The
- * cost is one small synchronous read against two model calls.
- *
- * AN EMPTY FILE MEANS THE DEFAULT, not an empty prompt. A note-taker sent no
- * instructions at all writes something, and what it writes would be blamed on
- * the model rather than on the truncated file that caused it. Deleting the
- * file and blanking it are the same gesture and get the same answer.
+ * `notes-prompt.md` did not stop mattering the day that happened. A
+ * deployment that had edited it must not silently go back to the shipped
+ * words, so `readNotesPromptFile` below is what the new store reads ONCE to
+ * migrate the operator's words in. Afterwards nothing reads the file, and
+ * nothing deletes it either.
  */
 
 import { readFileSync } from 'node:fs';
@@ -186,51 +185,27 @@ export const DEFAULT_NOTES_INSTRUCTIONS = [
   'notes.',
 ].join('\n');
 
-export interface NotesPromptStore {
-  /** The instructions to send with this tick. */
-  read(): string;
-  /** Where an override would go. Printed in the boot log so an operator can
-   *  find the file without reading this module. */
-  readonly path: string;
-}
-
 /**
- * The store the composer reads its instructions from. Never throws: an
- * unreadable override is reported once and falls back to the default, because
- * a meeting whose notes stop because a settings file has the wrong mode is a
- * worse failure than one whose notes read the way they did last week.
+ * The operator's `notes-prompt.md`, or null when there is nothing to read.
+ *
+ * Blank is null for the reason the old store returned the default on a blank
+ * file: deleting the file and emptying it are the same gesture, and neither
+ * one is a request to send a note-taker no instructions at all.
+ *
+ * Never throws. An unreadable file is a migration that does not happen, not a
+ * server that does not boot.
  */
-export function createNotesPromptStore(opts: { dataDir: string }): NotesPromptStore {
-  const path = join(opts.dataDir, NOTES_PROMPT_FILENAME);
-  // What was announced last, so a stable override is said once rather than
-  // per tick, and a change to it is said again.
-  let announced: string | null = null;
-  const announce = (message: string): void => {
-    if (announced === message) return;
-    announced = message;
-    console.log(message);
-  };
-  return {
-    path,
-    read(): string {
-      let raw: string;
-      try {
-        raw = readFileSync(path, 'utf8');
-      } catch (err) {
-        // ENOENT is the ordinary case — no override — and says nothing.
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-          announce(`[meeting-notes] cannot read ${path}; using the default instructions`);
-        } else {
-          announced = null;
-        }
-        return DEFAULT_NOTES_INSTRUCTIONS;
-      }
-      if (!raw.trim()) {
-        announce(`[meeting-notes] ${path} is empty; using the default instructions`);
-        return DEFAULT_NOTES_INSTRUCTIONS;
-      }
-      announce(`[meeting-notes] note-taking instructions come from ${path}`);
-      return raw.trim();
-    },
-  };
+export function readNotesPromptFile(dataDir: string): string | null {
+  let raw: string;
+  try {
+    raw = readFileSync(join(dataDir, NOTES_PROMPT_FILENAME), 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.log(
+        `[prompts] cannot read ${join(dataDir, NOTES_PROMPT_FILENAME)}; nothing was migrated`,
+      );
+    }
+    return null;
+  }
+  return raw.trim() === '' ? null : raw.trim();
 }

@@ -7,19 +7,26 @@ import { DEFAULT_REVIEW_ITEM_CRITERIA } from '@feedback/core/review-judge-prompt
  * read their collaborators off `WorkspaceRoutesContext` instead of the scope.
  */
 import { canonicalRepoRoot, normalizeDocOriginRepo } from '../doc-origin-repo.ts';
+import { PROMPT_MAX_CHARS } from '../prompt-store.ts';
 import { redactCapChangeForVisitor } from '../share/redact-workspace.ts';
 import { PARALLELISM_CAP_MAX, PARALLELISM_CAP_MIN, type WorkspaceNotesHome } from '../tasks.ts';
 import { parseVoiceContext } from '../voice.ts';
 import type { WorkspaceRouteRequest, WorkspaceRoutesContext } from './workspace-routes-context.ts';
 
 // Moved down from server.ts with the settings route below, their only caller.
-/** The longest criteria prompt a board may hold. A page of instructions is
- *  fine; a pasted document is not what the field is for, and every filing
- *  sends the whole thing to the judge. */
-const REVIEW_ITEM_CRITERIA_MAX_CHARS = 4_000;
-/** Same ceiling and the same reason as the review criteria above — a page
- *  of instructions is fine, and every scoring run sends the whole thing. */
-const EFFORT_ESTIMATE_PROMPT_MAX_CHARS = 4_000;
+/**
+ * The longest prompt a board may hold, for both of its prompt fields.
+ *
+ * It used to be 4,000 each, written here, and 4,000 is BELOW the shipped
+ * length of two of the seven prompts the settings page saves — the
+ * notetaking instructions at 5,807 characters and meeting capture at 4,594.
+ * A ceiling that refuses the default it is protecting is a field nobody can
+ * use, so the number moved to `prompt-store.ts` (which has the measurements)
+ * and both sides of the product now share the one constant. Still a ceiling:
+ * every filing and every scoring run sends the whole thing.
+ */
+const REVIEW_ITEM_CRITERIA_MAX_CHARS = PROMPT_MAX_CHARS;
+const EFFORT_ESTIMATE_PROMPT_MAX_CHARS = PROMPT_MAX_CHARS;
 
 /** Answers the routes below, or `undefined` when the path is none of them. */
 export async function handleWorkspaceSettings(

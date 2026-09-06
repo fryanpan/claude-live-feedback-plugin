@@ -797,6 +797,12 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
     store: taskStore,
     dataDir,
     ...(ctx.stallEscalateMs !== undefined ? { escalateMs: ctx.stallEscalateMs } : {}),
+    // A filed item may not be retracted for movement until it has stood as
+    // long as the board's own quiet window — the span this board already uses
+    // to decide a row has stopped moving. Read from the same knob rather than
+    // kept as a second number, so a board tuned to a short window does not
+    // hold an ask open on a scale it does not otherwise use.
+    ...(ctx.stallNudgeQuietMs !== undefined ? { settleMs: ctx.stallNudgeQuietMs } : {}),
   });
   const stallNudger = new StallNudger({
     snapshot: () => taskStore.listWorkspaces().map(stallSnapshot),

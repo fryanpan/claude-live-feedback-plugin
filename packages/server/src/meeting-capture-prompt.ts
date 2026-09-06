@@ -166,62 +166,78 @@ export const OVERLAP_PROMPT_RULE = [
 ] as const;
 
 /**
+ * What the meeting listener is told to look for, as shipped.
+ *
+ * A standing string with no per-tick input in it, which is why it can be
+ * lifted out of the builder and overridden whole: the transcript, the
+ * candidate tasks and the earlier speech all ride in the USER message below.
+ * The settings page reads and writes these words through `prompt-store.ts`.
+ */
+export const DEFAULT_TASK_CAPTURE_SYSTEM = [
+  'You listen to a live working meeting and extract six things: task',
+  'REQUESTS, task REFERENCES, RESEARCH asks, LOOKUP asks, CORRECTIONS and',
+  'REVIEW asks. Answer with JSON only, this shape:',
+  '{"items":[{"kind":"request","title":"...","actionable":true|false,',
+  '           "requester":"who asked, omitted if unclear"}',
+  '         |{"kind":"reference","match":<candidate number>}',
+  '         |{"kind":"research","topic":"...","question":"...",',
+  '           "requester":"who asked, omitted if unclear"}',
+  '         |{"kind":"lookup","query":"..."}',
+  '         |{"kind":"correction","wrong":"...","right":"..."}',
+  '         |{"kind":"review","question":"...",',
+  '           "requester":"who asked, omitted if unclear"}]}',
+  '',
+  ...ASK_CUE_PROMPT_RULE,
+  '',
+  'A REQUEST only when a speaker explicitly asks, in the LATER cue, for a',
+  'task to be filed — "create a task", "make that a task", "file a ticket",',
+  '"add a ticket". One such clause asks for ONE row, not for every problem',
+  'the room went on to mention; a PLURAL one ("file tickets for the next few',
+  'things I mention") asks for a row per thing they THEN NAME, and for',
+  'nothing they did not. Discussing a problem, complaining about a',
+  'bug, or agreeing something is broken is NOT a request. Title: short, specific,',
+  'in the words spoken.',
+  'Mark a request "actionable": true only when it is clear enough to start',
+  'without asking anything back — what to do and where — and nobody said',
+  'to wait. When in doubt, false.',
+  '',
+  'Transcript lines may be prefixed with who said them. Set "requester" to',
+  'that speaker, copied exactly as the line spells it — including a label',
+  'like "Speaker B", which is a voice nobody has named yet. Omit',
+  '"requester" when the lines carry no speaker or you are unsure who asked;',
+  'never guess, and never name anyone the lines do not.',
+  '',
+  'A REFERENCE only when the speech clearly refers to work in the numbered',
+  'candidate list; "match" is that number. Never guess: no confident match',
+  'means no item.',
+  '',
+  ...RESEARCH_PROMPT_RULE,
+  '',
+  ...LOOKUP_PROMPT_RULE,
+  '',
+  ...CORRECTION_PROMPT_RULE,
+  '',
+  ...REVIEW_PROMPT_RULE,
+  '',
+  ...OVERLAP_PROMPT_RULE,
+  '',
+  'An empty items array is the normal answer for most speech.',
+].join('\n');
+
+/**
  * Prompt building is pure and exported, same reason as the notes composer's:
  * what the transcript is asked to become is behaviour worth pinning without
  * a network in the test.
+ *
+ * `system` overrides the shipped words. It arrives from
+ * `prompt-store.ts` — read per call, so an edit on the settings page reaches
+ * the next tick without a restart — and is absent everywhere else, which is
+ * what keeps every existing caller and every test on the default.
  */
-export function buildTaskCapturePrompt(input: TaskCaptureInput): { system: string; user: string } {
-  const system = [
-    'You listen to a live working meeting and extract six things: task',
-    'REQUESTS, task REFERENCES, RESEARCH asks, LOOKUP asks, CORRECTIONS and',
-    'REVIEW asks. Answer with JSON only, this shape:',
-    '{"items":[{"kind":"request","title":"...","actionable":true|false,',
-    '           "requester":"who asked, omitted if unclear"}',
-    '         |{"kind":"reference","match":<candidate number>}',
-    '         |{"kind":"research","topic":"...","question":"...",',
-    '           "requester":"who asked, omitted if unclear"}',
-    '         |{"kind":"lookup","query":"..."}',
-    '         |{"kind":"correction","wrong":"...","right":"..."}',
-    '         |{"kind":"review","question":"...",',
-    '           "requester":"who asked, omitted if unclear"}]}',
-    '',
-    ...ASK_CUE_PROMPT_RULE,
-    '',
-    'A REQUEST only when a speaker explicitly asks, in the LATER cue, for a',
-    'task to be filed — "create a task", "make that a task", "file a ticket",',
-    '"add a ticket". One such clause asks for ONE row, not for every problem',
-    'the room went on to mention; a PLURAL one ("file tickets for the next few',
-    'things I mention") asks for a row per thing they THEN NAME, and for',
-    'nothing they did not. Discussing a problem, complaining about a',
-    'bug, or agreeing something is broken is NOT a request. Title: short, specific,',
-    'in the words spoken.',
-    'Mark a request "actionable": true only when it is clear enough to start',
-    'without asking anything back — what to do and where — and nobody said',
-    'to wait. When in doubt, false.',
-    '',
-    'Transcript lines may be prefixed with who said them. Set "requester" to',
-    'that speaker, copied exactly as the line spells it — including a label',
-    'like "Speaker B", which is a voice nobody has named yet. Omit',
-    '"requester" when the lines carry no speaker or you are unsure who asked;',
-    'never guess, and never name anyone the lines do not.',
-    '',
-    'A REFERENCE only when the speech clearly refers to work in the numbered',
-    'candidate list; "match" is that number. Never guess: no confident match',
-    'means no item.',
-    '',
-    ...RESEARCH_PROMPT_RULE,
-    '',
-    ...LOOKUP_PROMPT_RULE,
-    '',
-    ...CORRECTION_PROMPT_RULE,
-    '',
-    ...REVIEW_PROMPT_RULE,
-    '',
-    ...OVERLAP_PROMPT_RULE,
-    '',
-    'An empty items array is the normal answer for most speech.',
-  ].join('\n');
-
+export function buildTaskCapturePrompt(
+  input: TaskCaptureInput,
+  system: string = DEFAULT_TASK_CAPTURE_SYSTEM,
+): { system: string; user: string } {
   const parts: string[] = [];
   if (input.docTitle) parts.push(`Meeting doc: ${input.docTitle}`);
   if (input.candidates.length > 0) {

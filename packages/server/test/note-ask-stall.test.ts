@@ -95,8 +95,14 @@ describe('evaluateStalls — an unfiled ask found in a note', () => {
     );
     expect(verdict.unfiled.map((r) => r.id)).toEqual(['t-arm']);
     // The reported quiet time stays honest about what it measures: the row
-    // was touched two minutes ago. What crossed the gate is the ask's age.
+    // was touched two minutes ago. What crossed the gate is the ask's age,
+    // and `stuckMs` is where the row carries it — without it, every later
+    // reader of this row has only the two minutes and concludes it is moving.
+    // `stall-escalation.ts` is that reader: it will not escalate a row whose
+    // clock says seconds, so a note-borne ask would silently stop reaching
+    // anybody past the lead.
     expect(verdict.unfiled[0]?.quietMs).toBe(2 * MIN);
+    expect(verdict.unfiled[0]?.stuckMs).toBe(90 * MIN);
   });
 
   it('…and the grace window still applies to a run that only just began', () => {

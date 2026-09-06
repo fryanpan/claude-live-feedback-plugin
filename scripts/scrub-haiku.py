@@ -50,7 +50,7 @@ MAX_DIFF_CHARS = 80_000 * 4
 SYSTEM_PROMPT = """You are a sensitive-content scanner. You will be shown a git diff that's about to be pushed to a public GitHub repository. Your job is to spot anything that would leak private information once that push lands.
 
 **What counts as a leak (flag it):**
-- Real personal names (other than the repo's documented author / committer in standard metadata like LICENSE or package author tags)
+- Real personal names, except any listed under "This repository's maintainers" below
 - Email addresses, phone numbers, postal addresses, SSNs, financial account numbers
 - Specific dollar amounts in personal context (taxes, donations, balances, salaries)
 - Tax-document names tied to a specific person (Form 8606, Schedule D, kiddie tax, IRA backdoor, capital loss carryover, etc.)
@@ -64,7 +64,7 @@ SYSTEM_PROMPT = """You are a sensitive-content scanner. You will be shown a git 
 
 **What does NOT count as a leak (don't flag):**
 - The repo's own name in self-references (a repo's README / CLAUDE.md / package metadata legitimately names itself)
-- The author/maintainer name in standard metadata fields
+- A maintainer name listed below, wherever it appears — prose, docs, comments, metadata
 - The literal placeholder `<commit identity already public on the remote>` —
   it marks a git Author/Co-authored-by line whose identity this tool already
   verified is on the remote and redacted before you saw the diff
@@ -107,6 +107,39 @@ opposite of what you meant.
 
 Be conservative about content that IS being added — when borderline, flag it.
 The human can override with SCRUB_SKIP=1 after reviewing your reasoning."""
+
+
+def system_prompt(maintainers: "set[str] | None" = None) -> str:
+    """The scanner prompt, told who this repository's maintainers are.
+
+    Passed as data rather than hardcoded, so the rule travels to any repo and
+    names nobody this checkout cannot already prove is a published author
+    here. With no maintainers resolved the prompt says so, and every real name
+    flags exactly as it did before.
+    """
+    names = sorted(n for n in (maintainers or set()) if n.strip())
+    if not names:
+        listed = (
+            "None could be resolved for this repository, so treat EVERY real "
+            "personal name as a potential leak."
+        )
+    else:
+        listed = "\n".join(f"- {n}" for n in names) + (
+            "\n\nThese names are already published across this repository and are "
+            "NEVER a leak in it, in any context: prose, documentation, code "
+            "comments, metadata, an attribution, a dated decision record, a "
+            "task assignment, a quoted preference. A maintainer name next to a "
+            "date is a changelog entry, not personal information. Do not report "
+            "such a line at all — not as a leak, and not with a note explaining "
+            "why it is safe.\n\n"
+            "Only what is on the line BESIDES the name can make it a leak: an "
+            "email address, a home address, a medical or financial detail, a "
+            "credential. Judge that content on its own merits, exactly as you "
+            "would if no name were present.\n\n"
+            "Every OTHER real person's name is still a leak, including a "
+            "co-author, a colleague, a reviewer, or anyone quoted or thanked."
+        )
+    return f"{SYSTEM_PROMPT}\n\n**This repository's maintainers:**\n{listed}"
 
 
 KEYCHAIN_SERVICE = "scrub-haiku-api-key"
@@ -163,7 +196,7 @@ def call_haiku(diff_content: str) -> int:
     body = json.dumps({
         "model": MODEL,
         "max_tokens": 1024,
-        "system": SYSTEM_PROMPT,
+        "system": system_prompt(scrub_git.maintainer_names()),
         "messages": [{
             "role": "user",
             "content": f"Scan this diff for leaks:\n\n```diff\n{diff_content}\n```",

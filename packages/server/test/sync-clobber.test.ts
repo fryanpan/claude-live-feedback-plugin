@@ -18,7 +18,7 @@ import { DocStore } from '../src/doc-store.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
-import { afterPersist, insideWriteBack, pastWriteBack, waitFor, waitForFile } from './wait-for.ts';
+import { insideWriteBack, pastWriteBack, waitFor, waitForFile } from './wait-for.ts';
 
 /**
  * Regression suite for the disk-clobber incident class (2026-07-15 and
@@ -38,13 +38,25 @@ import { afterPersist, insideWriteBack, pastWriteBack, waitFor, waitForFile } fr
  *       direct Writes in the first place.
  */
 
+/**
+ * Every DocStore built by a test, so `afterEach` can stop them all.
+ *
+ * A store nobody stopped keeps its mtime sweep running — over a dataDir the
+ * teardown then deletes, and alongside whichever store the NEXT test builds.
+ * These tests deliberately build two stores over one dataDir, which is the
+ * case `DocStore.stop()` exists for.
+ */
+const liveStores: DocStore[] = [];
+
 function makeDocStore(dataDir: string): DocStore {
-  return new DocStore({
+  const store = new DocStore({
     dataDir,
     sse: new SseBus(),
     webhooks: createWebhookDispatcher({ onLog: () => {} }),
     decorateDocMeta: (m) => ({ ...m, reviewUrl: `http://test/review/${m.docId}` }),
   });
+  liveStores.push(store);
+  return store;
 }
 
 const AUTHOR = { id: 'u1', kind: 'known' as const, name: 'Reviewer', color: '#000' };
@@ -96,6 +108,33 @@ Intro paragraph, second external edit.
 Keep this sentence intact.
 `;
 
+/**
+ * Build the state a crash inside the write-back window leaves behind: the
+ * `.ydoc` saved, the `.md` still holding the pre-edit bytes.
+ *
+ * Waiting for the `.ydoc` to be REWRITTEN, then dropping the pending file
+ * write, replaces a `sleep(afterPersist())` that had to land between a ~20ms
+ * persist and an ~80ms write-back. Neither half is a race any more: the wait
+ * returns when the persist has actually happened, and the write it drops can
+ * no longer fire late. A loaded runner overshooting that window was enough to
+ * turn "the reassert snapshots the disk version" red — measured, +120ms.
+ */
+async function crashAfterPersist(
+  store: DocStore,
+  dataDir: string,
+  docId: string,
+  edit: string,
+): Promise<void> {
+  const ydoc = join(dataDir, `${docId}.ydoc`);
+  // The snapshot's own bytes, not its mtime: a persist that predates the edit
+  // would bump the mtime and let the "crash" happen before the state it is
+  // supposed to have saved. The CRDT update carries inserted text verbatim.
+  await waitFor(() => existsSync(ydoc) && readFileSync(ydoc).includes(Buffer.from(edit)), {
+    describe: `the .ydoc snapshot for ${docId} to hold ${JSON.stringify(edit)}`,
+  });
+  store.simulateCrash();
+}
+
 describe('sync-clobber regressions', () => {
   let dataDir: string;
   let path: string;
@@ -111,6 +150,7 @@ describe('sync-clobber regressions', () => {
   });
 
   afterEach(() => {
+    for (const store of liveStores.splice(0)) store.stop();
     rmSync(dataDir, { recursive: true, force: true });
   });
 
@@ -220,7 +260,17 @@ describe('sync-clobber regressions', () => {
       ).toBe(true);
       await waitForFile(path, (t) => t.includes('Flushed edit.'));
 
-      // "Server goes down"; the file is edited while it's away.
+      // "Server goes down" — and it has to ACTUALLY go down, because this
+      // store is the one whose absence the test is about. Left running it
+      // keeps polling the same file, and on a loaded runner its poll reads the
+      // external write as a conflict and reasserts its own live content over
+      // it (measured: the file reverts ~100ms after the write, with the
+      // external version moved into clobber-backups). After that the wait
+      // below cannot succeed at any budget — disk no longer holds the edit —
+      // which is how this failed in CI: `last value: false` at the timeout,
+      // not a slow arrival.
+      docStore.simulateCrash();
+      // …the file is edited while it's away.
       writeExternal(path, EXT_ONE.replace('first external edit', 'edited while server was down'));
 
       // Fresh process over the same dataDir. attachFile used to skip the
@@ -248,9 +298,11 @@ describe('sync-clobber regressions', () => {
           replace: 'Edit persisted to ydoc only.',
         }).ok,
       ).toBe(true);
-      // timed: the whole case is a crash BETWEEN the two debounces, so this has
-      // to land after the .ydoc persist and before the .md write-back.
-      await sleep(afterPersist());
+      // The whole case is a crash BETWEEN the two debounces: the .ydoc saved,
+      // the .md write-back never fired. Built, not timed — see
+      // `crashAfterPersist`.
+      await crashAfterPersist(docStore, dataDir, 'd1', 'Edit persisted to ydoc only.');
+      expect(readFileSync(path, 'utf8')).not.toContain('Edit persisted to ydoc only.');
       const docStore2 = makeDocStore(dataDir);
       expect(docStore2.getDoc('d1')?.plainText).toContain('Edit persisted to ydoc only.');
       // And the reassert flushes the live edit to disk.
@@ -291,10 +343,16 @@ describe('sync-clobber regressions', () => {
       writeFileSync(p2, EXT_ONE); // extra blank lines = pure normalization drift
       docStore.getOrCreate('n1', { type: 'markdown', sourceUrl: p2 });
       expect(docStore.attachFile('n1', p2).ok).toBe(true);
-      // timed: the .ydoc has to persist for the restart to see a real mtime skew.
-      await sleep(afterPersist());
+      // The skew this test is about is the .ydoc being NEWER than the .md, so
+      // wait for that to be true on disk rather than sleeping a length that
+      // usually makes it true — a restart that ran before the persist would
+      // find no skew and the test would pass having exercised nothing.
+      await waitFor(() => statSync(join(dataDir, 'n1.ydoc')).mtimeMs > statSync(p2).mtimeMs, {
+        describe: 'the .ydoc snapshot to land after the .md, the skew this test needs',
+      });
       const bytesBefore = readFileSync(p2, 'utf8');
       const mtimeBefore = statSync(p2).mtimeMs;
+      docStore.simulateCrash(); // it is a RESTART: the old store must not be polling p2
 
       makeDocStore(dataDir); // restart
       // timed: a wrongly-scheduled reassert would flush at ~800ms, so the
@@ -313,10 +371,11 @@ describe('sync-clobber regressions', () => {
       expect(
         docStore.findAndReplace('d1', { find: 'Intro paragraph.', replace: 'Unflushed edit.' }).ok,
       ).toBe(true);
-      // timed: the restart below must happen inside the write-back window, with
-      // the .ydoc already saved — that is what makes the reassert fire.
-      await sleep(afterPersist());
+      // The restart must find the .ydoc saved and the .md un-flushed — that is
+      // what makes the reassert fire, and it is built rather than timed.
+      await crashAfterPersist(docStore, dataDir, 'd1', 'Unflushed edit.');
       const diskBefore = readFileSync(path, 'utf8');
+      expect(diskBefore).not.toContain('Unflushed edit.');
 
       makeDocStore(dataDir); // restart inside the write-back window
       await waitForFile(path, (t) => t.includes('Unflushed edit.'));
@@ -336,8 +395,15 @@ describe('sync-clobber regressions', () => {
       writeFileSync(p2, EXT_ONE);
       docStore.getOrCreate('r1', { type: 'markdown', sourceUrl: p2 });
       expect(docStore.attachFile('r1', p2).ok).toBe(true);
-      // timed: the .ydoc has to persist so the restart hydrate sees it as newer.
-      await sleep(afterPersist());
+      // The hydrate has to see the .ydoc as newer than the .md, so wait for
+      // that ordering rather than for a duration that usually produces it.
+      await waitFor(() => statSync(join(dataDir, 'r1.ydoc')).mtimeMs > statSync(p2).mtimeMs, {
+        describe: 'the .ydoc snapshot to land after the .md, the skew the hydrate reads',
+      });
+      // A restart, so the first store stops: left polling p2 it is a second
+      // writer on the file, and the `clobber-backups` assertion below cannot
+      // tell its conflict from the false one this test is about.
+      docStore.simulateCrash();
       const docStore2 = makeDocStore(dataDir); // suppression fires on hydrate
       // Suppression fires when the deferred bind lands, not when `get`
       // returns — see `DocStore.prereadFor`. Editing before it would be a

@@ -26,6 +26,7 @@ import type { MeetingNotesOptions } from './meeting-notes.ts';
 import type { CfAccessOptions } from './middleware/cf-access.ts';
 import type { NoteAskJudge } from './note-ask.ts';
 import type { PluginRefresher } from './plugin-refresh.ts';
+import type { PromptStore } from './prompt-store.ts';
 import type { PushFetch } from './push-notify.ts';
 import type { RecallCalendarClient } from './recall-calendar.ts';
 import type { RecallClient } from './recall.ts';
@@ -295,6 +296,18 @@ export interface ServerOptions {
    * (`haikuNoteAskJudge`); tests pass a stub.
    */
   noteAskJudge?: NoteAskJudge;
+  /**
+   * The words this server's prompts run on, and the settings page's writes.
+   *
+   * UNLIKE the judges above this one HAS a default: `createServer` builds a
+   * store over its own `dataDir` when none is passed, because a prompt store
+   * reads a file and never reaches the network, and the settings page has to
+   * answer on a server somebody spun up in a test exactly as it does in prod.
+   * `bin.ts` passes the process's own store so the notes composer, the
+   * capture extractor, the note-ask judge and the routes all read one
+   * instance and the migration off `notes-prompt.md` is announced once.
+   */
+  promptStore?: PromptStore;
   /**
    * The ticket-effort scorer (chunk 2 of the effort model). **No default**,
    * the same seam rule as the review judge and the summarizer: omitting it

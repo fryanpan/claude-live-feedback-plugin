@@ -45,7 +45,7 @@ arranged. Read it before non-trivial work.
 ```mermaid
 flowchart TB
   subgraph browser[Browser]
-    app["workspaces-app<br/>5 bundles: doc · board · signin · landing · sentry"]
+    app["workspaces-app<br/>6 bundles: doc · board · settings · signin · landing · sentry"]
     wid["widget<br/>injectable web component"]
   end
   plug["plugin<br/>skills · hooks · bundled mcp"]
@@ -57,6 +57,7 @@ flowchart TB
     meet["Meetings<br/>meetings.ts · meeting-*.ts · notes-*.ts<br/>transcribe-*.ts · recall*.ts"]
     keep["Keep-moving<br/>stall-wiring · stall-gate · stall-nudge<br/>stall-escalation · note-ask · keep-moving"]
     ident["Identity and sharing<br/>auth/ · share/ · identities.ts"]
+    prompts["Model prompts<br/>prompt-catalog.ts · prompt-store.ts<br/>routes/prompts.ts"]
     ops["Ops<br/>deploy*.ts · client-release.ts · plugin-release.ts · sentry.ts"]
   end
   core["core — pure shared library"]
@@ -67,7 +68,9 @@ flowchart TB
   wid -->|REST| edge
   plug --> mcp
   mcp -->|"REST · SSE"| edge
-  edge --> docs & board & meet & ident & ops
+  edge --> docs & board & meet & ident & ops & prompts
+  board & meet & keep --> prompts
+  prompts --> disk
   board --> keep
   docs <--> files
   docs & board & meet --> disk
@@ -79,10 +82,25 @@ flowchart TB
 | --- | --- | --- |
 | `core` | Wire types, the Yjs⇄markdown document model, anchors, attachment-set ids (`attachment.ts`), review-item rules, goal arithmetic, schedule rules and their English, prompts. | Imports no other workspace package. No `node:` I/O beyond path math, no DOM. |
 | `server` | The one process: data dir, the doc store, board, meetings, auth, sharing, deploys. | The only writer of durable state. Everything else asks it. |
-| `workspaces-app` | The browser client, five bundles from `scripts/build.ts`. | Ships as static assets the server publishes as a numbered release. |
+| `workspaces-app` | The browser client, six bundles from `scripts/build.ts`. | Ships as static assets the server publishes as a numbered release. |
 | `mcp` | The stdio MCP server agents talk to — a **client** of the server's REST and SSE. | No business logic the server does not also enforce. |
 | `widget` | The injectable comment widget for mockups and dev servers. | 40 KB gzipped (`check:widget-size`). Vanilla JS, no framework deps. |
 | `plugin` | Skills, hooks, and a bundled copy of `mcp`. | Version bumped in three places; see CLAUDE.md. |
+
+**Model prompts are a subsystem, not a scatter of literals.** Every set of
+words this server sends to a model is one row of `prompt-catalog.ts`, and
+`prompt-store.ts` keeps whatever the owner has rewritten in
+`<dataDir>/prompts.json`. Each caller — the notes composer, the meeting
+capture extractor, the note-ask judge, the voice router — takes its
+instructions as a **thunk** and calls it per tick, so an edit made on
+`/settings/prompts` reaches the next model call without a restart or a
+deploy. The shipped default for each stays beside the code that builds the
+rest of its message (`notes-prompt-store.ts`, `meeting-capture-prompt.ts`,
+`voice-prompt.ts`, `core/summary-prompt.ts`), and the catalog imports them;
+the store never holds a default, only an override. Two of the seven are
+fields on a **board** rather than on the server and keep being written
+through `PUT /api/workspaces/<id>/settings` — `routes/prompts.ts` says so
+with `scope` rather than serving them twice, and the client hides the split.
 
 **Where a route lives.** Everything that decides which URL paths it answers is
 under `routes/`, `server.ts` composes and delegates to it and matches nothing
@@ -119,7 +137,35 @@ suggestions, anchors, presence, live notes. Agents hold no replica, so an agent
 edit is a REST call the server applies to the doc. *REST* carries what needs the
 server as an authority — sign-in, binds, diffs, shares, deploys, and the board,
 where a write is a decision with an author and a gate rather than a merged
-value. *SSE* pushes changes to anyone holding no Yjs socket for them.
+value. *SSE* pushes changes to anyone holding no Yjs socket for them: one stream per
+document at `/events/<docId>`, and one per board at
+`/workspaces/<id>/events:stream`, which carries every thread event on any
+member doc of that board or diff review — what an agent's `watch_doc` holds
+instead of a stream per file (`routes/upgrade-stream.ts`, and
+`board/board-live-wiring.ts` in `workspaces-app`). Both the colon and the
+`/workspaces` prefix are deliberate, and the board stream moved to this
+address on 2026-09-05 to get them: a bare `events` segment under a board path
+is the activity feed's name, and a workspace id sitting outside `/workspaces`
+could not be read by the guard that reads every other board path. The address
+it moved off is recorded once, in [glossary.md](glossary.md).
+
+**Board state is server-owned, and Yjs only mirrors it.** The rows live in the
+sidecar-backed `TaskStore` (`tasks.ts`, JSON on disk). The `ws:<workspaceId>`
+doc's `tasks` and `workspace` maps are a read-only PROJECTION of that store
+(`task-projection.ts`), so the board renders in realtime without Yjs becoming
+the record: the server observes those maps and reverts any transaction whose
+Yjs origin is not its own `PROJECTION_ORIGIN` — firing no `task.*` event for
+it, because events come only from store mutations — and reasserts the whole
+projection from the store on hydrate, so a crash cannot leave forged board
+state standing. `isBoardOwnedDoc` (`doc-ids.ts`) is the prefix authority for
+which docs those are, `ws:` and `task:`, and none of them is ever file-bound.
+That is why editing a task chip inside a document does not write the task —
+the edit is reverted a moment later and the board changes only through the
+named REST routes, which is the consequence [security.md](security.md) records
+under "The board's own live doc is different". Task BODIES are the deliberate
+exception: each is an ordinary live `task:<taskId>` doc so every edit tool,
+thread and anchor applies unchanged, and the store's `body` string is a
+debounced snapshot of it.
 
 ## Layers inside `server`
 

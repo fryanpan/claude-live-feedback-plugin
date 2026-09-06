@@ -57,7 +57,13 @@ import { resolve } from 'node:path';
 const SRC = resolve(import.meta.dirname, '../src');
 
 /** The sheets the app's pages load, in cascade order. */
-export type SheetName = 'tokens.css' | 'styles.css' | 'doc.css' | 'board.css' | 'signin.css';
+export type SheetName =
+  | 'tokens.css'
+  | 'styles.css'
+  | 'doc.css'
+  | 'board.css'
+  | 'signin.css'
+  | 'settings.css';
 
 // audit: no-text
 //
@@ -72,6 +78,7 @@ const TEXT: Record<SheetName, string> = {
   'doc.css': readFileSync(resolve(SRC, 'doc.css'), 'utf8'),
   'board.css': readFileSync(resolve(SRC, 'board.css'), 'utf8'),
   'signin.css': readFileSync(resolve(SRC, 'signin.css'), 'utf8'),
+  'settings.css': readFileSync(resolve(SRC, 'settings.css'), 'utf8'),
 };
 
 /**
@@ -81,10 +88,11 @@ const TEXT: Record<SheetName, string> = {
  * `styles.css`, then `doc.css`, then `tokens.css`
  * (`packages/workspaces-app/index.html`); `renderBoardShell` links `board.css`,
  * then `styles.css`, then `tokens.css`; `renderSigninShell` links
- * `styles.css`, then `signin.css`, then `tokens.css`
- * (`packages/server/src/shells.ts`). Order is load-bearing and neither
- * page's is arbitrary: the board block used to sit a twelfth of the way into
- * `styles.css`, so loading `board.css` LAST would reverse about thirty
+ * `styles.css`, then `signin.css`, then `tokens.css`, and
+ * `renderSettingsShell` links `styles.css`, then `settings.css`, then
+ * `tokens.css` (`packages/server/src/shells.ts`). Order is load-bearing and
+ * neither page's is arbitrary: the board block used to sit a twelfth of the
+ * way into `styles.css`, so loading `board.css` LAST would reverse about thirty
  * equal-specificity ties the product does not reverse, and `doc.css` was
  * interleaved through `styles.css`, so loading it FIRST reverses twenty. A
  * test that installs a pair the other way round can watch a rule win that

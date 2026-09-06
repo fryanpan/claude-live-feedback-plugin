@@ -83,6 +83,15 @@ export interface HaikuNoteAskJudgeOpts {
    *  "there is no key", explicitly. */
   apiKey?: string | null;
   timeoutMs?: number;
+  /**
+   * The words to send, read PER CALL rather than captured at construction.
+   *
+   * A thunk and not a string, because that is what makes the settings page's
+   * promise true: the judge is built once at boot, and an edit saved an hour
+   * later has to reach the next note without a restart. Absent means the
+   * shipped `NOTE_ASK_SYSTEM`.
+   */
+  system?: () => string;
 }
 
 /** Process-wide, so an outage costs a line and not a log. */
@@ -104,6 +113,7 @@ export function haikuNoteAskJudge(opts: HaikuNoteAskJudgeOpts = {}): NoteAskJudg
   if (!key) return null;
   const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
   const timeoutMs = opts.timeoutMs ?? NOTE_ASK_JUDGE_TIMEOUT_MS;
+  const systemOf = opts.system ?? (() => NOTE_ASK_SYSTEM);
   return async (text) => {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), timeoutMs);
@@ -118,7 +128,7 @@ export function haikuNoteAskJudge(opts: HaikuNoteAskJudgeOpts = {}): NoteAskJudg
         body: JSON.stringify({
           model: MODEL,
           max_tokens: MAX_TOKENS,
-          system: NOTE_ASK_SYSTEM,
+          system: systemOf(),
           messages: [{ role: 'user', content: noteAskUserPrompt(text) }],
         }),
         signal: ctl.signal,

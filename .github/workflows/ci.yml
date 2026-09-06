@@ -1,12 +1,59 @@
 name: CI
 
+# FOUR JOBS, NOT ONE, AND WHY.
+#
+# This was a single `verify` job of twenty-one sequential steps, and it took
+# 576-718 seconds — measured over its last twelve runs on 2026-09-06. A person
+# who opens a pull request and waits eleven minutes for its verdict has put the
+# change down and picked something else up; the verdict then arrives for
+# somebody who is no longer holding the context, and every merge becomes a
+# return trip. The target is two minutes.
+#
+# Where the eleven minutes were, from run 34029537983's own step timings:
+#
+#   coverage      337s        loc:audit, check:imports,     0s each
+#   test:server   176s        check:architecture,
+#   test:vitest   147s        check:plugin-version,
+#   typecheck      23s        build:widget, widget-size,
+#   everything else ~18s      test:audit, mcp-bundle
+#
+# So 660 of 701 seconds were three steps, and those three steps ran each suite
+# TWICE: once plain for the verdict, once again inside `coverage` for the
+# number. Two changes follow from that, and they are the whole of this file's
+# redesign:
+#
+#   1. Each suite runs ONCE, under coverage instrumentation, and its lcov is
+#      carried to a job that ratchets it. The suite's own exit code is still
+#      the test verdict — it is the same tests, on the same commit, and the
+#      instrumentation costs the server suite nothing measurable and the client
+#      suite about 16%. What used to be ~660s of suite time is now ~330s.
+#   2. The ~330s runs CONCURRENTLY: the client suite across four shards, the
+#      server suite across processes inside one runner (it is two-thirds idle
+#      — 61s of CPU inside 175s of wall clock — so it parallelises almost for
+#      free), and the twelve cheap gates in a job that does not wait for
+#      either.
+#
+# The verdict is now the slowest job plus the coverage merge, not the sum of
+# everything. Each job is also its own line in the checks list, which is the
+# other half of the point: a red `client (2/4)` says which shard and its log
+# has that shard's output, where a red `verify` used to say only that one of
+# twenty-one steps failed.
+#
+# WHAT DID NOT CHANGE. Every gate that ran before runs now — `bun run
+# verify:parity` is the enforcement, and it reads EVERY job in this file
+# (except the ones scripts/verify.ts documents as non-gating), so a gate
+# dropped in the split fails the pull request that dropped it.
+
 on:
   push:
     branches: [main]
   pull_request:
 
 jobs:
-  verify:
+  # Everything that is not a suite: 41 seconds of the old job's 701, and it no
+  # longer waits behind eleven minutes of tests to tell you a file crossed 500
+  # lines.
+  gates:
     runs-on: ubuntu-latest
     # pull-requests: read is what lets the concurrent-version check see the
     # other open PRs. Everything unlisted is none — this job only reads.
@@ -26,37 +73,23 @@ jobs:
           # between Bun releases. Bump this deliberately, alongside a rebuild.
           bun-version: 1.3.10
       - run: bun install --frozen-lockfile
+      # THIS STEP IS WHY THE LISTS BELOW CAN BE TRUSTED. `bun run verify` is the
+      # one command CLAUDE.md tells a builder to run before pushing, and its
+      # member list lives in scripts/verify.ts. This asserts that every
+      # `bun run` in every gating job of this file is one of those members — so
+      # adding a gate here without adding it there fails, loudly, on the PR that
+      # added it, rather than on somebody else's PR weeks later.
+      - name: Local `bun run verify` covers this workflow
+        run: bun run verify:parity
       - name: Typecheck
         run: bun run typecheck
       - name: Lint
         run: bun run lint
-      # Two steps, not one `bun run test`. That script is
-      # `test:vitest && test:server`, and the `&&` means a red client suite
-      # short-circuits before the server suite is ever run — so a server
-      # regression that arrives alongside an unrelated client failure is
-      # invisible until somebody fixes the client one and pushes again. The
-      # server step runs even when the step above it failed, so ONE CI run
-      # reports on both suites. `!cancelled()` and not `always()`: a cancelled
-      # workflow should stop, not spend three more minutes.
-      - name: Test (client + unit)
-        run: bun run test:vitest
-      - name: Test (server)
-        if: ${{ !cancelled() }}
-        run: bun run test:server
       # Mechanical half of .claude/rules/testing-standards.md. Ratchets on
       # scripts/test-audit.baseline.json, so the counts it tracks cannot grow
       # back once they have been paid down.
       - name: Testing standards audit
         run: bun run test:audit
-      # Per-package line coverage, ratcheted on scripts/coverage.baseline.json.
-      # It re-runs both suites under instrumentation rather than reusing the
-      # Test step's run: coverage changes what the runners do, and a number
-      # measured from a different execution is not this commit's number.
-      # The floors are today's measured values, NOT the 80% bar — a threshold
-      # nothing meets is a build that is always red, which is a build nobody
-      # reads. `--list` prints the per-file gap so it can be worked down.
-      - name: Coverage
-        run: bun run coverage --list
       - name: Leak gate can still see
         run: bun run check:scrub-gate
       # Every file over 500 lines must have a written verdict in
@@ -105,25 +138,134 @@ jobs:
       # anyway, since HEAD and the base are the same commit.
       - name: Plugin version bumped
         run: bun run check:plugin-version --base origin/${{ github.event.pull_request.base.ref || 'main' }} $CONCURRENT_ARGS
+      # Was eight lines of inline shell here. It is a script so that this job and
+      # `bun run verify` run the SAME check instead of two hand-copied versions.
       - name: MCP bundle matches source
+        run: bun run check:mcp-bundle
+
+  # The client + unit suite, in four shards.
+  #
+  # It is CPU-bound — 134 seconds of CPU inside 42 of wall clock locally, with
+  # vitest's fork pool already saturating the runner — so more processes on one
+  # runner buys nothing and more runners buys everything.
+  #
+  # Sharding a coverage run is only sound because vitest's denominator is a
+  # property of the source, not of the execution: `all: true` instruments every
+  # included file whether a test touched it or not. Measured 2026-09-06: the
+  # four shards' lcov, merged, reports each package's numbers to the line
+  # exactly as one unsharded run does. `scripts/coverage.ts` documents the
+  # contrast with bun, whose denominator does move.
+  client:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      # Every shard runs. A failure in one is a fact about that shard, and
+      # cancelling the others would hide three quarters of the suite behind it.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+      - run: bun install --frozen-lockfile
+      - name: Test (client + unit)
         run: |
-          bun run build:mcp
-          if ! git diff --quiet -- packages/plugin/mcp/index.js; then
-            echo "::error::packages/plugin/mcp/index.js is stale — it does not match a fresh build of packages/mcp/src."
-            echo "Peers load the committed bundle, not the TypeScript source, so an unrebuilt bundle ships nothing."
-            echo "Fix: bun run build:mcp && git add packages/plugin/mcp/index.js"
-            git diff --stat -- packages/plugin/mcp/index.js
+          bun run test:vitest --shard=${{ matrix.shard }}/4 \
+            --coverage.enabled --coverage.reporter=lcovonly \
+            --coverage.reportsDirectory=.coverage/vitest
+      - uses: actions/upload-artifact@v4
+        # `!cancelled()`, so a shard that fails still hands over what it
+        # measured: the coverage job then reports a real shortfall rather than
+        # an artifact-shaped hole nobody can read.
+        if: ${{ !cancelled() }}
+        with:
+          name: lcov-client-${{ matrix.shard }}
+          path: .coverage/vitest/lcov.info
+          if-no-files-found: error
+
+  # The server suite, in one runner, across processes.
+  #
+  # The opposite shape to the client suite: 61 seconds of CPU inside 175 of
+  # wall clock, because most of it is waiting on debounce timers, fs.watch and
+  # SSE round trips. Waiting parallelises for free, so scripts/test-server.ts
+  # runs it across eight bun processes on this one runner — 175s to 29s
+  # locally, on two cores' worth of CPU. A matrix would pay four checkouts and
+  # four installs to buy the same thing.
+  server:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+      - run: bun install --frozen-lockfile
+      - name: Test (server)
+        run: bun run test:server --jobs 8 --coverage --coverage-dir .coverage/server
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: lcov-server
+          path: .coverage/server/lcov.info
+          if-no-files-found: error
+
+  # Per-package line coverage, ratcheted on scripts/coverage.baseline.json.
+  #
+  # It no longer re-runs the suites: the two jobs above ran them under
+  # instrumentation and this reads their lcov. `--reuse` is what says so out
+  # loud — it refuses rather than measuring, if an lcov is not there.
+  #
+  # The floors are today's measured values, NOT the 80% bar — a threshold
+  # nothing meets is a build that is always red, which is a build nobody
+  # reads. `--list` prints the per-file gap so it can be worked down.
+  coverage:
+    runs-on: ubuntu-latest
+    needs: [client, server]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+      - run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: lcov-*
+          path: .lcov
+      # Concatenation IS the merge for this format: scripts/coverage.ts takes
+      # the maximum hit count across records for a line, so a line covered in
+      # any shard is covered. The count is asserted, because an empty or short
+      # download would otherwise read as a coverage collapse — a shortfall
+      # against the floor, with no hint that the cause was a missing file.
+      - name: Merge the shards' lcov
+        run: |
+          set -euo pipefail
+          mkdir -p .coverage/vitest .coverage/server
+          cat .lcov/lcov-client-*/lcov.info > .coverage/vitest/lcov.info
+          cat .lcov/lcov-server/lcov.info > .coverage/server/lcov.info
+          client=$(ls -d .lcov/lcov-client-* | wc -l)
+          if [ "$client" -ne 4 ]; then
+            echo "::error::merged $client client shard lcov file(s), expected 4 — the coverage number would be measured from part of the suite."
             exit 1
           fi
-          echo "packages/plugin/mcp/index.js matches a fresh build."
+          wc -c .coverage/vitest/lcov.info .coverage/server/lcov.info
+      - name: Coverage
+        run: bun run coverage --reuse --list
 
   # The note-taking behaviour, on three ticks of one real meeting.
   #
-  # A SEPARATE JOB, not a step of `verify`, because it is the only thing in CI
-  # that spends money and reaches the network, and because it must never be
+  # A SEPARATE JOB, not a step of a gating one, because it is the only thing in
+  # CI that spends money and reaches the network, and because it must never be
   # able to fail the build for anyone else's change. `continue-on-error` says
   # that in the one place it is enforced: the slice reports, and a red note-
-  # taker is read rather than merged around.
+  # taker is read rather than merged around. scripts/verify.ts names it in
+  # NON_GATE_JOBS for the same reason — that is what keeps `verify:parity` from
+  # demanding `notes:eval` be runnable on a builder's machine.
   #
   # It SKIPS ITSELF when no key is configured, which is the state of this repo
   # today. That is deliberate and it is also the failure mode to watch — a

@@ -131,6 +131,19 @@ export interface StalledRow {
   /** How long since anything touched the row — a transition, an edit, or a
    *  comment on its discussion. */
   quietMs: number;
+  /**
+   * How long the row has been the FINDING it is, on the clock its own bucket
+   * is judged by — absent when that is `quietMs`, which is every bucket but
+   * one.
+   *
+   * The exception is a `blocked-on-owner-unfiled` row whose ask lives in its
+   * notes. Posting a note touches the row, so `quietMs` is near zero for an
+   * agent that restates "waiting on Bryan" every turn, while the thing being
+   * reported — an ask nobody has filed — is hours old (`unfiledQuietMs`).
+   * A reader of `quietMs` alone would conclude such a row was moving; the
+   * escalation does read it that way and needs the other number.
+   */
+  stuckMs?: number;
 }
 
 /** A row the gate could not evaluate. */
@@ -336,7 +349,7 @@ export function evaluateStalls(input: EvaluateStallsInput): StallVerdict {
     // gate — the note's own time rescuing the row from the very finding the
     // note is evidence for.
     else if (row.bucket === 'blocked-on-owner-unfiled' && unfiledQuietMs(row, input.now) > quietMs)
-      unfiled.push(named);
+      unfiled.push({ ...named, stuckMs: unfiledQuietMs(row, input.now) });
   }
   // `classifyOpenTasks` already sorts by silence, longest first, and both
   // lists inherit that order — the row at the top is the one to start with.
