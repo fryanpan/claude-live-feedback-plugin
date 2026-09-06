@@ -123,7 +123,7 @@ export function parseVoiceContext(raw: unknown): VoiceContext | undefined {
 }
 
 /** How the router learns what a doc holds. Injected, because the answer needs
- *  the room store and the review-item builder — neither of which voice owns,
+ *  the doc store and the review-item builder — neither of which voice owns,
  *  and neither of which it should grow a second copy of. */
 export type VoiceDocResourceReader = (
   workspaceId: string,
@@ -131,9 +131,9 @@ export type VoiceDocResourceReader = (
 ) => { title?: string; reviewItems: VoiceReviewItem[] } | undefined;
 
 /**
- * The two room-side writes voice performs, and nothing else.
+ * The two doc-side writes voice performs, and nothing else.
  *
- * Declared as a narrow structural interface rather than by importing the room
+ * Declared as a narrow structural interface rather than by importing the doc
  * store's type, for the same reason `VoiceReviewItem` is a projection: the
  * review-item entity is being reshaped on another branch, and voice must meet
  * it at a stable seam. `DocStore` satisfies this as-is — these ARE its methods,
@@ -161,11 +161,11 @@ export interface VoiceDocStore {
 }
 
 /**
- * A task's discussion room, CREATED if this process has not served it yet.
+ * A task's discussion doc, CREATED if this process has not served it yet.
  *
  * Injected rather than derived from the task id, because `task:<id>` is only
- * half the answer: body rooms are made lazily, so on a freshly restarted
- * server the room for a task nobody has opened does not exist and a comment
+ * half the answer: body docs are made lazily, so on a freshly restarted
+ * server the doc for a task nobody has opened does not exist and a comment
  * aimed straight at that docId is silently dropped. The one function that
  * both ensures and names it lives in the projection, so voice asks for it.
  */
@@ -273,7 +273,7 @@ export class VoiceRouter {
     tasks: TaskStore;
     complete?: VoiceComplete;
     docResource?: VoiceDocResourceReader;
-    /** Absent on a server built without a room store — the two text verbs then
+    /** Absent on a server built without a doc store — the two text verbs then
      *  defer, exactly as they did before their executors existed. */
     docStore?: VoiceDocStore;
     taskCommentDoc?: VoiceTaskCommentDoc;
@@ -313,9 +313,9 @@ export class VoiceRouter {
   /**
    * The same rule for a doc: attached to THIS workspace, or not present.
    *
-   * A task's BODY room (`task:<taskId>`) is the second half, and it was
+   * A task's BODY doc (`task:<taskId>`) is the second half, and it was
    * missing. `/review/task:<id>` is a real surface the board links to, and
-   * `workspaceOfDoc` deliberately resolves those rooms to the task's
+   * `workspaceOfDoc` deliberately resolves those docs to the task's
    * workspace — but `attachDoc` is the only writer of `docIds` and it never
    * holds one, so speaking on that page had its docId silently dropped from
    * the prompt, from the channel line and from the queue. The agent that
@@ -507,7 +507,7 @@ export class VoiceRouter {
       case 'comment': {
         if (!this.verbatim(transcript, plan.text) || !this.docStore) return { kind: 'defer' };
         const docStore = this.docStore;
-        // A task discussion lives in the task's own body room, which may not
+        // A task discussion lives in the task's own body doc, which may not
         // exist yet; a doc's comments live on the doc itself.
         const docId =
           plan.target.kind === 'task'
@@ -850,7 +850,7 @@ export class VoiceRouter {
       });
       if (plan) {
         // Same reason as the resource read above: `executeAction` creates a
-        // body room, parses a task body and awaits two room writes. A
+        // body doc, parses a task body and awaits two doc writes. A
         // rejection there is a reason to hand the utterance to the agent, not
         // to lose it.
         let outcome: ActionOutcome = { kind: 'defer' };

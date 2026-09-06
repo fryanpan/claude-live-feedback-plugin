@@ -1001,7 +1001,7 @@ function ActivityTab(props: { task: BoardTask; handlers: DetailHandlers; hidden:
       )}
       {links !== null && <div ref={linksRef} class="board-detail-links" />}
       <p class="board-detail-body-link">
-        {/* A secondary way in, not the way to edit: the same room in the full
+        {/* A secondary way in, not the way to edit: the same doc in the full
             review surface, for anchored comments and the wider page. */}
         <a href={`/review/${encodeURIComponent(task.bodyDocId)}`}>Open in the full editor</a>
       </p>
@@ -1256,7 +1256,7 @@ function TaskDetailPanel(props: {
   ]);
 
   // The description slot is the one node a repaint must never rebuild: the
-  // live editor is a ProseMirror view bound to a Yjs room, and even MOVING the
+  // live editor is a ProseMirror view bound to a Yjs doc, and even MOVING the
   // node removes it from the document first, which blurs it and drops the
   // caret. Preact owns the element and none of its children, and the fallback
   // below only runs while no editor has claimed it — an un-mounted slot must

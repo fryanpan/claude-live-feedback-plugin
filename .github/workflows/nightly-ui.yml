@@ -1,0 +1,163 @@
+name: Nightly UI
+
+# NIGHTLY, AND DELIBERATELY NOT ON PULL REQUESTS (Bryan, 2026-09-05).
+# This job installs a browser, builds the client, boots a real server and
+# renders four full pages. That is the expensive kind of check, and the
+# regressions it catches — a tab covered by the feedback bubble, a dead band at
+# the bottom of the editor — are ones that can wait a day. The stylesheet tests
+# in packages/workspaces-app/test stay on every PR; this stands behind them
+# with an actual layout engine rather than replacing them.
+#
+# Cron is UTC. 10:00 UTC is 03:00 America/Los_Angeles in summer, 02:00 in
+# winter — the middle of the night either way, which is the point.
+on:
+  schedule:
+    - cron: '0 10 * * *'
+  workflow_dispatch:
+
+# A run already going is worth more than a new one: it is the same commit.
+concurrency:
+  group: nightly-ui
+  cancel-in-progress: false
+
+jobs:
+  browser-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # WHO READS A FAILURE. The last step opens (or updates) a GitHub issue
+      # assigned to the repo owner — see the "Report" steps at the bottom and
+      # the PR body. A nightly job whose only output is a red tick in a tab
+      # nobody opens is decoration.
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Same pin as ci.yml. Bump the two together.
+          bun-version: 1.3.10
+      - run: bun install --frozen-lockfile
+
+      # `ui:shot` takes a Chrome binary or refuses to start. The runner image
+      # ships one; which name it answers to has moved between images, so ask
+      # rather than hard-code, and FAIL LOUDLY if there is none — a browser
+      # check that silently skips is the failure this whole job exists against.
+      - name: Resolve the browser
+        run: |
+          bin=""
+          for candidate in google-chrome google-chrome-stable chromium-browser chromium; do
+            found=$(command -v "$candidate" || true)
+            if [ -n "$found" ]; then bin="$found"; break; fi
+          done
+          if [ -z "$bin" ]; then
+            echo "::error::No Chrome or Chromium on this runner. The nightly UI run needs a browser; it did not skip, it failed."
+            exit 1
+          fi
+          echo "CW_CHROME_BIN=$bin" >> "$GITHUB_ENV"
+          echo "Using $bin — $("$bin" --version)"
+
+      # A CI container runs the browser without a usable sandbox namespace on
+      # some images. ui-shot reads these through CW_CHROME_ARGS rather than
+      # baking them in: on a person's machine the sandbox should stay on.
+      - name: Chrome flags for a CI container
+        run: echo 'CW_CHROME_ARGS=--no-sandbox --disable-dev-shm-usage' >> "$GITHUB_ENV"
+
+      # The nightly run boots the server against these bundles, so build them
+      # here rather than letting the server's own dev bundler do it — a run
+      # that measured a stale bundle would be reporting on yesterday.
+      - name: Build the client
+        run: |
+          bun run build:widget
+          bun run build:workspaces-app
+
+      - name: Browser checks
+        id: checks
+        run: |
+          set -o pipefail
+          bun run ui:nightly 2>&1 | tee ui-nightly.log
+
+      # `always()`, because the screenshots of a FAILED run are the ones worth
+      # looking at.
+      - name: Screenshots
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-ui-screenshots
+          path: |
+            .ui-nightly/*.png
+            ui-nightly.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      # ---- Report ----
+      #
+      # One issue, reused. A week of red nights on one open issue is a thread
+      # somebody can read; seven issues is a mailbox somebody mutes. Green
+      # closes it, so the issue list answers "is the UI currently healthy"
+      # without opening a workflow run.
+      - name: Open or update the failure issue
+        if: ${{ failure() && steps.checks.conclusion == 'failure' }}
+        uses: actions/github-script@v7
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const fs = require('fs');
+            let log = '';
+            try {
+              log = fs.readFileSync('ui-nightly.log', 'utf8');
+            } catch {
+              log = '(the run produced no log — it failed before the checks ran)';
+            }
+            const tail = log.split('\n').slice(-60).join('\n');
+            const body = [
+              `The nightly browser checks failed on \`${context.sha.slice(0, 8)}\`.`,
+              '',
+              `Run: ${process.env.RUN_URL}`,
+              'Screenshots are attached to that run as the `nightly-ui-screenshots` artifact.',
+              '',
+              '```',
+              tail,
+              '```',
+            ].join('\n');
+            const { owner, repo } = context.repo;
+            const existing = await github.rest.issues.listForRepo({
+              owner, repo, state: 'open', labels: 'nightly-ui', per_page: 1,
+            });
+            if (existing.data.length > 0) {
+              const number = existing.data[0].number;
+              await github.rest.issues.createComment({ owner, repo, issue_number: number, body });
+              core.notice(`Commented on the open nightly-ui issue #${number}.`);
+              return;
+            }
+            const created = await github.rest.issues.create({
+              owner, repo,
+              title: 'Nightly UI checks are failing',
+              body,
+              labels: ['nightly-ui'],
+              // The repo owner. Named here rather than left to the default
+              // (which is nobody) so the issue lands in somebody's queue.
+              assignees: [owner],
+            });
+            core.notice(`Opened issue #${created.data.number}.`);
+
+      - name: Close the failure issue when the run is clean
+        if: ${{ success() }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const open = await github.rest.issues.listForRepo({
+              owner, repo, state: 'open', labels: 'nightly-ui', per_page: 10,
+            });
+            for (const issue of open.data) {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: issue.number,
+                body: `The nightly browser checks passed on \`${context.sha.slice(0, 8)}\`. Closing.`,
+              });
+              await github.rest.issues.update({
+                owner, repo, issue_number: issue.number, state: 'closed',
+              });
+              core.notice(`Closed issue #${issue.number}.`);
+            }

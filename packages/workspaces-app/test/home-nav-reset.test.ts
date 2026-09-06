@@ -20,22 +20,29 @@
  *
  * All fixtures are synthetic.
  */
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type BoardTask, CHORES_ID } from '../src/board/board-model.ts';
 import { CLOSED_WALK, reviewQueue, walkPosition } from '../src/board/board-review-model.ts';
-import { BOARD_BOOT_SOURCES } from './support/board-boot-sources.ts';
+import {
+  type Booted,
+  NOW,
+  WS,
+  boardRow,
+  bootTestBoard,
+  click,
+  el,
+  resetBoardServer,
+} from './support/board-drive.ts';
 
-// The board's boot sources: `board-app.ts` and the three modules split out of
-// it. Read as one string because these assertions are about the board's
-// shape, not about which file a line ended up in — a move must not fail
-// them, and an absence checked across all four is the stronger read.
-const BOARD_APP = BOARD_BOOT_SOURCES.map((m) =>
-  readFileSync(resolve(import.meta.dirname, `../src/board/${m}.ts`), 'utf8'),
-).join('\n');
-
-const NOW = 1_700_000_000_000;
+/** A row the review queue picks up: open, human-owned, needing a decision. */
+const decisionRow = (n: number): BoardTask =>
+  boardRow(`t-${n}`, {
+    title: `Decision ${n}`,
+    assignee: 'human',
+    needs: 'decision',
+    goal: CHORES_ID,
+    order: n,
+  });
 
 function decision(n: number): BoardTask {
   return {
@@ -83,51 +90,100 @@ describe('CLOSED_WALK — the pair that means the Home page is showing', () => {
   });
 });
 
-/** `setNav` is a local declaration inside `bootBoard`, so it is unreachable by
- *  name even though the boot itself can now be driven (board-boot.test.ts).
- *  These read its source; what the nav DOES on arrival is asserted there. */
-function setNavBody(): string {
-  const body = BOARD_APP.match(/function setNav\([\s\S]*?\n {2}\}\n/)?.[0] ?? '';
-  expect(body, 'setNav went missing from board-app.ts').not.toBe('');
-  return body;
-}
-
+/**
+ * The tap, on a real board.
+ *
+ * DRIVEN, NOT GREPPED. All four cases below used to cut `setNav` and
+ * `renderWalkthrough` out of the concatenated boot modules with a regex and
+ * match strings inside them — including two ABSENCES (`not.toContain('same')`
+ * on one line, `history.pushState` nowhere in `setNav`). An absence in a
+ * function body is the weakest evidence there is: the same guard spelled
+ * `alreadyHere`, or moved one call deeper, passes every one of them. What
+ * Bryan reported is a TAP that changed nothing on screen, so tap it.
+ */
 describe('the Home nav item resets Home', () => {
-  it('arriving at Home closes the walkthrough', () => {
-    expect(setNavBody()).toMatch(/nav === 'home'[^\n]*closeWalkthrough\(\)/);
+  const rows = [decisionRow(1), decisionRow(2)];
+
+  beforeEach(resetBoardServer);
+  afterEach(() => {
+    document.body.innerHTML = '';
   });
 
-  it('closes it even when Home is already the destination', () => {
-    // The whole bug: a `same` guard short-circuited the only thing the tap
-    // did. The reset must stay unconditional.
-    const reset = setNavBody()
-      .split('\n')
-      .find((line) => line.includes('closeWalkthrough()'));
-    // Asserted present first: `not.toContain` on a missing line is a pass that
-    // means the opposite of what it reads as.
-    expect(reset, 'no closeWalkthrough call in setNav').toBeDefined();
-    expect(reset).not.toContain('same');
+  const homePageShowing = () =>
+    document.getElementById('board-home-page')?.classList.contains('hidden') === false;
+  const walkPositionText = () =>
+    document.querySelector('.board-walk-pos')?.textContent ??
+    document.querySelector('[class*=board-walk-pos]')?.textContent ??
+    null;
+
+  /** Boot on Home and drill into the queue, the way the card is reached. */
+  async function openWalkthrough(): Promise<Booted> {
+    const board = await bootTestBoard({
+      url: `https://board.test/workspaces/${WS}/home`,
+      tasks: rows,
+    });
+    expect(homePageShowing(), 'Home did not start on the Home page').toBe(true);
+    await click(el('board-home').querySelector('.board-review-go') as HTMLElement);
+    expect(homePageShowing(), 'Review All did not drill in').toBe(false);
+    return board;
+  }
+
+  it('a Home tap from the card lands on the Home page — the whole bug', async () => {
+    // `setNav` saw `state.nav === 'home'` already and short-circuited: one
+    // tap, no visible change, and the only way back was the card's own close.
+    // Home is ALREADY the destination here, which is the case that broke.
+    const board = await openWalkthrough();
+    await click(document.querySelector('[data-nav=home]') as HTMLElement);
+    expect(homePageShowing()).toBe(true);
+    // And the card is gone from the address too — the URL is the authority.
+    expect(board.location.href).not.toContain('item=');
   });
 
-  it('writes history only through the one address writer', () => {
-    // `syncBoardUrl` owns push-vs-replace-vs-unwind (`historyStep` decides);
-    // a raw history call in setNav would be a second, drifting opinion. The
-    // popstate path passes `push=false` — there the URL is the input.
-    expect(setNavBody()).toMatch(/if \(push\) syncBoardUrl\(\)/);
-    expect(setNavBody().match(/history\.(pushState|replaceState)/g)).toBeNull();
+  it('writes history only through the one address writer', async () => {
+    // `syncBoardUrl` owns push-vs-replace-vs-unwind. A raw history call in the
+    // nav handler would be a second, drifting opinion — visible here as an
+    // extra entry, because the drill-in and the tap out are ONE step: a push
+    // for the card, and the unwind that takes it back off.
+    const board = await openWalkthrough();
+    const beforeTap = board.history.entries.length;
+    await click(document.querySelector('[data-nav=home]') as HTMLElement);
+    const added = board.history.entries.slice(beforeTap);
+    expect(added, 'the tap wrote more than the one unwind').toEqual([{ kind: 'back' }]);
   });
 
-  it('closes it the same way the card’s own close button does', () => {
+  it('closes it on the way in from anywhere — Back onto /home included', async () => {
+    // The board banner's "go home" and a browser Back land on the same rule:
+    // arriving at Home closes the card, whichever way you arrive.
+    const board = await openWalkthrough();
+    await board.traverseTo(`https://board.test/workspaces/${WS}/home`);
+    expect(homePageShowing()).toBe(true);
+  });
+
+  it('closes it the same way the card’s own close button does', async () => {
     // Two spellings of "closed" is how the walkthrough comes back with a
-    // stale tally under it.
-    // Scoped to renderWalkthrough: the task detail panel has an `onClose` of
-    // its own, and an unscoped match reads that one instead.
-    const walkthrough =
-      BOARD_APP.match(/function renderWalkthrough\([\s\S]*?\n {2}\}\n/)?.[0] ?? '';
-    expect(walkthrough, 'renderWalkthrough went missing').not.toBe('');
-    const onClose = walkthrough.match(/onClose: \(\) => \{[\s\S]*?\n {8}\}/)?.[0] ?? '';
-    expect(onClose, 'the walkthrough onClose handler moved').not.toBe('');
-    expect(onClose).toContain('closeWalkthrough()');
-    expect(onClose).not.toContain('state.walkKey = null');
+    // stale tally under it: a close that clears the INDEX but leaves the KEY
+    // resumes on the item the reader had walked to.
+    const viaCard = await openWalkthrough();
+    await click(document.querySelector('.board-walk-skip') as HTMLElement);
+    expect(walkPositionText(), 'the skip did not move the card').toContain('2 of 2');
+    await click(document.querySelector('.board-walk-home') as HTMLElement);
+    expect(homePageShowing()).toBe(true);
+    await click(el('board-home').querySelector('.board-review-go') as HTMLElement);
+    const afterCardClose = walkPositionText();
+    expect(afterCardClose).toContain('1 of 2');
+    expect(viaCard.location.href).toContain('/home');
+
+    document.body.innerHTML = '';
+    resetBoardServer();
+
+    await openWalkthrough();
+    await click(document.querySelector('.board-walk-skip') as HTMLElement);
+    expect(walkPositionText()).toContain('2 of 2');
+    await click(document.querySelector('[data-nav=home]') as HTMLElement);
+    expect(homePageShowing()).toBe(true);
+    await click(el('board-home').querySelector('.board-review-go') as HTMLElement);
+    // The two routes out leave the queue in the SAME place. A second spelling
+    // of closed is exactly the difference this compares.
+    expect(walkPositionText()).toBe(afterCardClose);
   });
 });

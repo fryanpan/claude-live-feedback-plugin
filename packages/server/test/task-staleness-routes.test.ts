@@ -2,7 +2,7 @@
  * The premise-drift signal, driven through the REAL work-queue route.
  *
  * task-staleness.test.ts proves the arming rule. It cannot prove the notes
- * survive the trip from the task's body room, through the projection, into
+ * survive the trip from the task's body doc, through the projection, into
  * `buildQueue`, and out of `GET /workspaces/:id/next` — and that trip is
  * where this class of bug lives here: every REST handler hand-copies fields,
  * and the route is the layer nothing type-checks. `groups` was accepted,

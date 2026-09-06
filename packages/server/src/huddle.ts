@@ -3,7 +3,7 @@
  * lives, and what its first bytes are.
  *
  * A huddle is a live conversation over a doc, started from the Board before
- * there is a task. Everything about it that is a DOC — the room, the file
+ * there is a task. Everything about it that is a DOC — the doc, the file
  * binding, the board filing, the listing — is the ordinary doc machinery;
  * this module is only the handful of pure decisions the huddle route makes
  * before handing over to it, kept out of `server.ts` so they can be read and

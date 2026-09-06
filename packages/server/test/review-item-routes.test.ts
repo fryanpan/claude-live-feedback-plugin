@@ -632,13 +632,13 @@ describe("a person's plain reply answers the item it lands on", () => {
     });
     expect(first.status).toBe(200);
     // The loser of the race: it read the item as pending, and by the time it
-    // writes, it is not. Addressed by the room's PRIMARY id — `answerReviewItem`
+    // writes, it is not. Addressed by the doc's PRIMARY id — `answerReviewItem`
     // takes the resolved id the routes hand it, and a readable alias reaches no
-    // room from in here. Resolved rather than assumed, because a miss would
+    // doc from in here. Resolved rather than assumed, because a miss would
     // return `no-doc` and this test would pass without ever reaching the guard.
-    const roomId = handle.docStore.get(docId)?.docId ?? docId;
+    const primaryDocId = handle.docStore.get(docId)?.docId ?? docId;
     const late = await handle.docStore.answerReviewItem(
-      roomId,
+      primaryDocId,
       seeded.id,
       commentId,
       { ...PERSON, id: 'known-sam', name: 'Sam' },
@@ -865,8 +865,8 @@ describe('undo respects the visitor gate — a share visitor cannot spend the AP
   });
 
   function markerOf(docId: string, threadId: string): unknown {
-    const room = gatedHandle.docStore.get(docId);
-    const threads = room?.ydoc.getMap('threads') as Y.Map<Y.Map<unknown>> | undefined;
+    const doc = gatedHandle.docStore.get(docId);
+    const threads = doc?.ydoc.getMap('threads') as Y.Map<Y.Map<unknown>> | undefined;
     return threads?.get(threadId)?.get('summaryPendingTs');
   }
 

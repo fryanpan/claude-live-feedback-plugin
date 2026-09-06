@@ -64,7 +64,7 @@ carries `changed`: the rows, holds, unreadable rows and escalation that are
 new since the last one, rendered ahead of the full lists.
 
 **An open question counts wherever it was asked.** A row's own `task:<id>`
-room is read for both things a discussion can say — somebody is talking,
+doc is read for both things a discussion can say — somebody is talking,
 somebody is waiting on an answer — and so is every doc the row LINKS. Reading
 a linked doc for its prose alone missed the common case: thread writes carry
 no transaction origin, `lastContentChangeFor` refuses an unnamed one, so a
@@ -82,13 +82,13 @@ shared design doc from each other. Owner-matching alone was the first rule and
 missed the first case, leaving a row waking while a person owed it an answer;
 matching the row's ASSIGNEE instead is rejected on purpose, because it
 over-exonerates the moment one agent holds two rows. The row's own `task:<id>`
-room needs no scope at all, because a task-body thread belongs to exactly one
+doc needs no scope at all, because a task-body thread belongs to exactly one
 row. Two consequences to know: on a doc several rows link, an ask by a person
 or by an agent the roster cannot place parks nobody, and a linked doc's plain
 COMMENTS
 and edits still count for every row that links it — that exoneration expires
 with the quiet window rather than lasting as long as a question does. Reading
-those threads goes through `docStore.listThreads`, which hydrates an evicted room
+those threads goes through `docStore.listThreads`, which hydrates an evicted doc
 from disk rather than peeking, so a board whose rows link many cold docs pulls
 them back into memory on the loop's schedule.
 

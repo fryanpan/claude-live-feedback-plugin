@@ -58,12 +58,12 @@ export async function handleWorkspaceContent(
     const body = await safeJson(req);
     const addressed = body?.docId as string | undefined;
     if (!addressed || typeof addressed !== 'string') return j(400, { error: 'docId required' });
-    // The link target must exist: either a doc room, or a REVIEW id (a
+    // The link target must exist: either a live doc, or a REVIEW id (a
     // diff review / folder bind, attached as one unit). Only the first
-    // kind canonicalizes — a review id names no room, so there is
+    // kind canonicalizes — a review id names no doc, so there is
     // nothing to resolve it to.
-    const attachRoom = docStore.get(addressed);
-    const docId = attachRoom?.docId ?? addressed;
+    const attachDoc = docStore.get(addressed);
+    const docId = attachDoc?.docId ?? addressed;
     /**
      * A member may file onto their board something they can ALREADY see.
      * They may not pull something in from outside it.
@@ -105,7 +105,7 @@ export async function handleWorkspaceContent(
     // out-of-board refusal either way, and the miss reaches only callers who
     // could have attached the doc had it been there.
     const exists =
-      attachRoom !== undefined || docStore.list().some((m) => attachmentIdOf(m) === docId);
+      attachDoc !== undefined || docStore.list().some((m) => attachmentIdOf(m) === docId);
     if (!exists) return j(404, { error: 'doc not found', docId });
     const res = taskStore.attachDoc(workspaceId, docId);
     if (!res.ok) return j(404, res);
@@ -294,11 +294,11 @@ export async function handleWorkspaceContent(
     if (!created.ok || !created.minted) {
       return j(500, { error: 'huddle-not-minted' });
     }
-    const room = created.room;
-    const docId = room.docId;
+    const doc = created.doc;
+    const docId = doc.docId;
     const boardWorkspaceId = fileUnderBoardWorkspace(docId, workspaceId);
-    // The file first, then the bind — `attachFile` seeds the room from
-    // the file when the room is empty, so the topic heading lands
+    // The file first, then the bind — `attachFile` seeds the doc from
+    // the file when the doc is empty, so the topic heading lands
     // through the same path a bound project file's content does, and
     // the doc is a record on disk before anyone has typed a word.
     const file = huddleFilePath(dataDir, docId);
@@ -318,7 +318,7 @@ export async function handleWorkspaceContent(
       // link-refs route does.
       if (linked.ok) taskProjection.ensureWorkspace(linked.task.workspaceId);
     }
-    const decorated = withReviewUrl(room.meta, boardWorkspaceId);
+    const decorated = withReviewUrl(doc.meta, boardWorkspaceId);
     /**
      * The reply's doc metadata, as this caller may see it.
      *

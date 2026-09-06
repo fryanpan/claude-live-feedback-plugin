@@ -20,8 +20,25 @@ import { describe, expect, it } from 'vitest';
  * These are stylesheet properties — happy-dom resolves no layout, so no DOM
  * hit-test can see them. This test instead ties the reservation to the
  * widget's OWN fab geometry, so growing the bubble or its inset fails here
- * rather than silently re-covering the tab. What a browser still has to
- * confirm is in the commit body: the tap at 430px.
+ * rather than silently re-covering the tab. The tap itself — every visible tab
+ * hit-tested at 430px with the widget on the page — is asserted nightly by
+ * `nav-clears-widget` in scripts/ui-nightly-lib.ts; before that it lived only
+ * in this fix's commit body.
+ *
+ * PERMANENT SOURCE-SHAPE SITES, and counted as such. Two of the audit's
+ * source-shape floor lives here (scripts/test-audit.baseline.json names all
+ * three). A `calc()` of `max()` and `env()`, which happy-dom discards whole, needs a real layout engine, and the only browser this repo
+ * has is `bun run ui:shot`. Since 2026-09-05 that browser DOES run in CI —
+ * but NIGHTLY, from .github/workflows/nightly-ui.yml, and deliberately not on
+ * pull requests, because installing a browser and rendering four real pages is
+ * the expensive kind of job (Bryan's call, 2026-09-05). That schedule is
+ * exactly why this test stays here. Moving it would take a check that runs on
+ * EVERY PR and put it on one that runs once a day: the regression would land,
+ * merge, and surface tomorrow. Not a conversion, a downgrade. The nightly run
+ * stands BEHIND this test on the same subject, asserting in a real layout
+ * engine what this file can only read as text — see scripts/ui-nightly-lib.ts.
+ * It carries no `audit: not-source` marker
+ * because it IS a source read; what it is not is an unconverted leftover.
  */
 const SRC = resolve(import.meta.dirname, '../src');
 const CSS = readFileSync(resolve(SRC, 'board.css'), 'utf8');

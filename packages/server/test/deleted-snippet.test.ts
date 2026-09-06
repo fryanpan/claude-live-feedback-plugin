@@ -73,9 +73,9 @@ describe('deletedSnippet anchor hint (HTTP)', () => {
   /** Build a text-range anchor over the doc's first line, exactly the way the
    *  flat surfaces do (CM offsets are byte-identical to `content` indices). */
   function anchorFirstLine(extra: Record<string, unknown> = {}) {
-    const room = handle.docStore.get(docId);
-    if (!room) throw new Error('room missing');
-    const content = room.ydoc.getText('content');
+    const doc = handle.docStore.get(docId);
+    if (!doc) throw new Error('doc missing');
+    const content = doc.ydoc.getText('content');
     const source = content.toString();
     expect(source.length).toBeGreaterThan(0);
     const to = source.indexOf('\n') === -1 ? source.length : source.indexOf('\n');

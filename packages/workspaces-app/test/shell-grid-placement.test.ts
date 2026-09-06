@@ -19,10 +19,27 @@ import { describe, expect, it } from 'vitest';
  * against the wrong children; running the placement algorithm cannot.
  *
  * Scope, stated honestly: this models which ROW each child lands in, not how
- * TALL the rows come out. happy-dom resolves no layout and the repo has no
- * browser in CI, so track geometry was verified by hand in headless Chrome
- * against the running app and is recorded in the `#shell` comment. The row
- * index is the part that regresses silently; the geometry follows from it.
+ * TALL the rows come out. happy-dom resolves no layout, so track geometry is
+ * measured elsewhere: by hand in headless Chrome when this fix was written
+ * (recorded in the `#shell` comment), and nightly since 2026-09-05 by
+ * `shell-main-reaches-bottom` in scripts/ui-nightly-lib.ts, which fails with
+ * the same 40px / 100px band this file's comment names. The row index is the
+ * part that regresses silently; the geometry follows from it.
+ *
+ * PERMANENT SOURCE-SHAPE SITE, and counted as such. One of the audit's
+ * source-shape floor lives here (scripts/test-audit.baseline.json names all
+ * three). Grid auto-placement needs a real layout engine, and the only browser this repo
+ * has is `bun run ui:shot`. Since 2026-09-05 that browser DOES run in CI —
+ * but NIGHTLY, from .github/workflows/nightly-ui.yml, and deliberately not on
+ * pull requests, because installing a browser and rendering four real pages is
+ * the expensive kind of job (Bryan's call, 2026-09-05). That schedule is
+ * exactly why this test stays here. Moving it would take a check that runs on
+ * EVERY PR and put it on one that runs once a day: the regression would land,
+ * merge, and surface tomorrow. Not a conversion, a downgrade. The nightly run
+ * stands BEHIND this test on the same subject, asserting in a real layout
+ * engine what this file can only read as text — see scripts/ui-nightly-lib.ts.
+ * It carries no `audit: not-source` marker
+ * because it IS a source read; what it is not is an unconverted leftover.
  */
 
 const SRC = resolve(import.meta.dirname, '../src');

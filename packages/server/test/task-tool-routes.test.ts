@@ -510,10 +510,10 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
         expect(ev.to).toBe('human');
         expect(ev.actor).toEqual({ id: PERSON.id, name: PERSON.name, kind: 'person' });
 
-        // The board room is what every browser and share visitor reads; a
+        // The board doc is what every browser and share visitor reads; a
         // store-only change would be invisible there (§3.3).
         const board = handle.docStore.get(workspaceDocId(wsId));
-        expect(board).toBeDefined(); // positive control: the room exists at all
+        expect(board).toBeDefined(); // positive control: the doc exists at all
         const projected = board?.ydoc.getMap('tasks').get(task.id) as
           | { assignee?: string; title?: string }
           | undefined;
@@ -589,10 +589,10 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
         // fields and nothing type-checks that it forwarded this one.
         expect((await getTasks(wsId)).find((t) => t.id === task.id)?.dueAt).toBe(DUE);
 
-        // The board room is what every browser reads; a store-only change
+        // The board doc is what every browser reads; a store-only change
         // would be invisible there.
         const board = handle.docStore.get(workspaceDocId(wsId));
-        expect(board).toBeDefined(); // control: the room exists at all
+        expect(board).toBeDefined(); // control: the doc exists at all
         const projected = board?.ydoc.getMap('tasks').get(task.id) as
           | { dueAt?: number; title?: string }
           | undefined;

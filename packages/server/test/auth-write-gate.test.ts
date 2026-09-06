@@ -432,7 +432,7 @@ describe('with the gate ON', () => {
   it('lets an unsigned browser OPEN a review member it is allowed to read', async () => {
     // Opening a file in a review is a POST for its request shape — the path
     // of the member does not belong in a URL — and a read in its effect: the
-    // docId is derived from the review and the relPath, the room is created
+    // docId is derived from the review and the relPath, the doc is created
     // idempotently under the review's own root, and no user content comes
     // into being. Gated, a signed-out reader's redline companion never
     // opened, so the comment threads anchored to it silently vanished and

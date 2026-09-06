@@ -20,9 +20,6 @@
 import { describe, expect, it } from 'vitest';
 import { decisionAnsweredLine } from '../src/decision-line.ts';
 import { type BundleHarness, restoredWatches, startBundle } from './harness/mcp-bundle.ts';
-import { readMcpSource } from './harness/mcp-source.ts';
-
-const SRC = readMcpSource();
 
 const CLAUSE = 'walk its links as the propagation checklist';
 const ANSWERED = {
@@ -64,21 +61,19 @@ describe('decisionAnsweredLine', () => {
   });
 });
 
-describe('the channel switch and the shipped bundle both use it', () => {
-  /** The `case 'decision.answered':` arm, up to the next case. */
-  const arm = (): string => {
-    const start = SRC.indexOf("case 'decision.answered':");
-    expect(start, 'no decision.answered case in mcp.ts').toBeGreaterThan(-1);
-    const rest = SRC.slice(start + 1);
-    return rest.slice(0, rest.indexOf('case '));
-  };
-
-  it('delegates to the renderer instead of rebuilding the sentence inline', () => {
-    expect(arm()).toContain('decisionAnsweredLine(p)');
-    expect(arm()).not.toContain(CLAUSE);
-  });
-
-  it('ships the guard in the artifact peers actually load', async () => {
+describe('the shipped bundle renders the event with it', () => {
+  /**
+   * The channel switch used to be checked by slicing the
+   * `case 'decision.answered':` arm out of the source and requiring it to say
+   * `decisionAnsweredLine(p)`. That is a claim about which function name
+   * appears in a file — it passes on an arm that calls the renderer and
+   * throws the result away, and it fails on a rename that keeps the sentence
+   * identical. What has to hold is that the line a session RECEIVES is the
+   * one this renderer builds, so the frames below are pushed down the running
+   * bundle's own event stream and the delivered sentence is compared against
+   * the renderer's output for the same payload.
+   */
+  it('ships the guard, and the renderer, in the artifact peers actually load', async () => {
     let h: BundleHarness | undefined;
     try {
       h = await startBundle((req) =>
@@ -124,6 +119,33 @@ describe('the channel switch and the shipped bundle both use it', () => {
       });
       const bare = await h.waitForChannel((c) => c.content.includes('t-bare'));
       expect(bare.content).not.toContain(CLAUSE);
+
+      // The delivered line IS this renderer's output, not a sentence the arm
+      // rebuilt inline that happens to agree about the clause. A long answer
+      // is the cheapest way to tell them apart: truncation lives in the
+      // renderer, and an inline concat would relay the whole essay.
+      const long = 'z'.repeat(200);
+      h.pushFrame({
+        id: 'd:3',
+        event: 'decision.answered',
+        data: {
+          event: 'decision.answered',
+          eid: 'e-long',
+          docId: 'doc-1',
+          taskId: 't-long',
+          answer: long,
+          actor: { id: 'a-someone-else' },
+          links: [],
+        },
+      });
+      const essay = await h.waitForChannel((c) => c.content.includes('t-long'));
+      expect(essay.content).not.toContain(long);
+      expect(essay.content).toContain('…');
+      expect(essay.content).toBe(
+        // No `actor`: the frame's `{ id }` carries no name, and the
+        // renderer's `by …` clause keys on the name alone.
+        decisionAnsweredLine({ taskId: 't-long', answer: long, links: [] }),
+      );
     } finally {
       await h?.stop();
     }

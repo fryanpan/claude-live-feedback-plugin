@@ -21,6 +21,7 @@
  * about tasks.
  */
 import type { FeedbackClient, User } from '@feedback/core';
+import type { BootLocation } from '../boot-env.ts';
 import type { BoardState } from './board-actions.ts';
 import {
   type DriftNotice,
@@ -30,7 +31,7 @@ import {
   pluginDriftNotice,
   presenceChips,
 } from './board-presence-model.ts';
-import { wireMeMenu } from './me-menu.ts';
+import { defaultSigninHref, wireMeMenu } from './me-menu.ts';
 import { driftData, presenceData } from './presence-island.tsx';
 
 /** Everything the chrome needs from `bootBoard`, and nothing else. */
@@ -42,8 +43,13 @@ export interface BoardChromeDeps {
   user: Pick<User, 'name' | 'color'>;
   /** `getElementById`, already narrowed — `bootBoard`'s own `el`. */
   el(id: string): HTMLElement;
-  /** The board room's awareness feed: every tab connected to this workspace. */
+  /** The board doc's awareness feed: every tab connected to this workspace. */
   awareness: FeedbackClient['awareness'];
+  /** The address bar the boot was handed. The me-menu reads it for the
+   *  sign-in link's `next`, and reloads through it after a sign-out or a
+   *  rename — this module is inside the boot, so it takes the injected one
+   *  rather than reaching past it for the global. */
+  location: Pick<BootLocation, 'pathname' | 'search' | 'reload'>;
 }
 
 /** What `bootBoard` keeps: the three renders, plus the awareness read the live
@@ -56,7 +62,7 @@ export interface BoardChromeRegion {
 }
 
 export function createBoardChromeRegion(deps: BoardChromeDeps): BoardChromeRegion {
-  const { state, user, el, awareness } = deps;
+  const { state, user, el, awareness, location } = deps;
 
   function peopleFromAwareness(): PresencePerson[] {
     const people: PresencePerson[] = [];
@@ -142,7 +148,16 @@ export function createBoardChromeRegion(deps: BoardChromeDeps): BoardChromeRegio
   }
   // The chip's menu — sign in / sign out. Wired once (buildShell above was
   // the last write of this subtree); renderMe only repaints the chip face.
-  wireMeMenu({ button: el('board-me'), menu: el('board-me-menu'), localName: user.name });
+  wireMeMenu({
+    button: el('board-me'),
+    menu: el('board-me-menu'),
+    localName: user.name,
+    signinHref: defaultSigninHref(location.pathname, location.search),
+    // A reload after either, so no surface is left rendering the old session
+    // or the old name.
+    onSignedOut: () => location.reload(),
+    onRenamed: () => location.reload(),
+  });
 
   function renderSettingsPanel(): void {
     el('board-settings-panel').classList.toggle('hidden', !state.settingsOpen);

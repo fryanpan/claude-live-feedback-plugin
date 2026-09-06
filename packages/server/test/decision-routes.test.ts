@@ -178,7 +178,7 @@ describe('decision routes', () => {
           author: PERSON,
           text: 'Round 5 delivered 133 candidates.',
           // An ELEMENT anchor: a text-range one carries encoded Yjs relative
-          // positions, and a hand-written empty pair blows up the room's
+          // positions, and a hand-written empty pair blows up the doc's
           // re-anchor sweep on every later save.
           anchor: {
             kind: 'element',

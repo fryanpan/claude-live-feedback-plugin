@@ -117,7 +117,7 @@ describe('the MCP tools file a doc in a workspace, through the real bundle', () 
     expect(docId).toBeTruthy();
     expect(res.hubWorkspaceId).toBe(wsId);
     expect(handle.tasks.workspaceOfDoc(docId)).toBe(wsId);
-    // ...and the name the tool was given still reaches the same room.
+    // ...and the name the tool was given still reaches the same doc.
     expect(handle.docStore.get('mcp-doc-named')?.docId).toBe(docId);
   });
 

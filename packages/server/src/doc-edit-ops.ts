@@ -3,11 +3,11 @@
  * anchored edits a comment thread drives, suggestions, and block insert and
  * delete.
  *
- * Split out of `doc-store.ts`, which keeps the room lifecycle these operate on.
- * Almost every verb here is a thin, deliberate wrapper: resolve the room,
+ * Split out of `doc-store.ts`, which keeps the doc lifecycle these operate on.
+ * Almost every verb here is a thin, deliberate wrapper: resolve the doc,
  * hand the `Y.Doc` to `prose` or `suggestOps`, return what it says. The
  * value of gathering them is that the wrapping is the SAME each time —
- * a missing room is one answer, not eleven — and that is easier to hold
+ * a missing doc is one answer, not eleven — and that is easier to hold
  * true in one file than scattered through six thousand lines of lifecycle.
  *
  * What it needs from the store is four things, named in `DocEditPersistence`
@@ -18,7 +18,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:
 import { join } from 'node:path';
 import { type Thread, contentKind, prose, suggestOps } from '@feedback/core';
 import * as Y from 'yjs';
-import type { DocRoom } from './doc-store.ts';
+import type { LiveDoc } from './doc-store.ts';
 
 /** Backups kept per doc by `backupReplacedContent` before rotation. */
 const REPLACE_BACKUP_CAP = 20;
@@ -28,12 +28,12 @@ export interface DocEditPersistence {
   /** Where backups are written. Read at call time: the store builds this
    *  seam in a field initialiser, before its own config is assigned. */
   dataDir(): string;
-  /** The hydrated room behind a docId or alias, or nothing. */
-  room(docId: string): DocRoom | undefined;
+  /** The hydrated doc behind a docId or alias, or nothing. */
+  doc(docId: string): LiveDoc | undefined;
   thread(docId: string, threadId: string): Thread | null;
-  /** Bump the room's sequence and broadcast one suggestion event. */
+  /** Bump the doc's sequence and broadcast one suggestion event. */
   announceSuggestion(
-    room: DocRoom,
+    doc: LiveDoc,
     event: 'suggestion.created' | 'suggestion.accepted' | 'suggestion.rejected',
     sid: string,
     summary: suggestOps.SuggestionSummary | undefined,
@@ -80,11 +80,11 @@ export class DocEditOps {
     docId: string,
     markdown: string,
   ): { ok: true } | { ok: false; error: 'not-found' | 'unsupported' | 'empty' | 'parse-failed' } {
-    const room = this.p.room(docId);
-    if (!room) return { ok: false, error: 'not-found' };
+    const doc = this.p.doc(docId);
+    if (!doc) return { ok: false, error: 'not-found' };
     // Flat docs (code / diff) are read-only review surfaces; their content
     // comes from disk or a pinned commit, never from an agent payload.
-    if (contentKind(room.meta.type) !== 'prose') return { ok: false, error: 'unsupported' };
+    if (contentKind(doc.meta.type) !== 'prose') return { ok: false, error: 'unsupported' };
     if (!markdown.trim()) return { ok: false, error: 'empty' };
     let blocks: Y.XmlElement[];
     try {
@@ -93,16 +93,16 @@ export class DocEditOps {
       return { ok: false, error: 'parse-failed' };
     }
     if (blocks.length === 0) return { ok: false, error: 'empty' };
-    const fragment = prose.getProseFragment(room.ydoc);
+    const fragment = prose.getProseFragment(doc.ydoc);
     // Backup-on-replace: whatever the doc holds right now survives this
     // rewrite on disk, whoever wrote it and whatever the caller believed.
     this.backupReplacedContent(docId, prose.serializeFragmentToMarkdown(fragment));
     // A doc-side edit origin (NOT 'file-watch'): the write-back observer must
     // see this and flush it to disk like any other agent edit.
-    room.ydoc.transact(() => {
+    doc.ydoc.transact(() => {
       prose.applyMarkdownToFragment(fragment, markdown);
     }, 'agent-set-content');
-    prose.normalizeHeadingLevels(room.ydoc);
+    prose.normalizeHeadingLevels(doc.ydoc);
     return { ok: true };
   }
 
@@ -124,9 +124,9 @@ export class DocEditOps {
       parseInlineMarks?: boolean;
     },
   ): prose.ReplaceResult {
-    const room = this.p.room(docId);
-    if (!room) return { ok: false, error: 'no-match' };
-    return prose.findAndReplace(room.ydoc, opts);
+    const doc = this.p.doc(docId);
+    if (!doc) return { ok: false, error: 'no-match' };
+    return prose.findAndReplace(doc.ydoc, opts);
   }
 
   /**
@@ -142,12 +142,12 @@ export class DocEditOps {
     replacement: string,
     opts?: { parseInlineMarks?: boolean },
   ): prose.AnchoredEditResult {
-    const room = this.p.room(docId);
-    if (!room) return { ok: false, error: 'anchor-not-found' };
+    const doc = this.p.doc(docId);
+    if (!doc) return { ok: false, error: 'anchor-not-found' };
     const thread = this.p.thread(docId, threadId);
     if (!thread) return { ok: false, error: 'anchor-not-found' };
     if (thread.anchor.kind !== 'text-range') return { ok: false, error: 'anchor-orphaned' };
-    return prose.rewriteRange(room.ydoc, {
+    return prose.rewriteRange(doc.ydoc, {
       startRel: thread.anchor.startRel,
       endRel: thread.anchor.endRel,
       replacement,
@@ -169,9 +169,9 @@ export class DocEditOps {
       label?: string;
     },
   ): prose.CreateAnchorResult {
-    const room = this.p.room(docId);
-    if (!room) return { ok: false, error: 'no-match' };
-    return prose.createAgentAnchor(room.ydoc, opts);
+    const doc = this.p.doc(docId);
+    if (!doc) return { ok: false, error: 'no-match' };
+    return prose.createAgentAnchor(doc.ydoc, opts);
   }
 
   editAtAgentAnchor(
@@ -179,24 +179,24 @@ export class DocEditOps {
     anchorId: string,
     op: { kind: 'replace'; text: string } | { kind: 'insert_after'; text: string },
   ): prose.AnchoredEditResult {
-    const room = this.p.room(docId);
-    if (!room) return { ok: false, error: 'anchor-not-found' };
-    const anchor = prose.readAgentAnchor(room.ydoc, anchorId);
+    const doc = this.p.doc(docId);
+    if (!doc) return { ok: false, error: 'anchor-not-found' };
+    const anchor = prose.readAgentAnchor(doc.ydoc, anchorId);
     if (!anchor) return { ok: false, error: 'anchor-not-found' };
     if (op.kind === 'replace') {
-      return prose.rewriteRange(room.ydoc, {
+      return prose.rewriteRange(doc.ydoc, {
         startRel: anchor.startRel,
         endRel: anchor.endRel,
         replacement: op.text,
       });
     }
-    return prose.insertAfterRange(room.ydoc, { endRel: anchor.endRel, text: op.text });
+    return prose.insertAfterRange(doc.ydoc, { endRel: anchor.endRel, text: op.text });
   }
 
   deleteAgentAnchor(docId: string, anchorId: string): boolean {
-    const room = this.p.room(docId);
-    if (!room) return false;
-    return prose.deleteAgentAnchor(room.ydoc, anchorId);
+    const doc = this.p.doc(docId);
+    if (!doc) return false;
+    return prose.deleteAgentAnchor(doc.ydoc, anchorId);
   }
 
   // =========================================================================
@@ -212,9 +212,9 @@ export class DocEditOps {
   /** All pending proposals on the doc, in doc order. Empty for unknown docs
    *  and for flat (code/diff) docs, whose prose fragment has no content. */
   listSuggestions(docId: string): suggestOps.SuggestionSummary[] {
-    const room = this.p.room(docId);
-    if (!room) return [];
-    return suggestOps.listSuggestions(room.ydoc);
+    const doc = this.p.doc(docId);
+    if (!doc) return [];
+    return suggestOps.listSuggestions(doc.ydoc);
   }
 
   /**
@@ -245,15 +245,15 @@ export class DocEditOps {
         error: 'not-found' | 'no-match' | 'ambiguous' | 'match-in-pending-suggestion';
         candidates?: Array<{ docOffset: number; preview: string }>;
       } {
-    const room = this.p.room(docId);
-    if (!room) return { ok: false, error: 'not-found' };
-    const res = suggestOps.suggestReplace(room.ydoc, opts);
+    const doc = this.p.doc(docId);
+    if (!doc) return { ok: false, error: 'not-found' };
+    const res = suggestOps.suggestReplace(doc.ydoc, opts);
     if (!res.ok) return res;
     this.p.announceSuggestion(
-      room,
+      doc,
       'suggestion.created',
       res.sid,
-      suggestOps.listSuggestions(room.ydoc).find((s) => s.sid === res.sid),
+      suggestOps.listSuggestions(doc.ydoc).find((s) => s.sid === res.sid),
     );
     return { ok: true, suggestionId: res.sid };
   }
@@ -278,12 +278,12 @@ export class DocEditOps {
   ):
     | { ok: true; suggestionId: string }
     | { ok: false; error: 'anchor-not-found' | 'anchor-orphaned' | 'cross-block' } {
-    const room = this.p.room(docId);
-    if (!room) return { ok: false, error: 'anchor-not-found' };
+    const doc = this.p.doc(docId);
+    if (!doc) return { ok: false, error: 'anchor-not-found' };
     const thread = this.p.thread(docId, threadId);
     if (!thread) return { ok: false, error: 'anchor-not-found' };
     if (thread.anchor.kind !== 'text-range') return { ok: false, error: 'anchor-orphaned' };
-    const res = suggestOps.suggestRewriteRange(room.ydoc, {
+    const res = suggestOps.suggestRewriteRange(doc.ydoc, {
       startRel: thread.anchor.startRel,
       endRel: thread.anchor.endRel,
       replacement: opts.replacement,
@@ -293,10 +293,10 @@ export class DocEditOps {
     });
     if (!res.ok) return res;
     this.p.announceSuggestion(
-      room,
+      doc,
       'suggestion.created',
       res.sid,
-      suggestOps.listSuggestions(room.ydoc).find((s) => s.sid === res.sid),
+      suggestOps.listSuggestions(doc.ydoc).find((s) => s.sid === res.sid),
     );
     return { ok: true, suggestionId: res.sid };
   }
@@ -305,21 +305,21 @@ export class DocEditOps {
    *  normal debounced write-back. Missing sid (or doc) → not-found — also
    *  the correct answer to the double-accept race. */
   acceptSuggestion(docId: string, sid: string): suggestOps.SuggestionOpResult {
-    const room = this.p.room(docId);
-    if (!room) return { ok: false, error: 'not-found' };
-    const before = suggestOps.listSuggestions(room.ydoc).find((s) => s.sid === sid);
-    const res = suggestOps.acceptSuggestion(room.ydoc, sid);
-    if (res.ok) this.p.announceSuggestion(room, 'suggestion.accepted', sid, before);
+    const doc = this.p.doc(docId);
+    if (!doc) return { ok: false, error: 'not-found' };
+    const before = suggestOps.listSuggestions(doc.ydoc).find((s) => s.sid === sid);
+    const res = suggestOps.acceptSuggestion(doc.ydoc, sid);
+    if (res.ok) this.p.announceSuggestion(doc, 'suggestion.accepted', sid, before);
     return res;
   }
 
   /** Reject a proposal: restores exactly the pre-suggestion text. */
   rejectSuggestion(docId: string, sid: string): suggestOps.SuggestionOpResult {
-    const room = this.p.room(docId);
-    if (!room) return { ok: false, error: 'not-found' };
-    const before = suggestOps.listSuggestions(room.ydoc).find((s) => s.sid === sid);
-    const res = suggestOps.rejectSuggestion(room.ydoc, sid);
-    if (res.ok) this.p.announceSuggestion(room, 'suggestion.rejected', sid, before);
+    const doc = this.p.doc(docId);
+    if (!doc) return { ok: false, error: 'not-found' };
+    const before = suggestOps.listSuggestions(doc.ydoc).find((s) => s.sid === sid);
+    const res = suggestOps.rejectSuggestion(doc.ydoc, sid);
+    if (res.ok) this.p.announceSuggestion(doc, 'suggestion.rejected', sid, before);
     return res;
   }
 
@@ -328,13 +328,13 @@ export class DocEditOps {
     docId: string,
     opts: { action: 'accept' | 'reject'; authorId?: string },
   ): { ok: true; resolved: number; sids: string[] } | { ok: false; error: 'not-found' } {
-    const room = this.p.room(docId);
-    if (!room) return { ok: false, error: 'not-found' };
-    const before = new Map(suggestOps.listSuggestions(room.ydoc).map((s) => [s.sid, s]));
-    const res = suggestOps.resolveAllSuggestions(room.ydoc, opts);
+    const doc = this.p.doc(docId);
+    if (!doc) return { ok: false, error: 'not-found' };
+    const before = new Map(suggestOps.listSuggestions(doc.ydoc).map((s) => [s.sid, s]));
+    const res = suggestOps.resolveAllSuggestions(doc.ydoc, opts);
     const event = opts.action === 'accept' ? 'suggestion.accepted' : 'suggestion.rejected';
     for (const sid of res.sids) {
-      this.p.announceSuggestion(room, event, sid, before.get(sid));
+      this.p.announceSuggestion(doc, event, sid, before.get(sid));
     }
     return res;
   }
@@ -353,11 +353,11 @@ export class DocEditOps {
     markdown: string,
     opts?: { placement?: prose.BlockPlacement },
   ): prose.AnchoredEditResult {
-    const room = this.p.room(docId);
-    if (!room) return { ok: false, error: 'anchor-not-found' };
-    const anchor = prose.readAgentAnchor(room.ydoc, anchorId);
+    const doc = this.p.doc(docId);
+    if (!doc) return { ok: false, error: 'anchor-not-found' };
+    const anchor = prose.readAgentAnchor(doc.ydoc, anchorId);
     if (!anchor) return { ok: false, error: 'anchor-not-found' };
-    return prose.insertBlocksAfterAnchor(room.ydoc, {
+    return prose.insertBlocksAfterAnchor(doc.ydoc, {
       anchorRel: anchor.endRel,
       markdown,
       placement: opts?.placement,
@@ -366,12 +366,12 @@ export class DocEditOps {
 
   /** Append text at the END position of a thread's anchored range. */
   insertAfterThread(docId: string, threadId: string, text: string): prose.AnchoredEditResult {
-    const room = this.p.room(docId);
-    if (!room) return { ok: false, error: 'anchor-not-found' };
+    const doc = this.p.doc(docId);
+    if (!doc) return { ok: false, error: 'anchor-not-found' };
     const thread = this.p.thread(docId, threadId);
     if (!thread) return { ok: false, error: 'anchor-not-found' };
     if (thread.anchor.kind !== 'text-range') return { ok: false, error: 'anchor-orphaned' };
-    return prose.insertAfterRange(room.ydoc, { endRel: thread.anchor.endRel, text });
+    return prose.insertAfterRange(doc.ydoc, { endRel: thread.anchor.endRel, text });
   }
 
   /**
@@ -386,12 +386,12 @@ export class DocEditOps {
     markdown: string,
     opts?: { placement?: prose.BlockPlacement },
   ): prose.AnchoredEditResult {
-    const room = this.p.room(docId);
-    if (!room) return { ok: false, error: 'anchor-not-found' };
+    const doc = this.p.doc(docId);
+    if (!doc) return { ok: false, error: 'anchor-not-found' };
     const thread = this.p.thread(docId, threadId);
     if (!thread) return { ok: false, error: 'anchor-not-found' };
     if (thread.anchor.kind !== 'text-range') return { ok: false, error: 'anchor-orphaned' };
-    return prose.insertBlocksAfterAnchor(room.ydoc, {
+    return prose.insertBlocksAfterAnchor(doc.ydoc, {
       anchorRel: thread.anchor.endRel,
       markdown,
       placement: opts?.placement,
@@ -405,21 +405,21 @@ export class DocEditOps {
    * empty block element behind.
    */
   deleteBlockAtThread(docId: string, threadId: string): prose.DeleteBlockResult {
-    const room = this.p.room(docId);
-    if (!room) return { ok: false, error: 'anchor-orphaned' };
+    const doc = this.p.doc(docId);
+    if (!doc) return { ok: false, error: 'anchor-orphaned' };
     const thread = this.p.thread(docId, threadId);
     if (!thread) return { ok: false, error: 'anchor-orphaned' };
     if (thread.anchor.kind !== 'text-range') return { ok: false, error: 'anchor-orphaned' };
-    return prose.deleteBlockAtAnchor(room.ydoc, { anchorRel: thread.anchor.startRel });
+    return prose.deleteBlockAtAnchor(doc.ydoc, { anchorRel: thread.anchor.startRel });
   }
 
   /** Same, keyed on an agent anchor. */
   deleteBlockAtAgentAnchor(docId: string, anchorId: string): prose.DeleteBlockResult {
-    const room = this.p.room(docId);
-    if (!room) return { ok: false, error: 'anchor-orphaned' };
-    const anchor = prose.readAgentAnchor(room.ydoc, anchorId);
+    const doc = this.p.doc(docId);
+    if (!doc) return { ok: false, error: 'anchor-orphaned' };
+    const anchor = prose.readAgentAnchor(doc.ydoc, anchorId);
     if (!anchor) return { ok: false, error: 'anchor-orphaned' };
-    return prose.deleteBlockAtAnchor(room.ydoc, { anchorRel: anchor.startRel });
+    return prose.deleteBlockAtAnchor(doc.ydoc, { anchorRel: anchor.startRel });
   }
 
   /** Delete every top-level block from start match through end match.
@@ -435,9 +435,9 @@ export class DocEditOps {
       endOccurrence?: number;
     },
   ): prose.DeleteBlocksInRangeResult {
-    const room = this.p.room(docId);
-    if (!room) return { ok: false, error: 'no-match' };
-    return prose.deleteBlocksInRange(room.ydoc, opts);
+    const doc = this.p.doc(docId);
+    if (!doc) return { ok: false, error: 'no-match' };
+    return prose.deleteBlocksInRange(doc.ydoc, opts);
   }
 
   /** Delete a heading block + everything until the next heading at ≤ level. */
@@ -445,9 +445,9 @@ export class DocEditOps {
     docId: string,
     opts: { heading: string; level?: number; occurrence?: number },
   ): prose.DeleteSectionResult {
-    const room = this.p.room(docId);
-    if (!room) return { ok: false, error: 'no-match' };
-    return prose.deleteSection(room.ydoc, opts);
+    const doc = this.p.doc(docId);
+    if (!doc) return { ok: false, error: 'no-match' };
+    return prose.deleteSection(doc.ydoc, opts);
   }
 
   /**
@@ -456,8 +456,8 @@ export class DocEditOps {
    * safe to call on every significant doc change.
    */
   autoReanchor(docId: string): { checked: number; reanchored: number; stillOrphan: number } | null {
-    const room = this.p.room(docId);
-    if (!room) return null;
-    return prose.autoReanchorDoc(room.ydoc);
+    const doc = this.p.doc(docId);
+    if (!doc) return null;
+    return prose.autoReanchorDoc(doc.ydoc);
   }
 }

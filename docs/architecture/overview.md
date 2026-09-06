@@ -130,7 +130,7 @@ two cannot drift into a suggestion nobody can accept).
 ```mermaid
 flowchart LR
   subgraph f1["A comment: browser → .ydoc → agent"]
-    B1[Browser] -->|Yjs update over WS| R1["Room ydoc<br/>doc-store.ts"]
+    B1[Browser] -->|Yjs update over WS| R1["Live doc<br/>doc-store.ts"]
     R1 -->|debounced persist| Y1[(".ydoc · bound .md")]
     R1 -->|thread event| S1["SSE bus<br/>sse.ts · sse-mux.ts"]
     S1 -->|channel frame| A1["Agent<br/>mcp watch_doc"]

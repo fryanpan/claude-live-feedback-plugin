@@ -532,7 +532,7 @@ const BOARD_MEMBER_ROUTES: Readonly<Record<string, readonly string[]>> = {
   '': ['GET'],
   'review-items': ['GET'],
   // The board's rows. GET is the list the Tasks pane pages through; POST is
-  // filing one. The board room syncs the same rows, so the GET is a
+  // filing one. The board doc syncs the same rows, so the GET is a
   // convenience rather than a new disclosure.
   tasks: ['GET', 'POST'],
   // The Home pane and its per-person "caught up" marker. `home` is both the
@@ -773,9 +773,9 @@ export function shareScopeAllows(
 
   // Workspace-board surfaces (§3.12 commit 8) — three explicit allowances,
   // ONLY for a workspace-scope share. A doc-scoped share never reaches the
-  // board: the ws:<id> room syncs every task in the workspace (§3.3 rule 2),
+  // board: the ws:<id> doc syncs every task in the workspace (§3.3 rule 2),
   // so task chips inside a shared doc resolve through the REST endpoint
-  // below instead. The board room is deliberately NOT resolved through
+  // below instead. The board doc is deliberately NOT resolved through
   // `workspacesOf` (it is not a member doc) — its allowance is spelled out
   // here so granting it stays a decision, not a resolver side effect.
   if (target.workspaceId) {
@@ -849,7 +849,7 @@ export function shareScopeAllows(
         }
       }
     }
-    // The server-owned board room socket (/y/ws:<id>). Reads are the §3.3
+    // The server-owned board doc socket (/y/ws:<id>). Reads are the §3.3
     // visitor-contract projection; foreign writes are reverted server-side.
     if (pathname.startsWith('/y/') && safeDecode(pathname.slice('/y/'.length)) === `ws:${wsId}`) {
       return true;
@@ -912,7 +912,7 @@ export function shareScopeAllows(
    * It spends money while it is open — a transcription engine session per
    * meeting — which is the honest cost of the grant and not a reason to
    * withhold it: a member can already spend the same engine by being in the
-   * room while the owner records. Two things the socket still checks for
+   * doc while the owner records. Two things the socket still checks for
    * itself, unchanged by this line: the browser's Origin, and the sign-in
    * (a websocket upgrade is a GET, so the write gate cannot see it).
    */
@@ -951,7 +951,7 @@ export function shareScopeAllows(
   // refuses reading their doc.
   //
   // Bare `/api/tasks/<id>` is not in the table and therefore refused: the row
-  // itself arrives over the board room, and a bare-path read would be a
+  // itself arrives over the board doc, and a bare-path read would be a
   // second, unredacted spelling of it.
   //
   // GOALS used to be judged here, on the same lines, because
@@ -1185,9 +1185,9 @@ function pathWorkspaces(pathname: string, workspacesOf?: (id: string) => string[
     const rowOwners = workspacesOf?.(`task:${rowId}`);
     return Array.isArray(rowOwners) ? rowOwners : [];
   }
-  // The board room socket is `/y/ws:<id>`; every other `/y/<id>` is a doc.
-  const room = seg('/y/');
-  if (room?.startsWith('ws:')) return [room.slice('ws:'.length)];
+  // The board doc socket is `/y/ws:<id>`; every other `/y/<id>` is a doc.
+  const liveDoc = seg('/y/');
+  if (liveDoc?.startsWith('ws:')) return [liveDoc.slice('ws:'.length)];
 
   // Paths that name a DOC — every workspace it belongs to, most specific
   // first, which is the order `collabScope` then prefers between them.
@@ -1200,7 +1200,7 @@ function pathWorkspaces(pathname: string, workspacesOf?: (id: string) => string[
   // ask membership about and judged the path against the shell allowances,
   // which refuse it. So a member could open every tab of their board and not
   // the meeting they had just started on it.
-  const doc = seg('/review/') ?? room ?? seg('/audio/') ?? seg('/events/') ?? seg('/api/docs/');
+  const doc = seg('/review/') ?? liveDoc ?? seg('/audio/') ?? seg('/events/') ?? seg('/api/docs/');
   if (!doc) return [];
   const owners = workspacesOf?.(doc);
   // `Array.isArray` for the reason `shareScopeAllows` gives at its own use of
@@ -1229,7 +1229,7 @@ function pathWorkspaces(pathname: string, workspacesOf?: (id: string) => string[
  *
  * `tasks` (GET) is the §3.3 rule-2 chip endpoint: how a task chip inside a
  * shared doc resolves (id, title, status, assignee) without the visitor
- * ever syncing the workspace board room.
+ * ever syncing the workspace board doc.
  *
  * Anything not named here is refused, so a subroute added later is closed
  * until someone decides a visitor should have it.

@@ -8,7 +8,7 @@ import type { ReviewPayload } from './review-item.ts';
  *  - diff: one changed file of a git diff review (base..target). Content is
  *    the file at the TARGET commit — immutable, so anchors never drift; the
  *    diff itself is a client-side rendering against the base text.
- *  - workspace: a board workspace's board room (`ws:<workspaceId>`). Carries
+ *  - workspace: a board workspace's board doc (`ws:<workspaceId>`). Carries
  *    no LF-held content surface of its own — its `tasks`/`workspace` maps
  *    are a server-written projection of the task store (see the server's
  *    task-projection module), never edited through a content editor.
@@ -519,7 +519,7 @@ export interface ThreadWebhookPayload {
    *  thread. Absent on every other thread. */
   reviewItemId?: string;
   /** monotonically-increasing sequence within a doc. NOT unique across a
-   *  server restart — the counter lives on the in-memory room and starts at 0
+   *  server restart — the counter lives on the in-memory doc and starts at 0
    *  again on every start. Use `eid` to identify an event. */
   seq: number;
   /** Globally unique id for this broadcast, identical on every channel that
@@ -541,7 +541,7 @@ export interface SuggestionWebhookPayload {
   sid: string;
   suggestion?: unknown;
   doc: DocMeta;
-  /** Per-room and per-epoch; see ThreadWebhookPayload.seq. */
+  /** Per-doc and per-epoch; see ThreadWebhookPayload.seq. */
   seq: number;
   /** See ThreadWebhookPayload.eid. */
   eid?: string;
@@ -572,7 +572,7 @@ export interface DocSyncErrorPayload {
   message: string;
   /** ms epoch the failure was recorded — mirrors `syncError.at`. */
   at: number;
-  /** Per-room and per-epoch; see ThreadWebhookPayload.seq. */
+  /** Per-doc and per-epoch; see ThreadWebhookPayload.seq. */
   seq: number;
   /** See ThreadWebhookPayload.eid. */
   eid?: string;

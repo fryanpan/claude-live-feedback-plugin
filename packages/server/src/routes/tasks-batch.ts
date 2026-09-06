@@ -126,19 +126,19 @@ export async function handleTaskBatch(
       // Unlike a bare `links` ref, the source doc must EXIST: its plan
       // state decides whether these rows are drafts, and a gate read
       // off a doc that isn't there would answer with a shrug.
-      const sourceRoom = docStore.get(sdId);
-      if (!sourceRoom) {
+      const sourceLiveDoc = docStore.get(sdId);
+      if (!sourceLiveDoc) {
         return j(404, { error: 'source-doc-not-found', docId: sdId });
       }
-      const mode = sdMode ?? (sourceRoom.meta.huddle === true ? 'discussion' : 'plan');
-      const hold = mode === 'plan' && sourceRoom.meta.planState !== 'approved';
+      const mode = sdMode ?? (sourceLiveDoc.meta.huddle === true ? 'discussion' : 'plan');
+      const hold = mode === 'plan' && sourceLiveDoc.meta.planState !== 'approved';
       // Filing plan drafts is what DECLARES the doc a pending plan —
       // one call, no separate "mark this a plan" step. An approved
       // plan stays approved: later rows ride in ungated.
-      if (hold && sourceRoom.meta.planState === undefined) {
-        docStore.setPlanState(sourceRoom.docId, 'pending');
+      if (hold && sourceLiveDoc.meta.planState === undefined) {
+        docStore.setPlanState(sourceLiveDoc.docId, 'pending');
       }
-      sourceDoc = { docId: sourceRoom.docId, mode, hold };
+      sourceDoc = { docId: sourceLiveDoc.docId, mode, hold };
     }
     const createdBy = authorFor(body?.author);
     const createdIds = new Set<string>();

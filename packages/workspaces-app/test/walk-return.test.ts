@@ -1,8 +1,46 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { CLOSED_WALK, walkAimAfterOpen } from '../src/board/board-review-model';
-import { BOARD_BOOT_SOURCES } from './support/board-boot-sources.ts';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  CLOSED_WALK,
+  type ReviewItem,
+  type ReviewThreadItem,
+  walkAimAfterOpen,
+} from '../src/board/board-review-model';
+import { type WalkthroughView, walkthroughData } from '../src/board/walkthrough-island.tsx';
+import {
+  type Booted,
+  NOW,
+  WS,
+  boardRow,
+  bootTestBoard,
+  closeDetailPanel,
+  resetBoardServer,
+  server,
+  settle,
+} from './support/board-drive.ts';
+
+/** A question on a DOC — the jump that leaves the page. */
+const DOC_ASK: ReviewThreadItem = {
+  kind: 'doc-thread',
+  docId: 'd-1',
+  threadId: 'th-1',
+  title: 'The hob spec',
+  ask: 'Induction or gas?',
+  askedBy: 'Ada',
+  since: NOW - 60_000,
+  band: 'declared',
+};
+/** A question on a TASK — the open that stays, and repaints the card. */
+const TASK_ASK: ReviewThreadItem = {
+  kind: 'task-thread',
+  docId: 'task:t-1',
+  threadId: 'th-2',
+  taskId: 't-1',
+  title: 'Fit the hob',
+  ask: 'Before or after the worktop?',
+  askedBy: 'Ada',
+  since: NOW - 30_000,
+  band: 'declared',
+};
 
 /**
  * Back from a doc has to land where the reader was.
@@ -49,36 +87,95 @@ describe('walkAimAfterOpen', () => {
     expect(walkAimAfterOpen(closed, false)).toEqual(closed);
   });
 });
-
-// Pinned on the source (the pattern of walk-handoff.test.ts): the return hop
-// leaves the page, which a driven boot cannot follow. The behaviour itself was verified headlessly
-// at 430px against a built client — see the PR.
-describe('board-app wires the return', () => {
-  const src = BOARD_BOOT_SOURCES.map((m) =>
-    readFileSync(join(__dirname, '..', 'src', 'board', `${m}.ts`), 'utf8'),
-  ).join('\n');
-
-  it('both walkthrough openers route their aim through openFromWalk', () => {
-    // Two handlers, one rule. `onOpenThread` reaches the same doc jump when
-    // the item has no task thread to aim at, so it fails the same way — the
-    // shared helper is what stops the two drifting apart again.
-    expect(src).toMatch(/onOpenItem: \(item\) => openFromWalk\(/);
-    expect(src).toMatch(/onOpenThread: \(item\) => openFromWalk\(/);
-    expect(src).toMatch(/function openFromWalk[\s\S]{0,600}walkAimAfterOpen\(aim, stillHere\)/);
-    // Negative control: the old inline clear is gone from both handlers, so
-    // this is a pin on the new path rather than on a leftover of the old one.
-    expect(src).not.toMatch(
-      /onOpen(Item|Thread): \(item\) => \{[\s\S]{0,400}state\.walkIndex = -1/,
-    );
+// ── The two openers, driven ────────────────────────────────────────────────
+//
+// This used to be read out of the boot's source, on the grounds that the
+// return hop leaves the page and a driven boot cannot follow it. It does not
+// have to follow it: the jump goes through the INJECTED location, so the URL
+// the reader would have landed on is recorded rather than travelled, and the
+// aim bfcache would freeze is the state the next render reads.
+describe('the walkthrough hands the doc a way back', () => {
+  beforeEach(() => {
+    resetBoardServer();
+  });
+  afterEach(() => {
+    document.body.innerHTML = '';
   });
 
-  it('the doc jump carries the reader’s queue position on the link it mints', () => {
-    expect(src).toMatch(/item=\$\{encodeURIComponent\(returnItem\)\}/);
+  /**
+   * Boot straight into a sitting on ONE ask, and hand back the card's own
+   * handlers — the ones this paint bound to the item it drew.
+   *
+   * One item, because the return position the opener stamps is the reader's
+   * AIM, not the row passed in: a two-item queue would open item A and stamp
+   * item B, which is right and unreadable as an assertion.
+   */
+  async function sitting(ask: ReviewThreadItem): Promise<{
+    board: Booted;
+    view: WalkthroughView;
+    item: ReviewItem;
+  }> {
+    server.on(`/workspaces/${WS}/review-items`, { items: [ask] });
+    const board = await bootTestBoard({
+      url: `https://board.test/workspaces/${WS}/home?walk=1`,
+      tasks: [boardRow('t-1', { title: 'Fit the hob' })],
+    });
+    const view = walkthroughData.value;
+    const item = view.queue.items[view.index];
+    if (!item) throw new Error('the sitting opened on nothing');
+    return { board, view, item };
+  }
+
+  it('the doc jump carries the reader\u2019s queue position on the link it mints', async () => {
+    const { board, view, item: doc } = await sitting(DOC_ASK);
+    view.handlers.onOpenItem(doc);
+    await settle();
+    expect(board.location.navigations).toEqual([
+      `/workspaces/${WS}/docs/d-1?thread=th-1&item=${encodeURIComponent(doc.key)}`,
+    ]);
   });
 
-  it('only an OPEN walk hands out a return position', () => {
-    // A doc opened from a board row or a pasted link must not stamp one, or
-    // its back arrow would drop the reader into a sitting they never started.
-    expect(src).toMatch(/aim\.index >= 0 \? aim\.key : null/);
+  it('the thread opener mints the same link \u2014 one rule, two handlers', async () => {
+    // `onOpenThread` reaches the same doc jump when the item has no task
+    // thread to aim at, so it fails the same way if it skips the shared path.
+    const { board, view, item: doc } = await sitting(DOC_ASK);
+    view.handlers.onOpenThread(doc);
+    await settle();
+    expect(board.location.navigations).toEqual([
+      `/workspaces/${WS}/docs/d-1?thread=th-1&item=${encodeURIComponent(doc.key)}`,
+    ]);
+  });
+
+  it('the aim survives the leaving, so the page bfcache restores is still in the sitting', async () => {
+    const { board, view, item: doc } = await sitting(DOC_ASK);
+    view.handlers.onOpenItem(doc);
+    await settle();
+    // The restore: the frozen heap comes back and the first render normalises
+    // the URL from it. If the close had stood, that render would strip the
+    // deep link and the reader would arrive on a rebuilt, closed Home.
+    await board.project([boardRow('t-1', { title: 'Fit the hob' })]);
+    expect(board.history.url()).toContain(`item=${encodeURIComponent(doc.key)}`);
+  });
+
+  it('an open that STAYS on the page really does close the walk', async () => {
+    const { board, view, item } = await sitting(TASK_ASK);
+    view.handlers.onOpenItem(item);
+    await settle();
+    expect(board.location.navigations).toEqual([]);
+    expect(document.getElementById('board-home-page')?.classList.contains('hidden')).toBe(false);
+    expect(board.history.url()).toContain('task=t-1');
+    expect(board.history.url()).not.toContain('item=');
+    await closeDetailPanel(board);
+  });
+
+  it('a doc opened outside a sitting stamps no return position', async () => {
+    // Otherwise its back arrow would drop the reader into a queue they never
+    // started.
+    const { board, view, item: doc } = await sitting(DOC_ASK);
+    view.handlers.onClose();
+    await settle();
+    walkthroughData.value.handlers.onOpenThread(doc);
+    await settle();
+    expect(board.location.navigations).toEqual([`/workspaces/${WS}/docs/d-1?thread=th-1`]);
   });
 });

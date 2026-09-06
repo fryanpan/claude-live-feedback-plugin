@@ -2,7 +2,7 @@ import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
 import * as awarenessProtocol from 'y-protocols/awareness';
 import * as syncProtocol from 'y-protocols/sync';
-import type { DocRoom, FeedbackWs } from './doc-store.ts';
+import type { FeedbackWs, LiveDoc } from './doc-store.ts';
 import { captureServerError } from './sentry.ts';
 
 /**
@@ -33,22 +33,22 @@ function state(ws: FeedbackWs): WsState {
 }
 
 /**
- * One broadcaster per room (not per connection). When the room's Y.Doc
+ * One broadcaster per doc (not per connection). When the doc's Y.Doc
  * or Awareness emits an update, send it to every connection *except*
  * the origin connection. Registering N handlers with per-ws closures
  * (the previous approach) skipped the wrong peer on the broadcast loop —
  * updates originating from peer B never reached peer A.
  */
-const roomBroadcasters = new WeakMap<DocRoom, () => void>();
+const docBroadcasters = new WeakMap<LiveDoc, () => void>();
 
-function ensureBroadcaster(room: DocRoom): void {
-  if (roomBroadcasters.has(room)) return;
+function ensureBroadcaster(doc: LiveDoc): void {
+  if (docBroadcasters.has(doc)) return;
   const onUpdate = (update: Uint8Array, origin: unknown) => {
     const enc = encoding.createEncoder();
     encoding.writeVarUint(enc, MSG_SYNC);
     syncProtocol.writeUpdate(enc, update);
     const payload = encoding.toUint8Array(enc);
-    for (const peer of room.conns) {
+    for (const peer of doc.conns) {
       if (peer === origin) continue;
       try {
         peer.sendBinary(payload, true);
@@ -64,9 +64,9 @@ function ensureBroadcaster(room: DocRoom): void {
     const ids = [...added, ...updated, ...removed];
     const enc = encoding.createEncoder();
     encoding.writeVarUint(enc, MSG_AWARENESS);
-    encoding.writeVarUint8Array(enc, awarenessProtocol.encodeAwarenessUpdate(room.awareness, ids));
+    encoding.writeVarUint8Array(enc, awarenessProtocol.encodeAwarenessUpdate(doc.awareness, ids));
     const payload = encoding.toUint8Array(enc);
-    for (const peer of room.conns) {
+    for (const peer of doc.conns) {
       if (peer === origin) continue;
       try {
         peer.sendBinary(payload, true);
@@ -75,35 +75,35 @@ function ensureBroadcaster(room: DocRoom): void {
       }
     }
   };
-  room.ydoc.on('update', onUpdate);
-  room.awareness.on('update', onAwareness);
-  // Keep the handlers alive for the life of the server; rooms are long-lived.
-  roomBroadcasters.set(room, () => {
-    room.ydoc.off('update', onUpdate);
-    room.awareness.off('update', onAwareness);
+  doc.ydoc.on('update', onUpdate);
+  doc.awareness.on('update', onAwareness);
+  // Keep the handlers alive for the life of the server; docs are long-lived.
+  docBroadcasters.set(doc, () => {
+    doc.ydoc.off('update', onUpdate);
+    doc.awareness.off('update', onAwareness);
   });
 }
 
-export function onOpen(room: DocRoom, ws: FeedbackWs): void {
-  ensureBroadcaster(room);
-  room.conns.add(ws);
+export function onOpen(doc: LiveDoc, ws: FeedbackWs): void {
+  ensureBroadcaster(doc);
+  doc.conns.add(ws);
 
   // sync step 1 — ask the client for updates it has that we don't
   {
     const enc = encoding.createEncoder();
     encoding.writeVarUint(enc, MSG_SYNC);
-    syncProtocol.writeSyncStep1(enc, room.ydoc);
+    syncProtocol.writeSyncStep1(enc, doc.ydoc);
     ws.sendBinary(encoding.toUint8Array(enc), true);
   }
 
   // send current awareness state
-  const states = room.awareness.getStates();
+  const states = doc.awareness.getStates();
   if (states.size > 0) {
     const enc = encoding.createEncoder();
     encoding.writeVarUint(enc, MSG_AWARENESS);
     encoding.writeVarUint8Array(
       enc,
-      awarenessProtocol.encodeAwarenessUpdate(room.awareness, Array.from(states.keys())),
+      awarenessProtocol.encodeAwarenessUpdate(doc.awareness, Array.from(states.keys())),
     );
     ws.sendBinary(encoding.toUint8Array(enc), true);
   }
@@ -111,13 +111,13 @@ export function onOpen(room: DocRoom, ws: FeedbackWs): void {
   state(ws).cleanup = () => {
     const { knownClientIds } = state(ws);
     if (knownClientIds.size > 0) {
-      awarenessProtocol.removeAwarenessStates(room.awareness, Array.from(knownClientIds), ws);
+      awarenessProtocol.removeAwarenessStates(doc.awareness, Array.from(knownClientIds), ws);
     }
-    room.conns.delete(ws);
+    doc.conns.delete(ws);
   };
 }
 
-export function onMessage(room: DocRoom, ws: FeedbackWs, data: Uint8Array): void {
+export function onMessage(doc: LiveDoc, ws: FeedbackWs, data: Uint8Array): void {
   try {
     const dec = decoding.createDecoder(data);
     const kind = decoding.readVarUint(dec);
@@ -143,10 +143,10 @@ export function onMessage(room: DocRoom, ws: FeedbackWs, data: Uint8Array): void
           // that ignored the answer, and it gets what it should — no write.
           const step = decoding.readVarUint(dec);
           if (step === syncProtocol.messageYjsSyncStep1) {
-            syncProtocol.readSyncStep1(dec, enc, room.ydoc);
+            syncProtocol.readSyncStep1(dec, enc, doc.ydoc);
           }
         } else {
-          syncProtocol.readSyncMessage(dec, enc, room.ydoc, ws);
+          syncProtocol.readSyncMessage(dec, enc, doc.ydoc, ws);
         }
         if (encoding.length(enc) > 1) {
           ws.sendBinary(encoding.toUint8Array(enc), true);
@@ -157,9 +157,9 @@ export function onMessage(room: DocRoom, ws: FeedbackWs, data: Uint8Array): void
         const payload = decoding.readVarUint8Array(dec);
         // Track which client IDs this ws is contributing so disconnect only
         // removes *their* awareness states, not every peer's.
-        const before = new Set(room.awareness.getStates().keys());
-        awarenessProtocol.applyAwarenessUpdate(room.awareness, payload, ws);
-        const after = room.awareness.getStates().keys();
+        const before = new Set(doc.awareness.getStates().keys());
+        awarenessProtocol.applyAwarenessUpdate(doc.awareness, payload, ws);
+        const after = doc.awareness.getStates().keys();
         const ws_state = state(ws);
         for (const id of after) {
           if (!before.has(id)) ws_state.knownClientIds.add(id);

@@ -217,7 +217,7 @@ export async function bootBoard(env: BoardBootEnv): Promise<void> {
     maps: () => ({ tasks: tasksMap, ws: wsMap }),
   });
   // The REST read above already knows whether this board is retired, and the
-  // board room's first sync can be a second away on a cold connection. Paint
+  // board doc's first sync can be a second away on a cold connection. Paint
   // it now so nobody reads a retired board as live in that window.
   syncHeader();
 
@@ -241,7 +241,7 @@ export async function bootBoard(env: BoardBootEnv): Promise<void> {
     renderPresenceRegion: () => renderPresenceRegion(),
   });
 
-  // ── Realtime: the ws:<id> board room ────────────────────────────────────
+  // ── Realtime: the ws:<id> board doc ────────────────────────────────────
   const client = connect(wsUrl(`ws:${workspaceId}`, 'workspace'));
   installStaleClientNotice(client);
   // The board had no reading of its own connection at all, in any viewport —
@@ -284,6 +284,7 @@ export async function bootBoard(env: BoardBootEnv): Promise<void> {
     renderDetail: () => renderDetail(),
     renderLead: () => renderLead(),
     focusTitle: (taskId) => setFocusTitle(taskId),
+    location,
   });
   const { newTask, startHuddle, archiveTask } = actions;
 
@@ -554,7 +555,7 @@ export async function bootBoard(env: BoardBootEnv): Promise<void> {
 
   // ── The chrome cluster ──────────────────────────────────────────────────
   const { peopleFromAwareness, renderPresenceRegion, renderMe, renderSettingsPanel } =
-    createBoardChromeRegion({ state, user, el, awareness: client.awareness });
+    createBoardChromeRegion({ state, user, el, awareness: client.awareness, location });
 
   function renderAll(): void {
     // Mounted, not rendered: `renderQuickActions` is a no-op after the first
@@ -671,6 +672,7 @@ export async function bootBoard(env: BoardBootEnv): Promise<void> {
     loadHome,
     loadReviewItems,
     loadDiscussion,
+    location,
   });
 
   // Controls.

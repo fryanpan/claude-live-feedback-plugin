@@ -595,7 +595,7 @@ describe('withServerNotesSinks', () => {
     expect(context?.docTitle).toBe('Q3 planning');
   });
 
-  it('a doc without a room still resolves the caller context', () => {
+  it('a doc without a doc still resolves the caller context', () => {
     const { deps } = serverDeps();
     const wired = withServerNotesSinks(
       { composer: { name: 's', compose: async () => 'n' }, context: { repoRoot: '/repo' } },

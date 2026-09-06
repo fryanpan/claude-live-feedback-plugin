@@ -87,7 +87,7 @@ in `packages/server/test`, minus the `// timed:` ones.
 
 Polling cannot shorten a debounce the server itself schedules, and the suite
 crosses that chain hundreds of times. So `CW_TEST_TIMING_SCALE` multiplies
-every room cadence in `packages/server/src/room-timings.ts` by one factor.
+every doc cadence in `packages/server/src/doc-store-timings.ts` by one factor.
 `packages/server/test/timing.preload.ts` sets it to `0.1` for every `bun test`
 run, which is why the documented gate needs no extra flag.
 
@@ -96,7 +96,7 @@ load-bearing — the `.ydoc` persists before the `.md` write-back, which is what
 makes "a crash inside the flush window" a state a test can build. A uniform
 scale preserves every ratio. Unset, malformed, or above 1 gives the
 production defaults unchanged, asserted by
-`packages/server/test/room-timings.test.ts` in a subprocess with the variable
+`packages/server/test/doc-store-timings.test.ts` in a subprocess with the variable
 removed from the environment.
 
 The consequence for tests: a `// timed:` wait must DERIVE its window from

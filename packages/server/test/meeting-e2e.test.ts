@@ -139,9 +139,9 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
   const updates: NotesUpdate[] = [];
 
   const docMarkdown = (): string => {
-    const room = handle.docStore.get(docId);
-    if (!room) throw new Error(`no room for ${docId}`);
-    return prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
+    const doc = handle.docStore.get(docId);
+    if (!doc) throw new Error(`no doc for ${docId}`);
+    return prose.serializeFragmentToMarkdown(prose.getProseFragment(doc.ydoc));
   };
 
   /**
@@ -414,9 +414,9 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     expect(created.status, await created.clone().text()).toBe(200);
     const carryDocId = ((await created.json()) as { docId: string }).docId;
     const carryMarkdown = (): string => {
-      const room = handle.docStore.get(carryDocId);
-      if (!room) throw new Error(`no room for ${carryDocId}`);
-      return prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
+      const doc = handle.docStore.get(carryDocId);
+      if (!doc) throw new Error(`no doc for ${carryDocId}`);
+      return prose.serializeFragmentToMarkdown(prose.getProseFragment(doc.ydoc));
     };
     const client = await AudioClient.open(wsBase, carryDocId);
     // A conversation: the mode is what buys the labels every assertion below
@@ -517,9 +517,9 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     expect(created.status, await created.clone().text()).toBe(200);
     const lateDocId = ((await created.json()) as { docId: string }).docId;
     const lateMarkdown = (): string => {
-      const room = handle.docStore.get(lateDocId);
-      if (!room) throw new Error(`no room for ${lateDocId}`);
-      return prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
+      const doc = handle.docStore.get(lateDocId);
+      if (!doc) throw new Error(`no doc for ${lateDocId}`);
+      return prose.serializeFragmentToMarkdown(prose.getProseFragment(doc.ydoc));
     };
 
     // A two-voice conversation, composed into notes, then stopped.

@@ -127,9 +127,9 @@ describe('workspace folder-review e2e (HTTP)', () => {
     // way the read-only code surface does (code-anchor.ts): CM offsets are
     // byte-identical to indices into `content`. Send rel positions as
     // number[] — the wire shape the editor + REST routes round-trip cleanly.
-    const room = handle.docStore.get(codeDocId);
-    expect(room).toBeTruthy();
-    const content = room!.ydoc.getText('content');
+    const doc = handle.docStore.get(codeDocId);
+    expect(doc).toBeTruthy();
+    const content = doc!.ydoc.getText('content');
     const source = content.toString();
     const from = source.indexOf('export const answer');
     const to = source.indexOf('\n', from); // end of the first line

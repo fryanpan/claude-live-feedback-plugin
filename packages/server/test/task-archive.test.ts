@@ -5,7 +5,7 @@
  * no reversible removal at all: the row either stayed on the board forever or
  * a caller destroyed it. Archiving is the third answer. Three fields land on
  * the row (`archivedAt` / `archivedBy` / `archiveReason`), the id survives, the
- * task's body room and its comment threads keep resolving, and nothing moves
+ * task's body doc and its comment threads keep resolving, and nothing moves
  * on disk — so `unarchive` is a field clear rather than a restore from
  * anywhere.
  *
@@ -80,7 +80,7 @@ describe('archiving a task (store)', () => {
     expect(res.task.goal).toBe(task.goal);
     expect(res.task.order).toBe(task.order);
     // And the id still resolves, which is what keeps links and the task's
-    // body room working while it is archived.
+    // body doc working while it is archived.
     expect(store.getTask(task.id)?.id).toBe(task.id);
   });
 
@@ -322,7 +322,7 @@ describe('archive + restore routes', () => {
   it('an archived row keeps its body doc and its threads resolving', async () => {
     const task = await makeTask('Still readable');
     await post(`/api/tasks/${task.id}/archive`, { author: PERSON, reason: 'obsolete' });
-    // The task's own body room — the surface every comment thread hangs off.
+    // The task's own body doc — the surface every comment thread hangs off.
     const doc = await local(`/api/docs/task:${task.id}`);
     expect(doc.status).toBe(200);
   });

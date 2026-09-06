@@ -46,13 +46,22 @@ const IGNORED_ABS = join(REPO, IGNORED_REL);
  * that whole class of site is gone — those tests install the sheets and read
  * a computed value now. It then named `channel-gate.test.ts`, whose read of
  * the built plugin bundle has since become a frame pushed through the running
- * bundle instead. What is left is the board's own source-contract tests,
- * which read `board/*.ts` as text on purpose. When this file stops being a
- * site, point this at another one from `bun run test:audit --list` rather
- * than deleting the assertion: it is the positive control for the two
- * negative controls below.
+ * bundle instead, and then `board-source-contract.test.ts`, which now boots
+ * the board rather than reading it.
+ *
+ * It names one of the THREE PERMANENT floor reads now, on purpose: the
+ * baseline says why they cannot be converted while `ui:shot` is a local dev
+ * tool, so this anchor stops chasing the conversion pass. When even that
+ * stops being a site, point this at another one from
+ * `bun run test:audit --list` rather than deleting the assertion — it is the
+ * positive control for the two negative controls below.
  */
-const TRACKED_SITE = join('packages', 'workspaces-app', 'test', 'board-source-contract.test.ts');
+const TRACKED_SITE = join(
+  'packages',
+  'workspaces-app',
+  'test',
+  'board-nav-widget-clearance-css.test.ts',
+);
 
 /** A file the sleep check must object to: one fixed wait, well over the bar. */
 const PROBE_SOURCE = `import { sleep } from 'bun';\n\nexport async function wait(): Promise<void> {\n  await sleep(2500);\n}\n`;
@@ -601,21 +610,37 @@ describe('the audit sees a source read one module away', () => {
   });
 
   it('holds on the real harnesses, not only on planted ones', () => {
-    // The two modules the rule was written for. `watch-coverage.test.ts` owns
-    // no read of its own — every line of source it asserts on arrives through
-    // `harness/mcp-source.ts`. `board-island.test.tsx` imports `css-harness.ts`
-    // and asserts computed styles with `toBe`, so it matches every widened
-    // criterion except the one that matters.
+    // `board-island.test.tsx` imports `css-harness.ts` and asserts computed
+    // styles with `toBe`, so it matches every widened criterion except the one
+    // that matters — the harness's marker line over fully annotated exports.
+    // This is the exemption's real-tree positive control.
     const listed = runAudit('--list').stdout;
-    expect(listed).toContain(join('packages', 'mcp', 'test', 'watch-coverage.test.ts'));
     expect(listed).not.toContain(join('packages', 'workspaces-app', 'test', 'board-island'));
 
-    // And the real wrapped read. `css-minify.test.ts` is the one to name
-    // because its ONLY read is the wrapped one — the other five files the
-    // widening added were already on the list for a read that happened to fit
-    // on a line, so naming one of those would pass against a line-based
-    // detector too. If this file's read stops being wrapped, point this at
-    // `review-item-comments.test.tsx`, the other single-site case.
-    expect(listed).toContain(join('packages', 'widget', 'test', 'css-minify.test.ts'));
+    // The COUNTED side of the transitive-import rule has no real instance left
+    // to name. It used to be `watch-coverage.test.ts`, which owned no read of
+    // its own and took every line it asserted on through
+    // `harness/mcp-source.ts`; that harness and its eight siblings now drive
+    // the built bundle instead, and the harness is deleted. So the counted
+    // transitive case is held by `via-harness.test.ts` in the probe dir above
+    // and nowhere else on the real tree. If a test ever imports a reading
+    // module again, name it here — a rule whose only positive is planted is a
+    // rule that can rot without a single test going red.
+
+    // And the real wrapped read — a read whose own parentheses run past the
+    // line biome broke them on, which a line-based detector cannot see. This
+    // anchor has now moved twice: `css-minify.test.ts` held it until it took a
+    // per-site marker, then `review-item-comments.test.tsx`, until the suite
+    // stopped reading source at all. `board-nav-widget-clearance-css.test.ts`
+    // is named now because it is one of the THREE permanent floor reads the
+    // baseline names — a calc() of max() and env() that happy-dom discards
+    // whole — so it is the one real wrapped read that will still be here after
+    // the next conversion pass. The LINE number is part of the assertion (the
+    // detector reports a site, not a file), so an edit to that file's header
+    // moves it — as the nightly-UI change did, 37 → 45. Re-read it from
+    // `bun run test:audit --list` rather than guessing.
+    expect(listed).toContain(
+      `${join('packages', 'workspaces-app', 'test', 'board-nav-widget-clearance-css.test.ts')}:45`,
+    );
   });
 });

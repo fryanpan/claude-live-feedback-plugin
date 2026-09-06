@@ -7,7 +7,7 @@
  * two things a goal is FOR — saying what it means, and arguing about it — did
  * not.
  *
- * The design settled the naming question this suite pins: a goal's body room
+ * The design settled the naming question this suite pins: a goal's body doc
  * is `task:<goalId>`, not `goal:<goalId>`. Goal ids are `g-…` and task ids are
  * `t-…`, so the namespace cannot collide, and reusing the prefix means
  * `isBoardOwnedDoc`, every prose edit tool, the thread store, the SSE redactors
@@ -18,13 +18,13 @@
  * every one of these was a `getTask` lookup that misses on a goal row and
  * fails silently:
  *
- *  - the room has to be CREATED for a goal (nothing calls `ensureTaskBody`
+ *  - the doc has to be CREATED for a goal (nothing calls `ensureTaskBody`
  *    for one), or an agent's first `get_doc` lands on an empty stranger;
  *  - the write-back has to reach `GoalRow.body` (`updateBodySnapshot` reads
  *    `getTask`), or every description is lost on restart;
  *  - the projection has to carry it, or the board cannot draw what the store
  *    holds — this file's recurring bug;
- *  - a comment has to BROADCAST (`onDocRoomEvent` resolves the workspace via
+ *  - a comment has to BROADCAST (`onLiveDocEvent` resolves the workspace via
  *    `getTask`), or an agent watching the board never hears it;
  *  - a review item on a goal thread has to reach the Home queue, or "ask
  *    Bryan about this goal" is a comment nobody is told about.
@@ -97,11 +97,11 @@ describe('a goal is at parity with a task: description + comments', () => {
   /** The positive control every "it isn't there" below leans on: the summary
    *  really does describe THIS goal, so an absent field is an absent field
    *  rather than a lookup that found nothing. */
-  it('names the goal body room on the goal summary, so an agent can find it', async () => {
+  it('names the goal body doc on the goal summary, so an agent can find it', async () => {
     expect((await goalRow()).bodyDocId).toBe(`task:${goalId}`);
   });
 
-  it('serves the goal body room, so a description can be written to it', async () => {
+  it('serves the goal body doc, so a description can be written to it', async () => {
     const res = await fetch(`${base}/api/docs/${bodyDoc()}/content`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -117,16 +117,16 @@ describe('a goal is at parity with a task: description + comments', () => {
       body: JSON.stringify({ markdown: 'Ten teams using it weekly, unprompted.', author: AGENT }),
     });
     await settle();
-    // Read the STORE, not the room: the room is where the words are typed and
+    // Read the STORE, not the doc: the doc is where the words are typed and
     // the row is what survives a restart, and the write-back between them is
     // the thing that did not exist for a goal (`updateBodySnapshot` reads
     // `getTask`, which misses every goal row and returned false silently).
     expect(handle.tasks.getGoalRow(goalId)?.body ?? '').toContain('Ten teams using it weekly');
   });
 
-  it('takes the goal body room back to its board, so the full editor has a way back', async () => {
+  it('takes the goal body doc back to its board, so the full editor has a way back', async () => {
     // `workspaceOfDoc` is the same `getTask` miss: it answered null for a
-    // goal's room, which is what the back-link, the review URL and share
+    // goal's doc, which is what the back-link, the review URL and share
     // scoping all resolve against.
     expect(handle.tasks.workspaceOfDoc(`task:${goalId}`)).toBe(workspaceId);
   });
@@ -138,11 +138,11 @@ describe('a goal is at parity with a task: description + comments', () => {
       body: JSON.stringify({ markdown: 'Ten teams using it weekly, unprompted.', author: AGENT }),
     });
     await settle();
-    // The board renders bands off the `ws:` room's projected `goals` and
+    // The board renders bands off the `ws:` doc's projected `goals` and
     // nothing else, so a body only the store can see is the
     // store-has-it/surface-can't-show-it bug for the field goals exist for.
-    const room = handle.docStore.get(`ws:${workspaceId}`);
-    const goals = room?.ydoc.getMap('workspace').get('goals') as
+    const doc = handle.docStore.get(`ws:${workspaceId}`);
+    const goals = doc?.ydoc.getMap('workspace').get('goals') as
       | Array<{ id: string; body?: string; bodyDocId?: string }>
       | undefined;
     const projected = (goals ?? []).find((g) => g.id === goalId);
@@ -162,8 +162,8 @@ describe('a goal is at parity with a task: description + comments', () => {
     });
     expect(res.status).toBeLessThan(300);
     await settle();
-    const room = handle.docStore.get(`ws:${workspaceId}`);
-    const goals = room?.ydoc.getMap('workspace').get('goals') as
+    const doc = handle.docStore.get(`ws:${workspaceId}`);
+    const goals = doc?.ydoc.getMap('workspace').get('goals') as
       | Array<{ id: string; commentCount?: number }>
       | undefined;
     expect((goals ?? []).find((g) => g.id === goalId)?.commentCount).toBe(1);

@@ -6,7 +6,7 @@
  * per-board snapshots (`readyWorkSnapshot`, `stallSnapshot` and the
  * `stallVerdict` under it), the held-item walk over comment-borne asks, the
  * lead-presence monitor, both `Nudger` objects, the store subscription that
- * feeds the ready clock, and the comment-queue bridge that puts a doc room's
+ * feeds the ready clock, and the comment-queue bridge that puts a live doc's
  * comments on the board channel. They moved together because they are one
  * reading: every one of them answers "is this board moving, and who has to be
  * told", and the snapshots exist only to be handed to the nudgers.
@@ -172,7 +172,7 @@ export interface StallWiring {
   stallNudger: StallNudger;
   /** The comment-queue bridge, for the late-bound hook `DocStore` was built
    *  with — `DocStore` is constructed before the stores this needs. */
-  onDocRoomEvent: (docId: string, payload: WebhookPayload) => void;
+  onLiveDocEvent: (docId: string, payload: WebhookPayload) => void;
 }
 
 export function createStallWiring(ctx: StallWiringContext): StallWiring {
@@ -522,12 +522,12 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
     const first = evaluateStalls(input);
     const suspect = [...first.stalled, ...first.unfiled];
     if (suspect.length === 0) return first;
-    // Second pass over the handful the first pass named. A room that was never
+    // Second pass over the handful the first pass named. A doc that was never
     // opened holds no threads and answers nothing, which is the right answer:
     // a row with no discussion has no comment activity to find.
     //
     // The same walk also collects the asks `reviewState` cannot see: a review
-    // item filed as a payload ON A COMMENT lives in the room, not on the
+    // item filed as a payload ON A COMMENT lives in the doc, not on the
     // ticket, yet it sits on the reader's Home queue exactly like a
     // ticket-borne one — so a row behind one is legitimately waiting, and the
     // loop woke a live lead over exactly this shape. Openness is
@@ -553,11 +553,11 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
       }
     }
     /**
-     * One room's discussion, read for both things a discussion can say about
+     * One doc's discussion, read for both things a discussion can say about
      * a row: that somebody is talking on it, and that somebody is waiting on
      * an answer. Returns the newest comment time it saw.
      *
-     * Factored out because the row's own `task:<id>` room and each doc the
+     * Factored out because the row's own `task:<id>` doc and each doc the
      * row LINKS are read by exactly the same rules — and were not, which is
      * the bug. Two copies of "is this ask still open" is how one of them
      * comes to disagree with the Home queue.
@@ -609,8 +609,8 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
       // `evaluateStalls`, the CLI report, and every future caller.
       //
       // Scope is the row's OWN links — a doc it cites and any doc it holds a
-      // thread ref into. Deliberately not the row's `task:<id>` body room:
-      // that room is written by the projection on any row change, so
+      // thread ref into. Deliberately not the row's `task:<id>` body doc:
+      // that doc is written by the projection on any row change, so
       // counting it would exonerate a row for changing its own status.
       //
       // KNOWN LIMIT, and the reason a row can still wake falsely while
@@ -630,7 +630,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
         const editedAt = docStore.lastContentChangeFor(ref.docId);
         if (editedAt !== undefined && editedAt > newest) newest = editedAt;
         // …and that doc's DISCUSSION, on the same opt-in gesture and by the
-        // same rules as the row's own room. The prose fold above could never
+        // same rules as the row's own doc. The prose fold above could never
         // have covered it: `schema.ts` writes threads with no transaction
         // origin, and `lastContentChangeFor` refuses an unnamed origin on
         // purpose (see doc-activity-stall.test.ts's origins pair), so a
@@ -642,7 +642,7 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
         // The ask half is SCOPED, because a doc is a shared surface: a design
         // doc linked by four rows must not park all four, indefinitely, on one
         // unanswered question that only one of them is actually waiting on.
-        // The row's own `task:<id>` room needs no such scoping — a task-body
+        // The row's own `task:<id>` doc needs no such scoping — a task-body
         // thread belongs to exactly one row by construction.
         //
         // Two ways an ask can be about THIS row, and the first is why the
@@ -863,14 +863,14 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
       });
     }
   });
-  // A task's discussion lives in its body room, but an agent working a board
+  // A task's discussion lives in its body doc, but an agent working a board
   // watches the WORKSPACE channel, not each task's doc — so a comment that
   // only fans out on the doc's own stream reaches nobody who is working. The
   // same event also moves the row's comment count, which nothing else would
   // refresh (the store never changes, so no task.* event fires).
   //
-  // EVERY other doc room needs the same bridge, for the same reason and with
-  // one extra hop. `docStore.broadcastToRoom` fans out on `ws~<meta.workspaceId>`
+  // EVERY other live doc needs the same bridge, for the same reason and with
+  // one extra hop. `docStore.broadcastToDoc` fans out on `ws~<meta.workspaceId>`
   // — the GROUPING tag a diff review or folder bind sets — and a board link is
   // not that tag, so a plain attachment filed on a board reached that board's
   // agent never. Measured: a session with six docs under `watch_doc` and a
@@ -963,10 +963,10 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
     }
   };
 
-  const onDocRoomEvent = (docId: string, payload: WebhookPayload): void => {
+  const onLiveDocEvent = (docId: string, payload: WebhookPayload): void => {
     const rowId = taskIdOfBodyDoc(docId);
     if (rowId) {
-      // A `task:` room belongs to a task OR to a goal — one prefix, two kinds
+      // A `task:` doc belongs to a task OR to a goal — one prefix, two kinds
       // of row (see `ensureGoalBody`). Asking only `getTask` returned
       // undefined for every goal and took the early return, so a comment on a
       // goal reached nobody: no board broadcast, no agent watching the
@@ -1005,5 +1005,5 @@ export function createStallWiring(ctx: StallWiringContext): StallWiring {
     }
   };
 
-  return { leadPresence, readyNudger, stallNudger, onDocRoomEvent };
+  return { leadPresence, readyNudger, stallNudger, onLiveDocEvent };
 }

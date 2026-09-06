@@ -9,7 +9,7 @@
  *    choke point as every other store event (SSE + events.jsonl), and the
  *    record they carry NEVER includes `endpoint` — host-machine fields are
  *    REST-only with visitor redaction (the private-meta lesson).
- *  - AgentAttachment records never enter any ydoc. The ws:<id> board room
+ *  - AgentAttachment records never enter any ydoc. The ws:<id> board doc
  *    is proven clean with a positive control beside the absence.
  *  - Attachment state distinguishes "process up, agent unresponsive" (fresh
  *    lastHeartbeat, stale lastToolCallAt — the usage-limit outage shape)
@@ -680,10 +680,10 @@ describe('attachment routes + lead-addressed delivery', () => {
   it('AgentAttachment records never enter any ydoc (§3.3 rule 1)', async () => {
     // The board is given a lead up front so the agent we attach below is NOT
     // the lead. That separation is what keeps this assertion strong now that
-    // the workspace projects `leadAgentId`: an agent id in the ws room is
+    // the workspace projects `leadAgentId`: an agent id in the ws doc is
     // board state (who is responsible), never evidence that an ATTACHMENT
     // reached the ydoc, and this test still refuses the latter.
-    const wsId = await makeWorkspace('clean-room-board', 'agent-board-lead');
+    const wsId = await makeWorkspace('clean-doc-board', 'agent-board-lead');
     await post(`/workspaces/${wsId}/tasks`, { author: PERSON, title: 'A visible task' });
     await post(`/workspaces/${wsId}/agents`, {
       agentId: 'relay-agent',
@@ -693,16 +693,16 @@ describe('attachment routes + lead-addressed delivery', () => {
     await post(`/workspaces/${wsId}/agents/relay-agent/heartbeat`, {});
     await settle();
 
-    const room = handle.docStore.get(workspaceDocId(wsId));
-    if (!room) throw new Error('ws room missing');
+    const doc = handle.docStore.get(workspaceDocId(wsId));
+    if (!doc) throw new Error('ws doc missing');
     const dump = JSON.stringify({
-      tasks: room.ydoc.getMap('tasks').toJSON(),
-      workspace: room.ydoc.getMap('workspace').toJSON(),
+      tasks: doc.ydoc.getMap('tasks').toJSON(),
+      workspace: doc.ydoc.getMap('workspace').toJSON(),
     });
-    // Positive control: the room really projects this workspace's state —
+    // Positive control: the doc really projects this workspace's state —
     // including the one agent-shaped field it is SUPPOSED to carry.
     expect(dump).toContain('A visible task');
-    expect(dump).toContain('clean-room-board');
+    expect(dump).toContain('clean-doc-board');
     expect(dump).toContain('agent-board-lead');
     // The absences under test: no attachment record, no endpoint, and not
     // even the agent id of the agent that attached.

@@ -258,7 +258,7 @@ async function watchDoc(
  *    review tag and `doc-store.ts` has always double-broadcast on it. True from
  *    the start.
  *  - A BOARD: it holds docs through `workspace.docIds`, which is NOT that
- *    tag. Until the board fan-out landed in server.ts's `onDocRoomEvent`, a
+ *    tag. Until the board fan-out landed in server.ts's `onLiveDocEvent`, a
  *    doc filed on a board reached this stream never — and nothing said so,
  *    which is the whole failure class here. Now it does, resolved at
  *    broadcast time, so docs created LATER are covered with no second call.

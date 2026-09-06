@@ -51,6 +51,20 @@ NEW_TOKEN = "grimsbyfoyle"
 # metadata. The gate must keep seeing the former after it learns to ignore
 # the latter — a redaction that also swallowed content emails would be a miss.
 LEAK_EMAIL = "finchwhistle@example.invalid"
+# A two-word phrase, and the two halves it wraps into. A formatter breaking a
+# line between them is the whole subject of `check_multiline` below: searched
+# one line at a time, neither half is a match and the phrase disappears.
+WRAPPED_LEFT = "borogove"
+WRAPPED_RIGHT = "slithy"
+WRAPPED_LITERAL = f"{WRAPPED_LEFT} {WRAPPED_RIGHT}"
+# A regex whose own `\s+` already spells "any whitespace here" — broken only
+# because a line-at-a-time search never showed it a newline.
+SPACED_RX_LEFT = "jubjub"
+SPACED_RX_RIGHT = "bird"
+# A regex with a `.` between the halves. `.` must keep refusing to cross a
+# line break: widening it would let narrow patterns swallow half a file.
+DOT_RX_LEFT = "frumious"
+DOT_RX_RIGHT = "bandersnatch"
 
 REGISTRY = f"""\
 projects:
@@ -72,6 +86,11 @@ DENYLIST = (
     # the gate reported clean while its regex entries were blind.
     "/zonkey-[0-9]{3}/\n"
     "/quagga-[0-9]+\n"
+    # A multi-word literal, and two regexes that straddle a gap: one spelling
+    # the gap `\s+`, one spelling it `.`. See `check_multiline`.
+    f"{WRAPPED_LITERAL}\n"
+    f"/{SPACED_RX_LEFT}\\s+{SPACED_RX_RIGHT}/\n"
+    f"/{DOT_RX_LEFT}.{DOT_RX_RIGHT}/\n"
 )
 
 failures: list[str] = []
@@ -668,6 +687,67 @@ def check_allow_token_position(registry: str, denylist: str, fixture) -> None:
         expect(f"allow token: {label}", r.returncode, want, r.stderr)
 
 
+def check_multiline(registry: str, denylist: str, fixture) -> None:
+    """A phrase a line wrap broke in half is still one phrase.
+
+    The scanner searched one line at a time, so a private phrase that a
+    formatter or an editor wrapped was handed to the patterns as two
+    unrelated halves and matched nothing. Every case here ships with the same
+    needle on ONE line, because a clean exit reads identically as "the fix
+    works" and "the needle was never in this fixture" — and the fixture
+    denylist gained three entries for these cases, so the one-line controls
+    are also what proves those entries compile at all.
+
+    The `.` cases run the other way: widening `.` to cross a newline would let
+    a narrow pattern swallow half a file, so it must still refuse. That case's
+    control is the same pattern matching a character on its own line, which is
+    what separates "`.` correctly refused" from "the pattern is dead".
+    """
+    L, R = WRAPPED_LEFT, WRAPPED_RIGHT
+    cases = [
+        (f"We reused {L} {R} again.\n", 1,
+         "control — a two-word literal on one line is caught"),
+        (f"We reused {L}\n{R} again.\n", 1,
+         "a two-word literal broken across a line wrap is caught"),
+        (f"We reused {L}\n    {R} again.\n", 1,
+         "...and when the wrapped continuation is indented"),
+        (f"We reused {L}  \n\t{R} again.\n", 1,
+         "...and across trailing space, the break, and a tab"),
+        # `scrub-allow` is a TRAILING comment token, so on the first line of a
+        # span the phrase necessarily begins inside the comment — which is the
+        # real shape: a line documenting the gate, wrapped by a formatter.
+        (f"notes # scrub-allow {L}\n{R} tail\n", 0,
+         "the marker on the FIRST line of the span suppresses"),
+        (f"lead {L}\n{R} tail # scrub-allow\n", 0,
+         "the marker on the LAST line of the span suppresses"),
+        (f"lead {L}\n{R} tail\n", 1,
+         "control — the same two shapes without the marker are caught"),
+        (f"a {SPACED_RX_LEFT} {SPACED_RX_RIGHT} b\n", 1,
+         rf"control — a denylist regex spelling its gap \s+ matches on one line"),
+        (f"a {SPACED_RX_LEFT}\n{SPACED_RX_RIGHT} b\n", 1,
+         r"...and now matches the newline it was always written to match"),
+        (f"a {DOT_RX_LEFT}-{DOT_RX_RIGHT} b\n", 1,
+         "control — a `.` in a denylist regex matches a character on its line"),
+        (f"a {DOT_RX_LEFT}\n{DOT_RX_RIGHT} b\n", 0,
+         "...and still refuses to cross the line break"),
+    ]
+    for i, (body, want, label) in enumerate(cases):
+        r = run([fixture(f"multiline-{i}.md", body)], registry, denylist)
+        expect(f"multiline: {label}", r.returncode, want, r.stderr)
+
+    # The finding has to point somewhere useful. It names the line the phrase
+    # STARTS on, and says where it ends when it crosses one — a report that
+    # named only a line number would send the writer to a line whose text does
+    # not contain the phrase.
+    r = run([fixture("multiline-span.md", f"pad\npad\nWe reused {L}\n{R} again.\n")],
+            registry, denylist)
+    expect("multiline: a wrapped finding is reported", r.returncode, 1, r.stderr)
+    expect("multiline: ...at the line the phrase starts on",
+           0 if "multiline-span.md:3" in r.stderr else 1, 0, r.stderr)
+    expect("multiline: ...and says it spans through the next line",
+           0 if "lines 3-4" in r.stderr else 1, 0, r.stderr)
+
+
 def check_attribution(registry: str, denylist: str) -> None:
     """The push gate keeps the whole-blob read, and says who wrote each hit.
 
@@ -793,6 +873,37 @@ def check_commit_path(registry: str, denylist: str) -> None:
         r = run(["--staged"], registry, denylist, cwd=root)
         expect("commit path: control — whole-blob --staged still sees that match",
                r.returncode, 1, r.stderr)
+
+        # 2c. Added lines that are NOT neighbours must not be glued together.
+        #     The scanner searches whole text now, and the commit gate feeds it
+        #     only the added lines; concatenating two distant hunks would
+        #     manufacture a phrase the file does not contain. So the two halves
+        #     of a needle, added eight lines apart, must NOT fire...
+        write("spread.md", "\n".join(f"body line {n}" for n in range(1, 10)) + "\n")
+        g("add", "-A")
+        g("commit", "-qm", "spread seed")
+        lines = [f"body line {n}" for n in range(1, 10)]
+        lines[0] = f"body line 1 {WRAPPED_LEFT}"
+        lines[8] = f"{WRAPPED_RIGHT} body line 9"
+        write("spread.md", "\n".join(lines) + "\n")
+        g("add", "-A")
+        r = run(["--staged-added"], registry, denylist, cwd=root)
+        expect("commit path: two distant added hunks are not glued into a phrase",
+               r.returncode, 0, r.stderr)
+
+        # 2d. ...and the control: the same two halves on ADJACENT added lines
+        #     are one phrase and must fire. Without it, 2c passes just as well
+        #     when the needle is absent or the entry never compiled.
+        lines = [f"body line {n}" for n in range(1, 10)]
+        lines[0] = f"body line 1 {WRAPPED_LEFT}"
+        lines[1] = f"{WRAPPED_RIGHT} body line 2"
+        write("spread.md", "\n".join(lines) + "\n")
+        g("add", "-A")
+        r = run(["--staged-added"], registry, denylist, cwd=root)
+        expect("commit path: control — the same halves on adjacent added lines do",
+               r.returncode, 1, r.stderr)
+        g("checkout", "-q", "--", "spread.md")
+        g("reset", "-q")
 
         # 3. A line the commit adds that STARTS WITH `++` must not be read as a
         #    diff file header. Misparsed, it retargets every finding after it to
@@ -1049,6 +1160,7 @@ def main() -> int:
         check_never_allow(registry, denylist, fixture)
         check_never_push(registry, denylist, fixture)
         check_allow_token_position(registry, denylist, fixture)
+        check_multiline(registry, denylist, fixture)
 
     return _report()
 

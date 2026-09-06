@@ -16,6 +16,7 @@
  * two sources.
  */
 import { connect } from '@feedback/core';
+import type { BootLocation } from '../boot-env.ts';
 import { renderLiveStaleNotice, watchConnection, watchLiveSync } from '../connection-state.ts';
 import { staleTaskLinkStatuses } from '../link-titles.ts';
 import type { BoardState } from './board-actions.ts';
@@ -70,6 +71,9 @@ export interface BoardLiveDeps {
   loadHome: () => Promise<void>;
   loadReviewItems: () => Promise<void>;
   loadDiscussion: (row: LiveDiscussionRow, quiet?: boolean) => Promise<void>;
+  /** The address bar the boot was handed. Following a person off this board
+   *  leaves through it, so a test can read where the follow sent us. */
+  location: Pick<BootLocation, 'assign'>;
 }
 
 export function wireBoardLive(deps: BoardLiveDeps): void {
@@ -95,6 +99,7 @@ export function wireBoardLive(deps: BoardLiveDeps): void {
     loadHome,
     loadReviewItems,
     loadDiscussion,
+    location,
   } = deps;
 
   // ── Wiring ──────────────────────────────────────────────────────────────
@@ -194,7 +199,7 @@ export function wireBoardLive(deps: BoardLiveDeps): void {
   }
   // A reply to the question you just asked is the case this whole surface is
   // for, so it lands in the open panel without a reload. These events reach
-  // the workspace channel only because a task body room fans out to it — the
+  // the workspace channel only because a task body doc fans out to it — the
   // board is not subscribed to each task's own doc stream.
   for (const name of ['thread.created', 'thread.replied', 'thread.resolved', 'thread.reopened']) {
     es.addEventListener(name, () => {
@@ -204,7 +209,7 @@ export function wireBoardLive(deps: BoardLiveDeps): void {
       // refreshes whether or not a task panel happens to be open.
       void loadReviewItems();
       // Whichever panel is open — a goal's discussion goes as stale as a
-      // task's, and it is reached through the same room, so leaving it out
+      // task's, and it is reached through the same doc, so leaving it out
       // would mean a comment landing on a goal was invisible until the reader
       // closed and reopened the panel.
       const open: LiveDiscussionRow | undefined = state.detailTaskId

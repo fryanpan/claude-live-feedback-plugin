@@ -27,16 +27,19 @@ export interface MeMenuOpts {
   localName: string;
   fetchSession?: () => Promise<MeSession>;
   signOut?: () => Promise<void>;
-  /** Where "Sign in" goes. Carries `next` so finishing lands back here. */
-  signinHref?: string;
-  /** After sign-out — a reload, so nothing keeps rendering the old session. */
-  onSignedOut?: () => void;
+  /** Where "Sign in" goes. Carries `next` so finishing lands back here.
+   *  Required: the caller holds the address bar, this module does not. */
+  signinHref: string;
+  /** After sign-out — a reload, so nothing keeps rendering the old session.
+   *  Required, for the same reason as `signinHref`. */
+  onSignedOut: () => void;
   /** Saves a new display name; resolves false when the server refused. */
   saveName?: (name: string) => Promise<boolean>;
   /** Persist the confirmed name where `ensureUserIdentity` reads it. */
   storeName?: (name: string) => void;
-  /** After a rename — a reload, so every surface repaints the new name. */
-  onRenamed?: () => void;
+  /** After a rename — a reload, so every surface repaints the new name.
+   *  Required, for the same reason as `signinHref`. */
+  onRenamed: () => void;
 }
 
 async function defaultFetchSession(): Promise<MeSession> {
@@ -70,11 +73,9 @@ export function defaultSigninHref(pathname: string, search: string): string {
 }
 
 export function wireMeMenu(opts: MeMenuOpts): () => void {
-  const { button, menu } = opts;
+  const { button, menu, signinHref, onSignedOut, onRenamed } = opts;
   const fetchSession = opts.fetchSession ?? defaultFetchSession;
   const signOut = opts.signOut ?? defaultSignOut;
-  const signinHref = opts.signinHref ?? defaultSigninHref(location.pathname, location.search);
-  const onSignedOut = opts.onSignedOut ?? (() => location.reload());
   const saveName = opts.saveName ?? defaultSaveName;
   const storeName =
     opts.storeName ??
@@ -83,7 +84,6 @@ export function wireMeMenu(opts: MeMenuOpts): () => void {
         { get: (k) => localStorage.getItem(k), set: (k, v) => localStorage.setItem(k, v) },
         name,
       ));
-  const onRenamed = opts.onRenamed ?? (() => location.reload());
 
   const close = () => {
     menu.classList.add('hidden');

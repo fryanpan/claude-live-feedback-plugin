@@ -6,7 +6,6 @@ import {
   stalledLine,
 } from '../src/nudge-line.ts';
 import { type BundleHarness, restoredWatches, startBundle } from './harness/mcp-bundle.ts';
-import { readMcpSource } from './harness/mcp-source.ts';
 
 /**
  * The two wake events exist to make the board the scheduler instead of the
@@ -288,22 +287,8 @@ describe('the propagation clause on reviewAnsweredLine', () => {
   });
 });
 
-describe('the channel switch and the shipped bundle both use it', () => {
+describe('the shipped bundle renders the event with it', () => {
   const CLAUSE = 'walk its links as the propagation checklist';
-  const SRC = readMcpSource();
-
-  /** The `case 'workspace.review_answered':` arm, up to the next case. */
-  const arm = (): string => {
-    const start = SRC.indexOf("case 'workspace.review_answered':");
-    expect(start, 'no workspace.review_answered case in mcp.ts').toBeGreaterThan(-1);
-    const rest = SRC.slice(start + 1);
-    return rest.slice(0, rest.indexOf('case '));
-  };
-
-  it('delegates to the renderer instead of rebuilding the sentence inline', () => {
-    expect(arm()).toContain('reviewAnsweredLine(p)');
-    expect(arm()).not.toContain(CLAUSE);
-  });
 
   /**
    * The delivery half, driven rather than grepped.
@@ -360,6 +345,18 @@ describe('the channel switch and the shipped bundle both use it', () => {
       });
       const bare = await h.waitForChannel((c) => c.content.includes('t-bare'));
       expect(bare.content).not.toContain(CLAUSE);
+
+      // The delivered line IS this renderer's output, and not a sentence the
+      // arm rebuilt inline that happens to agree about the clause. The old
+      // proof was `arm().toContain('reviewAnsweredLine(p)')` over the source,
+      // which is a claim about a function name in a file: it went red on a
+      // behaviour-preserving refactor and stayed green on an arm that called
+      // the renderer and threw the result away. Comparing the delivered
+      // sentence to the renderer's own output for the same payload cannot do
+      // either.
+      expect(bare.content).toBe(
+        reviewAnsweredLine({ taskId: 't-bare', title: 'Cache the facet counts', links: [] }),
+      );
     } finally {
       await h?.stop();
     }
@@ -577,7 +574,6 @@ describe('stalledLine names held review items as their own finding', () => {
 });
 
 describe('reviewItemHeldLine — the filer’s own wake', () => {
-  const SRC = readMcpSource();
   const payload = {
     taskId: 't-b3',
     title: 'Rebuild the index nightly',
@@ -622,8 +618,29 @@ describe('reviewItemHeldLine — the filer’s own wake', () => {
     expect(reviewItemHeldLine({ ...payload, reason: 'No stakes' })).toContain('No stakes.');
   });
 
-  it('the shipped switch renders the event with it', () => {
-    expect(SRC).toContain("case 'workspace.review_item_held':");
-    expect(SRC).toContain('reviewItemHeldLine(p)');
-  });
+  /**
+   * The wiring half, driven rather than grepped. Two `toContain` checks over
+   * the source said only that a `case` label and a call expression existed
+   * somewhere in a file — they pass on an arm whose result is discarded, on a
+   * source edit that was never rebuilt into the bundle a peer loads, and they
+   * fail on a rename that changes nothing a session sees.
+   */
+  it('the shipped bundle renders the event with it', async () => {
+    let h: BundleHarness | undefined;
+    try {
+      h = await startBundle((req) =>
+        req.method === 'GET' && /\/watches$/.test(req.path) ? restoredWatches('doc-1') : {},
+      );
+      await h.streamOpen();
+      h.pushFrame({
+        id: 'h:1',
+        event: 'workspace.review_item_held',
+        data: { event: 'workspace.review_item_held', eid: 'e-held', docId: 'doc-1', ...payload },
+      });
+      const held = await h.waitForChannel((c) => c.content.includes('ri-1'));
+      expect(held.content).toBe(reviewItemHeldLine(payload));
+    } finally {
+      await h?.stop();
+    }
+  }, 60_000);
 });

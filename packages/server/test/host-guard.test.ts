@@ -751,8 +751,8 @@ describe('shareScopeAllows (workspace-board surfaces — §3.12 commit 8)', () =
     expect(shareScopeAllows('/api/docs/auth-rfc', 'GET', OTHER_WS, workspaceOf)).toBe(true);
   });
 
-  it('allows the ws:<id> board room socket (the resolver knows nothing of it)', () => {
-    // The room is not a member doc — its allowance is explicit, so pass a
+  it('allows the ws:<id> board doc socket (the resolver knows nothing of it)', () => {
+    // The doc is not a member doc — its allowance is explicit, so pass a
     // resolver that knows nothing about it and watch it still pass.
     expect(shareScopeAllows('/y/ws%3Aboard-1', 'GET', BOARD, () => [])).toBe(true);
     expect(shareScopeAllows('/y/ws:board-1', 'GET', BOARD, () => [])).toBe(true);
@@ -800,7 +800,7 @@ describe('shareScopeAllows (workspace-board surfaces — §3.12 commit 8)', () =
 
   /**
    * The strip's thread half rides REST while its decision half rides the board
-   * room. Blocked, the client swallows the non-ok and a visitor's strip shows
+   * doc. Blocked, the client swallows the non-ok and a visitor's strip shows
    * decisions only — the same silent transport/surface disagreement that closed
    * `<ws>` and `<ws>/attachments` were reopened to fix.
    */

@@ -1,8 +1,6 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
-import { BOARD_BOOT_SOURCES } from './support/board-boot-sources.ts';
+import { WS, bootTestBoard, el, resetBoardServer } from './support/board-drive.ts';
 
 /**
  * The hold-to-talk mic is DOCKED in the workspace nav, not floating over the
@@ -36,14 +34,6 @@ import { BOARD_BOOT_SOURCES } from './support/board-boot-sources.ts';
  * child order is a fact about the file that renders it. What a browser still
  * has to confirm is in the PR body: how the docked control READS.
  */
-// The board's boot sources: `board-app.ts` and the three modules split out of
-// it. Read as one string because these assertions are about the board's
-// shape, not about which file a line ended up in — a move must not fail
-// them, and an absence checked across all four is the stronger read.
-const BOARD_APP = BOARD_BOOT_SOURCES.map((m) =>
-  readFileSync(resolve(import.meta.dirname, `../src/board/${m}.ts`), 'utf8'),
-).join('\n');
-
 /** The 901–1100px band: the rail is a horizontal strip, in flow. */
 const STRIP = { width: 1000, height: 800 } as const;
 
@@ -120,30 +110,58 @@ function overlays(viewport: { width: number; height: number }) {
 }
 
 describe('the mic lives in the nav, not on top of the page', () => {
-  it('mounts the mic and its indicator inside the nav element', () => {
-    const start = BOARD_APP.indexOf('<nav id="board-nav"');
-    const end = BOARD_APP.indexOf('</nav>', start);
-    const markup = start < 0 || end < 0 ? '' : BOARD_APP.slice(start, end);
-    // Positive control: this really is the nav, and the items it has always
-    // held are in the slice being read.
-    expect(markup, 'the board nav element moved or was renamed').not.toBe('');
-    expect(markup).toContain('board-nav-item');
-    expect(markup).toContain('id="board-nav-collapse"');
+  it('mounts the mic and its indicator inside the nav element', async () => {
+    // DRIVEN, NOT GREPPED. This used to cut `<nav id="board-nav">…</nav>` out
+    // of the concatenated boot sources with two indexOf calls and compare
+    // substring OFFSETS inside it. That is a claim about the order of
+    // characters in a template literal: anything that moves the dock at
+    // RUNTIME — a later render that reorders the rail's children, a rebuild
+    // of the nav from elsewhere — keeps every offset where it was. Boot the
+    // board and read the tree the reader gets.
+    resetBoardServer();
+    // The capture rewrites the mic's own label on an insecure origin ("Voice
+    // needs https or localhost…"), which happy-dom is by default. The board
+    // this test is about is served over https, so say so — and the fact that
+    // the label is a RUNTIME value at all is the reason reading it out of the
+    // template literal was never the same assertion.
+    const wasSecure = (globalThis as Record<string, unknown>).isSecureContext;
+    (globalThis as Record<string, unknown>).isSecureContext = true;
+    try {
+      await bootTestBoard({ url: `https://board.test/workspaces/${WS}/tasks` });
+    } finally {
+      (globalThis as Record<string, unknown>).isSecureContext = wasSecure;
+    }
+    const nav = el('board-nav');
+    // Positive control: this really is the rail, and the items it has always
+    // held are in the element being read.
+    expect(nav.querySelectorAll('.board-nav-item').length).toBeGreaterThan(1);
+    expect(nav.querySelector('#board-nav-collapse')).not.toBeNull();
 
-    expect(markup).toContain('id="board-mic"');
-    expect(markup).toContain('id="board-voice"');
+    const mic = nav.querySelector('#board-mic') as HTMLElement | null;
+    const indicator = nav.querySelector('#board-voice');
+    expect(mic, 'the mic is not in the nav').not.toBeNull();
+    expect(indicator, 'the indicator is not in the nav').not.toBeNull();
     // …and in a wrapper of its own, which is what carries the divider and the
     // gap that say "this is not one more page you can navigate to".
-    expect(markup).toContain('board-nav-dock');
+    expect(mic?.closest('.board-nav-dock')).not.toBeNull();
+    expect(indicator?.closest('.board-nav-dock')).not.toBeNull();
+
     // At the END of the rail: after every nav item and after the collapse
     // toggle, so it reads as the rail's foot rather than as another tab.
-    expect(markup.indexOf('id="board-mic"')).toBeGreaterThan(markup.lastIndexOf('data-nav='));
-    expect(markup.indexOf('id="board-mic"')).toBeGreaterThan(
-      markup.indexOf('id="board-nav-collapse"'),
-    );
+    // Read as document order over the live tree, not as string offsets.
+    const kids = [...nav.children];
+    const dockAt = kids.findIndex((k) => k.classList.contains('board-nav-dock'));
+    const lastNavItem = kids.map((k) => k.hasAttribute('data-nav')).lastIndexOf(true);
+    const collapseAt = kids.findIndex((k) => k.id === 'board-nav-collapse');
+    expect(dockAt, 'no dock among the nav’s children').toBeGreaterThan(-1);
+    expect(lastNavItem, 'no [data-nav] items in the rail').toBeGreaterThan(-1);
+    expect(dockAt).toBeGreaterThan(lastNavItem);
+    expect(dockAt).toBeGreaterThan(collapseAt);
+
     // The mic keeps the hold-to-talk affordance it had as a FAB — the press is
     // the gesture, and the label is what a screen reader gets.
-    expect(markup).toContain('aria-label="Hold to talk"');
+    expect(mic?.getAttribute('aria-label')).toBe('Hold to talk');
+    document.body.innerHTML = '';
   });
 
   it('takes the docked mic out of the viewport-fixed layer', () => {
