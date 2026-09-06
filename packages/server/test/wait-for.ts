@@ -13,7 +13,19 @@
 import { DOC_STORE_TIMINGS } from '../src/doc-store-timings.ts';
 
 export type WaitOptions = {
-  /** Give up after this long. Default 5000ms — generous, since it is only paid on failure. */
+  /**
+   * Give up after this long. Only ever paid on failure, so it is generous —
+   * but it MUST stay under bun's per-test timeout (5000ms unless the test
+   * says otherwise), or the runner's clock wins the race to report.
+   *
+   * When both were 5000 the test died first and said `this test timed out
+   * after 5000ms`, while the sentence naming what never happened arrived
+   * separately as an `Unhandled error between tests` — charged to no test in
+   * particular. Two CI failures read that way and both got re-run rather than
+   * read. Under the budget the failure describes itself, on the test that
+   * owns it. A wait that genuinely needs longer passes its own `timeout`; the
+   * slowest healthy wait measured across the server suite is ~350ms.
+   */
   timeout?: number;
   /** Gap between probes. Default 20ms. */
   interval?: number;
@@ -21,7 +33,7 @@ export type WaitOptions = {
   describe?: string;
 };
 
-const DEFAULTS = { timeout: 5000, interval: 20 };
+const DEFAULTS = { timeout: 4000, interval: 20 };
 
 /**
  * Resolve as soon as `probe` returns a value that is neither `false`,
