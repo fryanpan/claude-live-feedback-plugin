@@ -242,7 +242,12 @@ describe('stale-write guard on POST /api/docs/:id/content', () => {
     expect(res.json.error).toBe('stale-write');
     expect(typeof res.json.humanEditedAt).toBe('number');
     expect(res.json.lastReadAt).toBe(readAt);
-    expect(readAt).toBeLessThan(res.json.humanEditedAt as number);
+    // Read off the REFUSAL's own two fields rather than off a test-local clock
+    // value: what this test owns is the shape of the 409 — it names a read
+    // that predates the edit it is refusing over. Comparing the fixture's
+    // `readAt` against a server timestamp mixed two clocks to say the same
+    // thing, and put a wall-clock-derived value inside an assertion.
+    expect(res.json.lastReadAt as number).toBeLessThan(res.json.humanEditedAt as number);
   });
 
   it("agent edits through the MCP tools don't trip the guard", async () => {
