@@ -8,6 +8,7 @@ import {
   boardRow,
   bootTestBoard,
   click,
+  closeDetailPanel,
   el,
   resetBoardServer,
   server,
@@ -387,6 +388,7 @@ describe('board-app wires the three buttons to their routes', () => {
     // rename, which is what `focusTitleTaskId === task.id` buys.
     await board.traverseTo(`https://board.test/workspaces/${WS}/tasks?task=t-1`);
     expect(document.querySelector('.board-detail-title input')).toBeNull();
+    await closeDetailPanel(board);
   });
 
   it('Make a plan posts a plan huddle and leaves with the mic flag and the mode', async () => {

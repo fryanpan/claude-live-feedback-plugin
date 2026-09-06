@@ -55,7 +55,14 @@ import {
   reviewReplyRequest,
   reviewRow,
 } from '../src/board/board-review-model.ts';
-import { WS, boardRow, bootTestBoard, resetBoardServer, server } from './support/board-drive.ts';
+import {
+  WS,
+  boardRow,
+  bootTestBoard,
+  closeDetailPanel,
+  resetBoardServer,
+  server,
+} from './support/board-drive.ts';
 
 /** All fixtures are synthetic — invented names, jordan@partner.example register. */
 
@@ -2255,7 +2262,7 @@ describe('the detail panel takes its asks through panelAsks', () => {
     server.on(`/workspaces/${WS}/review-items`, {
       items: [askRow(LEGACY_REVIEW_ITEM_ID, 'the derived copy'), askRow('ri-1', 'Green or blue?')],
     });
-    await bootTestBoard({
+    const board = await bootTestBoard({
       url: `https://board.test/workspaces/${WS}/tasks?task=t-1`,
       tasks: [boardRow('t-1', { title: 'Pick a hob', needs: 'decision' })],
     });
@@ -2273,6 +2280,7 @@ describe('the detail panel takes its asks through panelAsks', () => {
     // Two cards, not three: the board's own decision and the ticket-borne ask.
     expect(panel.querySelectorAll('.board-decide-card')).toHaveLength(2);
     expect(panel.querySelector('.board-decide-count')?.textContent).toContain('1 of 2');
+    await closeDetailPanel(board);
   });
 
   it('a row about another ticket never reaches this panel', async () => {
@@ -2281,13 +2289,14 @@ describe('the detail panel takes its asks through panelAsks', () => {
     server.on(`/workspaces/${WS}/review-items`, {
       items: [{ ...askRow('ri-2', 'Belongs to t-2'), taskId: 't-2', docId: 'task:t-2' }],
     });
-    await bootTestBoard({
+    const board = await bootTestBoard({
       url: `https://board.test/workspaces/${WS}/tasks?task=t-1`,
       tasks: [boardRow('t-1', { title: 'Pick a hob' }), boardRow('t-2', { title: 'Order it' })],
     });
     const panel = document.getElementById('board-detail') as HTMLElement;
     expect(panel.textContent).not.toContain('Belongs to t-2');
     expect(panel.querySelectorAll('.board-decide-card')).toHaveLength(0);
+    await closeDetailPanel(board);
   });
 });
 

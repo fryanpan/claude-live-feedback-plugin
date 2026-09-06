@@ -171,6 +171,23 @@ export async function bootTestBoard(opts: BootOptions = {}): Promise<Booted> {
   };
 }
 
+/**
+ * Leave any open task detail panel, and let the leaving settle.
+ *
+ * Opening the panel starts a dynamic import of the body editor's chunk. If a
+ * test ends while that import is still in flight, its `.then`/`.catch` lands
+ * after vitest has torn the environment down and touches a `document` that is
+ * gone — an unhandled rejection that vitest reports as an error on a passing
+ * run, intermittently. Closing the panel first makes the late callback take
+ * its own `mount !== m` early return, which is the guard the editor already
+ * has for a reader who closed the panel mid-load.
+ */
+export async function closeDetailPanel(board: Booted): Promise<void> {
+  const url = new URL(board.location.href);
+  url.searchParams.delete('task');
+  await board.traverseTo(url.href);
+}
+
 /** An element the boot built, by id — a miss is a loud failure, not a null. */
 export function el(id: string): HTMLElement {
   const found = document.getElementById(id);
