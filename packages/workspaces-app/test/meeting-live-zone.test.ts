@@ -1,5 +1,12 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { FOLLOW_SLACK_PX, WASH_GRACE_MS, createMeetingLiveZone } from '../src/meeting-live-zone.ts';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  COLLAPSE_MS,
+  FADE_MS,
+  FOLLOW_SLACK_PX,
+  NOTE_LAND_MS,
+  WASH_GRACE_MS,
+  createMeetingLiveZone,
+} from '../src/meeting-live-zone.ts';
 
 /**
  * The provisional zone (meeting-notes UX plan, AC 3/4): the live transcript
@@ -29,6 +36,8 @@ const zoneEl = (): HTMLElement => {
 const turns = (): string[] =>
   [...zoneEl().querySelectorAll<HTMLElement>('.lz-lines .lz-turn')].map((l) => l.textContent ?? '');
 const stream = (): string => zoneEl().querySelector('.lz-lines')?.textContent ?? '';
+const chunkEl = (): HTMLElement | null => zoneEl().querySelector<HTMLElement>('.lz-chunk');
+const slotEl = (): HTMLElement | null => zoneEl().querySelector<HTMLElement>('.lz-slot');
 
 describe('the provisional live zone', () => {
   it('is hidden until a live meeting has words, and renders after the editor content', () => {
@@ -120,26 +129,25 @@ describe('the provisional live zone', () => {
     ).toEqual(['Dana', 'Speaker B']);
   });
 
-  it('composing splits the tick’s lines into the card; written removes them; the rest streams on', () => {
+  it('composing splits the tick’s lines off with nothing drawn around them, and the rest streams on', () => {
     const zone = createMeetingLiveZone({ parent, now });
     zone.begin(now());
     zone.onTurn({ turn: 0, text: 'the settled thought.', final: true });
     zone.onTurn({ turn: 1, text: 'the next one, mid-air', final: false });
-    const chunk = zoneEl().querySelector<HTMLElement>('.lz-chunk');
-    if (!chunk) throw new Error('no chunk card');
-    expect(chunk.hidden).toBe(true);
+    expect(chunkEl()).toBeNull(); // no block until a tick actually splits one
 
     zone.onProgress({ tick: 1, phase: 'composing', turns: [0] });
-    expect(chunk.hidden).toBe(false);
-    expect(chunk.querySelector('.lz-chunk-lines')?.textContent).toContain('the settled thought.');
-    expect(chunk.querySelector('.lz-chunk-note')?.textContent).toContain(
-      'Writing this into the notes above…',
-    );
-    // The remainder keeps streaming below the card.
-    expect(turns()).toEqual(['the next one, mid-air']);
-
-    zone.onProgress({ tick: 1, phase: 'written', turns: [0] });
-    expect(chunk.hidden).toBe(true);
+    const chunk = chunkEl();
+    if (!chunk) throw new Error('no chunk');
+    expect(chunk.textContent).toContain('the settled thought.');
+    // The chunk IS the stream's type, and nothing is drawn in its place: the
+    // "Writing this into the notes above…" line and its spinner are gone
+    // (owner, 2026-09-05 — both took up space and shifted the words).
+    expect(chunk.classList.contains('lz-chunk-lines')).toBe(true);
+    expect(zoneEl().querySelector('.lz-chunk-note')).toBeNull();
+    expect(zoneEl().querySelector('.lz-spinner')).toBeNull();
+    expect(zoneEl().textContent).not.toContain('Writing this into the notes');
+    // The remainder keeps streaming below.
     expect(turns()).toEqual(['the next one, mid-air']);
   });
 
@@ -148,8 +156,10 @@ describe('the provisional live zone', () => {
     zone.begin(now());
     zone.onTurn({ turn: 0, text: 'carried words.', final: true });
     zone.onProgress({ tick: 1, phase: 'composing', turns: [0] });
+    expect(chunkEl()).not.toBeNull(); // control: it really was split off
     zone.onProgress({ tick: 1, phase: 'failed', turns: [0] });
-    expect(zoneEl().querySelector<HTMLElement>('.lz-chunk')?.hidden).toBe(true);
+    // Nothing settled, so the block goes at once — no fade, no collapse.
+    expect(chunkEl()).toBeNull();
     expect(turns()).toEqual(['carried words.']);
   });
 
@@ -181,6 +191,125 @@ describe('the provisional live zone', () => {
     const zone = createMeetingLiveZone({ parent, now });
     zone.destroy();
     expect(parent.querySelector('.live-zone')).toBeNull();
+  });
+});
+
+/**
+ * The settle (approved settle mock, round 2). The words do not
+ * disappear with their turns: the block holding them stays where it is,
+ * holds while the note lands, fades in place, and only then collapses the
+ * space it held.
+ *
+ * happy-dom lays nothing out, so the "nothing below it moves" claim is a
+ * BROWSER measurement (recorded in the PR). What is guarded here is the
+ * mechanism that produces it: the slot's height is pinned before the fade
+ * starts and is not touched again until the collapse begins.
+ */
+describe('a settled chunk fades where it sits, then collapses', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const settling = (): { zone: ReturnType<typeof createMeetingLiveZone>; slot: HTMLElement } => {
+    const zone = createMeetingLiveZone({ parent, now, reducedMotion: () => false });
+    zone.begin(now());
+    zone.onTurn({ turn: 0, text: 'the settled thought.', final: true });
+    zone.onTurn({ turn: 1, text: 'still talking', final: false });
+    zone.onProgress({ tick: 1, phase: 'composing', turns: [0] });
+    zone.onProgress({ tick: 1, phase: 'written', turns: [0] });
+    const slot = slotEl();
+    if (!slot) throw new Error('the chunk left the zone the moment its turns did');
+    return { zone, slot };
+  };
+
+  it('holds the words on screen after `written`, at a pinned height', () => {
+    const { slot } = settling();
+    // The turns are gone from the model…
+    expect(turns()).toEqual(['still talking']);
+    // …but their words are still on the page, not yet fading.
+    expect(slot.textContent).toContain('the settled thought.');
+    expect(chunkEl()?.classList.contains('is-fading')).toBe(false);
+    // Pinned before anything animates, so the fade cannot change the height.
+    expect(slot.style.height).toBe('0px'); // happy-dom measures every box at 0
+  });
+
+  it('fades only after the note has had time to land, and collapses only after the fade', () => {
+    const { slot } = settling();
+    const pinned = slot.style.height;
+
+    vi.advanceTimersByTime(NOTE_LAND_MS - 1);
+    expect(chunkEl()?.classList.contains('is-fading')).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(chunkEl()?.classList.contains('is-fading')).toBe(true);
+
+    // Through the whole fade the slot keeps the height it was pinned at and
+    // the collapse has not started — this is the interval the browser
+    // measurement checks nothing below it moves in.
+    vi.advanceTimersByTime(FADE_MS - 1);
+    expect(slot.classList.contains('is-collapsing')).toBe(false);
+    expect(slot.style.height).toBe(pinned);
+
+    vi.advanceTimersByTime(1);
+    expect(slot.classList.contains('is-collapsing')).toBe(true);
+    expect(slot.style.height).toBe('0px');
+
+    // Gone once the collapse has run, and the zone with it — nothing left.
+    vi.advanceTimersByTime(COLLAPSE_MS);
+    expect(slotEl()).toBeNull();
+  });
+
+  it('reduced motion keeps the cross-fade and drops only the travel', () => {
+    const zone = createMeetingLiveZone({ parent, now, reducedMotion: () => true });
+    zone.begin(now());
+    zone.onTurn({ turn: 0, text: 'the settled thought.', final: true });
+    zone.onProgress({ tick: 1, phase: 'composing', turns: [0] });
+    zone.onProgress({ tick: 1, phase: 'written', turns: [0] });
+
+    // Not a cut: the words are still there, and they still fade — the owner
+    // tried the instant swap and called it too sudden (2026-09-05).
+    vi.advanceTimersByTime(NOTE_LAND_MS - 1);
+    expect(chunkEl()?.textContent).toContain('the settled thought.');
+    expect(chunkEl()?.classList.contains('is-fading')).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(chunkEl()?.classList.contains('is-fading')).toBe(true);
+
+    // The fade runs its full length…
+    vi.advanceTimersByTime(FADE_MS - 1);
+    expect(slotEl()?.classList.contains('is-collapsing')).toBe(false);
+    // …and it is the COLLAPSE that loses its travel, not the fade.
+    vi.advanceTimersByTime(1);
+    const slot = slotEl();
+    expect(slot?.classList.contains('is-collapsing')).toBe(true);
+    expect(slot?.style.getPropertyValue('--lz-collapse-ms')).toBe('0ms');
+    // No travel to wait out: the slot goes on the very next tick, where the
+    // full-motion path is still COLLAPSE_MS from being done.
+    vi.advanceTimersByTime(1);
+    expect(slotEl()).toBeNull();
+  });
+
+  it('a second tick settles behind the first without disturbing it', () => {
+    const { zone, slot } = settling();
+    zone.onTurn({ turn: 1, text: 'still talking, finished now.', final: true });
+    zone.onProgress({ tick: 2, phase: 'composing', turns: [1] });
+    const slots = zoneEl().querySelectorAll('.lz-slot');
+    expect(slots).toHaveLength(2);
+    // Order on the page is the order they settled: the older one stays above.
+    expect(slots[0]).toBe(slot);
+    expect(slots[1]?.textContent).toContain('still talking, finished now.');
+  });
+
+  it('the meeting ending drops a chunk mid-settle rather than leaving it behind', () => {
+    const { zone } = settling();
+    vi.advanceTimersByTime(NOTE_LAND_MS);
+    zone.end();
+    expect(slotEl()).toBeNull();
+    expect(zoneEl().hidden).toBe(true);
+    // And no timer left to resurrect it.
+    vi.advanceTimersByTime(FADE_MS + COLLAPSE_MS);
+    expect(slotEl()).toBeNull();
   });
 });
 
