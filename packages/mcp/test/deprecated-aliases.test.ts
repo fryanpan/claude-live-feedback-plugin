@@ -165,6 +165,9 @@ function recorder(answer: unknown) {
   return { calls, ctx };
 }
 
+/** The board every one of these calls is addressed under. */
+const WS = 'w-board';
+
 describe('both names reach the same code, not merely the same switch', () => {
   const sameUnderBothNames = async (
     handle: (name: string, a: Record<string, unknown>, ctx: never) => Promise<unknown>,
@@ -188,7 +191,7 @@ describe('both names reach the same code, not merely the same switch', () => {
       handleDocsTool as never,
       'bind_folder',
       'attach_folder',
-      { folderPath: '/tmp/synthetic', workspaceId: 'grp-1', subscribe: false },
+      { folderPath: '/tmp/synthetic', workspaceId: WS, setId: 'grp-1', subscribe: false },
       { ok: true },
     );
     expect(calls[0]?.[1]).toBe('/workspaces');
@@ -199,10 +202,10 @@ describe('both names reach the same code, not merely the same switch', () => {
       handleDocsTool as never,
       'bind_mock',
       'attach_mockup',
-      { docId: 'mock-1', sourceHtmlPath: '/tmp/synthetic.html' },
+      { workspaceId: WS, docId: 'mock-1', sourceHtmlPath: '/tmp/synthetic.html' },
       { docId: 'mock-1' },
     );
-    expect(calls[0]?.[1]).toBe('/api/docs');
+    expect(calls[0]?.[1]).toBe(`/workspaces/${WS}/docs`);
     expect(calls[0]?.[2]).toMatchObject({ type: 'mockup' });
   });
 
@@ -211,10 +214,10 @@ describe('both names reach the same code, not merely the same switch', () => {
       handleTaskTool as never,
       'promote_to_task',
       'spin_off_task',
-      { docId: 'plan', threadId: 't1', workspaceId: 'w1' },
+      { docId: 'plan', threadId: 't1', workspaceId: WS },
       { task: { id: 'k1', title: 'A row', goal: 'g1', order: 1, status: 'todo', assignee: 'me' } },
     );
-    expect(calls[0]?.[1]).toBe('/api/docs/plan/threads/t1/promote');
+    expect(calls[0]?.[1]).toBe(`/workspaces/${WS}/docs/plan/threads/t1/promote`);
   });
 
   it('archive_workspace / retire_workspace put the same retired flag', async () => {
@@ -246,51 +249,55 @@ describe('both names reach the same code, not merely the same switch', () => {
     {
       alias: 'create_review_doc',
       now: 'attach_markdown',
-      args: { docId: 'plan', path: '/tmp/synthetic.md' },
+      args: { workspaceId: WS, docId: 'plan', path: '/tmp/synthetic.md' },
       answer: { docId: 'plan' },
-      route: '/api/docs',
+      route: `/workspaces/${WS}/docs`,
     },
     {
       alias: 'delete_review',
       now: 'delete_attachment_set',
-      args: { setId: 'set-1', force: true, purge: false },
+      args: { workspaceId: WS, setId: 'set-1', force: true, purge: false },
       answer: { ok: true },
-      route: '/api/reviews/set-1?force=true',
+      route: `/workspaces/${WS}/reviews/set-1?force=true`,
     },
     {
       alias: 'archive_review',
       now: 'archive_attachment_set',
-      args: { setId: 'set-1', reason: 'merged in #301' },
+      args: { workspaceId: WS, setId: 'set-1', reason: 'merged in #301' },
       answer: { ok: true },
-      route: '/api/reviews/set-1/archive',
+      route: `/workspaces/${WS}/reviews/set-1/archive`,
     },
     {
       alias: 'unarchive_review',
       now: 'unarchive_attachment_set',
-      args: { setId: 'set-1' },
+      args: { workspaceId: WS, setId: 'set-1' },
       answer: { ok: true },
-      route: '/api/reviews/set-1/unarchive',
+      route: `/workspaces/${WS}/reviews/set-1/unarchive`,
     },
     {
       alias: 'list_archived_reviews',
       now: 'list_archived_attachments',
-      args: {},
+      args: { workspaceId: WS },
       answer: { archived: [], docs: [] },
-      route: '/api/reviews/archived',
+      route: `/workspaces/${WS}/reviews?archived=true`,
     },
     {
       alias: 'refresh_review',
       now: 'refresh_attachment_set',
-      args: { setId: 'set-1' },
+      args: { workspaceId: WS, setId: 'set-1' },
       answer: { ok: true },
-      route: '/api/reviews/set-1/refresh',
+      route: `/workspaces/${WS}/reviews/set-1/refresh`,
     },
     {
       alias: 'set_review_groups',
       now: 'set_attachment_groups',
-      args: { setId: 'set-1', groups: [{ title: 'Server', paths: ['packages/server'] }] },
+      args: {
+        workspaceId: WS,
+        setId: 'set-1',
+        groups: [{ title: 'Server', paths: ['packages/server'] }],
+      },
       answer: { ok: true },
-      route: '/api/reviews/set-1/groups',
+      route: `/workspaces/${WS}/reviews/set-1/groups`,
     },
   ];
 

@@ -44,7 +44,7 @@ const waiters = new Map<number, (value: unknown) => void>();
  *  deliberately not what the caller sent — the tool must report the stored
  *  set, so a blocker the row already had reads as "nothing moved". */
 function replyFor(path: string, body: Record<string, unknown>): unknown {
-  if (/^\/api\/tasks\/[^/]+\/park$/.test(path)) {
+  if (/^\/workspaces\/[^/]+\/tasks\/[^/]+\/park$/.test(path)) {
     const asked = (body.blockedBy as string[] | undefined) ?? [];
     return {
       ok: true,
@@ -67,6 +67,9 @@ function rpc(method: string, params: unknown): Promise<Reply> {
     send({ jsonrpc: '2.0', id, method, params });
   });
 }
+
+/** The board every one of these calls is addressed under. */
+const WS = 'w-board';
 
 function call(name: string, args: Record<string, unknown>): Promise<Reply> {
   return rpc('tools/call', { name, arguments: args });
@@ -157,9 +160,11 @@ afterAll(async () => {
 describe('block_task — the ticket a row is waiting for', () => {
   it('sends one blocker as an array, and reports the edges the store read back', async () => {
     const before = parkPosts().length;
-    const out = payload(await call('block_task', { taskId: 't-1', blockedBy: 't-dep' }));
+    const out = payload(
+      await call('block_task', { workspaceId: WS, taskId: 't-1', blockedBy: 't-dep' }),
+    );
     expect(parkPosts().length).toBe(before + 1);
-    expect(last().path).toBe('/api/tasks/t-1/park');
+    expect(last().path).toBe(`/workspaces/${WS}/tasks/t-1/park`);
     // The new payload only — nothing that would trip the route's park arm.
     expect(last().body.blockedBy).toEqual(['t-dep']);
     expect(last().body).not.toHaveProperty('parkedUntil');
@@ -173,13 +178,17 @@ describe('block_task — the ticket a row is waiting for', () => {
   });
 
   it('takes several blockers at once', async () => {
-    const out = payload(await call('block_task', { taskId: 't-1', blockedBy: ['t-a', 't-b'] }));
+    const out = payload(
+      await call('block_task', { workspaceId: WS, taskId: 't-1', blockedBy: ['t-a', 't-b'] }),
+    );
     expect(last().body.blockedBy).toEqual(['t-a', 't-b']);
     expect(out.blockedBy).toEqual(['t-already', 't-a', 't-b']);
   });
 
   it('reports changed: false when the row already waits on that ticket', async () => {
-    const out = payload(await call('block_task', { taskId: 't-1', blockedBy: 't-already' }));
+    const out = payload(
+      await call('block_task', { workspaceId: WS, taskId: 't-1', blockedBy: 't-already' }),
+    );
     expect(out.changed).toBe(false);
     expect(out.blockedBy).toEqual(['t-already']);
   });
@@ -187,14 +196,14 @@ describe('block_task — the ticket a row is waiting for', () => {
   it('refuses an empty or malformed blocker list without calling the server', async () => {
     for (const bad of [[], [''], [42]]) {
       const before = parkPosts().length;
-      const reply = await call('block_task', { taskId: 't-1', blockedBy: bad });
+      const reply = await call('block_task', { workspaceId: WS, taskId: 't-1', blockedBy: bad });
       expect(reply.result?.isError, JSON.stringify(bad)).toBe(true);
       expect(parkPosts().length, JSON.stringify(bad)).toBe(before);
     }
   });
 
   it('park_task is gone — one verb for one thing', async () => {
-    const reply = await call('park_task', { taskId: 't-1', reason: 'later' });
+    const reply = await call('park_task', { workspaceId: WS, taskId: 't-1', reason: 'later' });
     expect(reply.result?.isError || reply.error).toBeTruthy();
   });
 });
