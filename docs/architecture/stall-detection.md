@@ -405,6 +405,23 @@ would have escalated never.
   caused — file, watch the anchor leave the findings, withdraw, watch it come
   back. A re-file cooldown of one escalation window is the second half of the
   same guard.
+- **An ask gets a minimum life before movement can take it back.** The two
+  halves of the old anchor test were acted on identically, and they are not
+  the same question: an anchor the reader cannot see is a placement fact, but
+  a WRITE to the anchor is only a claim that the row is moving — and one write
+  is a far weaker claim than the hour of silence that filed the item. The
+  commonest write on any live board is the row's own agent posting its
+  end-of-turn note, so the ask retracted itself: measured 2026-09-05, item
+  filed 04:56:21, `task.noted` by the row's own lead at 04:58:19, item
+  withdrawn 04:58:20 with *"the rows it named are moving again"*. For those
+  two minutes it was a real ask — a watching session saw `review_item.added`
+  and told the reader something was waiting for them, and it was not. Movement
+  now retracts an item only once it has stood a quiet window
+  (`STALL_ESCALATION_SETTLE_DEFAULT_MS`, tied to `CW_STALL_NUDGE_MINUTES`),
+  which is long enough that a row writing once and going quiet again keeps its
+  ask. A done, archived or vanished anchor still moves or withdraws on the
+  tick it is seen, and a retired board still withdraws unconditionally — an
+  item nobody can read is not an ask being kept.
 - **When the anchor stops holding, the item MOVES.** A `done` or archived
   anchor is not a reason to keep revising: `taskReviewItems` skips a done
   ticket's rows, so the ask would be open forever and visible to nobody while
@@ -446,10 +463,10 @@ grace window that #411 fixed.
 
 | Env (server launch) | Default | Meaning |
 |---|---|---|
-| `CW_STALL_NUDGE_MINUTES` | 20 | quiet time before a row is a finding |
+| `CW_STALL_NUDGE_MINUTES` | 20 | quiet time before a row is a finding, and the minimum life of an escalation item before movement may retract it |
 | `CW_STALL_REPEAT_HOURS` | 4 | how often an unchanged bad board is re-said |
 | `CW_HELD_ITEM_MINUTES` | 5 | how long a held review item may stand before its filer, then the lead, is told |
-| `CW_STALL_ESCALATE_MINUTES` | 60 | how long a row the lead was already told about may stay stuck — told AND silent, both — before the board files over the lead's head |
+| `CW_STALL_ESCALATE_MINUTES` | 60 | how long a row the lead was already told about may stay stuck — told AND silent, both — before the board files over the lead's head. Also caps the settle window below |
 | `CW_REVIEW_GATE` | on | `0` turns the judge off; every item passes unjudged (also the state with no summary API key) |
 | `CW_NOTE_ASK_JUDGE` | on | `0` turns the note-ask confirmation off; the deterministic prefilter decides alone (also the state with no summary API key) |
 
