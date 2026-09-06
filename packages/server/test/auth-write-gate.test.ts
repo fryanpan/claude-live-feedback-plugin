@@ -414,12 +414,12 @@ describe('with the gate ON', () => {
   });
 
   it('leaves a POST that only reads open to an unsigned browser', async () => {
-    // `/api/links/titles` is a POST for its request shape — a batch of URLs
+    // `links:titles` is a POST for its request shape — a batch of URLs
     // does not fit in a query string — and a read in its effect. Gated, an
     // unsigned reader's link chips silently never resolved while the refusal
     // told them "Reading needs no account".
     const b = await boot(true);
-    const res = await fetch(`${b.base}/api/links/titles`, {
+    const res = await fetch(`${b.base}/workspaces/${b.ws}/links:titles`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...browserHeaders(b.base) },
       body: JSON.stringify({ urls: [`${b.base}/review/nothing-here`] }),

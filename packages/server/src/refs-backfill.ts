@@ -172,12 +172,22 @@ function scanGoalRefs(ctx: Ctx, goal: GoalRow): void {
   for (const id of docLinksIn(ctx.docStore, goal.body ?? '')) addGoalDocRef(ctx, goal, id);
 }
 
-/** Doc ids worth scanning: real content docs, not body/projection docs. */
-function scannableDocIds(docStore: DocStore): string[] {
+/**
+ * Doc ids worth scanning: real content docs, not body/projection docs.
+ *
+ * `onBoard` narrows the sweep to one board. It is a predicate over the META
+ * rather than an `=== meta.workspaceId` here, because a doc is LINKED to
+ * boards rather than filed in one: a review lives on its own board and on
+ * the board the review was filed from, and an equality test would skip it
+ * from the second. The caller passes the same membership answer the doc
+ * listing uses, so the two agree by construction.
+ */
+function scannableDocIds(docStore: DocStore, onBoard?: (docId: string) => boolean): string[] {
   return docStore
     .list()
     .map((m) => m.docId)
-    .filter((id) => taskIdOfBodyDoc(id) === null && !id.startsWith('ws:'));
+    .filter((id) => taskIdOfBodyDoc(id) === null && !id.startsWith('ws:'))
+    .filter((id) => !onBoard || onBoard(id));
 }
 
 /**
@@ -185,11 +195,21 @@ function scannableDocIds(docStore: DocStore): string[] {
  * url ref. Safe to re-run (second run: zero creates, everything in
  * `skippedExisting`). The caller refreshes the projection for
  * `workspacesTouched` — link writes emit no store event.
+ *
+ * `workspaceId` narrows it to one board, which is how the HTTP route runs it
+ * since the canonical-routes cutover: the sweep is a board's own command, so
+ * a member starts it over their own rows and reads back their own sizes. The
+ * settle-time scan still calls it unnarrowed — it runs as the server, not as
+ * anybody, and there is no board to ask on its behalf.
  */
 export function runRefsBackfill(opts: {
   docStore: DocStore;
   tasks: TaskStore;
   dryRun: boolean;
+  workspaceId?: string;
+  /** Whether a doc is reachable from `workspaceId`. Required to narrow docs;
+   *  without it a narrowed sweep covers the board's rows and no docs. */
+  docOnBoard?: (docId: string) => boolean;
 }): RefsBackfillStats {
   const ctx: Ctx = {
     docStore: opts.docStore,
@@ -207,8 +227,15 @@ export function runRefsBackfill(opts: {
       workspacesTouched: [],
     },
   };
-  for (const docId of scannableDocIds(opts.docStore)) scanDocRefs(ctx, docId);
-  for (const ws of opts.tasks.listWorkspaces()) {
+  // A narrowed sweep with no membership answer scans no docs at all rather
+  // than every doc: the caller asked for one board, and answering with the
+  // server's whole corpus is the failure this narrowing exists to prevent.
+  const docFilter = opts.workspaceId === undefined ? undefined : (opts.docOnBoard ?? (() => false));
+  for (const docId of scannableDocIds(opts.docStore, docFilter)) scanDocRefs(ctx, docId);
+  const boards = opts.tasks
+    .listWorkspaces()
+    .filter((ws) => opts.workspaceId === undefined || ws.id === opts.workspaceId);
+  for (const ws of boards) {
     // Archived rows too: "backfill all past tasks" includes the ones the
     // board has moved past — their panel still opens.
     for (const task of opts.tasks.listTasks(ws.id, { includeArchived: true }))

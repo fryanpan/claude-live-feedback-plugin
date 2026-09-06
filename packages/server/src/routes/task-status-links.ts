@@ -5,7 +5,7 @@ import { linkTitlesFor } from '../link-titles.ts';
  * Lifted verbatim out of `createServer`'s request closure; the handlers
  * read their collaborators off `TaskRoutesContext` instead of the scope.
  */
-import { matchRest } from '../middleware/workspace-scope.ts';
+import { matchRest, restIs } from '../middleware/workspace-scope.ts';
 import { runRefsBackfill } from '../refs-backfill.ts';
 import {
   OUT_OF_SHARE_SCOPE,
@@ -31,7 +31,7 @@ export async function handleTaskStatusAndLinks(
     boardsForDocIndexed,
     workspacesOfDoc,
   } = ctx;
-  const { req, pathname, scope, authorFor, visitor } = rq;
+  const { req, scope, authorFor, visitor } = rq;
   // The single gate for status changes: attributed and
   // dependency-checked. 409 on an enforce-marked open dependency.
   const taskTransitionMatch = matchRest(scope, /^tasks\/([^/]+)\/transition$/);
@@ -146,14 +146,26 @@ export async function handleTaskStatusAndLinks(
   // `url` kind carries a caller-supplied URL, and putting that in a
   // query string writes it into every access log and proxy on the path
   // for no gain. Nothing here mutates.
-  if (pathname === '/api/refs/backlinks' && req.method === 'POST') {
+  //
+  // Board-scoped since the cutover, and that is a change of MEANING rather
+  // than of spelling. It used to answer across every board on the server,
+  // so one board's member could ask "which tasks point at this pull
+  // request" and read title, id, status and assignee off boards they were
+  // never given. The answer is now the ASKING board's own rows — the same
+  // narrowing the task-scoped twin above already applies to a visitor,
+  // applied to everyone, because the address now names whose question it is.
+  if (restIs(scope, 'refs:backlinks') && req.method === 'POST') {
     const body = await safeJson(req);
     const ref = body?.ref;
     // A malformed ref must NOT fall through to an empty answer: [] and
     // "I didn't understand you" are indistinguishable to the caller,
     // and the first one reads as "nothing points at this PR".
     if (!isValidRef(ref)) return j(400, { error: BAD_REF_ERROR });
-    return j(200, { ref, tasks: taskStore.backlinksFor(ref).map(taskChip) });
+    const tasks = taskStore
+      .backlinksFor(ref)
+      .filter((t) => t.workspaceId === scope.workspaceId)
+      .map(taskChip);
+    return j(200, { ref, tasks });
   }
   // Mine the links people already wrote into structured refs — every
   // doc body, task body, goal body, and stored url ref, both
@@ -161,10 +173,32 @@ export async function handleTaskStatusAndLinks(
   // `dryRun: true` counts what WOULD land without writing, so the
   // sweep can be sized before it runs. One-shot per deployment in
   // practice; the settle-time scan keeps it from going stale.
-  if (pathname === '/api/refs/backfill' && req.method === 'POST') {
+  //
+  // Board-scoped since the cutover, and this one changes what the command
+  // DOES: it now scans this board's docs, tasks and goals rather than the
+  // whole server's. Run it once per board. A server-wide sweep was never
+  // something a board member should be able to start, and the sizes it
+  // reported were the sizes of everybody's data.
+  if (restIs(scope, 'refs:backfill') && req.method === 'POST') {
     const body = await safeJson(req);
     const dryRun = body?.dryRun === true;
-    const stats = runRefsBackfill({ docStore, tasks: taskStore, dryRun });
+    // One board index per REQUEST, same as the titles route below: the
+    // membership question is the one the docs listing answers, asked
+    // through the same index so the two cannot disagree.
+    let backfillIndex: Map<string, string[]> | null = null;
+    const stats = runRefsBackfill({
+      docStore,
+      tasks: taskStore,
+      dryRun,
+      workspaceId: scope.workspaceId,
+      docOnBoard: (docId) => {
+        const meta = docStore.peekMeta(docId);
+        if (!meta) return false;
+        if (meta.workspaceId === scope.workspaceId) return true;
+        backfillIndex ??= boardIndexForListing();
+        return boardsForDocIndexed(backfillIndex, meta).has(scope.workspaceId);
+      },
+    });
     // Link writes emit no store event (§3.6's exhaustive table), so
     // the projection refresh happens here — same as the links route.
     if (!dryRun) {
@@ -177,7 +211,13 @@ export async function handleTaskStatusAndLinks(
   // Members only: the share-scope middleware above never whitelists this
   // path, so a share visitor's client falls back to raw URLs rather
   // than reading titles across the whole server.
-  if (pathname === '/api/links/titles' && req.method === 'POST') {
+  //
+  // The board in the address is the page ASKING, not a filter on the
+  // answer: `docInWorkspace` below already decides per URL whether the
+  // target is reachable from the board that URL itself names, and that
+  // check is unchanged. What the address buys is the membership gate in
+  // front of it, which the old top-level path had to do without.
+  if (restIs(scope, 'links:titles') && req.method === 'POST') {
     const body = await safeJson(req);
     const urls = body?.urls;
     if (!Array.isArray(urls)) return j(400, { error: 'urls: string[] required' });

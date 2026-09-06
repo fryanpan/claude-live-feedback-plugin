@@ -7,7 +7,7 @@
  * `data-ws-custom`), marked `data-ws-link` (+ `data-ws-pending` until
  * resolved), and calls `scheduleLinkTitleHydration`. A beat later this module
  * gathers every pending anchor in the document into route-sized
- * `POST /api/links/titles` batches, caches the answers, swaps each bare
+ * `POST /workspaces/<ws>/links:titles` batches, caches the answers, swaps each bare
  * anchor's TEXT for its title, and appends a status chip when the target is a
  * task or goal (a custom label keeps its words and still gets the chip). The
  * href — and the stored comment — keep the raw URL: conversion is
@@ -18,6 +18,8 @@
  * itself; a failed lookup leaves the anchors pending, so a later render
  * retries. Nothing here ever throws into a render path.
  */
+
+import { api } from './doc-path.ts';
 
 /** What one URL resolved to. `status` is null when the target is not a
  *  task/goal — the "no chip" answer, distinct from "never asked". `held`
@@ -121,7 +123,7 @@ export async function fetchLinkInfos(
   for (let i = 0; i < wanted.length; i += BATCH_LIMIT) {
     const chunk = wanted.slice(i, i + BATCH_LIMIT);
     try {
-      const res = await fetcher('/api/links/titles', {
+      const res = await fetcher(api('links:titles'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ urls: chunk }),

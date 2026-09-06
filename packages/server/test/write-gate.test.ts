@@ -112,12 +112,16 @@ describe('which requests the gate governs', () => {
   });
 
   it('lets a POST that only reads through', () => {
-    // `/api/links/titles` batches a render burst's URLs into one lookup and
+    // `links:titles` batches a render burst's URLs into one lookup and
     // changes nothing. Gated, an unsigned reader's link chips silently never
     // resolve and the refusal says "Reading needs no account" while refusing
     // a read.
-    expect(isReadShapedPost('/api/links/titles')).toBe(true);
-    expect(isGatedWrite('POST', '/api/links/titles')).toBe(false);
+    expect(isReadShapedPost(`/workspaces/${WS}/links:titles`)).toBe(true);
+    expect(isGatedWrite('POST', `/workspaces/${WS}/links:titles`)).toBe(false);
+    // The address it MOVED FROM is not exempt any more — it is not a route
+    // at all. Left un-asserted, the exemption would quietly outlive its
+    // route and hand a future `/api/links/...` the same free pass.
+    expect(isReadShapedPost('/api/links/titles')).toBe(false);
   });
 
   it('lets a reader OPEN a doc it is allowed to read', () => {
@@ -162,7 +166,13 @@ describe('which requests the gate governs', () => {
     // The control for the entry above: a route that merely starts the same
     // way is a real write and must stay gated, or the exemption grows on its
     // own every time somebody names a route conveniently.
-    for (const p of ['/api/links/titles/bulk', '/api/links', '/api/links/titlesX']) {
+    for (const p of [
+      `/workspaces/${WS}/links:titles/bulk`,
+      `/workspaces/${WS}/links:titlesX`,
+      `/workspaces/${WS}/links`,
+      `/workspaces/${WS}/sub/links:titles`,
+      '/api/links/titles',
+    ]) {
       expect(isReadShapedPost(p)).toBe(false);
       expect(isGatedWrite('POST', p)).toBe(true);
     }

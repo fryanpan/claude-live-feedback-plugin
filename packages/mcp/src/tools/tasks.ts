@@ -1053,7 +1053,7 @@ export async function handleTaskTool(
     }
     case 'list_backlinks': {
       const { ref } = a as { ref: unknown };
-      const res = (await http('POST', '/api/refs/backlinks', { ref })) as {
+      const res = (await http('POST', `${board()}/refs:backlinks`, { ref })) as {
         tasks: unknown[];
       };
       return ok({ ref, tasks: res.tasks });

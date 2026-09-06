@@ -142,8 +142,12 @@ describe('<meeting-banner>', () => {
     button(el, 'Join + send bot').click();
     await settle();
     const join = calls.find((c) => c.url.includes('/join'));
-    expect(join?.url).toBe('/api/calendar/events/e1/join');
-    expect(JSON.parse(String(join?.init?.body))).toEqual({ join: true, workspaceId: 'w1' });
+    // The board is in the ADDRESS since the canonical-routes cutover, not in
+    // the body — that is what puts it in front of the server's one path
+    // guard. Both halves are asserted: a path that gained the board while
+    // the body kept it would be a half-done move that still passed.
+    expect(join?.url).toBe('/workspaces/w1/calendar/events/e1/join');
+    expect(JSON.parse(String(join?.init?.body))).toEqual({ join: true });
     expect(opened[0]?.location).toBe('https://meet.example/abc');
     expect(opened[0]?.closed).toBe(false);
     expect(navigations).toEqual(['/workspaces/w1/docs/d1']);

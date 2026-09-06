@@ -2182,13 +2182,18 @@ export const TOOL_LIST: ListToolsResult = {
     {
       name: 'list_backlinks',
       description:
-        "Which tasks point at this ref, across every board. This is what a url ref is for: paste a pull request or a dashboard link and find what work already cites it before filing a duplicate. Counts a promotion's origin too, so a task promoted from a thread comes back for that thread without anyone linking it by hand.",
+        "Which of THIS BOARD's tasks point at this ref. This is what a url ref is for: paste a pull request or a dashboard link and find what work already cites it before filing a duplicate. Counts a promotion's origin too, so a task promoted from a thread comes back for that thread without anyone linking it by hand. It used to answer across every board on the server; ask each board you are attached to if you need more than one.",
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           ref: { type: 'object', description: 'The ref to find citers of.' },
         },
-        required: ['ref'],
+        required: ['workspaceId', 'ref'],
       },
     },
     {
