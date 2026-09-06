@@ -15,7 +15,7 @@
  *
  * Two prompts' WORDS are not served here at all. The review criteria and the
  * effort estimate are fields on a BOARD, written through
- * `PUT /api/workspaces/<id>/settings`, and the list says so with `scope` so
+ * `PUT /workspaces/<id>/settings`, and the list says so with `scope` so
  * the page can read and write those two against the board it was opened from.
  * They are still edited on the settings page like every other row — `scope`
  * only says which request carries the words, and the page never learns the
@@ -110,7 +110,7 @@ export async function handlePromptRoutes(
   if (def.scope === 'board') {
     return j(409, {
       error: 'board-scoped',
-      message: `${def.id} is a field on a board — read and write it at /api/workspaces/<id>/settings`,
+      message: `${def.id} is a field on a board — read and write it at /workspaces/<id>/settings`,
     });
   }
 
