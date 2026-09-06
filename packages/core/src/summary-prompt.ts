@@ -66,11 +66,12 @@ export interface StoredSummary extends GeneratedSummary {
 }
 
 /**
- * Bump when a change to SYSTEM (or to how the answer is read) is meant to
- * reach summaries that already exist. `needsCall` treats a stored summary
- * from an older version as needing a call, so the next backfill rewrites it;
- * the client keeps showing the old line until the new one lands. Nothing
- * fires on its own — the backfill is still opt-in per start (`bin.ts`).
+ * Bump when a change to DEFAULT_THREAD_SUMMARY_SYSTEM (or to how the answer
+ * is read) is meant to reach summaries that already exist. `needsCall` treats
+ * a stored summary from an older version as needing a call, so the next
+ * backfill rewrites it; the client keeps showing the old line until the new
+ * one lands. Nothing fires on its own — the backfill is still opt-in per
+ * start (`bin.ts`).
  *
  *   1  everything before the field existed
  *   2  2026-08-18: mood rules (proposal ≠ decision, in-flight ≠ done,
@@ -83,7 +84,14 @@ export interface SummaryPrompt {
   user: string;
 }
 
-const SYSTEM = [
+/**
+ * The words the summariser is sent. Exported because the settings page lists
+ * every prompt this server uses and shows what each one says — read-only for
+ * this one: the summaries are stored and versioned by
+ * `SUMMARY_PROMPT_VERSION`, so an edit marks ~900 of them stale and the next
+ * backfill re-generates and re-pays for all of them.
+ */
+export const DEFAULT_THREAD_SUMMARY_SYSTEM = [
   'You write the two summary lines on a code-review comment card.',
   '',
   'Return ONLY a JSON object, no prose, no code fence:',
@@ -254,7 +262,7 @@ export function buildSummaryPrompt(t: Thread): SummaryPrompt {
   );
   parts.push(...fitToBudget(blocks, PROMPT_CHARS_MAX - anchored.length));
   if (t.comments.length <= 1) parts.push('(No replies yet — return an empty discussion.)');
-  return { system: SYSTEM, user: parts.join('\n\n') };
+  return { system: DEFAULT_THREAD_SUMMARY_SYSTEM, user: parts.join('\n\n') };
 }
 
 /** Marker left where comments were dropped, so the model knows they existed. */

@@ -112,6 +112,7 @@ const deps = createServerDeps(cfg, {
 });
 const {
   share,
+  promptStore,
   summarizer,
   codeSenderChoice,
   voiceComplete,
@@ -244,6 +245,7 @@ while (!handle) {
       ...(stallEscalateMs !== undefined ? { stallEscalateMs } : {}),
       ...(reviewJudge ? { reviewJudge } : {}),
       ...(noteAskJudge ? { noteAskJudge } : {}),
+      promptStore,
       ...(effortEstimator ? { effortEstimator } : {}),
       ...(voiceComplete ? { voiceComplete } : {}),
       ...(transcription ? { transcription } : {}),

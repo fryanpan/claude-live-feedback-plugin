@@ -762,6 +762,15 @@ export interface HaikuTaskCaptureOpts {
   apiKey?: string | null;
   /** Tests: the HTTP seam. Defaults to global fetch. */
   fetchImpl?: typeof fetch;
+  /**
+   * The instructions to send, read PER TICK rather than captured here.
+   *
+   * A thunk for the same reason the notes composer takes one: the extractor
+   * is built once at boot, and an edit made on the settings page mid-meeting
+   * has to reach the next tick without a restart. Absent means the shipped
+   * `DEFAULT_TASK_CAPTURE_SYSTEM`.
+   */
+  instructions?: () => string;
 }
 
 /** Printed once per process — the transcript leaving the machine is never
@@ -780,6 +789,7 @@ export function createHaikuTaskCaptureExtractor(
   const key = resolveKeyFrom(opts.apiKey, readKeychainPassword);
   if (!key) return null;
   const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
+  const instructions = opts.instructions;
 
   return {
     name: 'haiku',
@@ -791,7 +801,10 @@ export function createHaikuTaskCaptureExtractor(
             'sent to api.anthropic.com. Turn off with CW_MEETING_TASKS=0.',
         );
       }
-      const { system, user } = buildTaskCapturePrompt(input);
+      const { system, user } = buildTaskCapturePrompt(
+        input,
+        instructions ? instructions() : undefined,
+      );
       const ctl = new AbortController();
       const timeout = setTimeout(() => ctl.abort(), TIMEOUT_MS);
       try {
