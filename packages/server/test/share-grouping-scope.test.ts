@@ -219,7 +219,7 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
     expect(memberB).not.toBe('');
 
     // A folder bind on board A too — the other half of "group bind". Its
-    // members bind LAZILY, so only the entry doc has a room; that entry doc is
+    // members bind LAZILY, so only the entry doc has a doc; that entry doc is
     // the one a visitor clicks first.
     const folder = mkdtempSync(join(tmpdir(), 'sgs-folder-'));
     writeFileSync(join(folder, 'README.md'), '# Entry\n\nRead me.\n');
@@ -355,7 +355,7 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
    * newly makes reachable has to be reachable by the sweep too — otherwise a
    * visitor keeps syncing a member doc after the board share is revoked.
    *
-   * It is: both sweeps iterate every room / every stream and match on the
+   * It is: both sweeps iterate every doc / every stream and match on the
    * shareId stamped at open, so nothing had to be extended. This test is what
    * makes that a fact rather than a reading.
    */

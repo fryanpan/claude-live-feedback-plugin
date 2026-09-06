@@ -101,7 +101,7 @@ describe('the notes clocks', () => {
    * the one thing that was not allowed, so the assertion lives here rather
    * than in a reviewer's memory.
    *
-   * Nothing else asserts them: `room-timings.test.ts` pins the DOC room's
+   * Nothing else asserts them: `doc-store-timings.test.ts` pins the DOC's
    * debounces (file poll, write-back, persist) and has never had these two
    * in it.
    */
@@ -989,9 +989,9 @@ describe('notes through the audio socket', () => {
   });
 
   it('the composed notes are IN the doc, as a replaceable named section', () => {
-    const room = handle.docStore.get('planning');
-    expect(room).toBeDefined();
-    const md = prose.serializeFragmentToMarkdown(prose.getProseFragment(room!.ydoc));
+    const doc = handle.docStore.get('planning');
+    expect(doc).toBeDefined();
+    const md = prose.serializeFragmentToMarkdown(prose.getProseFragment(doc!.ydoc));
     // The end tick's notes replaced the pause tick's — one section, current.
     expect(md.split('## Meeting notes').length).toBe(2);
     expect(md).toContain('So the sync is the bottleneck.');

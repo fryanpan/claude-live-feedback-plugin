@@ -293,8 +293,8 @@ describe('handle(): every added call site degrades to the agent route', () => {
       tasks: store,
       complete: () => Promise.resolve(`{"kind":"action","action":"comment","id":"${taskId}"}`),
       docStore: {
-        postComment: () => Promise.reject(new Error('room store offline')),
-        answerReviewItem: () => Promise.reject(new Error('room store offline')),
+        postComment: () => Promise.reject(new Error('doc store offline')),
+        answerReviewItem: () => Promise.reject(new Error('doc store offline')),
       },
       taskCommentDoc: (id) => `task:${id}`,
     });
@@ -639,7 +639,7 @@ describe('voice actions, hardened: end to end', () => {
     expect(rows.length).toBeGreaterThan(0);
     const last = rows[rows.length - 1] ?? '';
     // On the first cut `docInWorkspace` only checked `workspace.docIds`, which
-    // never holds a `task:<id>` room — so the anchor was silently dropped and
+    // never holds a `task:<id>` doc — so the anchor was silently dropped and
     // the agent got a deictic utterance with no referent.
     expect(last).toContain(`task:${bodyDocTaskId}`);
   });

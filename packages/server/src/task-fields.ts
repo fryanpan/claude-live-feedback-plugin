@@ -68,6 +68,6 @@ export function taskAskedBy(task: Pick<Task, 'createdBy' | 'transitions'>): stri
 /** An opaque, server-generated id under a one-letter namespace. */
 export function cryptoId(prefix: string): string {
   // 9 random bytes → 12 base64url chars. URL-safe, filename-safe, and every
-  // char is legal in a docId (the future `task:<id>` body rooms need that).
+  // char is legal in a docId (the future `task:<id>` body docs need that).
   return `${prefix}-${randomBytes(9).toString('base64url')}`;
 }

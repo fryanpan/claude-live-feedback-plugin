@@ -171,7 +171,7 @@ describe('DocStore.archiveDoc / unarchiveDoc', () => {
     expect(rows[0]?.payload.reviewId).toBeUndefined();
   });
 
-  it('unarchive brings the doc back: room, threads, file binding and all', async () => {
+  it('unarchive brings the doc back: doc, threads, file binding and all', async () => {
     await docStore.createThreadByFind(
       'solo',
       { find: 'the unique md line' },
@@ -240,7 +240,7 @@ describe('DocStore.archiveDoc / unarchiveDoc', () => {
     expect(docStore.get('member')).toBeDefined();
   });
 
-  it('refuses a task body and a board room — live furniture, not a doc', async () => {
+  it('refuses a task body and a board doc — live furniture, not a doc', async () => {
     for (const docId of ['task:t-abc', 'ws:w-abc']) {
       // Server authority, because a CALLER may not occupy these prefixes at
       // all now — the projection is the only thing that mints them, and this
@@ -251,7 +251,7 @@ describe('DocStore.archiveDoc / unarchiveDoc', () => {
       if (!res.ok) expect(res.error).toBe('board-owned');
       expect(docStore.get(docId)).toBeDefined();
     }
-    // Let these rooms' debounced first save land before the temp dir goes, so
+    // Let these docs' debounced first save land before the temp dir goes, so
     // the teardown race doesn't print an ENOENT that looks like a failure.
     await settle();
   });

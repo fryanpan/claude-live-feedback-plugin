@@ -80,7 +80,7 @@ describe('stopping the server closes its open connections', () => {
   it('an open websocket is closed', async () => {
     const handle = boot();
     // Mockup docs are the one type a socket may create, which is why this
-    // reaches an open room without an API call first.
+    // reaches an open doc without an API call first.
     const ws = new WebSocket(`ws://localhost:${handle.port}/y/stop-sockets-mock?type=mockup`);
     let closed = false;
     ws.addEventListener('close', () => {
@@ -104,7 +104,7 @@ describe('stopping the server closes its open connections', () => {
     // the browser as a close event either way. What the drain actually has to
     // do is fire OUR handler while the stores are still up, because those
     // handlers write (a meeting flushes its last sentence into the doc). So
-    // this asserts the server-side effect: the room's connection set, which
+    // this asserts the server-side effect: the doc's connection set, which
     // only `onClose` empties.
     //
     // It is the property `socket-handlers.ts` would lose first if `close`
@@ -121,12 +121,12 @@ describe('stopping the server closes its open connections', () => {
     // Control: the handler ran on the way IN, so the set it empties is a set
     // that had something in it. Without this the assert below passes on a
     // server that never tracked the connection at all.
-    const room = handle.docStore.get(docId);
-    expect(room).toBeDefined();
-    expect(await within(5_000, () => (room?.conns.size ?? 0) === 1)).toBe(true);
+    const doc = handle.docStore.get(docId);
+    expect(doc).toBeDefined();
+    expect(await within(5_000, () => (doc?.conns.size ?? 0) === 1)).toBe(true);
 
     await handle.stop();
 
-    expect(room?.conns.size).toBe(0);
+    expect(doc?.conns.size).toBe(0);
   });
 });

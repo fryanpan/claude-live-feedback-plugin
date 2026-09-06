@@ -64,7 +64,7 @@ export async function handleWorkspaceHome(
   // `reviewQueue` in board-review-model).
   //
   // One request rather than one per doc: a board with forty tasks is a
-  // board with forty rooms, and the strip has to be right at first
+  // board with forty docs, and the strip has to be right at first
   // paint or it is not a "what do I look at next" surface.
   // WHERE a review item lives, from its bare id — the lookup that makes
   // `reviewItemId` a universal address. Two id families, two answers

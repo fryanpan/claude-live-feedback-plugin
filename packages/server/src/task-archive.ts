@@ -68,7 +68,7 @@ export class TaskArchiveStore {
    *
    * Three fields and one event. Nothing moves, nothing is rewritten, and the
    * id keeps resolving through `getTask`, which is what lets the task's body
-   * room, its comment threads and every `after` edge pointing at it go on
+   * doc, its comment threads and every `after` edge pointing at it go on
    * working while it is gone from the lanes. `unarchiveTask` clears the same
    * three fields, so a restore has nothing to reconstruct and no half-state to
    * crash in.

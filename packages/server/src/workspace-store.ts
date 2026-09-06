@@ -161,7 +161,7 @@ export class WorkspaceStore {
   /**
    * How many of a board's tasks are still open — the guard `deleteWorkspace`
    * applies, exposed so a caller can check it BEFORE doing work the refusal
-   * would waste (the route tears down rooms first). `null` when there is no
+   * would waste (the route tears down docs first). `null` when there is no
    * such board, which is a different answer from zero.
    */
   openTaskCount(workspaceId: string): number | null {
@@ -185,8 +185,8 @@ export class WorkspaceStore {
    * goes with it — an audit trail for a board nobody can see is a file that
    * only grows.
    *
-   * Returns the task ids so the caller can tear down each one's body room;
-   * this store owns no rooms and deliberately does not reach into them.
+   * Returns the task ids so the caller can tear down each one's body doc;
+   * this store owns no docs and deliberately does not reach into them.
    */
   deleteWorkspace(
     workspaceId: string,
@@ -543,7 +543,7 @@ export class WorkspaceStore {
   /**
    * The board workspace this docId belongs to for SHARE-SCOPE purposes, or
    * null (§3.12 commit 8): a doc linked via attachDoc, or a task's own body
-   * room (`task:<taskId>`). Deliberately NOT the `ws:<id>` board room — its
+   * doc (`task:<taskId>`). Deliberately NOT the `ws:<id>` board doc — its
    * share allowance is explicit in host-guard, so granting the board stays
    * a decision rather than a resolver side effect. Also deliberately not
    * transitive: attachDoc can link a whole review (diff review) by
@@ -552,7 +552,7 @@ export class WorkspaceStore {
    */
   workspaceOfDoc(docId: string): string | null {
     if (docId.startsWith('task:')) {
-      // A `task:` room is a TASK's body or a GOAL's — one prefix, two kinds of
+      // A `task:` doc is a TASK's body or a GOAL's — one prefix, two kinds of
       // row (see `ensureGoalBody` in task-projection.ts). Asking only
       // `getTask` answered null for every goal, and null here is not a
       // harmless miss: it is what the back-link, the review URL and SHARE

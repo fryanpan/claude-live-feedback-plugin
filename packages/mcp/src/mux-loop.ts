@@ -323,7 +323,7 @@ async function runMuxLoop(
     await deps.sleep(reconnectDelayMs(attempt, deps.random));
     if (signal.aborted) break;
     // A reconnect is what a server restart looks like from in here, and a
-    // restart rebuilds every room with `seq` back at 0 — so every key the
+    // restart rebuilds every doc with `seq` back at 0 — so every key the
     // dedup holds can now collide with a genuinely NEW event and silently
     // swallow it. Drop the window.
     deps.resetDedup();

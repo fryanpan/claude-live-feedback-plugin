@@ -104,13 +104,13 @@ export async function handleTaskFields(
     return j(200, res);
   }
   // update_task_body: replace a task's description after creation.
-  // The body is a live `task:<id>` doc room, so this goes THROUGH that
-  // room rather than at the store's snapshot field — a block-level
+  // The body is a live `task:<id>` live doc, so this goes THROUGH that
+  // doc rather than at the store's snapshot field — a block-level
   // diff, so comment threads on paragraphs the rewrite didn't touch
   // keep their anchors, and anyone reading the task on the board sees
   // it change under them. Three things the doc route alone can't do,
   // and each of them looks like "the rewrite failed" from outside:
-  // create the room on a workspace this process hasn't served yet,
+  // create the doc on a workspace this process hasn't served yet,
   // flush the snapshot the board and next_tasks read, and put an
   // attributed row in the audit log.
   const taskBodyMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/body$/);
@@ -187,7 +187,7 @@ export async function handleTaskFields(
       assigneeKind: handoverKind.assigneeKind,
     });
     if (!res.ok) return j(404, res);
-    // A no-op emits nothing, so nothing would refresh the board room —
+    // A no-op emits nothing, so nothing would refresh the board doc —
     // harmless here (nothing changed) but the changed path is covered
     // by the task.assigned event's own projection hook.
     if (!res.changed) taskProjection.ensureWorkspace(res.task.workspaceId);

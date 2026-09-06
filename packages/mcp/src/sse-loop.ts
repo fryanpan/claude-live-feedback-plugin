@@ -269,7 +269,7 @@ async function runSseLoop(
     const cap = absent > 0 ? ABSENT_RETRY_CAP_MS : RECONNECT_CAP_MS;
     await deps.sleep(reconnectDelayMs(attempt, deps.random, RECONNECT_BASE_MS, cap));
     // A reconnect is what a server restart looks like from in here, and a
-    // restart rebuilt every room with `seq` back at 0 — so every key the
+    // restart rebuilt every doc with `seq` back at 0 — so every key the
     // dedup is holding can now collide with a genuinely NEW event and
     // silently swallow it. Drop the window: the cost is at most a duplicate
     // of something in flight, and the cost of keeping it is a comment nobody

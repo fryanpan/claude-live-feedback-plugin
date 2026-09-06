@@ -12,7 +12,7 @@
  *
  * Everything else here exists to serve that one render:
  *
- * - `bodyEditor` is the single live-room editor host both panels drive, which
+ * - `bodyEditor` is the single live-doc editor host both panels drive, which
  *   is why it is built here rather than in the entry. "A body editor left
  *   mounted by the last open row" is impossible by construction rather than
  *   something a branch has to remember to tear down.
@@ -98,7 +98,7 @@ export interface BoardDetailDeps {
   /** Answering, asking back and undoing — the review queue's verbs, which the
    *  panel surfaces for the open ticket's own rows. */
   review: BoardReviewController;
-  /** A row's comments, and the goal-room derivation both panels share. */
+  /** A row's comments, and the goal-doc derivation both panels share. */
   discussion: BoardDiscussion;
   /** The projection's rows, for the blocker derivations. */
   taskList(): BoardTask[];
@@ -110,7 +110,7 @@ export interface BoardDetailDeps {
   loadEvents(): Promise<void>;
   /** Write the address for what the panel is showing. */
   syncBoardUrl(): void;
-  /** Open the task's body room. `bootBoard` owns the URL shape. */
+  /** Open the task's body doc. `bootBoard` owns the URL shape. */
   connectMarkdown(docId: string): FeedbackClient;
   /** Whether this reader may write at all — the description box is never live
    *  before the answer, and never live after a "no". */
@@ -180,8 +180,8 @@ export function createBoardDetailPanel(deps: BoardDetailDeps): BoardDetailPanel 
 
   // ── The description, edited in place ────────────────────────────────────
   //
-  // A second room, opened per task rather than per board: the task's body is
-  // `task:<taskId>`, the same room an agent rewrites through `set_doc_content`
+  // A second doc, opened per task rather than per board: the task's body is
+  // `task:<taskId>`, the same doc an agent rewrites through `set_doc_content`
   // and the same one `/review/task:<id>` opens. Mounting the review surface's
   // editor over it is what makes the reader's typing and an agent's rewrite
   // merge as CRDT edits instead of one overwriting the other.
@@ -261,7 +261,7 @@ export function createBoardDetailPanel(deps: BoardDetailDeps): BoardDetailPanel 
 
   /**
    * Reading-time capture for the open ticket — the same tracker the markdown,
-   * redline and code surfaces mount, pointed at the task's body room.
+   * redline and code surfaces mount, pointed at the task's body doc.
    *
    * A ticket is a PANEL rather than a page, so there is no load to hang a
    * tracker off and no unload to flush it: this is the lifecycle. It is keyed
@@ -352,7 +352,7 @@ export function createBoardDetailPanel(deps: BoardDetailDeps): BoardDetailPanel 
             onDueSet: (goalId, dueAt) => void setGoalDue(goalId, section.title, dueAt),
             onComment: (goalId, text, threadId) =>
               postRowComment({ id: goalId, bodyDocId: goalBodyDocId(section) }, text, threadId),
-            // The goal's description is a live room like a task's, so the SAME
+            // The goal's description is a live doc like a task's, so the SAME
             // editor host drives it — one mount at a time, which is what makes
             // "a body editor left mounted by the last open row" impossible
             // rather than something this branch has to remember to tear down.

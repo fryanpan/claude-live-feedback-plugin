@@ -76,7 +76,7 @@ export interface BoardProjectionDeps {
   workspaceId: string;
   /** Where the header and the tab title are written. */
   document: Document;
-  /** The board room's two server-owned Y.Maps. A THUNK because the header
+  /** The board doc's two server-owned Y.Maps. A THUNK because the header
    *  paints once before the socket is built — `bootBoard` constructs this
    *  module beside the shell and opens the connection after it. */
   maps(): { tasks: Y.Map<unknown>; ws: Y.Map<unknown> };

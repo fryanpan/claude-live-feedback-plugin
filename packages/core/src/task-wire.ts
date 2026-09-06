@@ -130,7 +130,7 @@ export interface TaskEffortEstimateFailed extends TaskEffortEstimateProvenance {
 
 export type TaskEffortEstimate = TaskEffortEstimateOk | TaskEffortEstimateFailed;
 
-/** Cumulative reading-tracker attention on one task's body room. See
+/** Cumulative reading-tracker attention on one task's body doc. See
  *  `Task.readingTime` for what counts and why absence isn't zero. */
 export interface TaskReadingTime {
   /** Sum of every folded-in `read_session`'s clamped durationMs, in
@@ -224,7 +224,7 @@ export interface TaskNote {
   /** The agent's display name, as the hook's environment spelled it. */
   agent: string;
   /** The Claude Code session that posted it. Kept for the pane; never
-   *  projected into the board room. */
+   *  projected into the board doc. */
   sessionId?: string;
 }
 
@@ -302,7 +302,7 @@ export interface InfoRequest {
  * gate's wake has to be ADDRESSED (`sendToAgent` keys on the agent id) and
  * `createdBy` is a display name by the §3.3 visitor contract. It stays out
  * of every projection the way transition actor ids do: `readTaskReviewItem`
- * never reads it, so the board room never carries it.
+ * never reads it, so the board doc never carries it.
  */
 export interface StoredReviewItem extends TaskReviewItem {
   filedBy?: TaskActor;
@@ -336,7 +336,7 @@ export interface Task {
    * write can change that. Absent means the title is real.
    */
   untitled?: boolean;
-  /** Markdown snapshot of the description. The live CRDT body room
+  /** Markdown snapshot of the description. The live CRDT body doc
    *  (`task:<taskId>`) arrives with the projection commit; this snapshot is
    *  for search/export and never re-seeds a live fragment (§3.3). */
   body?: string;
@@ -449,7 +449,7 @@ export interface Task {
    * going to do either sat on the board forever or was destroyed outright.
    * Archiving is the third answer, and it is deliberately the CHEAPEST one
    * available — three fields on the row. Nothing moves on disk, the id still
-   * resolves, the task's body room and every comment thread hanging off it
+   * resolves, the task's body doc and every comment thread hanging off it
    * keep working, and `after` edges pointing at it keep pointing at it. So a
    * restore is a field clear rather than a restore-from-anywhere, and there
    * is no window in which the record is half-moved.
@@ -492,7 +492,7 @@ export interface Task {
    */
   artifactCheck?: ArtifactCheck;
   /**
-   * Cumulative HUMAN attention on this task's body room (`task:<id>`) —
+   * Cumulative HUMAN attention on this task's body doc (`task:<id>`) —
    * the sum of interaction-bounded `read_session` durations the reading
    * tracker reports (idle time and agent traffic already excluded before
    * this ever sees them; see `packages/workspaces-app/src/reading-tracker.ts`
@@ -565,7 +565,7 @@ export interface Task {
    * is the closest to the source — so a filled quote is never overwritten.
    *
    * ONE writer for the rewrite case, deliberately, and it is the snapshot
-   * rather than the named rewrite route: a body is a live Yjs room with
+   * rather than the named rewrite route: a body is a live Yjs doc with
    * several doors into it, and the preservation belongs where the words are
    * lost, not where one caller announces it is about to lose them.
    *
@@ -660,7 +660,7 @@ export interface Task {
    *
    * `updatedAt` cannot answer this: twelve mutators bump it, including
    * `linkRef`, so "the row changed" says nothing about whether the
-   * description still describes the world. And the live-room path
+   * description still describes the world. And the live-doc path
    * (`updateBodySnapshot`) deliberately bumps nothing at all, which is
    * correct for board activity and useless here — measured on the real
    * board, seven bodies had been rewritten and the system held no record of

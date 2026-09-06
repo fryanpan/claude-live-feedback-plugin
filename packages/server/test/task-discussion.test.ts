@@ -1,7 +1,7 @@
 /**
  * You can discuss a task.
  *
- * A task body already lives in its own `task:<taskId>` doc room, so the whole
+ * A task body already lives in its own `task:<taskId>` live doc, so the whole
  * thread machinery applies unchanged — except that BOTH write paths demanded
  * something to point at (`POST /threads` required an anchor, `by_find`
  * required a find string), and a freshly created task's description is empty.
@@ -160,9 +160,9 @@ describe('task discussion', () => {
   it('the board projection counts the discussion', async () => {
     const { taskId, workspaceId } = await makeTaskIn('Wire the index');
     const docId = taskBodyDocId(taskId);
-    const room = handle.docStore.get(workspaceDocId(workspaceId));
-    if (!room) throw new Error('ws room missing');
-    const projected = () => room.ydoc.getMap('tasks').get(taskId) as { commentCount?: number };
+    const doc = handle.docStore.get(workspaceDocId(workspaceId));
+    if (!doc) throw new Error('ws doc missing');
+    const projected = () => doc.ydoc.getMap('tasks').get(taskId) as { commentCount?: number };
 
     expect(projected().commentCount ?? 0).toBe(0);
 

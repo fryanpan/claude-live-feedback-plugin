@@ -7,7 +7,7 @@
  * (`WsCtx.shareId` / `shareMember`) and `DocStore`'s sweeps match on those.
  *
  * The meeting's `/audio/<docId>` socket carried neither, and it is not in any
- * room's `conns` either — it lives in `MeetingRelay`'s WeakMap, which cannot
+ * doc's `conns` either — it lives in `MeetingRelay`'s WeakMap, which cannot
  * be enumerated. So removing a member, or throwing the sharing master switch,
  * closed the board and the doc and left an open microphone running a billed
  * transcription session against a doc the person may no longer read.

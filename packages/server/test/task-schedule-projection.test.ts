@@ -61,7 +61,7 @@ describe('the rule reaches the browser', () => {
       armedAt: MON,
       armedBy: OWNER.name,
     };
-    const { taskId } = seedRow('Sweep the lamp room');
+    const { taskId } = seedRow('Sweep the lamp doc');
     const armed = setTaskSchedule(store, taskId, schedule);
     if (!armed.ok) throw new Error('arm refused');
     const row = store.getTask(taskId);
@@ -73,11 +73,11 @@ describe('the rule reaches the browser', () => {
     // The board draws a live instance in its own goal band with a mark back
     // to the rule that made it. A mark it cannot resolve is a mark it cannot
     // draw, so the field has to be on the wire and not only in the store.
-    const { workspaceId, goal, taskId: ruleId } = seedRow('Sweep the lamp room');
+    const { workspaceId, goal, taskId: ruleId } = seedRow('Sweep the lamp doc');
     const mark = { taskId: ruleId, occurrenceAt: MON + 9 * 3_600_000, missed: 2 };
     const run = store.createTask(workspaceId, {
-      title: 'Sweep the lamp room',
-      body: 'Agent can sweep the lamp room so that the beam stays clean.',
+      title: 'Sweep the lamp doc',
+      body: 'Agent can sweep the lamp doc so that the beam stays clean.',
       assignee: OWNER.name,
       assigneeKind: 'agent',
       goal,

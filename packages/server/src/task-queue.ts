@@ -163,7 +163,7 @@ export interface QueueOpts {
   goalRows?: readonly GoalRow[];
   /**
    * Comments on a task, by task id. Optional so `buildQueue` stays pure and
-   * testable without a room store; a caller that omits it gets rows with no
+   * testable without a doc store; a caller that omits it gets rows with no
    * `premise` at all rather than rows that claim to be fresh.
    */
   discussion?: (taskId: string) => readonly PremiseNote[];
@@ -327,11 +327,11 @@ export interface GoalSummaryRow {
   /** Who declared it, display name and kind only. */
   doneBy?: { name: string; kind: 'person' | 'agent' };
   /**
-   * The goal's live description room — `task:<goalId>`, the same address a
+   * The goal's live description doc — `task:<goalId>`, the same address a
    * task's `bodyDocId` names and reachable with the same `get_doc` /
    * `find_and_replace` / `create_thread` calls.
    *
-   * Stated on the read because a body room nobody can NAME is a body room
+   * Stated on the read because a body doc nobody can NAME is a body doc
    * nobody opens: the address is derivable, but an agent that has to derive
    * it has to first know that goals have bodies at all. Absent on the
    * appended rows (Backlog, an orphaned goal id) for the same reason `status`

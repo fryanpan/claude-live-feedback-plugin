@@ -16,7 +16,7 @@ import type { DocMeta } from '@feedback/core';
  * rebuilt from it, which is what makes it safe to delete, safe to skip, and
  * safe to regenerate on a version bump.
  *
- * It is written inside `persistRoomNow`, in the same debounced write as the
+ * It is written inside `persistDocNow`, in the same debounced write as the
  * `.ydoc` and the private sidecar, and it goes wherever the sidecar goes —
  * staged with it, restored with it, purged with it, moved with it. If the
  * three could be written or moved independently they would eventually

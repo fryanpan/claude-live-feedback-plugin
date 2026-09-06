@@ -3,7 +3,7 @@
  *
  * `projectTask` is the §3.3 visitor contract in one function: the fields a
  * board viewer may read, with no actor ids and a capped body. It is a pure
- * function of a `Task` — no store, no room, no clock — which is why it lives
+ * function of a `Task` — no store, no doc, no clock — which is why it lives
  * here rather than in `task-projection.ts`, the class that drives the
  * snapshots. The redaction path and the review-item derivation both call it
  * without wanting any of that machinery.
@@ -20,7 +20,7 @@ import { type OwnerKind } from './task-owner.ts';
 import { type Task, legacyDecisionItem, taskAskedBy } from './tasks.ts';
 
 /**
- * The docId of a task's live body room.
+ * The docId of a task's live body doc.
  *
  * DECIDED, so nobody has to re-derive it: `task:<taskId>` is a RESERVED
  * PATTERN, not an alias and not a caller-chosen doc id. The `task:` and `ws:`
@@ -28,10 +28,10 @@ import { type Task, legacyDecisionItem, taskAskedBy } from './tasks.ts';
  * already-opaque generated id (`t-…`, `w-…`) — so the address inherits its
  * opacity from the task rather than needing an identity of its own. There is
  * nothing here for a readable-alias layer to protect: no person bookmarks a
- * body room, it is derived on demand from a task the reader already has, and
+ * body doc, it is derived on demand from a task the reader already has, and
  * it changes only when the task itself ceases to exist.
  *
- * What that settles, deliberately: a body room never gets a second, prettier
+ * What that settles, deliberately: a body doc never gets a second, prettier
  * name, so the alias layer that generated DOC ids need does not extend here.
  * `isBoardOwnedDoc` (doc-store.ts) is already the prefix authority; making the
  * prefixes unwritable by an outside caller belongs with the doc-id half of
@@ -41,9 +41,9 @@ export function taskBodyDocId(taskId: string): string {
   return `task:${taskId}`;
 }
 
-/** taskId ⇦ its body room docId (inverse of taskBodyDocId). */
+/** taskId ⇦ its body doc docId (inverse of taskBodyDocId). */
 /** The task a body docId belongs to, or null if the docId isn't one.
- *  One spelling of "not found" — callers that hold a body room and callers
+ *  One spelling of "not found" — callers that hold a body doc and callers
  *  handed an arbitrary docId ask the same question and read the same answer. */
 export function taskIdOfBodyDoc(docId: string): string | null {
   return docId.startsWith('task:') ? docId.slice('task:'.length) : null;
@@ -52,7 +52,7 @@ export function taskIdOfBodyDoc(docId: string): string | null {
 /**
  * How much of a description the board projection carries.
  *
- * A task body is a live doc anyone can paste a plan into, and the ws room
+ * A task body is a live doc anyone can paste a plan into, and the ws doc
  * re-syncs to every board viewer on every debounced snapshot — so an
  * uncapped body makes the board's sync cost proportional to the longest
  * thing anyone ever pasted. Past the cap the panel shows the head and says
@@ -155,12 +155,12 @@ function projectNotes(notes: Task['notes']): { notes?: Record<string, unknown>[]
 /** The plain-JSON shape of one task inside the `tasks` Y.Map — the §3.3
  *  visitor-contract fields, stated here so it's a decision, not an
  *  accident. No actor ids (display names only); the body is the capped
- *  snapshot, and the live one stays in its own room. */
+ *  snapshot, and the live one stays in its own doc. */
 export function projectTask(
   task: Task,
   /**
    * How many comments the task's discussion holds. Lives outside `Task`
-   * because the discussion lives in the task's body ROOM, not in the store —
+   * because the discussion lives in the task's body DOC, not in the store —
    * but the row has to say a discussion exists, or the only way to find one
    * is to open every task.
    */

@@ -95,7 +95,7 @@ describe('POST /api/docs/:id/archive', () => {
     expect(await boardDocIds(boardId)).not.toContain(docId);
     // The doc no longer loads — that is what taking it out of the top level
     // of the data dir buys. Not under its id, and not under the readable name
-    // either: the alias goes with the room it named.
+    // either: the alias goes with the doc it named.
     expect((await local(`/api/docs/${docId}`)).status).toBe(404);
     expect((await local('/api/docs/draft-doc')).status).toBe(404);
 

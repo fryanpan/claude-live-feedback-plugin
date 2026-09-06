@@ -9,7 +9,7 @@
  * There are TWO doors, which is the thing this file exists to hold. The REST
  * queue (`review-queue.ts`) normalizes the titles IT assembles, and has its own
  * tests. But the Home queue's DECISION rows are assembled in the browser, off
- * the board projection — `projectTask` → the `ws:<id>` room → `reviewQueue` —
+ * the board projection — `projectTask` → the `ws:<id>` doc → `reviewQueue` —
  * so a title left raw in the projection is a review row with a raw entity in
  * it however carefully the REST side behaves. The chain is asserted end to end
  * here rather than at either half, because either half alone passes while the

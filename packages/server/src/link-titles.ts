@@ -86,7 +86,7 @@ export function linkInfoFor(url: string, sources: LinkTitleSources): ResolvedLin
     }
     case 'doc':
     case 'mockup': {
-      // A task's body room is addressed as `task:<id>` — its title is the
+      // A task's body doc is addressed as `task:<id>` — its title is the
       // task's, which is also the only title it has.
       const taskId = taskIdOfBodyDoc(link.docId);
       if (taskId) {

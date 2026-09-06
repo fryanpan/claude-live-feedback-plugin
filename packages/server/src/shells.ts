@@ -429,7 +429,7 @@ function flattenWorkspaceFiles(node: WorkspaceDirNode | WorkspaceFileNode): Land
  * `lastActivity` is the newest REAL event on the board: a task mutation
  * (`task.updatedAt` — bumped by every transition, assignment, evidence and
  * body rewrite), a comment on a task's discussion (`thread.lastActivity` on
- * the `task:<id>` room), or the board's creation. Deliberately
+ * the `task:<id>` doc), or the board's creation. Deliberately
  * NOT `meta.lastActivityAt`, which is the `.ydoc` mtime wearing an activity
  * label — see rule 1 in the header of `landing.ts`.
  */
@@ -478,7 +478,7 @@ export function collectLandingProjects(
   const owners = new Set<string>();
   for (const meta of docStore.list()) {
     // Infrastructure, not attachment content: the shared hub-feedback doc exists
-    // on every install from startup, and `ws:`/`task:` rooms are surfaces the
+    // on every install from startup, and `ws:`/`task:` docs are surfaces the
     // server owns for the boards the page already lists.
     if (meta.docId === BOARD_FEEDBACK_DOC_ID) continue;
     if (meta.docId.startsWith('ws:') || meta.docId.startsWith('task:')) continue;

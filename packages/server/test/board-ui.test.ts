@@ -134,7 +134,7 @@ describe('board UI routes (plan §3.12 commit 7)', () => {
       expect(html).toContain('identity-scope="host"');
     });
 
-    // The doc must be findable by an agent that never opened a board — a room
+    // The doc must be findable by an agent that never opened a board — a doc
     // conjured by the first `/y/<id>` connect has no title and no type.
     it('materializes the shared feedback doc at startup', async () => {
       const res = await fetch(`${base}/api/docs/${BOARD_FEEDBACK_DOC_ID}`);
@@ -177,9 +177,9 @@ describe('board UI routes (plan §3.12 commit 7)', () => {
 
       // The board renders from the ws:<id> ydoc projection — assert the
       // rename reached the layer the UI actually reads.
-      const room = handle.docStore.get(workspaceDocId(wsId));
-      expect(room).toBeDefined();
-      const projected = room?.ydoc.getMap('tasks').get(task.id) as { title?: string } | undefined;
+      const doc = handle.docStore.get(workspaceDocId(wsId));
+      expect(doc).toBeDefined();
+      const projected = doc?.ydoc.getMap('tasks').get(task.id) as { title?: string } | undefined;
       expect(projected?.title).toBe('New sharper title');
     });
 

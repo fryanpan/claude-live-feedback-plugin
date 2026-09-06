@@ -124,7 +124,7 @@ describe('the board never loads doc.css, and loses nothing by it', () => {
   it('paints a pending suggestion, because the board mounts the same editor', () => {
     // The converse of the negatives above, and the check that would have
     // caught this: the board's task-body editor IS `createEditor` over the
-    // `task:<id>` room (board/task-body-editor.ts), and editor.ts registers
+    // `task:<id>` doc (board/task-body-editor.ts), and editor.ts registers
     // SuggestInsert, SuggestDelete and SuggestionChips in the BASE extension
     // list with no review-surface condition. So an agent's pending suggestion
     // on a task description renders here, and its rules have to be in the

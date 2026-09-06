@@ -286,7 +286,7 @@ describe('a bullet a person wrote', () => {
     const second = await harness.speak('It started after the rollout, I think.');
     await harness.end();
 
-    // The ACCEPTED text — what serializes to disk and what the room reads —
+    // The ACCEPTED text — what serializes to disk and what the doc reads —
     // still says what the person typed.
     expect(second.notes).toContain('I think this predates the 0.4 rollout');
     expect(allBullets(second.notes).filter((b) => b.includes('predates'))).toHaveLength(1);
