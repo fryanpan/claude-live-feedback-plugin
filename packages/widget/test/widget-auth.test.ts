@@ -79,14 +79,18 @@ afterEach(() => {
 describe('the sign-in offer', () => {
   it('does NOT exist without auth-offer on a workspace that does not require it', async () => {
     const mod = await importWidget();
-    const el = mod.FeedbackWidget.init({ docId: 'doc-auth-off' });
+    const el = mod.FeedbackWidget.init({ workspaceId: 'w-1', docId: 'doc-auth-off' });
     await flush();
     expect(el.shadowRoot!.querySelector('.auth-signin')).toBeNull();
   });
 
   it('exists on an embed that opted in', async () => {
     const mod = await importWidget();
-    const el = mod.FeedbackWidget.init({ docId: 'doc-auth-on', authOffer: true });
+    const el = mod.FeedbackWidget.init({
+      workspaceId: 'w-1',
+      docId: 'doc-auth-on',
+      authOffer: true,
+    });
     expect(el.shadowRoot!.querySelector('.auth-signin')).toBeTruthy();
   });
 
@@ -94,6 +98,7 @@ describe('the sign-in offer', () => {
     await importWidget();
     const host = document.createElement('claude-feedback-widget');
     host.setAttribute('doc-id', 'doc-auth-attr');
+    host.setAttribute('workspace-id', 'w-1');
     host.setAttribute('auth-offer', '');
     document.body.appendChild(host);
     expect((host as HTMLElement).shadowRoot!.querySelector('.auth-signin')).toBeTruthy();
@@ -108,7 +113,11 @@ describe('the popup handshake', () => {
       opened.push(String(url));
       return {} as Window;
     };
-    const el = mod.FeedbackWidget.init({ docId: 'doc-auth-popup', authOffer: true });
+    const el = mod.FeedbackWidget.init({
+      workspaceId: 'w-1',
+      docId: 'doc-auth-popup',
+      authOffer: true,
+    });
     (el.shadowRoot!.querySelector('.auth-signin') as HTMLButtonElement).click();
     expect(opened.length).toBe(1);
     const url = new URL(opened[0] as string);
@@ -121,7 +130,11 @@ describe('the popup handshake', () => {
     const mod = await importWidget();
     const popup = {} as Window;
     (window as unknown as { open: unknown }).open = () => popup;
-    const el = mod.FeedbackWidget.init({ docId: 'doc-auth-msg', authOffer: true });
+    const el = mod.FeedbackWidget.init({
+      workspaceId: 'w-1',
+      docId: 'doc-auth-msg',
+      authOffer: true,
+    });
     (el.shadowRoot!.querySelector('.auth-signin') as HTMLButtonElement).click();
 
     const user = { id: 'user-abc', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
@@ -165,7 +178,11 @@ describe('posting with a token', () => {
         : new Response(JSON.stringify({ ok: true }), {
             headers: { 'content-type': 'application/json' },
           });
-    const el = mod.FeedbackWidget.init({ docId: 'doc-auth-post', authOffer: true });
+    const el = mod.FeedbackWidget.init({
+      workspaceId: 'w-1',
+      docId: 'doc-auth-post',
+      authOffer: true,
+    });
     await flush();
     fetchCalls = [];
     // biome-ignore lint/suspicious/noExplicitAny: reaching into a private for the test
@@ -202,7 +219,11 @@ describe('posting with a token', () => {
             headers: { 'content-type': 'application/json' },
           });
     };
-    const el = mod.FeedbackWidget.init({ docId: 'doc-auth-401', authOffer: true });
+    const el = mod.FeedbackWidget.init({
+      workspaceId: 'w-1',
+      docId: 'doc-auth-401',
+      authOffer: true,
+    });
     await flush();
     fetchCalls = [];
     // biome-ignore lint/suspicious/noExplicitAny: reaching into a private for the test
@@ -244,7 +265,11 @@ describe('a stored token is validated on load', () => {
         : new Response(JSON.stringify({ ok: true }), {
             headers: { 'content-type': 'application/json' },
           });
-    const el = mod.FeedbackWidget.init({ docId: 'doc-auth-check', authOffer: true });
+    const el = mod.FeedbackWidget.init({
+      workspaceId: 'w-1',
+      docId: 'doc-auth-check',
+      authOffer: true,
+    });
     await flush();
     const probe = fetchCalls.find((c) => c.url.includes('/api/auth/widget-session'));
     expect(probe).toBeTruthy();
@@ -261,7 +286,11 @@ describe('a stored token is validated on load', () => {
         : new Response(JSON.stringify({ ok: true }), {
             headers: { 'content-type': 'application/json' },
           });
-    const el = mod.FeedbackWidget.init({ docId: 'doc-auth-dead', authOffer: true });
+    const el = mod.FeedbackWidget.init({
+      workspaceId: 'w-1',
+      docId: 'doc-auth-dead',
+      authOffer: true,
+    });
     await flush();
     expect(localStorage.getItem('cfw:authToken')).toBeNull();
     expect(el.shadowRoot!.querySelector('.auth-signin')).toBeTruthy();
@@ -286,7 +315,7 @@ describe('a stored token is validated on load', () => {
             headers: { 'content-type': 'application/json' },
           })
         : new Response('{}');
-    const el = mod.FeedbackWidget.init({ docId: 'doc-auth-silent' });
+    const el = mod.FeedbackWidget.init({ workspaceId: 'w-1', docId: 'doc-auth-silent' });
     await flush();
     const authCalls = fetchCalls.filter((c) => c.url.includes('/api/auth/'));
     expect(authCalls.map((c) => new URL(c.url).pathname)).toEqual(['/api/auth/session']);
@@ -313,7 +342,7 @@ describe('a write the workspace refuses for want of a session', () => {
     // response, so the comment simply vanished.
     const mod = await importWidget();
     fetchResponder = (url) => (url.includes('/threads') ? refuse() : new Response('{}'));
-    const el = mod.FeedbackWidget.init({ docId: 'doc-refused' });
+    const el = mod.FeedbackWidget.init({ workspaceId: 'w-1', docId: 'doc-refused' });
     await flush();
     fetchCalls = [];
     // biome-ignore lint/suspicious/noExplicitAny: reaching into a private for the test
@@ -333,7 +362,11 @@ describe('a write the workspace refuses for want of a session', () => {
       return {} as Window;
     };
     fetchResponder = (url) => (url.includes('/threads') ? refuse() : new Response('{}'));
-    const el = mod.FeedbackWidget.init({ docId: 'doc-refused-ui', authOffer: true });
+    const el = mod.FeedbackWidget.init({
+      workspaceId: 'w-1',
+      docId: 'doc-refused-ui',
+      authOffer: true,
+    });
     await flush();
     // biome-ignore lint/suspicious/noExplicitAny: reaching into a private for the test
     await (el as any).postReply('t-1', 'hello');
@@ -360,7 +393,7 @@ describe('a write the workspace refuses for want of a session', () => {
     };
     fetchResponder = (url) =>
       url.includes('/threads') ? refuse() : new Response('nope', { status: 500 });
-    const el = mod.FeedbackWidget.init({ docId: 'doc-refused-link' });
+    const el = mod.FeedbackWidget.init({ workspaceId: 'w-1', docId: 'doc-refused-link' });
     await flush();
     expect(el.shadowRoot!.querySelector('.auth-signin')).toBeNull();
     // biome-ignore lint/suspicious/noExplicitAny: reaching into a private for the test
@@ -401,7 +434,11 @@ describe('a write the workspace refuses for want of a session', () => {
       }
       return new Response('{}');
     };
-    const el = mod.FeedbackWidget.init({ docId: 'doc-dead-token', authOffer: true });
+    const el = mod.FeedbackWidget.init({
+      workspaceId: 'w-1',
+      docId: 'doc-dead-token',
+      authOffer: true,
+    });
     await flush();
     // biome-ignore lint/suspicious/noExplicitAny: reaching into a private for the test
     const posted = await (el as any).postReply('t-1', 'hello');
@@ -433,7 +470,7 @@ describe('a workspace that requires a signed-in writer', () => {
   it('asks once on load and offers sign-in without auth-offer', async () => {
     const mod = await importWidget();
     fetchResponder = (url) => (url.includes('/api/auth/session') ? required() : json({}));
-    const el = mod.FeedbackWidget.init({ docId: 'doc-req-load' });
+    const el = mod.FeedbackWidget.init({ workspaceId: 'w-1', docId: 'doc-req-load' });
     await flush();
     const asks = fetchCalls.filter((c) => c.url.includes('/api/auth/session'));
     expect(asks.length).toBe(1);
@@ -450,7 +487,7 @@ describe('a workspace that requires a signed-in writer', () => {
       if (url.includes('/api/auth/widget-session')) return json({ authenticated: true, user });
       return json({});
     };
-    const el = mod.FeedbackWidget.init({ docId: 'doc-req-stored' });
+    const el = mod.FeedbackWidget.init({ workspaceId: 'w-1', docId: 'doc-req-stored' });
     await flush();
     const probe = fetchCalls.find((c) => c.url.includes('/api/auth/widget-session'));
     expect(authHeaderOf(probe as FetchCall)).toBe('Bearer wt1.stored-token');
@@ -462,7 +499,7 @@ describe('a workspace that requires a signed-in writer', () => {
   it('the composer says why it cannot post, before the first attempt', async () => {
     const mod = await importWidget();
     fetchResponder = (url) => (url.includes('/api/auth/session') ? required() : json({}));
-    const el = mod.FeedbackWidget.init({ docId: 'doc-req-composer' });
+    const el = mod.FeedbackWidget.init({ workspaceId: 'w-1', docId: 'doc-req-composer' });
     await flush();
     const composer = openComposer(el);
     expect(composer.querySelector('.composer-err')?.textContent).toContain('Sign in');
@@ -485,7 +522,7 @@ describe('a workspace that requires a signed-in writer', () => {
       }
       return json({});
     };
-    const el = mod.FeedbackWidget.init({ docId: 'doc-req-retry' });
+    const el = mod.FeedbackWidget.init({ workspaceId: 'w-1', docId: 'doc-req-retry' });
     await flush();
     const composer = openComposer(el);
     // The load-time answer said open; the refusal is what teaches this embed.
@@ -528,7 +565,7 @@ describe('a workspace that requires a signed-in writer', () => {
       }
       return json({});
     };
-    const el = mod.FeedbackWidget.init({ docId: 'doc-req-cancel' });
+    const el = mod.FeedbackWidget.init({ workspaceId: 'w-1', docId: 'doc-req-cancel' });
     await flush();
     const composer = openComposer(el);
     (composer.querySelector('textarea') as HTMLTextAreaElement).value = 'second thoughts';
@@ -573,7 +610,7 @@ describe('a workspace that requires a signed-in writer, asked by a browser that 
   async function mount(session: unknown, docId: string) {
     const mod = await importWidget();
     fetchResponder = (url) => (url.includes('/api/auth/session') ? json(session) : json({}));
-    const el = mod.FeedbackWidget.init({ docId });
+    const el = mod.FeedbackWidget.init({ workspaceId: 'w-1', docId });
     await flush();
     return el;
   }
@@ -623,7 +660,7 @@ describe('a workspace that requires a signed-in writer, asked by a browser that 
         return json({ error: 'sign_in_required', signInUrl: '/signin' }, 401);
       return json({});
     };
-    const el = mod.FeedbackWidget.init({ docId: 'doc-access-expired' });
+    const el = mod.FeedbackWidget.init({ workspaceId: 'w-1', docId: 'doc-access-expired' });
     await flush();
     expect((el as unknown as { signInToWrite: boolean }).signInToWrite).toBe(false);
     // biome-ignore lint/suspicious/noExplicitAny: reaching into a private for the test

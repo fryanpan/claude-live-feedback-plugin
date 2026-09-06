@@ -45,14 +45,66 @@ describe('widget', () => {
 
   it('registers the custom element on init', async () => {
     const mod = await importWidget();
-    mod.FeedbackWidget.init({ docId: 'w-test-1', user: 'bryan' });
+    mod.FeedbackWidget.init({ workspaceId: 'w-1', docId: 'w-test-1', user: 'bryan' });
     expect(customElements.get('claude-feedback-widget')).toBeTruthy();
     expect(document.querySelector('claude-feedback-widget')).toBeTruthy();
   });
 
+  describe('a missing workspace-id fails loudly', () => {
+    /**
+     * The whole point of making the board a required attribute: an embed that
+     * names no board used to post onto whichever board the server picked, and
+     * nobody found out until they went looking for feedback that never
+     * arrived. So the failure has to be VISIBLE on the page, and it has to
+     * stop the widget before it opens anything.
+     */
+    it('renders an error, opens no socket, and shows no launcher', async () => {
+      const opened: string[] = [];
+      await importWidget();
+      class RecordingWS {
+        static OPEN = 1;
+        readyState = 1;
+        binaryType = 'arraybuffer';
+        constructor(url: string) {
+          opened.push(url);
+        }
+        addEventListener() {}
+        removeEventListener() {}
+        send() {}
+        close() {}
+      }
+      (globalThis as unknown as { WebSocket: unknown }).WebSocket = RecordingWS;
+
+      const host = document.createElement('claude-feedback-widget');
+      host.setAttribute('doc-id', 'no-board');
+      document.body.appendChild(host);
+
+      const shadow = (host as HTMLElement).shadowRoot;
+      const alert = shadow?.querySelector('[role="alert"]');
+      expect(alert, 'no visible error for a boardless embed').toBeTruthy();
+      expect(alert?.textContent).toContain('workspace-id');
+      // Not merely quiet — inert. No launcher to click, and no connection.
+      expect(shadow?.querySelector('.fab')).toBeNull();
+      expect(opened).toEqual([]);
+    });
+
+    it('POSITIVE CONTROL: the same markup WITH the board renders the launcher', async () => {
+      // Without this, the assertions above would pass on a widget that had
+      // stopped rendering anything at all.
+      await importWidget();
+      const host = document.createElement('claude-feedback-widget');
+      host.setAttribute('doc-id', 'has-board');
+      host.setAttribute('workspace-id', 'w-1');
+      document.body.appendChild(host);
+      const shadow = (host as HTMLElement).shadowRoot;
+      expect(shadow?.querySelector('[role="alert"]')).toBeNull();
+      expect(shadow?.querySelector('.fab')).toBeTruthy();
+    });
+  });
+
   it('FAB toggles feedback mode — no popover, cursor class on the body', async () => {
     const mod = await importWidget();
-    const el = mod.FeedbackWidget.init({ docId: 'w-test-2', user: 'bryan' });
+    const el = mod.FeedbackWidget.init({ workspaceId: 'w-1', docId: 'w-test-2', user: 'bryan' });
     const root = el.shadowRoot!;
     const fab = root.querySelector('.fab') as HTMLButtonElement;
     const panel = root.querySelector('.panel') as HTMLElement;
@@ -68,7 +120,7 @@ describe('widget', () => {
 
   it('Escape exits feedback mode', async () => {
     const mod = await importWidget();
-    const el = mod.FeedbackWidget.init({ docId: 'w-test-esc', user: 'bryan' });
+    const el = mod.FeedbackWidget.init({ workspaceId: 'w-1', docId: 'w-test-esc', user: 'bryan' });
     const fab = el.shadowRoot!.querySelector('.fab') as HTMLButtonElement;
     fab.click();
     expect(document.body.classList.contains('cfw-feedback-mode')).toBe(true);
@@ -78,7 +130,7 @@ describe('widget', () => {
 
   it('opens and closes the panel via the threads button', async () => {
     const mod = await importWidget();
-    const el = mod.FeedbackWidget.init({ docId: 't-panel', user: 'bryan' });
+    const el = mod.FeedbackWidget.init({ workspaceId: 'w-1', docId: 't-panel', user: 'bryan' });
     const root = el.shadowRoot!;
     const listBtn = root.querySelector('.fab-list') as HTMLButtonElement;
     const panel = root.querySelector('.panel') as HTMLElement;
@@ -98,7 +150,7 @@ describe('widget', () => {
    */
   it('a click in feedback mode opens the composer and the mode survives it', async () => {
     const mod = await importWidget();
-    const el = mod.FeedbackWidget.init({ docId: 't-multi', user: 'bryan' });
+    const el = mod.FeedbackWidget.init({ workspaceId: 'w-1', docId: 't-multi', user: 'bryan' });
     const root = el.shadowRoot!;
     const target = document.getElementById('hello') as HTMLElement;
     // happy-dom has no layout, so hit-testing by coordinates needs a stub.
@@ -128,7 +180,7 @@ describe('widget', () => {
     const mod = await importWidget();
     (globalThis as unknown as { fetch: unknown }).fetch = async () =>
       new Response('{}', { status: 500 });
-    const el = mod.FeedbackWidget.init({ docId: 't-fail', user: 'bryan' });
+    const el = mod.FeedbackWidget.init({ workspaceId: 'w-1', docId: 't-fail', user: 'bryan' });
     const root = el.shadowRoot!;
     document.elementFromPoint = () => document.getElementById('hello') as HTMLElement;
     (root.querySelector('.fab') as HTMLButtonElement).click();
@@ -151,7 +203,7 @@ describe('widget', () => {
     (globalThis as unknown as { fetch: unknown }).fetch = async () => {
       throw new Error('net down');
     };
-    const el = mod.FeedbackWidget.init({ docId: 't-net', user: 'bryan' });
+    const el = mod.FeedbackWidget.init({ workspaceId: 'w-1', docId: 't-net', user: 'bryan' });
     const root = el.shadowRoot!;
     document.elementFromPoint = () => document.getElementById('hello') as HTMLElement;
     (root.querySelector('.fab') as HTMLButtonElement).click();
@@ -168,7 +220,7 @@ describe('widget', () => {
 
   it('a click on the widget host in feedback mode is left alone', async () => {
     const mod = await importWidget();
-    const el = mod.FeedbackWidget.init({ docId: 't-chrome', user: 'bryan' });
+    const el = mod.FeedbackWidget.init({ workspaceId: 'w-1', docId: 't-chrome', user: 'bryan' });
     const root = el.shadowRoot!;
     // Shadow-DOM chrome (composer, FAB) resolves to the host element.
     document.elementFromPoint = () => el as unknown as HTMLElement;
@@ -191,7 +243,7 @@ describe('widget', () => {
    */
   it('keys typed in the composer are shielded from host-page shortcut handlers', async () => {
     const mod = await importWidget();
-    const el = mod.FeedbackWidget.init({ docId: 't-keys', user: 'bryan' });
+    const el = mod.FeedbackWidget.init({ workspaceId: 'w-1', docId: 't-keys', user: 'bryan' });
     const root = el.shadowRoot!;
     // The host page's shortcut, exactly as the mockup registered it.
     const hostSeen: string[] = [];
@@ -236,15 +288,15 @@ describe('widget', () => {
 
   it('init is idempotent — repeat calls return the same element', async () => {
     const mod = await importWidget();
-    const a = mod.FeedbackWidget.init({ docId: 'w-test-3', user: 'agent' });
-    const b = mod.FeedbackWidget.init({ docId: 'w-test-3', user: 'agent' });
+    const a = mod.FeedbackWidget.init({ workspaceId: 'w-1', docId: 'w-test-3', user: 'agent' });
+    const b = mod.FeedbackWidget.init({ workspaceId: 'w-1', docId: 'w-test-3', user: 'agent' });
     expect(a).toBe(b);
     expect(document.querySelectorAll('claude-feedback-widget').length).toBe(1);
   });
 
   it('ignores elements inside its own chrome when picking', async () => {
     const mod = await importWidget();
-    const el = mod.FeedbackWidget.init({ docId: 'w-test-4', user: 'bryan' });
+    const el = mod.FeedbackWidget.init({ workspaceId: 'w-1', docId: 'w-test-4', user: 'bryan' });
     const root = el.shadowRoot!;
     // the overlay lives in light DOM with the data-feedback-widget attr
     const overlay = document.querySelector('[data-feedback-widget]');
@@ -268,7 +320,7 @@ describe('widget', () => {
   it('lists a thread that is about the page itself', async () => {
     const mod = await importWidget();
     const core = await import('@feedback/core');
-    const el = mod.FeedbackWidget.init({ docId: 't-subject', user: 'bryan' });
+    const el = mod.FeedbackWidget.init({ workspaceId: 'w-1', docId: 't-subject', user: 'bryan' });
     const inner = el as unknown as {
       client: { ydoc: import('yjs').Doc } | null;
       renderThreads: () => void;
@@ -331,6 +383,7 @@ describe('widget', () => {
       // Default scope: the guest namespace is empty, so the widget is anonymous.
       const guest = document.createElement('claude-feedback-widget');
       guest.setAttribute('doc-id', 'scope-default');
+      guest.setAttribute('workspace-id', 'w-1');
       document.body.appendChild(guest);
       const guestName = (guest as unknown as { user: { name: string } }).user.name;
       expect(guestName).toMatch(/^Anonymous /);
@@ -338,6 +391,7 @@ describe('widget', () => {
       // scope=host: the SAME stored name is now the widget's identity.
       const hosted = document.createElement('claude-feedback-widget');
       hosted.setAttribute('doc-id', 'scope-host');
+      hosted.setAttribute('workspace-id', 'w-1');
       hosted.setAttribute('identity-scope', 'host');
       document.body.appendChild(hosted);
       expect((hosted as unknown as { user: { name: string } }).user.name).toBe('Dana Reviewer');
@@ -355,7 +409,11 @@ describe('widget', () => {
     it('via FeedbackWidget.init as well as the attribute', async () => {
       const mod = await importWidget();
       localStorage.setItem('feedback-user-name', 'Reviewer');
-      const el = mod.FeedbackWidget.init({ docId: 'scope-init', identityScope: 'host' });
+      const el = mod.FeedbackWidget.init({
+        workspaceId: 'w-1',
+        docId: 'scope-init',
+        identityScope: 'host',
+      });
       expect((el as unknown as { user: { name: string } }).user.name).toBe('Reviewer');
     });
   });

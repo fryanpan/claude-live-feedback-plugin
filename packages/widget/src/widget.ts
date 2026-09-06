@@ -34,6 +34,7 @@ import { positionPins, renderThreadsInto } from './widget-threads.ts';
  *   <script>
  *     FeedbackWidget.init({
  *       serverUrl: 'wss://host.example',  // optional; defaults to same host
+ *       workspaceId: 'w-abc123',          // REQUIRED — the board this doc is on
  *       docId: 'my-mockup',
  *       user: null,                       // omit/null → resolved from the browser
  *     });
@@ -42,6 +43,26 @@ import { positionPins, renderThreadsInto } from './widget-threads.ts';
 
 export interface WidgetOpts {
   serverUrl?: string;
+  /**
+   * The board this doc is on — attribute form `workspace-id`. REQUIRED.
+   *
+   * Every resource the server owns is addressed under the board that owns it,
+   * so a doc id on its own is not an address any more. The widget used to send
+   * `/y/<docId>` and `/api/docs/<docId>/…`, and the server filed a new mockup
+   * under whichever board it picked as a default — a doc could land on a board
+   * nobody named.
+   *
+   * A missing one FAILS LOUDLY rather than defaulting: the widget renders a
+   * visible error in place of the launcher and opens no socket. The quiet
+   * alternative was considered and rejected — an embed that silently posts
+   * comments onto a board the author did not choose is the failure this
+   * cutover exists to remove, and it is invisible until someone goes looking
+   * for feedback that never arrived.
+   *
+   * The cost is accepted and known: an embed snippet already pasted into a
+   * host page we do not control breaks until its `workspace-id` is added.
+   */
+  workspaceId: string;
   docId: string;
   user?: string | null;
   /**
@@ -130,6 +151,7 @@ export class FeedbackWidgetEl extends HTMLElement {
   private initialized = false;
   opts: WidgetOpts & { serverUrl: string; user: string | null } = {
     serverUrl: '',
+    workspaceId: '',
     docId: '',
     user: null,
   };
@@ -188,6 +210,14 @@ export class FeedbackWidgetEl extends HTMLElement {
   init(opts: WidgetOpts): void {
     if (this.initialized) return;
     this.initialized = true;
+    // Loud, before anything else runs: no socket, no launcher, no identity —
+    // just a visible box saying what is missing. See WidgetOpts.workspaceId
+    // for why this is not a default.
+    if (typeof opts.workspaceId !== 'string' || opts.workspaceId.trim() === '') {
+      this.renderMisconfigured('workspace-id');
+      return;
+    }
+    this.opts.workspaceId = opts.workspaceId.trim();
     this.opts.docId = opts.docId;
     this.opts.user = opts.user ?? null;
     this.opts.serverUrl = opts.serverUrl ?? defaultServerUrl();
@@ -225,7 +255,10 @@ export class FeedbackWidgetEl extends HTMLElement {
     if (this.initialized) return;
     const docId = this.getAttribute('doc-id');
     if (!docId) return;
-    const opts: WidgetOpts = { docId };
+    // `?? ''` rather than an early return: an absent board is a MISCONFIGURED
+    // embed, and init() is what says so on the page. Returning here would
+    // reproduce the silence this attribute exists to end.
+    const opts: WidgetOpts = { docId, workspaceId: this.getAttribute('workspace-id') ?? '' };
     const user = this.getAttribute('user');
     if (user !== null) opts.user = user;
     const serverUrl = this.getAttribute('server-url');
@@ -342,6 +375,43 @@ export class FeedbackWidgetEl extends HTMLElement {
     }
   }
 
+  /**
+   * `/workspaces/<ws>/docs/<docId>` — the address of the doc this embed is on.
+   *
+   * One builder for the three thread routes below and the socket above, for
+   * the same reason `doc-path.ts` has one in the app: four hand-built prefixes
+   * is four places to forget the board.
+   */
+  private docPath(): string {
+    return (
+      `/workspaces/${encodeURIComponent(this.opts.workspaceId)}` +
+      `/docs/${encodeURIComponent(this.opts.docId)}`
+    );
+  }
+
+  /**
+   * What an embed missing a required attribute shows instead of the launcher.
+   *
+   * In the light DOM and unstyled by the widget's own sheet on purpose: the
+   * shell that would carry those styles is never rendered on this path, and a
+   * developer who has just pasted a snippet needs to SEE the problem on the
+   * page rather than find it in a console they may not have open.
+   */
+  private renderMisconfigured(attribute: string): void {
+    const box = document.createElement('div');
+    box.setAttribute('role', 'alert');
+    box.style.cssText =
+      'position:fixed;right:16px;bottom:16px;z-index:2147483647;max-width:320px;' +
+      'padding:12px 14px;border:2px solid #b42318;border-radius:8px;background:#fff5f4;' +
+      'color:#7a271a;font:13px/1.45 system-ui,sans-serif';
+    box.textContent =
+      `claude-workspaces widget: missing \`${attribute}\`. ` +
+      'Add it to the <claude-feedback-widget> tag (or the init() call) — a doc is ' +
+      'addressed under the board that owns it, and this embed names no board.';
+    this.shadow.appendChild(box);
+    console.error(`[claude-workspaces] widget embed is missing \`${attribute}\``);
+  }
+
   // --- Connect ---
 
   private connect(): void {
@@ -352,7 +422,7 @@ export class FeedbackWidgetEl extends HTMLElement {
       type: 'mockup',
       sourceUrl: location.href,
     });
-    const url = `${this.opts.serverUrl}/y/${encodeURIComponent(this.opts.docId)}?${qs.toString()}`;
+    const url = `${this.opts.serverUrl}${this.docPath()}/y?${qs.toString()}`;
     this.client = connect(url);
     this.client.onStatus((s) => {
       if (this.statusEl) {
@@ -444,15 +514,11 @@ export class FeedbackWidgetEl extends HTMLElement {
    *  Discarding it on a refusal would lose the very thing the sign-in prompt
    *  is asking the person to come back and finish. */
   async postNewThread(anchor: ElementAnchor, text: string): Promise<boolean> {
-    const res = await authedPost(
-      this,
-      `${httpBase(this)}/api/docs/${encodeURIComponent(this.opts.docId)}/threads`,
-      () => ({
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ author: this.user, text, anchor }),
-      }),
-    );
+    const res = await authedPost(this, `${httpBase(this)}${this.docPath()}/threads`, () => ({
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ author: this.user, text, anchor }),
+    }));
     return res.ok;
   }
 
@@ -460,7 +526,7 @@ export class FeedbackWidgetEl extends HTMLElement {
   async postReply(threadId: string, text: string): Promise<boolean> {
     const res = await authedPost(
       this,
-      `${httpBase(this)}/api/docs/${encodeURIComponent(this.opts.docId)}/threads/${encodeURIComponent(threadId)}/comments`,
+      `${httpBase(this)}${this.docPath()}/threads/${encodeURIComponent(threadId)}/comments`,
       () => ({
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -474,7 +540,7 @@ export class FeedbackWidgetEl extends HTMLElement {
     const action = status === 'resolved' ? 'resolve' : 'reopen';
     await authedPost(
       this,
-      `${httpBase(this)}/api/docs/${encodeURIComponent(this.opts.docId)}/threads/${encodeURIComponent(threadId)}/${action}`,
+      `${httpBase(this)}${this.docPath()}/threads/${encodeURIComponent(threadId)}/${action}`,
       () => ({ method: 'POST' }),
     );
   }
