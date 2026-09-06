@@ -41,6 +41,7 @@ import {
 } from '../packages/server/src/client-release.ts';
 import { resolveDataDir } from '../packages/server/src/data-dir.ts';
 import { readDeploySource } from '../packages/server/src/deploy-source.ts';
+import { stamped } from '../packages/server/src/log-stamp.ts';
 import {
   type BindErrorKind,
   type ListenProbeVerdict,
@@ -50,6 +51,32 @@ import {
   probeLocalPort,
   shouldWalkPorts,
 } from '../packages/server/src/port-bind.ts';
+
+/**
+ * A supervisor diagnostic, with the clock the log file does not provide.
+ *
+ * Every line this writes is about WHEN something happened — the health probe
+ * failing, a restart, a child that would not die, a server that crashed young
+ * — and until now none of them carried a timestamp. launchd does not add one,
+ * so the err log was a pile of undated lines: 22 "alive-but-unbound"
+ * occurrences that could not be placed on either side of a reboot, against a
+ * criterion that asks for zero in a 24h window. An undated log cannot answer
+ * a question with "24h" in it.
+ *
+ * Every diagnostic goes through here rather than being stamped at the call
+ * site, so a line added to the watchdog later gets the clock for free.
+ *
+ * Stamping `console.error` is safe HERE and would not be in the server.
+ * `installLogSquelch` bounds a hot error loop by collapsing repeats of an
+ * IDENTICAL line, and a per-call timestamp makes every occurrence distinct,
+ * which is how this repo once produced a 341 MiB log. That squelch is
+ * installed in `packages/server/src/bin.ts` — the SERVER child. The
+ * supervisor is a separate process and installs none, so there is no ceiling
+ * here for a stamp to defeat. See the note in `log-stamp.ts`.
+ */
+function note(line: string): void {
+  console.error(stamped(line));
+}
 
 const args = process.argv.slice(2);
 function arg(name: string): string | undefined {
@@ -148,7 +175,7 @@ async function resolvePort(): Promise<number> {
       new Promise((r) => {
         setTimeout(r, ms);
       }),
-    log: (m) => console.error(m),
+    log: (m) => note(m),
   });
   return requestedPort;
 }
@@ -181,7 +208,7 @@ if (noWatch) {
     });
     if (r.status !== 0) {
       failures.push(pkg);
-      console.error(`[supervisor] ${pkg} build FAILED`);
+      note(`[supervisor] ${pkg} build FAILED`);
     }
   }
 
@@ -207,7 +234,7 @@ if (noWatch) {
   });
 
   if (prepared.stale) {
-    console.error(
+    note(
       `[supervisor] client NOT republished (${prepared.error ?? 'unknown'}; ` +
         `${prepared.consecutiveFailures} in a row) — ` +
         (prepared.releaseDir
@@ -379,7 +406,7 @@ async function reapChildren(): Promise<void> {
 
   const stubborn = stillRunning();
   if (stubborn.length === 0) return;
-  console.error(
+  note(
     `[supervisor] ${stubborn.length} child(ren) ignored SIGTERM after ` +
       `${SHUTDOWN_GRACE_MS / 1000}s — SIGKILL (pids ${stubborn.map((p) => p.pid).join(', ')})`,
   );
@@ -435,7 +462,7 @@ server.on('exit', () => {
     cleanup(1);
     return;
   }
-  console.error(
+  note(
     `[supervisor] server died ${Math.round(uptimeMs / 1000)}s after starting — ` +
       `holding ${FAST_CRASH_HOLD_MS / 1000}s before exiting, so relaunching does not ` +
       'become a hot loop of client builds and document hydration',
@@ -476,17 +503,17 @@ if (noWatch) {
         // Say it out loud. This branch is the one that used to be silently
         // counted as an unbound server, and the log line is how the next
         // socket shortage gets diagnosed as a socket shortage.
-        console.error(
+        note(
           `[supervisor] health: cannot open a socket to probe :${port} — this host is out of ` +
             'network resources, which says nothing about the server; not counting it ' +
             `(${fails}/${MAX_FAILS})`,
         );
         return;
       }
-      console.error(`[supervisor] health: :${port} not listening (${fails}/${MAX_FAILS})`);
+      note(`[supervisor] health: :${port} not listening (${fails}/${MAX_FAILS})`);
       if (step.action === 'restart') {
         clearInterval(timer);
-        console.error('[supervisor] server alive-but-unbound — restarting via launchd');
+        note('[supervisor] server alive-but-unbound — restarting via launchd');
         cleanup(1);
       }
     }, CHECK_MS);
