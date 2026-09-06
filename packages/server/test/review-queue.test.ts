@@ -368,11 +368,45 @@ describe('asksPerson', () => {
   // position, which re-scans to the end of the text on every miss. Measured at
   // 49ms for one 188KB comment, on a path that runs per person, per comment,
   // on every strip refresh.
-  it('stays cheap on a very long comment', () => {
+  //
+  // Asserted by COUNTING the scans rather than by timing the call, in the same
+  // house style as `list-docs-linear.test.ts`: a wall-clock budget encodes this
+  // machine's speed and goes red on a loaded CI box for a reason that has
+  // nothing to do with the bug. What must not scale with comment length is how
+  // many times the text is re-scanned for a paragraph break — once per address
+  // match under the bug, once for the whole call after the fix.
+  //
+  // The counter is tied to `indexOf`, the primitive the fix uses. A rewrite
+  // that found the breaks some other way would read zero here and would need
+  // its own counter. That is narrower than a stopwatch, and it is the trade
+  // this test makes deliberately: it catches the regression on a FAST machine
+  // too, where 16,000 re-scans still fit inside any budget worth writing.
+  it('scans for paragraph breaks once, not once per address match', () => {
     const text = '**Jordan: x? '.repeat(16_000);
-    const started = performance.now();
-    asksPerson(text, people);
-    expect(performance.now() - started).toBeLessThan(150);
+    const realIndexOf = String.prototype.indexOf;
+    let breakScans = 0;
+    String.prototype.indexOf = function counted(
+      this: string,
+      search: string,
+      position?: number,
+    ): number {
+      if (search === '\n\n') breakScans += 1;
+      return realIndexOf.call(this, search, position);
+    };
+    let asked: boolean;
+    try {
+      asked = asksPerson(text, people);
+    } finally {
+      String.prototype.indexOf = realIndexOf;
+    }
+    // Positive control: the fixture really did drive the matcher through all
+    // 16,000 of its addresses, so the count below is a claim about the
+    // algorithm and not about a text that matched nothing.
+    expect(asked).toBe(true);
+    // A small constant, deliberately loose: the point is that it does not
+    // TRACK the match count. The old code scanned once per match, which drove
+    // this fixture past 16,000.
+    expect(breakScans).toBeLessThanOrEqual(4);
   });
 });
 

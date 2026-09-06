@@ -293,9 +293,17 @@ describe('TaskStore attachment registry', () => {
     if (!back.ok) throw new Error('heartbeat failed');
     expect(back.attachment.lastToolCallAt).toBe(t0 + 2);
     // — and never forward-date it past now (a claim of future work is fake).
-    const future = store.heartbeat(ws.id, 'lead', { toolCallAt: Date.now() + 60_000 });
+    // Bracketed by two readings taken either side of the call, so the clamp is
+    // pinned to the instant of THIS call rather than to whenever the assertion
+    // after it happened to run. `<= Date.now()` read at assertion time also
+    // admitted "the store ignored the claim entirely and left the old value",
+    // which the lower bound now rules out.
+    const before = Date.now();
+    const future = store.heartbeat(ws.id, 'lead', { toolCallAt: before + 60_000 });
+    const after = Date.now();
     if (!future.ok) throw new Error('heartbeat failed');
-    expect(future.attachment.lastToolCallAt).toBeLessThanOrEqual(Date.now());
+    expect(future.attachment.lastToolCallAt).toBeGreaterThanOrEqual(before);
+    expect(future.attachment.lastToolCallAt).toBeLessThanOrEqual(after);
 
     expect(events.filter((e) => e.type === 'agent.heartbeat')).toHaveLength(4);
     expect(store.heartbeat(ws.id, 'ghost').ok).toBe(false);
