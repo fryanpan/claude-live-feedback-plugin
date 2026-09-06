@@ -355,13 +355,20 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
 
     beforeEach(() => {
       tightDir = mkdtempSync(join(tmpdir(), 'agent-coverage-tight-'));
-      // 40ms of freshness on both clocks: an attachment made at the top of a
-      // test is both `away` and past the delivery window by the time the same
-      // test reads coverage.
+      // Short freshness on both clocks, so an attachment made at the top of a
+      // test can be aged into `away` and past the delivery window inside the
+      // same test — by SLEEPING past them, which is the safe direction: a
+      // loaded runner only ever makes a thing staler.
+      //
+      // The label's window is the longer of the two because the fresh
+      // direction is the fragile one, and it is the only assertion here that
+      // a clock can serve: a test claiming `heartbeatFresh: true` has to make
+      // its read land inside the window, so the window has to be wide enough
+      // that one local request cannot blow it. 40ms could not, and did not.
       tight = createServer({
         port: 0,
         dataDir: tightDir,
-        heartbeatFreshMs: 40,
+        heartbeatFreshMs: 250,
         observedWorkFreshMs: 40,
       });
       tightBase = `http://localhost:${tight.port}`;
@@ -373,11 +380,27 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
     });
 
     /** Streams held by agents these tests want to be REACHABLE. Deliberately
-     *  not opened for the stale cases — those want the opposite. */
+     *  not opened for the stale cases — those want the opposite.
+     *
+     *  Pass `agentId` to hold it the way a real session does, from its own MCP
+     *  child: the server then answers `agentStreamProbe` for that agent, and
+     *  `isDeliverable` returns on the socket without consulting the observed
+     *  clock at all. That is what keeps a "this agent is LIVE" assertion from
+     *  depending on the setup between the attach and the read finishing inside
+     *  a 40ms window — the flake this describe shipped with (CI 34035346056).
+     *  Omit it to model a browser tab, which only satisfies `deliveryProbe`. */
     const tightStreams: AgentStream[] = [];
-    const holdStream = async (workspaceId: string) => {
-      tightStreams.push(await openWorkspaceStream(tightBase, workspaceId));
+    const holdStream = async (workspaceId: string, agentId?: string): Promise<AgentStream> => {
+      const stream = await openWorkspaceStream(tightBase, workspaceId, {}, agentId);
+      tightStreams.push(stream);
+      return stream;
     };
+
+    /** Past BOTH windows above, so anything attached before it is `away` AND
+     *  outside the delivery gate. Aging is the race-free direction — a loaded
+     *  runner overshoots it, never undershoots — so this is the one wait these
+     *  tests may spend. */
+    const ageOutTightWindows = () => new Promise((r) => setTimeout(r, 300));
 
     const seedBoard = async (name: string): Promise<string> => {
       const r = await tpost('/workspaces', { name, goal: 'Ship the index.' });
@@ -410,7 +433,7 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
         runtime: 'claude-code-local',
       });
       await tpost(`/api/agents/${AGENT}/watches`, { add: [`ws:${boardId}`], name: AGENT });
-      await new Promise((r) => setTimeout(r, 60)); // heartbeat ages out
+      await ageOutTightWindows();
       await queueThree(boardId);
 
       const coverage = await tcoverage();
@@ -441,15 +464,27 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
         agentId: AGENT,
         runtime: 'claude-code-local',
       });
-      await holdStream(boardId);
+      // Held as THIS agent, not as an anonymous tab: `no alarm` then rests on
+      // the socket the way a working session does, and not on the whole setup
+      // below fitting inside the delivery window.
+      const held = await holdStream(boardId, AGENT);
       await tpost(`/api/agents/${AGENT}/watches`, { add: [`ws:${boardId}`], name: AGENT });
 
+      // The label is a clock and nothing can ground it but a recent
+      // heartbeat, so take one HERE — the read that follows is the only thing
+      // that has to fit inside the window.
+      await tpost(`/workspaces/${boardId}/agents/${AGENT}/heartbeat`, {});
       const coverage = await tcoverage();
       expect((coverage.workspaces[0] as CoverageWorkspaceRow).heartbeatFresh).toBe(true);
       expect(coverage.unattachedBoards).toEqual([]);
-      // …and it goes back to being an alarm once the heartbeat ages out, in
-      // the same test, so "no alarm" is a state and not a permanent silence.
-      await new Promise((r) => setTimeout(r, 60));
+      // …and it goes back to being an alarm once the agent is actually gone —
+      // stream hung up AND both clocks lapsed — in the same test, so "no
+      // alarm" is a state and not a permanent silence. Hanging up is part of
+      // going away: an open agent stream outranks the clock by design
+      // (task-agents.ts `isDeliverable`), which the split-window test below
+      // asserts on purpose.
+      await held.close();
+      await ageOutTightWindows();
       expect((await tcoverage()).unattachedBoards.map((b) => b.workspaceId)).toEqual([boardId]);
     });
 
@@ -532,14 +567,19 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
      */
     it('names the incumbent lead and whether it is live', async () => {
       const boardId = await seedBoard('board-with-a-live-lead');
-      // The incumbent attaches (claiming the empty seat), holds its stream,
-      // and stays fresh — all three, or it is not the live lead this test is
-      // about and `leadLive` would be false for an uninteresting reason.
+      // The incumbent attaches (claiming the empty seat) and holds its OWN
+      // agent-attributed stream — all of it, or it is not the live lead this
+      // test is about and `leadLive` would be false for an uninteresting
+      // reason. The stream is what makes it live: `isDeliverable` answers on
+      // the socket before it reads any clock, so the doc parse and the two
+      // POSTs below cannot age the incumbent out from under the assertion.
+      // Held anonymously they could, and did — CI 34035346056 read
+      // `leadLive: false` because the setup ran past a 40ms window.
       await tpost(`/workspaces/${boardId}/agents`, {
         agentId: 'agent-incumbent',
         runtime: 'claude-code-local',
       });
-      await holdStream(boardId);
+      const incumbent = await holdStream(boardId, 'agent-incumbent');
       // A second agent watches a doc on the board, never attaches.
       const path = join(srcDir, 'doc-shared.md');
       writeFileSync(path, '# doc-shared\n\nBody.\n');
@@ -561,10 +601,11 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
       expect(alarm.leadLive).toBe(true);
       expect(alarm.attached).toBe(false);
 
-      // POSITIVE CONTROL 5 — once the incumbent's heartbeat ages out the same
-      // row reports `leadLive: false`, so the field tracks the incumbent
-      // rather than being a constant.
-      await new Promise((r) => setTimeout(r, 60));
+      // POSITIVE CONTROL 5 — once the incumbent is genuinely gone (hung up,
+      // and past the delivery window) the same row reports `leadLive: false`,
+      // so the field tracks the incumbent rather than being a constant.
+      await incumbent.close();
+      await ageOutTightWindows();
       const later = (await tcoverage()).unattachedBoards[0] as UnattachedBoard;
       expect(later.leadAgentId).toBe('agent-incumbent');
       expect(later.leadLive).toBe(false);
