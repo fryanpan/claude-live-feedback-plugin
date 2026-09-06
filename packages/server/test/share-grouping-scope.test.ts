@@ -153,17 +153,22 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
   /**
    * The visitor gets exactly what the OWNER gets on this path.
    *
-   * `/review/<id>` is served only when the workspaces-app bundle has been
-   * built, which a test worktree has not, so a bare `toBe(200)` would assert
-   * the bundler rather than the guard. Comparing to the owner's own status
-   * keeps the assertion on the one thing under test — the gate — and still
-   * fails loudly if the gate refuses (403 never matches the owner's status).
+   * A doc page — `/workspaces/<ws>/docs/<id>` — is served only when the
+   * workspaces-app bundle has been built, which a test worktree has not, so a
+   * bare `toBe(200)` would assert the bundler rather than the guard. Comparing
+   * to the owner's own status keeps the assertion on the one thing under test
+   * — the gate — and still fails loudly if the gate refuses (403 never matches
+   * the owner's status).
    *
-   * Both halves must handle redirects the SAME way. `/review/<id>` is now a
-   * compat alias that 302s to the doc's workspace-scoped path, and the
-   * visitor's fetch is `redirect: 'manual'` — so an owner fetch that followed
-   * the redirect would compare a followed status against an unfollowed one and
-   * report a difference that is entirely the test's own doing.
+   * Both halves must handle redirects the SAME way, which is why both fetches
+   * are `redirect: 'manual'`: one side following a redirect the other did not
+   * would report a difference that is entirely the test's own doing, and the
+   * comparison would stop being about the gate.
+   *
+   * There is no `/review/<id>` here to compare against any more. That address
+   * was DELETED in the canonical-routes cutover, along with its share grant —
+   * not turned into a redirect. If you are reading this because you expected a
+   * compat alias: there is deliberately none, for any old path.
    */
   const sameAsOwner = async (path: string, visitor: Record<string, string>) => {
     const owner = await local(path, { redirect: 'manual' });
