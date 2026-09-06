@@ -17,7 +17,7 @@ import * as encoding from 'lib0/encoding';
 import * as awarenessProtocol from 'y-protocols/awareness';
 import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
-import type { DocRoom, FeedbackWs } from '../src/doc-store.ts';
+import type { FeedbackWs, LiveDoc } from '../src/doc-store.ts';
 import { MSG_AWARENESS, MSG_SYNC, onClose, onMessage, onOpen } from '../src/yjs-protocol.ts';
 
 /** Everything created in a test, torn down after it. Awareness starts a 3s
@@ -27,7 +27,7 @@ afterEach(() => {
   while (opened.length > 0) opened.pop()?.destroy();
 });
 
-function room(): DocRoom {
+function doc(): LiveDoc {
   const ydoc = new Y.Doc();
   const awareness = new awarenessProtocol.Awareness(ydoc);
   opened.push({
@@ -42,7 +42,7 @@ function room(): DocRoom {
     awareness,
     peekAwareness: () => awareness,
     conns: new Set<FeedbackWs>(),
-  } as unknown as DocRoom;
+  } as unknown as LiveDoc;
 }
 
 /** A socket that records every frame it was handed. */
@@ -59,15 +59,15 @@ function socket(opts: { readOnly?: boolean; failSend?: boolean } = {}) {
 }
 
 /**
- * The REMOTE peers in a room.
+ * The REMOTE peers in a doc.
  *
- * `new Awareness(ydoc)` gives itself a local state, so a room always carries
+ * `new Awareness(ydoc)` gives itself a local state, so a doc always carries
  * one entry of its own — the server's — and every joiner is told about it.
  * That is production's shape (`DocStore.createAwareness` constructs it the
  * same way and only clears the library's timer), so the fake keeps it and the
- * assertions subtract it rather than pretending rooms start empty.
+ * assertions subtract it rather than pretending docs start empty.
  */
-const peers = (r: DocRoom) =>
+const peers = (r: LiveDoc) =>
   [...r.awareness.getStates().keys()].filter((id) => id !== r.awareness.clientID).sort();
 
 /** Decode an awareness frame the way a browser would, and say who it names. */
@@ -134,8 +134,8 @@ function awarenessFrame(clientId: number, name: string): Uint8Array {
 }
 
 describe('onOpen', () => {
-  it('joins the room and opens with sync step 1 — the server asking what it is missing', () => {
-    const r = room();
+  it('joins the doc and opens with sync step 1 — the server asking what it is missing', () => {
+    const r = doc();
     const a = socket();
     onOpen(r, a.ws);
     expect(r.conns.has(a.ws)).toBe(true);
@@ -143,10 +143,10 @@ describe('onOpen', () => {
     expect(syncStepOf(a.sent[0] as Uint8Array)).toBe(syncProtocol.messageYjsSyncStep1);
   });
 
-  it('tells a joiner who is already in the room', () => {
+  it('tells a joiner who is already in the doc', () => {
     // Presence has to arrive on connect, not on the next keystroke: a second
     // tab that learned about nobody shows an empty strip until somebody moves.
-    const r = room();
+    const r = doc();
     const first = socket();
     onOpen(r, first.ws);
     onMessage(r, first.ws, awarenessFrame(4242, 'Alice'));
@@ -160,7 +160,7 @@ describe('onOpen', () => {
 
 describe('onMessage — sync', () => {
   it('applies an update from a writable socket', () => {
-    const r = room();
+    const r = doc();
     const a = socket();
     onOpen(r, a.ws);
     onMessage(r, a.ws, updateFrame('hello'));
@@ -170,7 +170,7 @@ describe('onMessage — sync', () => {
   it('broadcasts an update to every OTHER connection, never back to its origin', () => {
     // The defect this holds: registering one handler per connection skipped
     // the wrong peer, so updates originating from B never reached A.
-    const r = room();
+    const r = doc();
     const a = socket();
     const b = socket();
     const c = socket();
@@ -194,12 +194,12 @@ describe('onMessage — sync', () => {
   });
 
   it('a peer whose socket has died does not stop the broadcast reaching the others', () => {
-    const r = room();
+    const r = doc();
     const a = socket();
     const dead = socket({ failSend: true });
     const c = socket();
     onOpen(r, a.ws);
-    // `dead` throws on its step-1 open too; the room still holds it.
+    // `dead` throws on its step-1 open too; the doc still holds it.
     expect(() => onOpen(r, dead.ws)).toThrow();
     r.conns.add(dead.ws);
     onOpen(r, c.ws);
@@ -211,7 +211,7 @@ describe('onMessage — sync', () => {
 
 describe('onMessage — a read-only socket may read and may not write', () => {
   it('answers step 1, so a view-only client still loads the doc', () => {
-    const r = room();
+    const r = doc();
     r.ydoc.getText('t').insert(0, 'server side');
     const viewer = socket({ readOnly: true });
     onOpen(r, viewer.ws);
@@ -230,7 +230,7 @@ describe('onMessage — a read-only socket may read and may not write', () => {
   });
 
   it('drops an update, leaving the doc exactly as it was', () => {
-    const r = room();
+    const r = doc();
     r.ydoc.getText('t').insert(0, 'server side');
     const viewer = socket({ readOnly: true });
     onOpen(r, viewer.ws);
@@ -242,7 +242,7 @@ describe('onMessage — a read-only socket may read and may not write', () => {
   });
 
   it('the SAME frame does land when the socket may write — the control on the two tests above', () => {
-    const r = room();
+    const r = doc();
     r.ydoc.getText('t').insert(0, 'server side');
     const writer = socket();
     onOpen(r, writer.ws);
@@ -252,8 +252,8 @@ describe('onMessage — a read-only socket may read and may not write', () => {
 });
 
 describe('onMessage — awareness', () => {
-  it('applies a peer’s presence into the room', () => {
-    const r = room();
+  it('applies a peer’s presence into the doc', () => {
+    const r = doc();
     const a = socket();
     onOpen(r, a.ws);
     onMessage(r, a.ws, awarenessFrame(4242, 'Alice'));
@@ -261,7 +261,7 @@ describe('onMessage — awareness', () => {
   });
 
   it('broadcasts presence to the other peers but not to its origin', () => {
-    const r = room();
+    const r = doc();
     const a = socket();
     const b = socket();
     onOpen(r, a.ws);
@@ -276,8 +276,8 @@ describe('onMessage — awareness', () => {
 describe('onClose', () => {
   it('removes only the leaving socket’s peers, and leaves everyone else present', () => {
     // The defect: a disconnect used to clear every peer's awareness, so one
-    // person closing a tab emptied the presence strip for the whole room.
-    const r = room();
+    // person closing a tab emptied the presence strip for the whole doc.
+    const r = doc();
     const a = socket();
     const b = socket();
     onOpen(r, a.ws);
@@ -300,7 +300,7 @@ describe('onClose', () => {
 
 describe('a frame the server cannot make sense of', () => {
   it('ignores an unknown message kind instead of throwing', () => {
-    const r = room();
+    const r = doc();
     const a = socket();
     onOpen(r, a.ws);
     const enc = encoding.createEncoder();
@@ -311,7 +311,7 @@ describe('a frame the server cannot make sense of', () => {
   });
 
   it('swallows a malformed sync frame rather than taking the socket down', () => {
-    const r = room();
+    const r = doc();
     const a = socket();
     onOpen(r, a.ws);
     r.ydoc.getText('t').insert(0, 'intact');

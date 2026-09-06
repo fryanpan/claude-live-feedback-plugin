@@ -235,7 +235,7 @@ describe('the store stamps a body clock the row clock cannot provide', () => {
     return res.task;
   };
 
-  it('stamps bodyWrittenAt when the live room flushes a CHANGED body', () => {
+  it('stamps bodyWrittenAt when the live doc flushes a CHANGED body', () => {
     const task = newTask();
     expect(task.bodyWrittenAt).toBeUndefined();
     expect(bodyWrittenAtOf(task)).toBe(task.createdAt);

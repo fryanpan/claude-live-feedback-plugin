@@ -101,7 +101,7 @@ function addGoalDocRef(ctx: Ctx, goal: GoalRow, canonicalDocId: string): void {
 }
 
 /** A docId a ref may point at, or null when it is not a real, linkable doc
- *  (missing, a task/goal body room, a projection room). Canonicalized. */
+ *  (missing, a task/goal body doc, a projection doc). Canonicalized. */
 function linkableDocId(docStore: DocStore, docId: string): string | null {
   const canonical = docStore.resolveDocId(docId);
   if (taskIdOfBodyDoc(canonical) !== null) return null;
@@ -125,7 +125,7 @@ export function scanDocRefs(ctx: Ctx, docId: string): void {
     if (link.kind === 'task') rowId = link.taskId;
     else if (link.kind === 'goal') rowId = link.goalId;
     else if (link.kind === 'doc' || link.kind === 'mockup') {
-      // A task's body room is addressed as `task:<id>` — a link to it is a
+      // A task's body doc is addressed as `task:<id>` — a link to it is a
       // link to the row.
       rowId = taskIdOfBodyDoc(ctx.docStore.resolveDocId(link.docId));
     }
@@ -172,7 +172,7 @@ function scanGoalRefs(ctx: Ctx, goal: GoalRow): void {
   for (const id of docLinksIn(ctx.docStore, goal.body ?? '')) addGoalDocRef(ctx, goal, id);
 }
 
-/** Doc ids worth scanning: real content docs, not body/projection rooms. */
+/** Doc ids worth scanning: real content docs, not body/projection docs. */
 function scannableDocIds(docStore: DocStore): string[] {
   return docStore
     .list()
@@ -222,9 +222,9 @@ export function runRefsBackfill(opts: {
 /**
  * The live half: one settled doc, scanned the way the backfill would. Wired
  * to the content-revision hook so a link somebody writes TODAY becomes a
- * ref without anyone remembering a second call. A `task:<id>` body room
+ * ref without anyone remembering a second call. A `task:<id>` body doc
  * settles here too (a task's or goal's own prose gaining a doc link), and
- * scans as that ROW — reading the live room rather than the row's `body`
+ * scans as that ROW — reading the live doc rather than the row's `body`
  * snapshot, which may still be a flush behind at settle time. Returns the
  * workspaces whose rows changed, for the caller's projection refresh.
  */

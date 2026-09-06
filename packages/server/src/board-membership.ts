@@ -135,7 +135,7 @@ export interface WatchCoverage {
  * ── A WORKSPACE is a board. Everything else in it is content. ──
  *
  * A workspace (`taskStore`) has goals, tasks, a name, and a list of
- * ATTACHMENT ids in `docIds`. An attachment is a doc room id or an
+ * ATTACHMENT ids in `docIds`. An attachment is a live doc id or an
  * ATTACHMENT SET id — `POST /workspaces/:id/docs` has accepted both since
  * it was written. So a set goes on its workspace as ONE row and its members
  * stay off, because a hundred-file set is one unit of work, not a hundred.
@@ -143,7 +143,7 @@ export interface WatchCoverage {
  * An ATTACHMENT SET (`meta.setId`, returned as `reviewId` by `bindDiff` —
  * the wire keeps its old spelling) is the tag binding the member docs of one
  * folder bind or diff review together. It is content, not a container of
- * tasks: it has no doc room of its own, and it is read through
+ * tasks: it has no live doc of its own, and it is read through
  * `/api/reviews/<setId>/tree|threads`. `attachmentIdOf` in `@feedback/core`
  * is the one place a member's set id is derived.
  *
@@ -171,7 +171,7 @@ export interface BoardMembershipContext {
    *  queue and the attachment records coverage is measured against. */
   taskStore: TaskStore;
   /** The ydoc projection. Attaching and detaching emit no store event, so
-   *  every write here refreshes the board room by hand. */
+   *  every write here refreshes the board doc by hand. */
   taskProjection: TaskProjection;
   /** The sharing registry, or null on a server with sharing off. */
   shares: Shares | null;
@@ -227,13 +227,13 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
 
   /**
    * Which workspaces an id belongs to, for SHARE SCOPING (§3.12 commit 8).
-   * The id may be a doc room OR an attachment set (folder bind / diff
+   * The id may be a live doc OR an attachment set (folder bind / diff
    * review), and the answer is a SET because those two senses of
    * "workspace" nest:
    *
    *   1. a member doc's own GROUPING     (`meta.workspaceId`)
    *   2. the board the id is filed on directly — docs linked via
-   *      attachDoc, each task's `task:<id>` body room, and a set id,
+   *      attachDoc, each task's `task:<id>` body doc, and a set id,
    *      which is how an attachment set goes on a board as one row
    *   3. the board that member's GROUPING is filed on — the hop that
    *      makes a set's row on a shared board actually open. Without it a
@@ -247,7 +247,7 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
    * later, and the one that diverges open is the breach.
    *
    * Exactly one hop from set to board — not a transitive closure.
-   * Deliberately NOT the ws:<id> board room: its share allowance is spelled
+   * Deliberately NOT the ws:<id> board doc: its share allowance is spelled
    * out in host-guard, never a resolver side effect.
    */
   const shareWorkspacesOf = (rawId: string): string[] => {
@@ -453,7 +453,7 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
    * bind needs (its members carry the set tag, and the set is what
    * sits on the board as one row).
    *
-   * Written once and used twice on purpose: `onDocRoomEvent` fans events out
+   * Written once and used twice on purpose: `onLiveDocEvent` fans events out
    * over exactly this set, and the coverage readout reports gaps against
    * exactly this set. Two copies would agree today and drift later, and the
    * drift would be invisible in the worst direction — a probe that says
@@ -507,7 +507,7 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
    * `boardWorkspacesHolding` against a prebuilt index.
    *
    * `task:` ids are deliberately absent from the index and fall through to
-   * `workspaceOfDoc`, exactly as the per-id version routes them: a task room
+   * `workspaceOfDoc`, exactly as the per-id version routes them: a task doc
    * is looked up by id rather than scanned for, and is never in any board's
    * `docIds` to begin with.
    */
@@ -626,7 +626,7 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
       const workspaceId = key.slice('ws:'.length);
       const board = taskStore.getWorkspace(workspaceId);
       if (!board) {
-        // Not a board. The key survived the liveness prune, so some doc room
+        // Not a board. The key survived the liveness prune, so some live doc
         // still carries this set id.
         workspaces.push({ key, workspaceId, kind: 'review' });
         continue;
@@ -706,7 +706,7 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
     if (existing) return existing.id;
     const created = taskStore.createWorkspace(DEFAULT_BOARD_WORKSPACE_NAME);
     // createWorkspace emits no event (nothing subscribes to a workspace that
-    // doesn't exist yet), so bring the board room up by hand — same as the
+    // doesn't exist yet), so bring the board doc up by hand — same as the
     // POST /workspaces route.
     taskProjection.ensureWorkspace(created.id);
     return created.id;
@@ -745,7 +745,7 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
   };
 
   /**
-   * Put an attachment — a doc room id OR a set id — on a board workspace and
+   * Put an attachment — a live doc id OR a set id — on a board workspace and
    * answer which one. Idempotent: something already attached keeps the board it
    * has (moving it is `attach_doc`'s job, not a side effect of re-binding, and
    * re-running `create_diff_review` on a live set is documented as safe). A

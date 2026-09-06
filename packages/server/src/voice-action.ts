@@ -68,7 +68,7 @@ export type VoiceActionPlan =
              * is a plain threaded reply, for an open question that never
              * declared one. Chosen from the projection rather than from an
              * error string — see `VoiceThreadReviewItem.answerable`. Both are
-             * existing public room writes.
+             * existing public doc writes.
              */
             mode: 'answer' | 'reply';
           }
@@ -292,7 +292,7 @@ export function resolveVoiceAction(args: {
           ? { kind: 'ticket' as const, taskId: resource.id, reviewItemId: item.reviewItemId }
           : {
               kind: 'thread' as const,
-              // A task's discussion lives in its body room.
+              // A task's discussion lives in its body doc.
               docId: resource.kind === 'doc' ? resource.id : taskBodyDocId(resource.id),
               threadId: item.threadId,
               commentId: item.commentId,

@@ -2,7 +2,7 @@
  * Visitor redaction for board events on the workspace SSE feed.
  *
  * The §3.3 visitor contract says a workspace-scope visitor sees transitions
- * with actor DISPLAY NAMES only — no actor ids. The ws:<id> room enforces
+ * with actor DISPLAY NAMES only — no actor ids. The ws:<id> doc enforces
  * that via projectTask; the SSE feed is the second door (the private-meta
  * lesson: redacting one transport and forgetting the long-lived other is how
  * leaks ship), so the same shape is asserted here on the payloads the stream

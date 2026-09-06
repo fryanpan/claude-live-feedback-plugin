@@ -1,10 +1,10 @@
 /**
  * The task description, edited in place.
  *
- * A task's body is not a field on the row — it is a live Yjs room
+ * A task's body is not a field on the row — it is a live Yjs doc
  * (`task:<taskId>`), the same one an agent rewrites through
  * `set_doc_content` / `find_and_replace` and the same one the full review
- * surface opens. This mounts the review surface's own editor over that room
+ * surface opens. This mounts the review surface's own editor over that doc
  * inside the detail panel, so a person's typing and an agent's rewrite merge
  * as CRDT edits rather than one overwriting the other, and the description
  * is edited where it is read instead of on a second page.
@@ -60,12 +60,12 @@ export interface TaskBodyEditorDeps {
    * built read-only rather than built and locked — see `CreateEditorOpts.editable`.
    */
   canWrite?: boolean;
-  /** Reached the room, mounted the editor. Test seam; the app has no use for it. */
+  /** Reached the doc, mounted the editor. Test seam; the app has no use for it. */
   onMounted?: (taskId: string) => void;
 }
 
 /** What the reader is told when the editor's chunk cannot be fetched. The
- *  link below the slot still reaches the same room in the full surface. */
+ *  link below the slot still reaches the same doc in the full surface. */
 export const LOAD_FAILED_TEXT =
   'The editor could not load here — open the full editor to change this.';
 
@@ -130,7 +130,7 @@ export function createTaskBodyEditorHost(deps: TaskBodyEditorDeps): TaskBodyEdit
     //
     // The cost is that the fallback text stops following the projection for
     // as long as the load takes. That is the right way round: it is corrected
-    // the moment the editor paints the room, which is the same text or newer.
+    // the moment the editor paints the doc, which is the same text or newer.
     slot.classList.add(BODY_LIVE_CLASS);
     const client = deps.connect(task.bodyDocId);
     const m: Mount = { taskId: task.id, slot, client, handle: null, placeholder: task.placeholder };

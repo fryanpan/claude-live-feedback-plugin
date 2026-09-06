@@ -236,7 +236,7 @@ describe('triage shaping', () => {
    * into the same body destroyed the capture with nothing preserved and
    * nothing recorded, and the caller and the board both saw success.
    *
-   * A task body is a live Yjs room at `task:<taskId>`, and there are several
+   * A task body is a live Yjs doc at `task:<taskId>`, and there are several
    * doors: `set_doc_content` on that docId, the prose edit tools aimed at it,
    * and a person typing on the board. They converge on one place —
    * `updateBodySnapshot`, which is what the fragment observer flushes — so
@@ -260,14 +260,14 @@ describe('triage shaping', () => {
       await jj(
         await post(docContent(task.id), {
           author: AGENT,
-          markdown: 'A story-shaped body written straight at the doc room.',
+          markdown: 'A story-shaped body written straight at the live doc.',
         }),
       );
 
       const shaped = await readTask(wsId, task.id);
       // The rewrite landed — without this the preservation assertion could
       // pass on a write that never happened.
-      expect(shaped.body).toContain('straight at the doc room');
+      expect(shaped.body).toContain('straight at the live doc');
       expect(shaped.quote).toBe(CAPTURE.body);
       expect(shaped.quote).toContain('Make a ticket from this or multiple');
     });
@@ -340,7 +340,7 @@ describe('triage shaping', () => {
     });
 
     it('does not quote a row whose body nobody has changed', async () => {
-      // The guard sits after the equality check, so opening a body room and
+      // The guard sits after the equality check, so opening a body doc and
       // letting it snapshot must not look like a rewrite. Paired with the
       // cases above, which show the same probe filling `quote` when there IS
       // a change — otherwise "still undefined" would prove nothing.
@@ -412,7 +412,7 @@ describe('triage shaping', () => {
     expect((await readTask(wsId, task.id)).title).toBe(CAPTURE.title);
   });
 
-  it('reaches the board room, which is the only thing the browser reads', async () => {
+  it('reaches the board doc, which is the only thing the browser reads', async () => {
     // The board renders from `ws:<id>` and nothing else, so a shaped title the
     // projection never refreshes for is one no reviewer can see — and nothing
     // goes red, because the store, the route and the REST read are all
@@ -421,10 +421,10 @@ describe('triage shaping', () => {
     // asserts the subscriber actually acts on it.
     const wsId = await seedWorkspace();
     const { task } = await capture(wsId);
-    const room = handle?.docStore.get(workspaceDocId(wsId));
-    if (!room) throw new Error('ws room was not created');
-    // Positive control: the room already carries the row, with the fragment.
-    expect((room.ydoc.getMap('tasks').get(task.id) as { title: string }).title).toBe(CAPTURE.title);
+    const doc = handle?.docStore.get(workspaceDocId(wsId));
+    if (!doc) throw new Error('ws doc was not created');
+    // Positive control: the doc already carries the row, with the fragment.
+    expect((doc.ydoc.getMap('tasks').get(task.id) as { title: string }).title).toBe(CAPTURE.title);
 
     await jj(
       await post(`/api/tasks/${task.id}/body`, {
@@ -433,7 +433,7 @@ describe('triage shaping', () => {
         markdown: 'A story-shaped body.',
       }),
     );
-    const projected = room.ydoc.getMap('tasks').get(task.id) as { title: string; quote?: string };
+    const projected = doc.ydoc.getMap('tasks').get(task.id) as { title: string; quote?: string };
     expect(projected.title).toBe('Moving between shelves loses your place');
     // …and the preserved words ride along, so the detail panel can show what
     // the row came from next to what it became.

@@ -151,8 +151,8 @@ describe('owner kind over the real routes', () => {
    *  browser renders from this map and from nothing else, so a field that is
    *  correct in the store and absent here is invisible on the surface. */
   function projected(wsId: string, taskId: string): Record<string, unknown> | undefined {
-    const room = handle.docStore.get(workspaceDocId(wsId));
-    return room?.ydoc.getMap('tasks').get(taskId) as Record<string, unknown> | undefined;
+    const doc = handle.docStore.get(workspaceDocId(wsId));
+    return doc?.ydoc.getMap('tasks').get(taskId) as Record<string, unknown> | undefined;
   }
 
   beforeAll(() => {
@@ -455,8 +455,8 @@ describe('owner id beside the owner name', () => {
   const get = (path: string) => fetch(`${base}${path}`);
 
   function projected(wsId: string, taskId: string): Record<string, unknown> | undefined {
-    const room = handle.docStore.get(workspaceDocId(wsId));
-    return room?.ydoc.getMap('tasks').get(taskId) as Record<string, unknown> | undefined;
+    const doc = handle.docStore.get(workspaceDocId(wsId));
+    return doc?.ydoc.getMap('tasks').get(taskId) as Record<string, unknown> | undefined;
   }
 
   async function seedWorkspace(name: string): Promise<string> {

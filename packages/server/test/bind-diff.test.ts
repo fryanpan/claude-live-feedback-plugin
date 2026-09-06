@@ -170,25 +170,25 @@ describe('DocStore.bindDiff', () => {
 
     const kept = byRel.get('src/kept.ts');
     expect(kept?.status).toBe('modified');
-    const keptRoom = docStore.get(kept?.docId ?? '');
-    expect(keptRoom?.meta.type).toBe('diff');
-    expect(keptRoom?.meta.diffBase).toBe(fixture.base);
-    expect(keptRoom?.meta.diffTarget).toBe(fixture.target);
-    expect(keptRoom?.ydoc.getText('content').toString()).toBe(
+    const keptDoc = docStore.get(kept?.docId ?? '');
+    expect(keptDoc?.meta.type).toBe('diff');
+    expect(keptDoc?.meta.diffBase).toBe(fixture.base);
+    expect(keptDoc?.meta.diffTarget).toBe(fixture.target);
+    expect(keptDoc?.ydoc.getText('content').toString()).toBe(
       'line1\nline2 CHANGED\nline3\nline4 added\n',
     );
 
     // Renames carry the base-side path for baseText lookups.
     const renamed = byRel.get('src/renamed.ts');
-    const renamedRoom = docStore.get(renamed?.docId ?? '');
-    expect(renamedRoom?.meta.diffStatus).toBe('renamed');
-    expect(renamedRoom?.meta.diffOldPath).toBe('src/moved.ts');
+    const renamedDoc = docStore.get(renamed?.docId ?? '');
+    expect(renamedDoc?.meta.diffStatus).toBe('renamed');
+    expect(renamedDoc?.meta.diffOldPath).toBe('src/moved.ts');
 
     // Deleted files exist in the tree but hold no target content.
     const gone = byRel.get('src/gone.ts');
-    const goneRoom = docStore.get(gone?.docId ?? '');
-    expect(goneRoom?.meta.diffStatus).toBe('deleted');
-    expect(goneRoom?.ydoc.getText('content').toString()).toBe('');
+    const goneDoc = docStore.get(gone?.docId ?? '');
+    expect(goneDoc?.meta.diffStatus).toBe('deleted');
+    expect(goneDoc?.ydoc.getText('content').toString()).toBe('');
   });
 
   it('is idempotent for the same range and rejects a different range', async () => {
@@ -228,11 +228,11 @@ describe('DocStore.bindDiff', () => {
     expect(a.ok).toBe(true);
     if (!a.ok) return;
     const docId = a.files.find((f) => f.relPath === 'src/kept.ts')?.docId ?? '';
-    const room = docStore.get(docId);
-    if (!room) throw new Error('room missing');
+    const doc = docStore.get(docId);
+    if (!doc) throw new Error('doc missing');
     // Anchor to the second line ("line2 CHANGED\n"), like the code surface's
     // snap-to-lines selection does.
-    const content = room.ydoc.getText('content');
+    const content = doc.ydoc.getText('content');
     const from = content.toString().indexOf('line2');
     const to = content.toString().indexOf('\n', from) + 1;
     const anchor = {
@@ -359,11 +359,11 @@ describe('DocStore.bindDiff', () => {
     expect(byRel.get('src/untracked.ts')?.status).toBe('added');
     // Content is the WORKING TREE bytes, not the last commit.
     const keptDocId = byRel.get('src/kept.ts')?.docId ?? '';
-    const keptRoom = docStore.get(keptDocId);
-    expect(keptRoom?.ydoc.getText('content').toString()).toBe('line1\nline2 WORKTREE\nline3\n');
-    expect(keptRoom?.meta.diffTarget).toBeUndefined();
+    const keptDoc = docStore.get(keptDocId);
+    expect(keptDoc?.ydoc.getText('content').toString()).toBe('line1\nline2 WORKTREE\nline3\n');
+    expect(keptDoc?.meta.diffTarget).toBeUndefined();
     // Live binding: sourceUrl set (poll armed), unlike pinned docs.
-    expect(keptRoom?.meta.sourceUrl).toBe(join(fixture.repo, 'src', 'kept.ts'));
+    expect(keptDoc?.meta.sourceUrl).toBe(join(fixture.repo, 'src', 'kept.ts'));
 
     // Agent edits the file → reparse (poll shortcut) → live doc updates and
     // the thread stack re-anchors by snippet.
@@ -380,7 +380,7 @@ describe('DocStore.bindDiff', () => {
       'line0 new\nline1\nline2 WORKTREE\nline3\n',
     );
     expect(docStore.reparseFromDisk(keptDocId).ok).toBe(true);
-    expect(keptRoom?.ydoc.getText('content').toString()).toContain('line0 new');
+    expect(keptDoc?.ydoc.getText('content').toString()).toContain('line0 new');
     // Thread still resolves to the (moved) line — snippet re-anchor keeps it.
     const threads = docStore.listThreads(keptDocId);
     expect(threads).toHaveLength(1);
@@ -574,11 +574,11 @@ describe('DocStore.bindDiff', () => {
     const opened = await docStore.openContextFile(res.reviewId, 'note.md');
     expect(opened.ok).toBe(true);
     if (!opened.ok) return;
-    const room = docStore.get(opened.docId);
-    expect(room?.meta.type).toBe('markdown');
-    expect(room?.meta.workspaceId).toBe(res.reviewId);
+    const doc = docStore.get(opened.docId);
+    expect(doc?.meta.type).toBe('markdown');
+    expect(doc?.meta.workspaceId).toBe(res.reviewId);
     // Markdown content lives in the prose fragment, not the flat Y.Text.
-    expect(room?.ydoc.getXmlFragment('prose').length).toBeGreaterThan(0);
+    expect(doc?.ydoc.getXmlFragment('prose').length).toBeGreaterThan(0);
 
     // Context docs stay OUT of the grouped-diff view.
     const grouped = docStore.listGroupedDiff(res.reviewId);
@@ -739,11 +739,11 @@ describe('DocStore.bindDiff', () => {
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     const docId = res.files.find((f) => f.relPath === 'src/kept.ts')?.docId ?? '';
-    const room = docStore.get(docId);
-    if (!room) throw new Error('room missing');
+    const doc = docStore.get(docId);
+    if (!doc) throw new Error('doc missing');
     // Simulate content corruption/loss.
-    const content = room.ydoc.getText('content');
-    room.ydoc.transact(() => content.delete(0, content.length));
+    const content = doc.ydoc.getText('content');
+    doc.ydoc.transact(() => content.delete(0, content.length));
     expect(content.toString()).toBe('');
     const rep = docStore.reparseFromDisk(docId);
     expect(rep.ok).toBe(true);

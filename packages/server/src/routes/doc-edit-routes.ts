@@ -73,7 +73,7 @@ export async function handleDocEditRoutes(
     // document, and rewriting one is an act the board has a name for.
     // Reachable here by anyone who knows the docId convention, so this
     // route runs the same ceremony `/api/tasks/:id/body` does rather
-    // than writing the room and walking away. It is not refused: that
+    // than writing the doc and walking away. It is not refused: that
     // would take away the only body-rewrite a bundle older than
     // `update_task_body` (0.1.24) has, to buy a guarantee this branch
     // can simply provide.

@@ -498,9 +498,9 @@ describe('the board projection', () => {
     expect(added.ok).toBe(true);
     handle.projection.refresh(ws);
 
-    const room = handle.docStore.get(`ws:${ws}`);
-    if (!room) throw new Error('no board room');
-    const map = room.ydoc.getMap('tasks');
+    const doc = handle.docStore.get(`ws:${ws}`);
+    if (!doc) throw new Error('no board doc');
+    const map = doc.ydoc.getMap('tasks');
     const projectedDecision = map.get(decision.id) as Record<string, unknown>;
     const projectedAction = map.get(action.id) as Record<string, unknown>;
 
@@ -521,7 +521,7 @@ describe('the board projection', () => {
    *
    * Both create doors attach the row after `createTask` has already emitted
    * `task.created`, which is what refreshes the projection; `addReviewItem`
-   * emits nothing. So the board room showed the new ticket without its
+   * emits nothing. So the board doc showed the new ticket without its
    * `reviews` until some unrelated store event happened to touch the
    * workspace, which on a quiet board is never. Deliberately no
    * `handle.projection.refresh(...)` here — calling it is what hid this.

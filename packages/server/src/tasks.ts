@@ -379,7 +379,7 @@ export interface BoardWorkspace {
    * Absent means docs must name their own file — the fleet's
    * `<repo>/.claude/reviews/` scratch convention is untouched either way.
    * Host paths: served on the owner settings route only, never projected
-   * into the `ws:` room a share visitor can sync (the settings route is not
+   * into the `ws:` doc a share visitor can sync (the settings route is not
    * on the visitor allowlist).
    */
   notesHome?: WorkspaceNotesHome;
@@ -902,8 +902,8 @@ export interface TaskAssignedEvent {
  * subscriber and to the audit log.
  *
  * Deliberately NOT emitted by `updateBodySnapshot`, which fires on every
- * keystroke's debounce as somebody types in the body room — that is content
- * activity, and the doc room already announces it. This row is for the
+ * keystroke's debounce as somebody types in the body doc — that is content
+ * activity, and the live doc already announces it. This row is for the
  * discrete, attributable act of replacing a description wholesale.
  */
 export interface TaskBodyEditedEvent {
@@ -1642,7 +1642,7 @@ export interface ListTasksFilter {
    * The opt-in exists because a handful of callers legitimately need every
    * row and would be BROKEN by the default — the projection (an archived row
    * still has to reach the browser, or nothing can draw the restore list),
-   * the room-file enumerations behind a workspace delete, and the two API
+   * the doc-file enumerations behind a workspace delete, and the two API
    * verbs a person uses to find what they archived. Each of those passes it
    * explicitly, so the list of readers that can see an archived task is a
    * list you can grep for rather than an absence you have to prove.
@@ -2051,7 +2051,7 @@ export class TaskStore {
   }
 
   /**
-   * Flush a goal's live body room back into its row — the goal half of
+   * Flush a goal's live body doc back into its row — the goal half of
    * `updateBodySnapshot`, and separate from it for the reason `getGoalRow` is
    * separate from `getTask`: a goal row is not a `Task` and the two fields the
    * task path also writes are fields it does not have.
@@ -2059,12 +2059,12 @@ export class TaskStore {
    * No `quote` preservation, because there is nothing to preserve against: the
    * pre-rewrite-words rule exists for tasks born from a dictated capture, a
    * chat message or a promoted comment, and a goal has none of those origins —
-   * its prose is written in the room and nowhere else. No `bodyWrittenAt`
+   * its prose is written in the doc and nowhere else. No `bodyWrittenAt`
    * either; the drift notice it feeds is a TASK staleness signal and inventing
    * a goal-shaped one here would be a field nothing reads.
    *
    * What it keeps is the equality guard, which is load-bearing rather than an
-   * optimization: the room seeds from this snapshot on first open, so the seed
+   * optimization: the doc seeds from this snapshot on first open, so the seed
    * round-trip flushes back the identical text, and without the guard every
    * board open would stamp `updatedAt` on every goal it had ever described.
    */

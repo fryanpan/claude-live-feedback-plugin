@@ -8,9 +8,9 @@
  * and that teardown is where a meeting's last sentence is flushed out of the
  * engine and into the doc.
  *
- * The shutdown flushes the rooms immediately afterwards. If `dispose()` did
+ * The shutdown flushes the docs immediately afterwards. If `dispose()` did
  * not wait for those teardowns, the flush would run first and the final notes
- * would be written into a room nothing will ever save again — lost silently,
+ * would be written into a doc nothing will ever save again — lost silently,
  * on every meeting that was live when the server went down.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';

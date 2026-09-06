@@ -198,7 +198,7 @@ describe('the goal detail island keeps its nodes across a repaint', () => {
     expect(host.querySelector('.board-detail-panel')).toBe(panel);
     expect(host.querySelector('.board-detail-title')).toBe(title);
     // The one node a repaint must NEVER rebuild: the live editor is a
-    // ProseMirror view bound to a Yjs room, and even MOVING the node removes
+    // ProseMirror view bound to a Yjs doc, and even MOVING the node removes
     // it from the document first, which blurs it and drops the caret.
     expect(host.querySelector('.board-detail-body-slot')).toBe(slot);
   });

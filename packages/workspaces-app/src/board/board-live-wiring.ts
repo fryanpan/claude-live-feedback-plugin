@@ -199,7 +199,7 @@ export function wireBoardLive(deps: BoardLiveDeps): void {
   }
   // A reply to the question you just asked is the case this whole surface is
   // for, so it lands in the open panel without a reload. These events reach
-  // the workspace channel only because a task body room fans out to it — the
+  // the workspace channel only because a task body doc fans out to it — the
   // board is not subscribed to each task's own doc stream.
   for (const name of ['thread.created', 'thread.replied', 'thread.resolved', 'thread.reopened']) {
     es.addEventListener(name, () => {
@@ -209,7 +209,7 @@ export function wireBoardLive(deps: BoardLiveDeps): void {
       // refreshes whether or not a task panel happens to be open.
       void loadReviewItems();
       // Whichever panel is open — a goal's discussion goes as stale as a
-      // task's, and it is reached through the same room, so leaving it out
+      // task's, and it is reached through the same doc, so leaving it out
       // would mean a comment landing on a goal was invisible until the reader
       // closed and reopened the panel.
       const open: LiveDiscussionRow | undefined = state.detailTaskId

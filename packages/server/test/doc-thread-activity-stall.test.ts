@@ -2,9 +2,9 @@
  * The same opt-in gesture as `doc-activity-stall.test.ts`, applied to the
  * linked doc's DISCUSSION rather than to its prose.
  *
- * A row's own `task:<id>` room is already read for both — a comment is the row
+ * A row's own `task:<id>` doc is already read for both — a comment is the row
  * moving, and an open declaration on it is somebody being waited on. A linked
- * doc's room was read for prose only, so a question asked where the work
+ * doc's doc was read for prose only, so a question asked where the work
  * actually is — a mock, a design doc, a diff — was invisible: the row read as
  * quiet with nobody waiting, and the wake fired on it every window while the
  * reader had it sitting on their queue. Measured on the live board on

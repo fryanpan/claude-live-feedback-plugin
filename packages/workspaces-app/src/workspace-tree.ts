@@ -32,8 +32,8 @@ interface TreeFile {
   threadCount: number;
   reviewUrl?: string;
   lastActivityAt?: number;
-  /** No longer part of the review as of the last refresh — kept because it
-   *  still holds comments, shown dimmed so nobody reviews a ghost. */
+  /** No longer part of the attachment set as of the last refresh — kept because
+   *  it still holds comments, shown dimmed so nobody reviews a ghost. */
   stale?: boolean;
   /** Diff-review members: change status + line counts for badges. */
   diffStatus?: 'added' | 'modified' | 'deleted' | 'renamed';
@@ -88,7 +88,7 @@ function renderTreeNode(
     }
     const cls = [isActive ? 'active' : '', node.stale ? 'stale' : ''].filter(Boolean).join(' ');
     const staleHint = node.stale
-      ? ' title="No longer in this review — the file was removed or its change reverted. Existing comments are kept."'
+      ? ' title="No longer in this attachment set — the file was removed or its change reverted. Existing comments are kept."'
       : '';
     return `<li class="tree-file"><a href="${href}" class="${cls}"${
       isActive ? ' aria-current="page"' : ''

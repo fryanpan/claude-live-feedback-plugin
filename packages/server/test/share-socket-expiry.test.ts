@@ -173,7 +173,7 @@ describe('expired shares lose their sockets', () => {
 
   it('does not count as somebody reaching for every doc on the server', async () => {
     // The sweep runs every 60s for the life of the server and reads one field
-    // of one Set. It used to reach each room through `list()` + `get()`, and
+    // of one Set. It used to reach each doc through `list()` + `get()`, and
     // `get` marks a doc ACCESSED — which puts its file binding in the poll's
     // fast lane for FILE_POLL_ACTIVE_MS, also 60s. So from the first sweep
     // onward the fast lane never emptied and every bound file was stat'd

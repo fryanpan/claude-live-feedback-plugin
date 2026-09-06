@@ -70,7 +70,7 @@ export interface PlanGateOpts {
    * is exactly what the UX review measured.
    *
    * The signal it needs is already there: `setPlanState` writes `planState`
-   * into the room's Yjs `meta` map, and this client is connected to that doc.
+   * into the doc's Yjs `meta` map, and this client is connected to that doc.
    * Observing the map turns the arrival into a live flip with no new server
    * surface. Injected rather than reached for so a test drives it without Yjs.
    */

@@ -43,7 +43,7 @@ export interface BoardChromeDeps {
   user: Pick<User, 'name' | 'color'>;
   /** `getElementById`, already narrowed — `bootBoard`'s own `el`. */
   el(id: string): HTMLElement;
-  /** The board room's awareness feed: every tab connected to this workspace. */
+  /** The board doc's awareness feed: every tab connected to this workspace. */
   awareness: FeedbackClient['awareness'];
   /** The address bar the boot was handed. The me-menu reads it for the
    *  sign-in link's `next`, and reloads through it after a sign-out or a

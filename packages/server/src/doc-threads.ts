@@ -26,7 +26,7 @@ import {
  * re-anchoring when the text under a thread moved, and the review payload a
  * thread can carry — answered, revised, judged, withdrawn, undone.
  *
- * Split out of `doc-store.ts`, which keeps the room lifecycle and the event
+ * Split out of `doc-store.ts`, which keeps the doc lifecycle and the event
  * plumbing this fires into. The review verbs come with the threads rather
  * than to a file of their own on purpose: a review IS a field on a thread
  * here, every one of them ends in the same `thread.replied` frame, and
@@ -35,13 +35,13 @@ import {
  *
  * `DocThreadPersistence` is four members. Two lookups rather than one is
  * deliberate: some verbs resolve an alias and hydrate, and some deliberately
- * only touch a room that is ALREADY resident, because answering a review on
+ * only touch a doc that is ALREADY resident, because answering a review on
  * a doc nobody has open should not page it in.
  */
 import * as Y from 'yjs';
 import type { ActivityType } from './activity.ts';
 import { classifyActor } from './actor-identity.ts';
-import type { DocRoom } from './doc-store.ts';
+import type { LiveDoc } from './doc-store.ts';
 
 export function randomId(): string {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
@@ -79,13 +79,13 @@ function displacedAnswer(prior: ReviewPayload, ts: number, by: string): ReviewAn
 /** What a thread verb may reach in the store, and nothing else. */
 export interface DocThreadPersistence {
   /** Resolve an alias and hydrate if needed — the normal door. */
-  room(docId: string): DocRoom | undefined;
-  /** Only a room that is ALREADY resident. Some verbs use this on purpose:
+  doc(docId: string): LiveDoc | undefined;
+  /** Only a doc that is ALREADY resident. Some verbs use this on purpose:
    *  acting on a review must not page in a doc nobody has open. */
-  residentRoom(docId: string): DocRoom | undefined;
-  /** Bump the room's sequence, schedule a summary and broadcast. */
+  residentDoc(docId: string): LiveDoc | undefined;
+  /** Bump the doc's sequence, schedule a summary and broadcast. */
   fireThreadEvent(
-    room: DocRoom,
+    doc: LiveDoc,
     event: 'thread.created' | 'thread.replied' | 'thread.resolved' | 'thread.reopened',
     thread: Thread,
     comment?: { id: string; author: User; text: string; ts: number },
@@ -93,7 +93,7 @@ export interface DocThreadPersistence {
     actor?: User,
   ): void;
   recordActivity(
-    room: DocRoom,
+    doc: LiveDoc,
     type: ActivityType,
     author: User,
     threadId: string,
@@ -135,29 +135,29 @@ export class DocThreads {
       review?: ReviewPayload;
     },
   ): Promise<Thread | null> {
-    const room = this.p.room(docId);
-    if (!room) return null;
+    const doc = this.p.doc(docId);
+    if (!doc) return null;
     if (threadId == null) {
       if (!anchor) return null;
       const id = randomId();
-      const t = createThread(room.ydoc, {
+      const t = createThread(doc.ydoc, {
         threadId: id,
         anchor,
         createdBy: author,
         firstComment: { id: randomId(), text, ...(opts?.review ? { review: opts.review } : {}) },
       });
-      this.p.fireThreadEvent(room, 'thread.created', t, undefined, opts);
+      this.p.fireThreadEvent(doc, 'thread.created', t, undefined, opts);
       // Hash the activity event with the comment's PERSISTED ts (not a fresh
       // Date.now()), so a later backfill — which reconstructs this event from
       // the same stored ts — produces an IDENTICAL eventId and dedupes
       // instead of double-counting.
-      this.p.recordActivity(room, 'comment', author, t.id, {
+      this.p.recordActivity(doc, 'comment', author, t.id, {
         text,
         tsMs: t.comments[0]?.ts ?? Date.now(),
       });
       return t;
     }
-    const comment = schemaPostReply(room.ydoc, threadId, {
+    const comment = schemaPostReply(doc.ydoc, threadId, {
       id: randomId(),
       author,
       text,
@@ -177,10 +177,10 @@ export class DocThreads {
     const replied = this.getThread(docId, threadId);
     const reopened =
       replied?.status === 'resolved' && classifyActor(author) === 'person'
-        ? schemaSetStatus(room.ydoc, threadId, 'open')
+        ? schemaSetStatus(doc.ydoc, threadId, 'open')
         : null;
     const thread = reopened ?? replied;
-    if (thread) this.p.fireThreadEvent(room, 'thread.replied', thread, comment, opts);
+    if (thread) this.p.fireThreadEvent(doc, 'thread.replied', thread, comment, opts);
     // Watchers that track open/resolved from the event stream would otherwise
     // hold 'resolved' for a thread that is open again. No separate activity
     // record: the reply below already logs this person's action, and a
@@ -188,9 +188,9 @@ export class DocThreads {
     if (reopened && thread) {
       // The replier's continuation is what reopened the thread, so the
       // reopen frame names them — same attribution the reply frame carries.
-      this.p.fireThreadEvent(room, 'thread.reopened', thread, undefined, opts, author);
+      this.p.fireThreadEvent(doc, 'thread.reopened', thread, undefined, opts, author);
     }
-    this.p.recordActivity(room, 'reply', author, threadId, { text, tsMs: comment.ts });
+    this.p.recordActivity(doc, 'reply', author, threadId, { text, tsMs: comment.ts });
     return thread;
   }
 
@@ -240,8 +240,8 @@ export class DocThreads {
     optionId?: string,
     opts?: { generate?: boolean; onlyIfUnanswered?: boolean },
   ): Promise<{ ok: true; thread: Thread } | { ok: false; error: string }> {
-    const room = this.p.room(docId);
-    if (!room) return { ok: false, error: 'no-doc' };
+    const doc = this.p.doc(docId);
+    if (!doc) return { ok: false, error: 'no-doc' };
     const thread = this.getThread(docId, threadId);
     const target = thread?.comments.find((c) => c.id === commentId);
     if (!target?.review) return { ok: false, error: 'not-a-review-item' };
@@ -280,7 +280,7 @@ export class DocThreads {
       answerText: _txt,
       ...cleared
     } = prior;
-    setCommentReview(room.ydoc, threadId, commentId, {
+    setCommentReview(doc.ydoc, threadId, commentId, {
       ...cleared,
       ...(history && history.length > 0 ? { answerHistory: history } : {}),
       // Every answer, tapped or typed. `answeredWith` cannot carry this on its
@@ -326,8 +326,8 @@ export class DocThreads {
   ):
     | { ok: true; review: ReviewPayload; thread: Thread }
     | { ok: false; error: string; message?: string } {
-    const room = this.p.residentRoom(docId);
-    if (!room) return { ok: false, error: 'no-doc' };
+    const doc = this.p.residentDoc(docId);
+    if (!doc) return { ok: false, error: 'no-doc' };
     const thread = this.getThread(docId, threadId);
     const target = thread?.comments.find((c) => c.id === commentId);
     if (!target?.review) return { ok: false, error: 'not-a-review-item' };
@@ -350,7 +350,7 @@ export class DocThreads {
       };
     }
     const review = withRevision(applied.next, applied.previous);
-    if (!setCommentReview(room.ydoc, threadId, commentId, review)) {
+    if (!setCommentReview(doc.ydoc, threadId, commentId, review)) {
       // The comment went between the read and the write — a race, not an
       // error the caller did anything to cause.
       return { ok: false, error: 'not-a-review-item' };
@@ -391,8 +391,8 @@ export class DocThreads {
   ):
     | { ok: true; review: ReviewPayload; thread: Thread }
     | { ok: false; error: 'no-doc' | 'not-a-review-item' | 'answered' | 'stale' } {
-    const room = this.p.residentRoom(docId);
-    if (!room) return { ok: false, error: 'no-doc' };
+    const doc = this.p.residentDoc(docId);
+    if (!doc) return { ok: false, error: 'no-doc' };
     const thread = this.getThread(docId, threadId);
     const target = thread?.comments.find((c) => c.id === commentId);
     if (!target?.review) return { ok: false, error: 'not-a-review-item' };
@@ -411,7 +411,7 @@ export class DocThreads {
       ...current,
       judge: storedJudgement(judgement),
     };
-    if (!setCommentReview(room.ydoc, threadId, commentId, review)) {
+    if (!setCommentReview(doc.ydoc, threadId, commentId, review)) {
       // The comment went between the read and the write — a race, not an
       // error the caller did anything to cause.
       return { ok: false, error: 'not-a-review-item' };
@@ -454,8 +454,8 @@ export class DocThreads {
   ):
     | { ok: true; review: ReviewPayload; thread: Thread }
     | { ok: false; error: string; message?: string } {
-    const room = this.p.residentRoom(docId);
-    if (!room) return { ok: false, error: 'no-doc' };
+    const doc = this.p.residentDoc(docId);
+    if (!doc) return { ok: false, error: 'no-doc' };
     const thread = this.getThread(docId, threadId);
     const target = thread?.comments.find((c) => c.id === commentId);
     if (!target?.review) return { ok: false, error: 'not-a-review-item' };
@@ -468,7 +468,7 @@ export class DocThreads {
           ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
         });
     if (!applied.ok) return { ok: false, error: applied.error, message: applied.message };
-    if (!setCommentReview(room.ydoc, threadId, commentId, applied.next)) {
+    if (!setCommentReview(doc.ydoc, threadId, commentId, applied.next)) {
       // The comment went between the read and the write — a race, not an
       // error the caller did anything to cause.
       return { ok: false, error: 'not-a-review-item' };
@@ -505,8 +505,8 @@ export class DocThreads {
     author: User,
     opts?: { generate?: boolean },
   ): { ok: true; thread: Thread } | { ok: false; error: string } {
-    const room = this.p.room(docId);
-    if (!room) return { ok: false, error: 'no-doc' };
+    const doc = this.p.doc(docId);
+    if (!doc) return { ok: false, error: 'no-doc' };
     const thread = this.getThread(docId, threadId);
     const target = thread?.comments.find((c) => c.id === commentId);
     if (!target?.review) return { ok: false, error: 'not-a-review-item' };
@@ -522,7 +522,7 @@ export class DocThreads {
       answerText: _txt,
       ...cleared
     } = prior;
-    setCommentReview(room.ydoc, threadId, commentId, {
+    setCommentReview(doc.ydoc, threadId, commentId, {
       ...cleared,
       answerHistory: [
         ...(prior.answerHistory ?? []),
@@ -538,7 +538,7 @@ export class DocThreads {
     // announced under a fifth would reach nobody until every session
     // restarted. No comment payload — nothing was said, a stamp was removed;
     // the updated thread carries the truth.
-    this.p.fireThreadEvent(room, 'thread.replied', updated, undefined, opts);
+    this.p.fireThreadEvent(doc, 'thread.replied', updated, undefined, opts);
     return { ok: true, thread: updated };
   }
 
@@ -577,14 +577,14 @@ export class DocThreads {
         candidates?: Array<{ docOffset: number; preview: string }>;
       }
   > {
-    const room = this.p.room(docId);
-    if (!room) return { ok: false, error: 'no-doc' };
+    const doc = this.p.doc(docId);
+    if (!doc) return { ok: false, error: 'no-doc' };
     // Code/diff docs are flat text in the `content` Y.Text — the prose
     // resolver below would walk an empty fragment and always miss. Find the
     // text directly and snap the anchor to whole lines, matching the code
     // surface's own selection convention.
-    if (contentKind(room.meta.type) === 'flat') {
-      const content = room.ydoc.getText('content');
+    if (contentKind(doc.meta.type) === 'flat') {
+      const content = doc.ydoc.getText('content');
       const hay = content.toString();
       const before = opts.contextBefore ?? '';
       const after = opts.contextAfter ?? '';
@@ -627,7 +627,7 @@ export class DocThreads {
       if (!thread) return { ok: false, error: 'no-doc' };
       return { ok: true, thread };
     }
-    const resolved = prose.resolveTextRangeFromFind(room.ydoc, opts);
+    const resolved = prose.resolveTextRangeFromFind(doc.ydoc, opts);
     if (!resolved.ok) {
       if (resolved.error === 'ambiguous') {
         return { ok: false, error: 'ambiguous', candidates: resolved.candidates };
@@ -678,22 +678,22 @@ export class DocThreads {
     author?: User,
     opts?: { generate?: boolean },
   ): Thread | null {
-    const room = this.p.room(docId);
-    if (!room) return null;
-    const t = schemaSetStatus(room.ydoc, threadId, 'resolved');
+    const doc = this.p.doc(docId);
+    if (!doc) return null;
+    const t = schemaSetStatus(doc.ydoc, threadId, 'resolved');
     if (t) {
       // The frame names WHO resolved. Without it, 17 resolves in the field
       // were each attributed to the thread's creator by the channel
       // renderer's comments[0] fallback. Same default recordActivity uses.
       this.p.fireThreadEvent(
-        room,
+        doc,
         'thread.resolved',
         t,
         undefined,
         opts,
         author ?? DEFAULT_REVIEWER,
       );
-      this.p.recordActivity(room, 'resolve', author ?? DEFAULT_REVIEWER, threadId, {
+      this.p.recordActivity(doc, 'resolve', author ?? DEFAULT_REVIEWER, threadId, {
         tsMs: Date.now(),
       });
     }
@@ -707,20 +707,20 @@ export class DocThreads {
     author?: User,
     opts?: { generate?: boolean },
   ): Thread | null {
-    const room = this.p.room(docId);
-    if (!room) return null;
-    const t = schemaSetStatus(room.ydoc, threadId, 'open');
+    const doc = this.p.doc(docId);
+    if (!doc) return null;
+    const t = schemaSetStatus(doc.ydoc, threadId, 'open');
     if (t) {
       // See resolve above — the reopen frame names who reopened.
       this.p.fireThreadEvent(
-        room,
+        doc,
         'thread.reopened',
         t,
         undefined,
         opts,
         author ?? DEFAULT_REVIEWER,
       );
-      this.p.recordActivity(room, 'reopen', author ?? DEFAULT_REVIEWER, threadId, {
+      this.p.recordActivity(doc, 'reopen', author ?? DEFAULT_REVIEWER, threadId, {
         tsMs: Date.now(),
       });
     }
@@ -728,22 +728,22 @@ export class DocThreads {
   }
 
   reanchor(docId: string, threadId: string, anchor: Anchor): Thread | null {
-    const room = this.p.room(docId);
-    if (!room) return null;
-    return schemaReplaceAnchor(room.ydoc, threadId, anchor);
+    const doc = this.p.doc(docId);
+    if (!doc) return null;
+    return schemaReplaceAnchor(doc.ydoc, threadId, anchor);
   }
 
   listThreads(docId: string, filter?: { status?: 'open' | 'resolved' }): Thread[] {
-    const room = this.p.room(docId);
-    if (!room) return [];
-    const all = listThreads(room.ydoc);
+    const doc = this.p.doc(docId);
+    if (!doc) return [];
+    const all = listThreads(doc.ydoc);
     return filter?.status ? all.filter((t) => t.status === filter.status) : all;
   }
 
   getThread(docId: string, threadId: string): Thread | null {
-    const room = this.p.room(docId);
-    if (!room) return null;
-    return listThreads(room.ydoc).find((t) => t.id === threadId) ?? null;
+    const doc = this.p.doc(docId);
+    if (!doc) return null;
+    return listThreads(doc.ydoc).find((t) => t.id === threadId) ?? null;
   }
 
   /**

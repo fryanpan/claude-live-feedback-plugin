@@ -390,7 +390,7 @@ describe('POST /workspaces/:id/huddles and the empty task', () => {
       // The doc really landed on the board.
       expect((await boardDocs(workspaceId)).length).toBe(before + 1);
       // A huddle is seeded into a file under the owner's data directory, and
-      // this route answers with the room's own meta — so it is a second door
+      // this route answers with the doc's own meta — so it is a second door
       // beside `GET /api/docs/<id>`, and it is redacted the same way.
       expect(made.meta.sourceUrl).toBeUndefined();
       expect(made.meta.owner).toBeUndefined();

@@ -169,10 +169,10 @@ describe('createHttp', () => {
   });
 
   it('surfaces a 500 body verbatim, since that is where the server explains itself', async () => {
-    const { fn } = fakeFetch([{ status: 500, body: 'room d-1 has no bound path' }]);
+    const { fn } = fakeFetch([{ status: 500, body: 'doc d-1 has no bound path' }]);
     const http = createHttp(() => 'http://localhost:8787', fn);
     await expect(http('POST', '/api/docs/d-1/reparse')).rejects.toThrow(
-      /room d-1 has no bound path/,
+      /doc d-1 has no bound path/,
     );
   });
 

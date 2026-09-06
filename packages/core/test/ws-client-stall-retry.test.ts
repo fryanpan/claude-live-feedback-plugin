@@ -80,7 +80,7 @@ class StubWebSocket {
 
   /**
    * Test helper: simulate an ordinary broadcast update — what this socket
-   * receives when a CONCURRENT peer edits the room, not this connection's own
+   * receives when a CONCURRENT peer edits the doc, not this connection's own
    * sync-step-2 answer. Distinguishing these two is the point of the codex
    * finding below.
    */

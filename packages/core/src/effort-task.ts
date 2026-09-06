@@ -112,7 +112,7 @@ export interface EffortTaskInput {
   };
   /** The append-only trail. Wall-clock actuals are read from it. */
   transitions?: EffortTransition[];
-  /** Folded-up human attention on the ticket's body room. Hands-on actuals
+  /** Folded-up human attention on the ticket's body doc. Hands-on actuals
    *  are read from it, and its ABSENCE means not measured — never zero. */
   readingTime?: { totalSeconds?: number };
 }

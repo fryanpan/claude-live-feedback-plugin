@@ -593,7 +593,7 @@ describe('share links over HTTP', () => {
 
       // …and the reply says nothing about the machine. A huddle is seeded
       // into a file under the owner's data directory, and this route answers
-      // with the room's own meta — the second door beside `GET /api/docs/<id>`.
+      // with the doc's own meta — the second door beside `GET /api/docs/<id>`.
       expect(body.meta.sourceUrl).toBeUndefined();
       expect(body.meta.owner).toBeUndefined();
       expect(body.meta.workspaceRoot).toBeUndefined();
