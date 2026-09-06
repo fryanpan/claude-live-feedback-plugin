@@ -235,7 +235,11 @@ describe('the prompt routes', () => {
     const res = await local('/api/prompts/review-item-criteria');
     expect(res.status).toBe(409);
     const body = (await res.json()) as { message: string };
-    expect(body.message).toContain('/api/workspaces/');
+    expect(body.message).toContain('/workspaces/<id>/settings');
+    // The address it names has to be one the router can actually serve:
+    // matchWorkspaceRoute accepts the bare '/workspaces/' prefix only, so an
+    // /api/-prefixed hint sends the caller somewhere that cannot answer.
+    expect(body.message).not.toContain('/api/workspaces/');
   });
 
   it('refuses a write with no author, so nothing is stored unattributed', async () => {
