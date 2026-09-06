@@ -848,7 +848,7 @@ in `src` and `test` that name a file in the set.
 | F7 | `workspaces-app/src/doc/` | `app.ts`, `editor.ts`, `review-chrome.ts`, `threads.ts`, `thread-*.ts`, `review-*.ts`, `preview.ts`, `edit-*.ts` | 85 |
 | F8 | `workspaces-app/src/meeting/` | `meeting-*.ts`, `speaker-*.ts` | 34 |
 
-Take them one directory per PR, smallest first, and run all four gates on each
+Take them one directory per PR, smallest first, and run `bun run verify` on each
 — an import rewrite is exactly the change that type-checks clean in one
 package and breaks another. `review-items/`, `routes/`, `share/`, `auth/`,
 `middleware/`, `board/`, `redline/`, `code/` and `signin/` already sit where

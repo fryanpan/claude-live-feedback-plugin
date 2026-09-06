@@ -22,7 +22,8 @@ The bars and the check behind each are
 [.claude/rules/testing-standards.md](testing-standards.md) — read them there;
 they are not restated here.
 
-*Enforced by:* `bun run test:audit` (ratcheted, CI), on top of the four gates.
+*Enforced by:* `bun run test:audit` (ratcheted, CI) — one member of
+`bun run verify`, which runs it alongside every other gate CI runs.
 
 ## A route lives in `routes/`
 

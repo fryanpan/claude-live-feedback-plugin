@@ -70,27 +70,45 @@ that way and add new subsystem docs to the list here.
 - **Mockups and sketches never enter the repo** — write the HTML outside the
   working tree and serve it with `attach_mockup(docId, sourceHtmlPath)`.
 
-## The four gates — run all of them before you push
+## The gates — `bun run verify` before you push
 
 ```bash
-bunx vitest run                 # unit + client suites
-bun test packages/server/test   # server suite (NOT covered by vitest)
-bun run typecheck               # tsc --noEmit; vitest does not typecheck
-bun run lint                    # biome; nothing else formats
+bun run verify                        # every gate CI runs. ~8 min, cheapest first.
+bun run verify --list                 # the members, and the one hole
+bun run verify --only lint,typecheck  # re-run what failed
+bun run verify --bail                 # stop at the first failure
 ```
 
-Four separate gates; each catches what the others cannot — read this list,
-don't recite it from memory. What a test has to do to be worth its runtime —
-behaviour not source shape, poll-until not sleep, no wall-clock assertions —
-is [.claude/rules/testing-standards.md](.claude/rules/testing-standards.md),
-whose mechanical half is `bun run test:audit` (ratcheted, runs in CI).
-The other bars — 500-line files, strict types, the security-review trigger —
-are [.claude/rules/code-health.md](.claude/rules/code-health.md), one
-enforcing command named per bar.
+**One command, not a list you pick from.** This section used to name four
+gates. CI's `verify` job runs fifteen you can run locally, and a builder who
+ran the four and pushed went red on `loc:audit` — a doc comment had taken a
+file from 496 to 504 lines. A list drifts the moment somebody adds a CI step;
+`bun run verify` is the set, `scripts/verify.ts` is where it is written down,
+and `bun run verify:parity` — a member of the run AND a step of the CI job —
+fails if ci.yml gains a gate that is not a member. That is what keeps this
+paragraph true.
+
+Every member's output goes straight to your terminal in full; the summary at
+the end indexes that scrollback rather than replacing it. Nothing is piped, so
+nothing swallows an exit code, and a member killed by a signal counts as a
+failure rather than as a pass.
+
+**The one gate it cannot run** is the concurrent-PR half of
+`check:plugin-version`: asking GitHub what version every other open PR
+declares needs a token and a PR number. `--list` names it as a hole rather
+than leaving it an absence.
+
+What a test has to do to be worth its runtime — behaviour not source shape,
+poll-until not sleep, no wall-clock assertions — is
+[.claude/rules/testing-standards.md](.claude/rules/testing-standards.md),
+whose mechanical half is the `test:audit` member. The other bars — 500-line
+files, strict types, the security-review trigger — are
+[.claude/rules/code-health.md](.claude/rules/code-health.md), one enforcing
+command named per bar.
 `bunx biome check --write` fixes formatting; `any` and unused imports are
-lint errors, at zero today. Per diff: `packages/mcp/src/**` → `bun run
-build:mcp` + commit the bundle; `packages/plugin/**` → version bump (below);
-touching neither adds nothing.
+lint errors, at zero today. Per diff: `packages/plugin/**` → version bump
+(below); `packages/mcp/src/**` needs no extra step of yours — the
+`check:mcp-bundle` member rebuilds the bundle and fails until you commit it.
 
 ## Releasing the plugin
 
