@@ -486,6 +486,41 @@ describe('attachment routes + lead-addressed delivery', () => {
     expect(handle.identities.get('agent-legacy-bundle')?.displayName).toBe('agent-legacy-bundle');
   });
 
+  it('answers a malformed escape in an id rather than closing the connection', async () => {
+    // `matchWorkspaceRoute` safe-decodes the WORKSPACE segment and nothing
+    // else, so the ids these four routes pull out of the remainder were the
+    // unguarded half. A `%` with no valid escape behind it throws a URIError
+    // out of `decodeURIComponent`; thrown inside a route match it takes the
+    // whole request down — the socket closes with no status line at all,
+    // which is neither an allow nor a deny and is chosen by the caller.
+    //
+    // REACHING an `expect` on `status` IS the assertion here: none of these
+    // lines can run if the handler threw.
+    const wsId = await makeWorkspace('bad-escape-board');
+    const BAD = '%E0%A4%A';
+    expect((await post(`/workspaces/${wsId}/agents/${BAD}/heartbeat`, {})).status).toBe(404);
+    expect((await local(`/workspaces/${wsId}/agents/${BAD}`, { method: 'DELETE' })).status).toBe(
+      404,
+    );
+    expect((await post(`/workspaces/${wsId}/comment-queue/${BAD}/ack`, {})).status).toBe(200);
+    expect((await post(`/workspaces/${wsId}/voice-queue/${BAD}/ack`, {})).status).toBe(200);
+
+    // POSITIVE CONTROL. Without it the four verdicts above are also what a
+    // deleted route gives: the same two paths must answer a well-formed id,
+    // so the 404s read as "no such agent" rather than "no such route".
+    const attached = await post(`/workspaces/${wsId}/agents`, {
+      agentId: 'agent-well-formed',
+      runtime: 'claude-code-local',
+    });
+    expect(attached.status).toBe(200);
+    expect((await post(`/workspaces/${wsId}/agents/agent-well-formed/heartbeat`, {})).status).toBe(
+      200,
+    );
+    expect(
+      (await local(`/workspaces/${wsId}/agents/agent-well-formed`, { method: 'DELETE' })).status,
+    ).toBe(200);
+  });
+
   it('POST attach → GET list round-trips every param, including endpoint + capabilities', async () => {
     const wsId = await makeWorkspace('routes-board');
     const r = await post(`/workspaces/${wsId}/agents`, {

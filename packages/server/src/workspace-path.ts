@@ -67,8 +67,15 @@ export function matchWorkspaceRoute(
  * `%`. The same posture `middleware/host-guard.ts` takes on the same problem:
  * a malformed escape is a caller's typo, and a thrown `URIError` inside a
  * route match closes the connection with no response at all.
+ *
+ * EXPORTED because a route that reads its own segments has the same problem
+ * and no way to inherit the answer. `matchWorkspaceRoute` protects only the
+ * workspace segment; a handler that then pulls an agent id or a queue entry
+ * id out of the remainder with a bare `decodeURIComponent` is one `%` away
+ * from a closed socket — neither an allow nor a deny, chosen by the caller.
+ * `routes/workspace-attachments.ts` is where that was true.
  */
-function safeDecodeSegment(segment: string): string {
+export function safeDecodeSegment(segment: string): string {
   try {
     return decodeURIComponent(segment);
   } catch {
