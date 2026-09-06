@@ -110,7 +110,7 @@ function replyFor(path: string): unknown {
   // The resolve route: WHERE a bare id lives. Most handlers decode an rt-…
   // id locally and never get here with one — request_more_info is the
   // exception, resolving through the server to verify the item exists.
-  if (/^\/api\/review-items\/[^/]+$/.test(path)) {
+  if (/^\/workspaces\/[^/]+\/review-items\/[^/]+$/.test(path)) {
     const id = decodeURIComponent(path.split('/').at(-1) ?? '');
     if (id.startsWith('rt-')) {
       return {
@@ -131,11 +131,18 @@ function send(msg: unknown) {
   child.stdin?.write(`${JSON.stringify(msg)}\n`);
 }
 
+/** The board every call in this file is addressed under. */
+const WS = 'w-board';
+
 function call(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
   const id = nextId++;
+  // Every resource tool takes the board now. Filled in here rather than at
+  // ninety call sites: what this file is about is which DOOR each verb
+  // knocks on, and the board is the same one throughout.
+  const withBoard = 'workspaceId' in args ? args : { workspaceId: WS, ...args };
   return new Promise((resolve) => {
     waiters.set(id, (v) => resolve(v as Record<string, unknown>));
-    send({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });
+    send({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: withBoard } });
   });
 }
 
@@ -261,7 +268,7 @@ describe('the harness itself', () => {
   it('drives the bundle and records what it asked the server for', async () => {
     const reply = await call('list_docs', {});
     okReply(reply);
-    expect(last().path).toContain('/api/docs');
+    expect(last().path).toContain(`/workspaces/${WS}/docs`);
   });
 
   /**
@@ -306,12 +313,12 @@ describe('the harness itself', () => {
     const oldTail = all.at(-1);
     expect(oldTail).toBeTruthy();
     expect(isBackgroundRequest(oldTail as Recorded)).toBe(true);
-    expect(oldTail?.path).not.toBe('/api/tasks/t-control/answer');
+    expect(oldTail?.path).not.toBe(`/workspaces/${WS}/tasks/t-control/answer`);
 
     // NEW form — the same positional read, over the foreground record. It
     // still names the verb the case exercised.
     expect(last().method).toBe('POST');
-    expect(last().path).toBe('/api/tasks/t-control/answer');
+    expect(last().path).toBe(`/workspaces/${WS}/tasks/t-control/answer`);
     expect(last().body.optionId).toBe('o-control');
   });
 });
@@ -325,7 +332,7 @@ describe('the old vocabulary still lands on the old doors (positive controls)', 
     });
     okReply(reply);
     expect(last().method).toBe('POST');
-    expect(last().path).toBe('/api/tasks/t-legacy/answer');
+    expect(last().path).toBe(`/workspaces/${WS}/tasks/t-legacy/answer`);
     // The legacy key, not this entity's spelling. An old caller passing
     // `optionId` and getting `answeredWith` sent on is a silent loss of which
     // candidate the words came from.
@@ -366,7 +373,7 @@ describe('a ticket carries review items, and the tools reach them', () => {
     const reply = await call('add_review_item', { taskId: 't-1', review });
     okReply(reply);
     expect(last().method).toBe('POST');
-    expect(last().path).toBe('/api/tasks/t-1/review-items');
+    expect(last().path).toBe(`/workspaces/${WS}/tasks/t-1/review-items`);
     expect(last().body.review).toEqual(review);
     expect(last().body.author).toBeTruthy();
   });
@@ -387,7 +394,7 @@ describe('a ticket carries review items, and the tools reach them', () => {
       answeredWith: 'o-4b2e',
     });
     okReply(reply);
-    expect(last().path).toBe('/api/tasks/t-1/review-items/r-4b2e/answer');
+    expect(last().path).toBe(`/workspaces/${WS}/tasks/t-1/review-items/r-4b2e/answer`);
     expect(last().body.answeredWith).toBe('o-4b2e');
     expect(last().body.text).toBe('One per index');
   });
@@ -403,7 +410,7 @@ describe('a ticket carries review items, and the tools reach them', () => {
       answeredWith: 'o-7f3a',
     });
     okReply(reply);
-    expect(last().path).toBe('/api/tasks/t-legacy/answer');
+    expect(last().path).toBe(`/workspaces/${WS}/tasks/t-legacy/answer`);
     // The legacy route knows `optionId` and nothing else.
     expect(last().body.optionId).toBe('o-7f3a');
     expect(last().body.answeredWith).toBeUndefined();
@@ -417,7 +424,7 @@ describe('a ticket carries review items, and the tools reach them', () => {
       optionId: 'o-4b2e',
     });
     okReply(reply);
-    expect(last().path).toBe('/api/tasks/t-1/review-items/r-4b2e/answer');
+    expect(last().path).toBe(`/workspaces/${WS}/tasks/t-1/review-items/r-4b2e/answer`);
     expect(last().body.answeredWith).toBe('o-4b2e');
   });
 
@@ -428,7 +435,7 @@ describe('a ticket carries review items, and the tools reach them', () => {
       question: 'How often is a cold query actually hit?',
     });
     okReply(withRow);
-    expect(last().path).toBe('/api/tasks/t-1/review-items/r-4b2e/more-info');
+    expect(last().path).toBe(`/workspaces/${WS}/tasks/t-1/review-items/r-4b2e/more-info`);
     expect(last().body.question).toBe('How often is a cold query actually hit?');
 
     const withoutRow = await call('request_more_info', {
@@ -436,7 +443,7 @@ describe('a ticket carries review items, and the tools reach them', () => {
       question: 'How often is a cold query actually hit?',
     });
     okReply(withoutRow);
-    expect(last().path).toBe('/api/tasks/t-legacy/more-info');
+    expect(last().path).toBe(`/workspaces/${WS}/tasks/t-legacy/more-info`);
   });
 
   it('revise_review_item lands on the revise door with only the fields that change', async () => {
@@ -447,7 +454,7 @@ describe('a ticket carries review items, and the tools reach them', () => {
       reply: 'Per night — clarified.',
     });
     okReply(reply);
-    expect(last().path).toBe('/api/tasks/t-1/review-items/r-4b2e/revise');
+    expect(last().path).toBe(`/workspaces/${WS}/tasks/t-1/review-items/r-4b2e/revise`);
     expect(last().body.detail).toBe('Reads twice per nightly run.');
     expect(last().body.reply).toBe('Per night — clarified.');
     // Untouched fields are not sent as undefined-turned-null.
@@ -626,7 +633,14 @@ describe('what the tool schemas tell an agent', () => {
     const decl = byName('answer_decision');
     const props = decl.inputSchema.properties ?? {};
     expect(Object.keys(props)).toContain('optionId');
-    expect((decl.inputSchema as { required?: string[] }).required).toEqual(['taskId', 'text']);
+    // `workspaceId` joined them in the routes cutover: the answer is written
+    // at /workspaces/<ws>/tasks/<id>/answer, so a call naming no board names
+    // no row. Nothing else about the tool moved.
+    expect((decl.inputSchema as { required?: string[] }).required).toEqual([
+      'workspaceId',
+      'taskId',
+      'text',
+    ]);
   });
 
   /**
@@ -756,7 +770,7 @@ describe('reviewItemId is a universal address', () => {
     });
     okReply(reply);
     expect(last().method).toBe('POST');
-    expect(last().path).toBe('/api/docs/mockup-notes/threads/th-91/withdraw');
+    expect(last().path).toBe(`/workspaces/${WS}/docs/mockup-notes/threads/th-91/withdraw`);
     expect(last().body.commentId).toBe('c-17');
     expect(last().body.reason).toBe('Superseded by the item below.');
     const p = payload(reply);
@@ -773,7 +787,7 @@ describe('reviewItemId is a universal address', () => {
     });
     okReply(reply);
     expect(seen.length).toBe(before + 1);
-    expect(last().path).toBe('/api/tasks/t-77/review-items/r-4b2e/withdraw');
+    expect(last().path).toBe(`/workspaces/${WS}/tasks/t-77/review-items/r-4b2e/withdraw`);
     expect(last().body.reason).toBe('Filed twice.');
   });
 
@@ -782,14 +796,16 @@ describe('reviewItemId is a universal address', () => {
     okReply(reply);
     const resolve = seen.at(-2);
     expect(resolve?.method).toBe('GET');
-    expect(resolve?.path).toBe('/api/review-items/r-4b2e');
-    expect(last().path).toBe('/api/tasks/t-resolved/review-items/r-4b2e/withdraw');
+    expect(resolve?.path).toBe(`/workspaces/${WS}/review-items/r-4b2e`);
+    expect(last().path).toBe(`/workspaces/${WS}/tasks/t-resolved/review-items/r-4b2e/withdraw`);
   });
 
   it('withdraw_review_item undo by id lands on /withdraw/undo', async () => {
     const reply = await call('withdraw_review_item', { reviewItemId: 'r-4b2e', undo: true });
     okReply(reply);
-    expect(last().path).toBe('/api/tasks/t-resolved/review-items/r-4b2e/withdraw/undo');
+    expect(last().path).toBe(
+      `/workspaces/${WS}/tasks/t-resolved/review-items/r-4b2e/withdraw/undo`,
+    );
     expect(payload(reply).withdrawn).toBe(false);
   });
 
@@ -811,7 +827,7 @@ describe('reviewItemId is a universal address', () => {
       reason: 'Measured it wrong.',
     });
     okReply(reply);
-    expect(last().path).toBe('/api/docs/mockup-notes/threads/th-91/withdraw');
+    expect(last().path).toBe(`/workspaces/${WS}/docs/mockup-notes/threads/th-91/withdraw`);
     expect(last().body.commentId).toBe('c-17');
   });
 
@@ -822,7 +838,7 @@ describe('reviewItemId is a universal address', () => {
     });
     okReply(reply);
     expect(last().method).toBe('POST');
-    expect(last().path).toBe('/api/docs/mockup-notes/threads/th-91/revise');
+    expect(last().path).toBe(`/workspaces/${WS}/docs/mockup-notes/threads/th-91/revise`);
     expect(last().body.commentId).toBe('c-17');
     expect(last().body.detail).toBe('The gallery scrolls the whole page sideways at 430px.');
   });
@@ -833,8 +849,8 @@ describe('reviewItemId is a universal address', () => {
       headline: 'Cache size for the rebuild',
     });
     okReply(reply);
-    expect(seen.at(-2)?.path).toBe('/api/review-items/r-4b2e');
-    expect(last().path).toBe('/api/tasks/t-resolved/review-items/r-4b2e/revise');
+    expect(seen.at(-2)?.path).toBe(`/workspaces/${WS}/review-items/r-4b2e`);
+    expect(last().path).toBe(`/workspaces/${WS}/tasks/t-resolved/review-items/r-4b2e/revise`);
   });
 
   it('answer_review_item with an rt-… id lands on the doc answer route', async () => {
@@ -843,7 +859,7 @@ describe('reviewItemId is a universal address', () => {
       text: 'Cap it at the viewport width.',
     });
     okReply(reply);
-    expect(last().path).toBe('/api/docs/mockup-notes/threads/th-91/answer');
+    expect(last().path).toBe(`/workspaces/${WS}/docs/mockup-notes/threads/th-91/answer`);
     expect(last().body.commentId).toBe('c-17');
     expect(last().body.text).toBe('Cap it at the viewport width.');
     expect(payload(reply).recorded).toBe(true);
@@ -856,8 +872,8 @@ describe('reviewItemId is a universal address', () => {
       answeredWith: 'o-7f3a',
     });
     okReply(reply);
-    expect(seen.at(-2)?.path).toBe('/api/review-items/r-4b2e');
-    expect(last().path).toBe('/api/tasks/t-resolved/review-items/r-4b2e/answer');
+    expect(seen.at(-2)?.path).toBe(`/workspaces/${WS}/review-items/r-4b2e`);
+    expect(last().path).toBe(`/workspaces/${WS}/tasks/t-resolved/review-items/r-4b2e/answer`);
     expect(last().body.answeredWith).toBe('o-7f3a');
   });
 
@@ -872,10 +888,10 @@ describe('reviewItemId is a universal address', () => {
     // verified here — a stale or forged id would otherwise land a question on
     // whatever unrelated thread it names.
     expect(seen.at(-2)?.method).toBe('GET');
-    expect(seen.at(-2)?.path).toBe(`/api/review-items/${encodeURIComponent(RT_ID)}`);
+    expect(seen.at(-2)?.path).toBe(`/workspaces/${WS}/review-items/${encodeURIComponent(RT_ID)}`);
     // A doc-thread item's conversation IS its thread — asking back is a
     // comment there, exactly where the asker is already listening.
-    expect(last().path).toBe('/api/docs/mockup-notes/threads/th-91/comments');
+    expect(last().path).toBe(`/workspaces/${WS}/docs/mockup-notes/threads/th-91/comments`);
     expect(last().body.text).toBe('Which breakpoint did you measure at?');
     expect(payload(reply).asked).toBe(true);
   });
@@ -886,19 +902,26 @@ describe('reviewItemId is a universal address', () => {
       question: 'What does the smaller cache cost?',
     });
     okReply(reply);
-    expect(seen.at(-2)?.path).toBe('/api/review-items/r-4b2e');
-    expect(last().path).toBe('/api/tasks/t-resolved/review-items/r-4b2e/more-info');
+    expect(seen.at(-2)?.path).toBe(`/workspaces/${WS}/review-items/r-4b2e`);
+    expect(last().path).toBe(`/workspaces/${WS}/tasks/t-resolved/review-items/r-4b2e/more-info`);
   });
 
-  it("set_review_item_criteria accepts a reviewItemId and lands on that item's board", async () => {
+  it('set_review_item_criteria takes the BOARD, and no longer stands one in for it', async () => {
+    // It used to accept a `reviewItemId` INSTEAD of a board and ask the
+    // server which board judged that item — a second way to name the thing
+    // the address now names outright. One call, straight to the setting.
+    const before = seen.length;
     const reply = await call('set_review_item_criteria', {
-      reviewItemId: 'r-4b2e',
       criteria: 'Every option names a cost.',
     });
     okReply(reply);
-    expect(seen.at(-2)?.path).toBe('/api/review-items/r-4b2e');
     expect(last().method).toBe('PUT');
-    expect(last().path).toBe('/workspaces/w-resolved/settings');
-    expect(payload(reply).workspaceId).toBe('w-resolved');
+    expect(last().path).toBe(`/workspaces/${WS}/settings`);
+    expect(payload(reply).workspaceId).toBe(WS);
+    // ...and the resolve round-trip it used to make is gone, not merely
+    // unused: this call made ONE request, where the old shape put a
+    // `/review-items/<id>` read in front of the PUT. Counted from a baseline
+    // because `seen` holds the whole file's traffic.
+    expect(seen.slice(before).map((r) => r.path)).toEqual([`/workspaces/${WS}/settings`]);
   });
 });

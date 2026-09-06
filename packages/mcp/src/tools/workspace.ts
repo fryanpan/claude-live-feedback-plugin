@@ -25,6 +25,7 @@
  */
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { AgentAuthor } from '../author.ts';
+import { boardIdOf, boardPathOf } from '../board-path.ts';
 import { declareWorkspaceLead } from '../declare-lead.ts';
 import { parseCapArg } from '../parallelism-cap.ts';
 
@@ -98,6 +99,8 @@ export async function handleWorkspaceTool(
     markAttached,
     watchWorkspace,
   } = ctx;
+  /** The board this call is addressed under — see board-path.ts. */
+  const board = (): string => boardPathOf(name, a);
   switch (name) {
     // ── Workspace board tools (plan §3.10). Results are TRIMMED per the
     // edit-interface conventions: an edit returns ids + status, not the
@@ -199,32 +202,14 @@ export async function handleWorkspaceTool(
       return declared.isError === true ? err(String(declared.message)) : ok(declared);
     }
     case 'set_review_item_criteria': {
-      const { workspaceId, criteria, reviewItemId } = a as {
-        workspaceId?: string;
-        criteria?: string;
-        reviewItemId?: string;
-      };
-      let effectiveWorkspaceId = workspaceId;
-      if (effectiveWorkspaceId === undefined) {
-        if (reviewItemId === undefined) {
-          return err(
-            'which board? Pass workspaceId, or a reviewItemId — the criteria then land on the board that judges that item',
-          );
-        }
-        // Deliberately the server resolve for BOTH id families: unlike the
-        // item-addressed tools, this one needs the containing workspace,
-        // which a locally-decoded rt-… triple does not name.
-        const res = (await http(
-          'GET',
-          `/api/review-items/${encodeURIComponent(reviewItemId)}`,
-        )) as { workspaceId?: string };
-        if (res.workspaceId === undefined) {
-          return err(
-            "that item's doc is not attached to any workspace, so it names no board — pass workspaceId",
-          );
-        }
-        effectiveWorkspaceId = res.workspaceId;
-      }
+      // `reviewItemId` used to stand IN for the board: pass an item and the
+      // tool asked the server which board judged it. That door is gone with
+      // the cutover — a board is part of every address now, so the tool that
+      // sets a board's setting takes the board, and `workspaceId` is required
+      // like it is everywhere else. Nothing is lost that a caller cannot
+      // spell: `get_workspace` names the board an item is on.
+      const { criteria } = a as { criteria?: string };
+      const effectiveWorkspaceId = boardIdOf(name, a);
       const res = (await http(
         'PUT',
         `/workspaces/${encodeURIComponent(effectiveWorkspaceId)}/settings`,
@@ -492,7 +477,7 @@ export async function handleWorkspaceTool(
     case 'get_unfiled_ask_count': {
       const { agent } = a as { agent?: string };
       const who = agent?.trim() || AUTHOR.name;
-      return ok(await http('GET', `/api/chat-audit/${encodeURIComponent(who)}`));
+      return ok(await http('GET', `${board()}/chat-audit/${encodeURIComponent(who)}`));
     }
     case 'publish_chat_audit': {
       const { day, entries } = a as {
@@ -506,7 +491,7 @@ export async function handleWorkspaceTool(
         }>;
       };
       return ok(
-        await http('POST', '/api/chat-audit', {
+        await http('POST', `${board()}/chat-audit`, {
           ...(day !== undefined ? { day } : {}),
           auditor: AUTHOR.name,
           entries,
@@ -515,11 +500,11 @@ export async function handleWorkspaceTool(
     }
     case 'register_dispatch': {
       const { taskId, worktreePath } = a as { taskId: string; worktreePath: string };
-      return ok(await http('POST', '/api/dispatches', { taskId, worktreePath }));
+      return ok(await http('POST', `${board()}/dispatches`, { taskId, worktreePath }));
     }
     case 'close_dispatch': {
       const { taskId } = a as { taskId: string };
-      return ok(await http('DELETE', `/api/dispatches/${encodeURIComponent(taskId)}`));
+      return ok(await http('DELETE', `${board()}/dispatches/${encodeURIComponent(taskId)}`));
     }
     case 'set_parallelism_cap': {
       const { workspaceId, cap: rawCap } = a as { workspaceId: string; cap: unknown };

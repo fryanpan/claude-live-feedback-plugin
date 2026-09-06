@@ -115,6 +115,7 @@ describe('find_and_replace forwards replaceAll', () => {
       );
 
       const on = await h.call('find_and_replace', {
+        workspaceId: 'w-1',
         docId: 'doc-1',
         find: 'alpha',
         replace: 'beta',
@@ -128,6 +129,7 @@ describe('find_and_replace forwards replaceAll', () => {
       // A handler that hard-coded `replaceAll: true` would pass the assertion
       // above and change what every existing caller does.
       const off = await h.call('find_and_replace', {
+        workspaceId: 'w-1',
         docId: 'doc-1',
         find: 'alpha',
         replace: 'beta',
@@ -165,6 +167,7 @@ describe('insert_blocks tools forward placement', () => {
       }
 
       const anchored = {
+        workspaceId: 'w-1',
         docId: 'doc-1',
         anchorId: 'anc-1',
         threadId: 'th-1',
