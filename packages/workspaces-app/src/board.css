@@ -380,6 +380,20 @@ body.board-body {
   font-size: 12px;
   color: var(--fg-subtle, var(--fg-muted));
 }
+/* The way out to /settings/prompts. Reads as a row like the rest, but it is
+   a link: the prompts page is where the words themselves are edited, and
+   this panel only says where it is. Coloured as a link so the tap is
+   obviously a navigation rather than another control that stays here. */
+.board-settings-row--link {
+  color: var(--accent);
+  text-decoration: none;
+  min-height: 36px;
+  cursor: pointer;
+}
+.board-settings-row--link:hover {
+  text-decoration: underline;
+}
+
 /* The criteria row stacks — label, then the words, then the buttons — because
    the words are the content here and a side-by-side label would leave the
    textarea a column too narrow to read a sentence in. `column` on the ROW
