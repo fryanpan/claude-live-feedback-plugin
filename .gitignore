@@ -9,6 +9,7 @@ build/
 .bun-cache/
 .claude/discord/
 .claude/scheduled_tasks.lock
+.claude/claude-workspaces.local.json
 .envrc
 .worktrees/
 __pycache__/

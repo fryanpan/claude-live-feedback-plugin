@@ -3,8 +3,10 @@
  * PreToolUse hook for mcp__claude-in-chrome__navigate.
  *
  * Auto-approves navigates to hostnames declared as trusted in
- * .claude/claude-workspaces.json or ~/.claude/claude-workspaces.json
- * (both falling back to the pre-rename live-feedback.json):
+ * .claude/claude-workspaces.local.json (gitignored, and where the list
+ * belongs), else .claude/claude-workspaces.json or
+ * ~/.claude/claude-workspaces.json (all three falling back to the
+ * pre-rename live-feedback.json):
  *
  *   {
  *     "trustedPreviewDomains": ["tunnel.fryanpan.com"]
@@ -35,16 +37,26 @@ type HookDecision = {
 };
 
 /**
- * Config filenames, current first.
+ * Config filenames, most specific first.
+ *
+ * `.local.json` comes first and is gitignored. The domains name private
+ * networks, so in a PUBLIC repository the list cannot live in a tracked file —
+ * and it cannot be replaced by a placeholder either, because a placeholder
+ * silently stops matching and nobody notices until a preview refuses to open.
+ * An untracked file keeps the hook working and keeps the names out of the repo.
  *
  * The old name is a permanent fallback, not a transition step: this file lives
  * in whoever's checkout the hook runs against, and nothing in this repo can
  * rename a config in somebody else's repo. Root precedence stays OUTERMOST —
  * a project's own config beats the home one whichever filename it uses.
  */
-const CONFIG_NAMES = ['claude-workspaces.json', 'live-feedback.json'];
+const CONFIG_NAMES = [
+  'claude-workspaces.local.json',
+  'claude-workspaces.json',
+  'live-feedback.json',
+];
 
-function readConfig(): string[] {
+function readConfig(): { domains: string[]; source: string | null } {
   const roots = [
     process.env.CLAUDE_PROJECT_DIR,
     process.cwd(),
@@ -58,13 +70,18 @@ function readConfig(): string[] {
         const j = JSON.parse(readFileSync(p, 'utf8')) as {
           trustedPreviewDomains?: string[];
         };
-        if (Array.isArray(j.trustedPreviewDomains)) return j.trustedPreviewDomains;
+        // The source is carried out so the approval reason can name the file it
+        // actually came from. It used to say claude-workspaces.json whatever had
+        // been read, which is now wrong more often than right.
+        if (Array.isArray(j.trustedPreviewDomains)) {
+          return { domains: j.trustedPreviewDomains, source: name };
+        }
       } catch {
         // ignore malformed config; fall through to defaults (empty)
       }
     }
   }
-  return [];
+  return { domains: [], source: null };
 }
 
 function hostMatches(host: string, domain: string): boolean {
@@ -104,7 +121,7 @@ async function main(): Promise<void> {
   }
   if (!host) process.exit(0);
 
-  const trusted = readConfig();
+  const { domains: trusted, source } = readConfig();
   const matched = trusted.find((d) => hostMatches(host!, d));
   if (!matched) {
     // Fall through to the normal prompt. exit 0 with no decision.
@@ -113,7 +130,7 @@ async function main(): Promise<void> {
 
   const out: HookDecision = {
     decision: 'approve',
-    reason: `host "${host}" matches trusted preview domain "${matched}" from .claude/claude-workspaces.json`,
+    reason: `host "${host}" matches trusted preview domain "${matched}" from .claude/${source}`,
   };
   process.stdout.write(JSON.stringify(out));
   process.exit(0);
