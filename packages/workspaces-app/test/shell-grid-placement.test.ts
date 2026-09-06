@@ -284,15 +284,18 @@ function placeRows(children: string[], { rowOf, displayed }: Placement): Map<str
 /**
  * The children that are grid items, per posture, in document order.
  *
- * `.signin-bar` is first because that is where `mountSignInBar` puts it —
- * `shell.insertBefore(bar, shell.firstChild)`. Worth saying plainly, since it
- * is the one thing about this bar that reads oddly: the DOM order puts it
- * ABOVE the topbar and the grid puts it BELOW, and the grid is what a reader
- * sees. Not changed here — see the PR body.
+ * `.signin-bar` sits SECOND because that is where `mountSignInBar` puts it —
+ * `topbar.insertAdjacentElement('afterend', bar)`. It used to go in first
+ * while the grid painted it second, and this comment used to say so and leave
+ * it there: the grid is what a sighted reader sees, but tab order and the
+ * accessibility tree follow the DOM, so the bar's link was the FIRST focus
+ * stop on a page that painted it under the topbar (WCAG 1.3.2, meaningful
+ * sequence). The two orders agree now, and `document order is row order`
+ * below is what keeps them agreeing.
  */
 const IN_FLOW: Record<Posture, string[]> = {
   'signed-in': ['#topbar', '#meeting-strip', '#main'],
-  'signed-out': ['.signin-bar', '#topbar', '#meeting-strip', '#main'],
+  'signed-out': ['#topbar', '.signin-bar', '#meeting-strip', '#main'],
 };
 
 const inFlowOnly = (posture: Posture, stripVisible: boolean) => (sel: string) =>
@@ -399,9 +402,45 @@ describe('#shell grid rows, signed out', () => {
   });
 
   it('pins the four in-flow children to rows 1, 2, 3, 4', () => {
-    // Document order is bar, topbar, strip, main; ROW order is topbar, bar,
-    // strip, main, and that is what a reader sees.
-    expect(IN_FLOW['signed-out'].map(rowOfIn('signed-out'))).toEqual([2, 1, 3, 4]);
+    // Document order and ROW order are both topbar, bar, strip, main. They
+    // used to disagree by one — see the test below, which is the guard.
+    expect(IN_FLOW['signed-out'].map(rowOfIn('signed-out'))).toEqual([1, 2, 3, 4]);
+  });
+
+  /**
+   * Document order IS row order — what a reader sees is the order a keyboard
+   * walks.
+   *
+   * The one invariant the rest of this file could not see. Every check above
+   * asks which ROW a child lands in, and rows are all `mountSignInBar` had to
+   * get right for the page to LOOK correct: the bar went in as `#shell`'s
+   * first child, `grid-row: 2` painted it under the topbar, and three comments
+   * in this repo wrote the mismatch down as a curiosity.
+   *
+   * It was not a curiosity. Tab order and the accessibility tree follow the
+   * DOM, so the bar's "Sign in to comment or edit" link was the FIRST focus
+   * stop on the page — a keyboard user landed in the bar, then tabbed BACKWARDS
+   * up the screen into the topbar. Measured in headless Chrome on a cold load
+   * at 1180x820 and at 430px, both. WCAG 1.3.2, meaningful sequence.
+   *
+   * Read from `shellChildren`, which calls the app's own mount, so this fails
+   * on the insertion point rather than on a list somebody kept by hand — and
+   * it is the check the two lists above cannot substitute for, since a
+   * reordered `IN_FLOW` would satisfy them both.
+   */
+  it('mounts every in-flow child in the order the grid paints it', () => {
+    const children = shellChildren('signed-out').filter(inFlowOnly('signed-out', true));
+    const rows = children.map(rowOfIn('signed-out'));
+    expect(
+      rows,
+      `#shell's in-flow children in DOM order are ${children.join(', ')} — rows ${rows.join(
+        ', ',
+      )}. A row that goes backwards is a focus stop above the one before it`,
+    ).toEqual([...rows].sort((a, b) => (a ?? 0) - (b ?? 0)));
+    // Named, not just monotonic: an ordering check alone would pass on a shell
+    // whose children had all lost their placement.
+    expect(children).toEqual(['#topbar', '.signin-bar', '#meeting-strip', '#main']);
+    expect(rows).toEqual([1, 2, 3, 4]);
   });
 
   it('keeps #main in the last row whether or not the strip is displayed', () => {

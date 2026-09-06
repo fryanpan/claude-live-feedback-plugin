@@ -2747,10 +2747,14 @@ body.composer-open #editor > .ProseMirror ::selection {
 body.signin-gated #shell {
   grid-template-rows: 48px auto auto minmax(0, 1fr);
 }
-/* Row order is topbar, bar, strip, doc. `mountSignInBar` inserts the bar as
-   #shell's FIRST child, so the DOM order and the row order disagree by one —
-   the grid is what a reader sees, and stating the row here is what makes that
-   deliberate rather than whatever auto-placement worked out to. */
+/* Row order is topbar, bar, strip, doc, and the DOM order now matches it:
+   `mountSignInBar` inserts the bar directly after `#topbar`. It used to insert
+   as #shell's FIRST child and this comment recorded the mismatch as
+   deliberate, which it was not — tab order follows the DOM, so the bar's link
+   was the first focus stop on a page painting it second (WCAG 1.3.2). The rule
+   keys on the CLASS and never on position in the child list, so moving the
+   insertion point needed no change here; stating the row is still what makes
+   the placement deliberate rather than whatever auto-placement worked out to. */
 body.signin-gated .signin-bar {
   grid-row: 2;
 }

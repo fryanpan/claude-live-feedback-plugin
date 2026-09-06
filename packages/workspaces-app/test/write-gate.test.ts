@@ -274,14 +274,55 @@ describe('where the standing bar lands', () => {
   // a constant and covered the action row — "Start a planning huddle" could
   // not be clicked at all — and at 430px on the doc it covered the H1 and the
   // format bar. These assert it takes SPACE on each surface instead.
-  it('becomes a declared row of the doc shell, above the topbar', () => {
+  /**
+   * This assertion USED to read `shell.firstElementChild === bar`, and it was
+   * deliberate: the bar mounted first and the grid painted it second, and the
+   * mismatch was written down in three places rather than fixed under a layout
+   * change. What it guarded was that the bar becomes a CHILD OF THE SHELL at
+   * all — a fixed overlay again, or a bar appended to `<body>`, is the failure
+   * that rule was standing against, and the first-child part was how that
+   * happened to be spelled.
+   *
+   * It now guards the same thing plus the ORDER, because the order turned out
+   * to be a bug of its own: tab order and the accessibility tree follow the
+   * DOM, so a bar mounted first was the first focus stop on a page that
+   * painted it second (WCAG 1.3.2). Verified in a browser, not inferred —
+   * first Tab from a cold load reached the bar's link and the second went back
+   * up to the topbar, at 1180x820 and at 430px both.
+   *
+   * So: still `#shell`'s child, still in flow, and now sitting directly after
+   * the topbar it renders under. A regression that puts it back on top fails
+   * `previousElementSibling`; one that floats it or reparents it fails the two
+   * checks that were always here.
+   */
+  it('becomes a declared row of the doc shell, directly after the topbar', () => {
     const shell = docShell();
     showSignInBar();
     const bar = document.querySelector('.signin-bar');
     expect(bar?.parentElement).toBe(shell);
-    expect(shell.firstElementChild).toBe(bar);
+    expect(bar?.previousElementSibling?.id).toBe('topbar');
+    expect(shell.firstElementChild?.id).toBe('topbar');
     // The grid has two declared tracks; without this class the bar would be
     // laid into the topbar's 48px and clipped.
+    expect(document.body.classList.contains('signin-gated')).toBe(true);
+    expect(bar?.classList.contains('signin-bar--floating')).toBe(false);
+  });
+
+  /**
+   * The shell with no topbar of its own. Nothing ships one today, and the
+   * anchor is why this is worth a test rather than a guess: keying the mount
+   * on `#topbar` means a shell without one has no anchor, and the branch that
+   * covers it has to still produce a grid item with the gated class on
+   * `<body>` — not a floating bar, and not a bar dropped on `document.body`.
+   */
+  it('still mounts into a shell that has no topbar to sit under', () => {
+    const shell = document.createElement('div');
+    shell.id = 'shell';
+    shell.append(document.createElement('main'));
+    document.body.append(shell);
+    showSignInBar();
+    const bar = document.querySelector('.signin-bar');
+    expect(bar?.parentElement).toBe(shell);
     expect(document.body.classList.contains('signin-gated')).toBe(true);
     expect(bar?.classList.contains('signin-bar--floating')).toBe(false);
   });
