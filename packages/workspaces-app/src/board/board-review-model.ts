@@ -1,3 +1,4 @@
+import type { ReviewPayload } from '@feedback/core';
 /**
  * The review queue and the walkthrough that walks it: everything waiting on a
  * person, in one list, plus the wording each row and card wears (plan §3.9).
@@ -8,7 +9,7 @@
  * and `board-presence-model.ts` for the two duration labels a queue row prints.
  * Nothing imports back: the queue is a reader of the board, not a peer of it.
  */
-import type { ReviewPayload } from '@feedback/core';
+import { api } from '../doc-path.ts';
 import { type BoardGoal, type BoardTask, goalRank, ownedByPerson } from './board-model.ts';
 import { timeAgo, waitShort } from './board-presence-model.ts';
 
@@ -721,7 +722,7 @@ export function reviewQueue(
  * Where an item's answer gets WRITTEN — path and body, minus the author the
  * caller adds. One spelling for all three doors, because the walkthrough's
  * reply handler used to build its two thread routes inline: a ticket-borne
- * row reaching it would have posted at `/api/docs/undefined/…` — an answer
+ * row reaching it would have posted at /workspaces/<ws>/docs/undefined/… — an answer
  * that lands nowhere while the card advances, which is the one failure the
  * answer flow cannot afford.
  *
@@ -744,7 +745,9 @@ export function reviewReplyRequest(
   if (t.kind === 'task-review') {
     if (!t.taskId || !t.reviewItemId) return null;
     return {
-      path: `/api/tasks/${encodeURIComponent(t.taskId)}/review-items/${encodeURIComponent(t.reviewItemId)}/answer`,
+      path: api(
+        `tasks/${encodeURIComponent(t.taskId)}/review-items/${encodeURIComponent(t.reviewItemId)}/answer`,
+      ),
       body: { text, ...(optionId !== undefined ? { answeredWith: optionId } : {}) },
     };
   }
@@ -754,14 +757,14 @@ export function reviewReplyRequest(
   const declared = item.review !== undefined && t.commentId !== undefined;
   return declared
     ? {
-        path: `/api/docs/${doc}/threads/${thread}/answer`,
+        path: api(`docs/${doc}/threads/${thread}/answer`),
         body: {
           text,
           commentId: t.commentId,
           ...(optionId !== undefined ? { optionId } : {}),
         },
       }
-    : { path: `/api/docs/${doc}/threads/${thread}/comments`, body: { text } };
+    : { path: api(`docs/${doc}/threads/${thread}/comments`), body: { text } };
 }
 
 /**
@@ -813,7 +816,7 @@ export function reviewItemThreadRequest(
   question: string,
 ): { path: string; body: Record<string, unknown> } {
   return {
-    path: `/api/docs/${encodeURIComponent(`task:${target.taskId}`)}/threads`,
+    path: api(`docs/${encodeURIComponent(`task:${target.taskId}`)}/threads`),
     body: {
       text: question,
       anchor: { kind: 'review-item', reviewItemId: target.reviewItemId, snippet: { text: phrase } },

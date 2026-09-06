@@ -59,8 +59,12 @@ const GOALS: BoardGoal[] = [
   { id: 'g-sub', title: '1.1 Tickets' },
 ];
 
+/** The board the page is standing on — every resource route is under it. */
+const WS = 'w-1';
+
 let root: HTMLElement;
 beforeEach(() => {
+  history.replaceState(null, '', `/workspaces/${WS}/tasks`);
   root = document.createElement('div');
   document.body.replaceChildren(root);
 });
@@ -397,6 +401,7 @@ describe('renderTaskDetail', () => {
     onTitleCommit: vi.fn(),
     onAnswer: vi.fn(),
     onAssign: vi.fn(),
+    workspaceId: WS,
   });
 
   // Design point 5's panel half: the blocked state lives HERE, on the task,
@@ -615,14 +620,14 @@ describe('renderTaskDetail', () => {
     // title-hydrated anchor (no title cached here, so it reads "Loading…"),
     // never the raw id.
     const a = root.querySelector<HTMLAnchorElement>('.board-detail-links a');
-    expect(a?.getAttribute('href')).toBe('/review/d-1');
+    expect(a?.getAttribute('href')).toBe(`/workspaces/${WS}/docs/d-1`);
     expect(a?.textContent).toBe('Loading…');
   });
 
   it('shows the doc TITLE for a doc-kind link, basename-fallback included — never a raw id', () => {
     _resetLinkTitlesForTest();
-    primeLinkTitle('/review/d-titled', 'Sprint plan', null);
-    primeLinkTitle('/review/d-blank', null, null);
+    primeLinkTitle(`/workspaces/${WS}/docs/d-titled`, 'Sprint plan', null);
+    primeLinkTitle(`/workspaces/${WS}/docs/d-blank`, null, null);
     renderTaskDetail(
       root,
       task({
@@ -729,7 +734,9 @@ describe('renderTaskDetail', () => {
       onAssign: vi.fn(),
     });
     const a = root.querySelector('.board-detail-body-link a') as HTMLAnchorElement;
-    expect(a.getAttribute('href')).toBe(`/review/${encodeURIComponent(t.bodyDocId)}`);
+    expect(a.getAttribute('href')).toBe(
+      `/workspaces/${WS}/docs/${encodeURIComponent(t.bodyDocId)}`,
+    );
   });
 
   // The description was stored on every task and the panel rendered only a
@@ -909,6 +916,7 @@ describe('renderTaskDetail — discussion', () => {
     onAnswer: vi.fn(),
     onAssign: vi.fn(),
     onComment: vi.fn(),
+    workspaceId: WS,
     ...over,
   });
 
@@ -2996,12 +3004,12 @@ describe('the panel’s review queue', () => {
     it('answers a ticket-borne card at the task review-item route', () => {
       const item = base({ source: 'task-review', reviewItemId: 'r-1', declared: true });
       expect(panelAnswerRequest(t, item, 'Keep disk', 'o-disk')).toEqual({
-        path: '/api/tasks/t-1/review-items/r-1/answer',
+        path: `/workspaces/${WS}/tasks/t-1/review-items/r-1/answer`,
         body: { text: 'Keep disk', answeredWith: 'o-disk' },
       });
       // Typed words carry no candidate id — nothing invents one.
       expect(panelAnswerRequest(t, item, 'Neither')).toEqual({
-        path: '/api/tasks/t-1/review-items/r-1/answer',
+        path: `/workspaces/${WS}/tasks/t-1/review-items/r-1/answer`,
         body: { text: 'Neither' },
       });
     });
@@ -3009,7 +3017,7 @@ describe('the panel’s review queue', () => {
     it('answers a declared thread card against its declaring comment', () => {
       const item = base({ threadId: 'th-1', commentId: 'c-1', declared: true });
       expect(panelAnswerRequest(t, item, 'Green', 'g')).toEqual({
-        path: '/api/docs/task%3At-1/threads/th-1/answer',
+        path: `/workspaces/${WS}/docs/task%3At-1/threads/th-1/answer`,
         body: { text: 'Green', commentId: 'c-1', optionId: 'g' },
       });
       // A card carried with its own doc id posts there, not on the task doc.
@@ -3019,7 +3027,7 @@ describe('the panel’s review queue', () => {
           base({ threadId: 'th-1', docId: 'doc-9', commentId: 'c-1', declared: true }),
           'Green',
         )?.path,
-      ).toBe('/api/docs/doc-9/threads/th-1/answer');
+      ).toBe(`/workspaces/${WS}/docs/doc-9/threads/th-1/answer`);
     });
 
     it('a question on a ticket-borne card is a thread on the task doc, quoting the headline', () => {
@@ -3033,7 +3041,7 @@ describe('the panel’s review queue', () => {
         headline: 'Which cache do we keep?',
       });
       expect(panelQuestionRequest(t, item, 'Does disk survive a reboot?')).toEqual({
-        path: '/api/docs/task%3At-1/threads',
+        path: `/workspaces/${WS}/docs/task%3At-1/threads`,
         body: {
           text: 'Does disk survive a reboot?',
           anchor: {
@@ -3053,7 +3061,7 @@ describe('the panel’s review queue', () => {
       expect(
         panelQuestionRequest(own, base({ source: 'task', headline: 'Three or once?' }), 'Why?'),
       ).toEqual({
-        path: '/api/docs/task%3At-7/threads',
+        path: `/workspaces/${WS}/docs/task%3At-7/threads`,
         body: {
           text: 'Why?',
           anchor: {
@@ -3067,7 +3075,7 @@ describe('the panel’s review queue', () => {
 
     it('replies to an inferred thread card as a plain comment', () => {
       expect(panelAnswerRequest(t, base({ threadId: 'th-1' }), 'On it')).toEqual({
-        path: '/api/docs/task%3At-1/threads/th-1/comments',
+        path: `/workspaces/${WS}/docs/task%3At-1/threads/th-1/comments`,
         body: { text: 'On it' },
       });
     });
@@ -3870,7 +3878,9 @@ describe('the description slot the editor mounts into', () => {
     const t = task({ body: 'Something.' });
     renderTaskDetail(root, t, detailHandlers());
     const a = root.querySelector('.board-detail-body-link a') as HTMLAnchorElement;
-    expect(a.getAttribute('href')).toBe(`/review/${encodeURIComponent(t.bodyDocId)}`);
+    expect(a.getAttribute('href')).toBe(
+      `/workspaces/${WS}/docs/${encodeURIComponent(t.bodyDocId)}`,
+    );
     expect(a.textContent).toBe('Open in the full editor');
 
     // Same copy with no description: the old wording branched on the body

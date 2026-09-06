@@ -83,8 +83,12 @@ const askButton = (host: HTMLElement, kind: string) =>
 const receipt = (host: HTMLElement, kind: string) =>
   host.querySelector<HTMLElement>(`.board-task-ask-receipt[data-ask="${kind}"]`);
 
+/** The board the page is standing on — every resource route is under it. */
+const WS = 'w-1';
+
 let sheets = () => {};
 beforeEach(() => {
+  history.replaceState(null, '', `/workspaces/${WS}/tasks`);
   setViewport(IPAD);
   sheets = installSheets('board.css', 'styles.css');
 });
@@ -295,10 +299,14 @@ describe('what the ask model decides', () => {
 
   it('addresses the ticket’s body doc as one path segment', () => {
     // The colon has to survive as a segment: the route matches
-    // `/api/docs/([^/]+)`, so an id smuggled in raw would still resolve today
+    // `…/docs/([^/]+)`, so an id smuggled in raw would still resolve today
     // and stop resolving the moment an id carries a slash.
-    expect(taskAskRequestPath('t-42', 'plan')).toBe('/api/docs/task%3At-42/plan-request');
-    expect(taskAskRequestPath('t-42', 'review')).toBe('/api/docs/task%3At-42/review-request');
-    expect(taskAskStatePath('t-42')).toBe('/api/docs/task%3At-42');
+    expect(taskAskRequestPath('t-42', 'plan')).toBe(
+      `/workspaces/${WS}/docs/task%3At-42/plan-request`,
+    );
+    expect(taskAskRequestPath('t-42', 'review')).toBe(
+      `/workspaces/${WS}/docs/task%3At-42/review-request`,
+    );
+    expect(taskAskStatePath('t-42')).toBe(`/workspaces/${WS}/docs/task%3At-42`);
   });
 });

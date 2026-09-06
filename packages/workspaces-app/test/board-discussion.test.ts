@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBoardDiscussion, goalBodyDocId } from '../src/board/board-discussion.ts';
 import { boardState } from './support/board-region-harness.ts';
 
@@ -33,6 +33,13 @@ function serveThreads(threads: unknown, onRequest?: (url: string, init?: Request
   });
 }
 
+/** The board the page is standing on — every resource route is under it. */
+const WS = 'w-1';
+
+beforeEach(() => {
+  history.replaceState(null, '', `/workspaces/${WS}/tasks`);
+});
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -43,7 +50,7 @@ describe('goalBodyDocId', () => {
   });
 
   it('derives the doc for a server that predates the goal-body projection', () => {
-    // Without this the panel fetched `/api/docs//threads` and mounted an
+    // Without this the panel fetched `…/docs//threads` and mounted an
     // editor on nothing.
     expect(goalBodyDocId({ id: 'g-1' })).toBe('task:g-1');
   });
@@ -63,7 +70,7 @@ describe('createBoardDiscussion', () => {
     );
     const d = discussion();
     await d.loadDiscussion({ id: 't-1', bodyDocId: 'task:t-1' });
-    expect(seen[0]).toBe('/api/docs/task%3At-1/threads');
+    expect(seen[0]).toBe(`/workspaces/${WS}/docs/task%3At-1/threads`);
     expect(d.state.discussion.threads[0]?.comments[0]).toMatchObject({
       id: 'c-1',
       author: 'Ada',
@@ -121,7 +128,7 @@ describe('createBoardDiscussion', () => {
     const d = discussion();
     const ok = await d.postRowComment({ id: 't-1', bodyDocId: 'task:t-1' }, 'first');
     expect(ok).toBe(true);
-    expect(calls[0]?.url).toBe('/api/docs/task%3At-1/threads');
+    expect(calls[0]?.url).toBe(`/workspaces/${WS}/docs/task%3At-1/threads`);
     expect(calls[0]?.body.anchor).toEqual({ kind: 'subject' });
   });
 
@@ -132,7 +139,7 @@ describe('createBoardDiscussion', () => {
     });
     const d = discussion();
     await d.postRowComment({ id: 't-1', bodyDocId: 'task:t-1' }, 'more', 'th-9');
-    expect(calls[0]).toBe('/api/docs/task%3At-1/threads/th-9/comments');
+    expect(calls[0]).toBe(`/workspaces/${WS}/docs/task%3At-1/threads/th-9/comments`);
   });
 
   it('says no when the post failed, so the composer can keep the text', async () => {

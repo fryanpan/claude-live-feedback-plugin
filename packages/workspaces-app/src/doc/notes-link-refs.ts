@@ -9,6 +9,7 @@
  * the meeting writes when it hears "link that to the existing task". A second
  * ref shape here would produce a link the note could make and never remove.
  */
+import { api } from '../doc-path.ts';
 
 /** The ref a note's link puts on a row. Mirrors `spokenLinkRef` on the
  *  server, which is what the meeting itself writes. */
@@ -34,7 +35,7 @@ export function createNotesLinkRefs(docId: string, fetchImpl?: Fetcher): NotesLi
 
   const write = async (method: 'POST' | 'DELETE', taskId: string): Promise<boolean> => {
     try {
-      const res = await call(`/api/tasks/${encodeURIComponent(taskId)}/links`, {
+      const res = await call(api(`tasks/${encodeURIComponent(taskId)}/links`), {
         method,
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ ref: docRef(docId) }),
@@ -51,7 +52,7 @@ export function createNotesLinkRefs(docId: string, fetchImpl?: Fetcher): NotesLi
     linked: () => linked,
     async refresh(): Promise<void> {
       try {
-        const res = await call(`/api/docs/${encodeURIComponent(docId)}/tasks`);
+        const res = await call(api(`docs/${encodeURIComponent(docId)}/tasks`));
         if (!res.ok) return;
         const body = (await res.json()) as { tasks?: Array<{ id?: string }> };
         linked = new Set(

@@ -24,7 +24,11 @@ afterEach(() => {
   resetSidebarSignature();
 });
 
+/** The board the page is standing on — every resource route is under it. */
+const WS = 'w-1';
+
 beforeEach(() => {
+  history.replaceState(null, '', `/workspaces/${WS}/docs/d1`);
   document.body.innerHTML = `
     <aside id="set-pane"><ol id="set-pane-list"></ol></aside>
     <button id="doc-switcher"></button>
@@ -46,7 +50,7 @@ function mount(meta: Record<string, string> = {}, docId = 'd1') {
   return { ydoc, scope, nav };
 }
 
-/** A stub `/api/docs` answer, and the URLs it was asked for. */
+/** A stub docs-listing answer, and the URLs it was asked for. */
 function stubDocs(docs: unknown[]) {
   const calls: string[] = [];
   vi.stubGlobal(
@@ -91,7 +95,7 @@ describe('a legacy hand-grouped set', () => {
     const { nav } = mount({ setId: 's1' });
     await nav.render();
 
-    expect(calls).toEqual(['/api/docs?setId=s1']);
+    expect(calls).toEqual([`/workspaces/${WS}/docs?setId=s1`]);
     const labels = [...list().querySelectorAll('a')].map((a) => a.textContent);
     expect(labels).toEqual(['Alpha', 'Beta']);
     expect(menu().querySelectorAll('a')).toHaveLength(2);

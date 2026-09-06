@@ -183,14 +183,14 @@ describe('the board opens exactly one socket, at the address it derived', () => 
     const board = sockets.opened.filter((c) => c.url.includes('type=workspace'));
     expect(board).toHaveLength(1);
     expect(board[0]?.url).toBe(
-      `wss://board.test/y/${encodeURIComponent(`ws:${WS}`)}?type=workspace`,
+      `wss://board.test/workspaces/${encodeURIComponent(WS)}/y?type=workspace`,
     );
   });
 
   it('uses a plain ws socket on an http page', async () => {
     const { sockets } = await boot(`http://localhost:8787/workspaces/${WS}/tasks`);
     const board = sockets.opened.filter((c) => c.url.includes('type=workspace'));
-    expect(board[0]?.url.startsWith('ws://localhost:8787/y/')).toBe(true);
+    expect(board[0]?.url.startsWith('ws://localhost:8787/workspaces/')).toBe(true);
   });
 });
 

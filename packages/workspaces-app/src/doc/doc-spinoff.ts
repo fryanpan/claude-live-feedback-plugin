@@ -1,3 +1,5 @@
+import { type User, readDocMeta } from '@feedback/core';
+import type * as Y from 'yjs';
 /**
  * Spinning selected words off a huddle doc into work: "Create task" and
  * "Research", and taking either one back.
@@ -7,8 +9,7 @@
  * that carries the Undo, and the two halves have to agree on what was made
  * (an archived row, an un-linked range) or the offer is a lie.
  */
-import { type User, readDocMeta } from '@feedback/core';
-import type * as Y from 'yjs';
+import { api } from '../doc-path.ts';
 import type { EditorHandle } from '../editor.ts';
 import { linkSpinoffRange, unlinkSpinoffHref } from '../spinoff-link.ts';
 import { type SpinoffTaskId, boardIdFor, runSpinoff } from '../spinoff-menu.ts';
@@ -45,7 +46,7 @@ export function createSpinoffRunner(opts: DocSpinoffOptions): SpinoffRunner {
    */
   async function undoSpinoff(taskId: string, href: string | undefined): Promise<void> {
     try {
-      const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/archive`, {
+      const res = await fetch(api(`tasks/${encodeURIComponent(taskId)}/archive`), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ author: user, reason: 'Undone from the doc it was spun off from' }),

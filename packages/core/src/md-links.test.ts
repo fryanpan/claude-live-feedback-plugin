@@ -7,13 +7,13 @@ describe('extractWorkspaceLinks', () => {
   it('reads all three spellings: markdown links, bare absolute, bare root-relative', () => {
     const md = [
       `See [the plan](${HOST}/workspaces/w-abc123/docs/d-plan42) first.`,
-      `Then ${HOST}/workspaces/w-abc123?task=t-42fixture and the notes at /review/huddle-0817.`,
+      `Then ${HOST}/workspaces/w-abc123?task=t-42fixture and the notes at /workspaces/w-abc123/docs/huddle-0817.`,
     ].join('\n');
     const links = extractWorkspaceLinks(md);
     expect(links.map((l) => l.link)).toEqual([
       { kind: 'doc', workspaceId: 'w-abc123', docId: 'd-plan42' },
       { kind: 'task', workspaceId: 'w-abc123', taskId: 't-42fixture' },
-      { kind: 'doc', workspaceId: null, docId: 'huddle-0817' },
+      { kind: 'doc', workspaceId: 'w-abc123', docId: 'huddle-0817' },
     ]);
   });
 
@@ -32,17 +32,18 @@ describe('extractWorkspaceLinks', () => {
   });
 
   it('reads a goal deep link and a mockup path as their own kinds', () => {
-    const md = '[the goal](/workspaces/w-abc123?goal=g-7fixture) beside /mockup/nav-sketch';
+    const md =
+      '[the goal](/workspaces/w-abc123?goal=g-7fixture) beside /workspaces/w-abc123/mockups/nav-sketch';
     expect(extractWorkspaceLinks(md).map((l) => l.link.kind)).toEqual(['goal', 'mockup']);
   });
 
   it('does not read an unanchored slash path as a link', () => {
     // `/workspaces/...` only counts at a boundary — mid-word slashes (file
     // paths, fractions) must not match.
-    const md = 'path packages/workspaces/thing and code`/review/x`';
+    const md = 'path packages/workspaces/thing and code`/workspaces/w-1/docs/x`';
     const links = extractWorkspaceLinks(md);
-    // The backtick before /review/x is a boundary the regex accepts? It is
-    // not in the boundary set — assert exactly what qualifies.
+    // The backtick is not in the boundary set, and `packages/workspaces/` is
+    // mid-word — assert exactly what qualifies.
     expect(links.map((l) => l.url)).toEqual([]);
   });
 });

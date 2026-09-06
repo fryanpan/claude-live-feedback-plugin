@@ -1,5 +1,5 @@
 import { type ReviewPayload, createThread, setCommentReview } from '@feedback/core';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import { MountScope } from '../src/mount-scope.ts';
 import { type ChromeOpts, mountReviewChrome } from '../src/review-chrome.ts';
@@ -17,6 +17,13 @@ import type { ReviewSurface } from '../src/review-surface.ts';
  *
  * All fixtures synthetic.
  */
+
+/** The board the page is standing on — every resource route is under it. */
+const WS = 'w-1';
+
+beforeEach(() => {
+  history.replaceState(null, '', `/workspaces/${WS}/docs/d1`);
+});
 
 const bob = { id: 'u2', name: 'Bob', kind: 'known' as const, color: '#c0392b' };
 
@@ -151,7 +158,7 @@ describe('mountReviewChrome onReply — the /answer vs /comments fork', () => {
     send('Alphabetical, please.');
     await flush();
     expect(posts).toHaveLength(1);
-    expect(posts[0]?.url).toBe('/api/docs/d1/threads/t1/answer');
+    expect(posts[0]?.url).toBe(`/workspaces/${WS}/docs/d1/threads/t1/answer`);
     expect(posts[0]?.body).toMatchObject({ text: 'Alphabetical, please.', commentId: 'c1' });
     expect(posts[0]?.body).not.toHaveProperty('optionId');
     // Landed: no failure toast.
@@ -163,7 +170,7 @@ describe('mountReviewChrome onReply — the /answer vs /comments fork', () => {
     send('Agreed, rewriting it.');
     await flush();
     expect(posts).toHaveLength(1);
-    expect(posts[0]?.url).toBe('/api/docs/d1/threads/t1/comments');
+    expect(posts[0]?.url).toBe(`/workspaces/${WS}/docs/d1/threads/t1/comments`);
     expect(posts[0]?.body).toMatchObject({ text: 'Agreed, rewriting it.' });
     expect(posts[0]?.body).not.toHaveProperty('commentId');
   });
@@ -183,7 +190,7 @@ describe('mountReviewChrome onReply — the /answer vs /comments fork', () => {
     option.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     await flush();
     expect(posts).toHaveLength(1);
-    expect(posts[0]?.url).toBe('/api/docs/d1/threads/t1/answer');
+    expect(posts[0]?.url).toBe(`/workspaces/${WS}/docs/d1/threads/t1/answer`);
     expect(posts[0]?.body).toMatchObject({
       text: 'Alphabetical',
       commentId: 'c1',
@@ -219,7 +226,7 @@ describe('mountReviewChrome onUndoAnswer — /answer/undo and the race swallow',
     clickUndo();
     await flush();
     expect(posts).toHaveLength(1);
-    expect(posts[0]?.url).toBe('/api/docs/d1/threads/t1/answer/undo');
+    expect(posts[0]?.url).toBe(`/workspaces/${WS}/docs/d1/threads/t1/answer/undo`);
     expect(posts[0]?.body).toMatchObject({ commentId: 'c1' });
   });
 

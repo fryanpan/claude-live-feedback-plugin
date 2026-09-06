@@ -23,6 +23,7 @@ import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protoc
 import * as Y from 'yjs';
 import {
   type Booted,
+  WS,
   bootTestBoard,
   el,
   longPress,
@@ -81,7 +82,7 @@ describe('following a person off the board', () => {
     // She opens a doc. The follow is what takes this browser with her.
     await zoe({ surface: 'doc', docId: 'kitchen-notes' });
 
-    expect(board.location.navigations).toEqual(['/review/kitchen-notes']);
+    expect(board.location.navigations).toEqual([`/workspaces/${WS}/docs/kitchen-notes`]);
   });
 
   it('a press released before the threshold arms nothing', async () => {
@@ -110,13 +111,13 @@ describe('following a person off the board', () => {
 
     await longPress(board, circleFor('Zoe Vance'));
     await zoe({ surface: 'doc', docId: 'kitchen-notes' });
-    expect(board.location.navigations).toEqual(['/review/kitchen-notes']);
+    expect(board.location.navigations).toEqual([`/workspaces/${WS}/docs/kitchen-notes`]);
 
     await longPress(board, circleFor('Zoe Vance'));
     expect(circleFor('Zoe Vance').classList.contains('board-following')).toBe(false);
 
     await zoe({ surface: 'doc', docId: 'hob-spec' });
     // Still just the one: the second press unfollowed her.
-    expect(board.location.navigations).toEqual(['/review/kitchen-notes']);
+    expect(board.location.navigations).toEqual([`/workspaces/${WS}/docs/kitchen-notes`]);
   });
 });

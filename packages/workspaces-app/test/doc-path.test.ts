@@ -1,25 +1,32 @@
 import { describe, expect, it } from 'vitest';
-import { docHref, docIdFromPath, workspaceIdFromPath } from '../src/doc-path.ts';
+import {
+  docHref,
+  docIdFromPath,
+  docIdFromPathOrNull,
+  workspaceIdFromPath,
+} from '../src/doc-path.ts';
 
 describe('docIdFromPath', () => {
   it('reads a doc under the workspace path', () => {
     expect(docIdFromPath('/workspaces/w-1/docs/auth-rfc')).toBe('auth-rfc');
   });
 
-  it('still reads the old /review/ path, which is what every old bookmark says', () => {
-    expect(docIdFromPath('/review/auth-rfc')).toBe('auth-rfc');
+  it('does NOT read the deleted /review/ path — an old bookmark names no doc', () => {
+    // The cutover deleted the address and the parse together: recognising the
+    // old shape here is the dual-address the cutover exists to remove, and a
+    // doc id without the board that owns it cannot be read anyway.
+    expect(docIdFromPath('/review/auth-rfc')).toBe('default');
+    expect(docIdFromPathOrNull('/review/auth-rfc')).toBeNull();
   });
 
   it('decodes an encoded member docId', () => {
     // Review members are `<reviewId>:<relPath with / as ~>`, so the colon
     // arrives percent-encoded.
     expect(docIdFromPath('/workspaces/w-1/docs/rev-1%3Asrc~app.ts')).toBe('rev-1:src~app.ts');
-    expect(docIdFromPath('/review/rev-1%3Asrc~app.ts')).toBe('rev-1:src~app.ts');
   });
 
   it('ignores query and hash', () => {
     expect(docIdFromPath('/workspaces/w-1/docs/d?mobile=iphone#c1')).toBe('d');
-    expect(docIdFromPath('/review/d?mobile=iphone#c1')).toBe('d');
   });
 
   it('accepts an absolute URL, which sidebar hrefs can be', () => {
@@ -56,10 +63,12 @@ describe('docHref', () => {
     expect(docHref('auth-rfc', 'w-1')).toBe('/workspaces/w-1/docs/auth-rfc');
   });
 
-  it('falls back to the legacy path when no workspace is known', () => {
-    // Not a 404: the old route still answers, and it redirects itself once
-    // the doc's workspace is resolvable server-side.
-    expect(docHref('auth-rfc', null)).toBe('/review/auth-rfc');
+  it('builds an unresolvable path when no workspace is known', () => {
+    // The cutover deleted `/review/<docId>`, so there is no second address to
+    // fall back to. A missing workspace leaves the segment empty, which the
+    // router's own parser refuses — a loud 404 at the first click, rather
+    // than a link that quietly keeps the old shape alive.
+    expect(docHref('auth-rfc', null)).toBe('/workspaces//docs/auth-rfc');
   });
 
   it('encodes both ids', () => {
@@ -74,7 +83,10 @@ describe('docHref', () => {
   it('round-trips with docIdFromPath', () => {
     for (const id of ['plain', 'rev-1:src~app.ts', 'a b']) {
       expect(docIdFromPath(docHref(id, 'w-1'))).toBe(id);
-      expect(docIdFromPath(docHref(id, null))).toBe(id);
+      // A workspace-less href does NOT round-trip: the empty segment fails
+      // the doc-path match, so the id is unreadable rather than resolving to
+      // something plausible. That is the point of not emitting `/review/`.
+      expect(docIdFromPath(docHref(id, null))).toBe('default');
     }
   });
 });

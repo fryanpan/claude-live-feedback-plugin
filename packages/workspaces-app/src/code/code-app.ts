@@ -1,4 +1,5 @@
 import { renderDiffNav, wireDiffNavRefresh } from '../diff-nav.ts';
+import { api } from '../doc-path.ts';
 import { el } from '../doc/chrome-dom.ts';
 import type { MountContext } from '../mount-context.ts';
 import { startReadingTracker } from '../reading-tracker.ts';
@@ -85,7 +86,7 @@ export async function mountCode(
   let diffInfo: DiffInfo | null = null;
   if (isDiff) {
     try {
-      const res = await fetch(`/api/docs/${encodeURIComponent(docId)}/diff`);
+      const res = await fetch(api(`docs/${encodeURIComponent(docId)}/diff`));
       if (res.ok) diffInfo = (await res.json()) as DiffInfo;
     } catch {
       // fall through to whole-file mode

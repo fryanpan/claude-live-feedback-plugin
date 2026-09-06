@@ -99,9 +99,12 @@ describe('renderCommentMarkdown — bare workspace URLs', () => {
   });
 
   it('linkifies a bare RELATIVE workspace path', () => {
-    const out = renderCommentMarkdown('see /review/doc-1 next');
-    expect(out).toContain('<a href="/review/doc-1"');
-    expect(out).toContain('>/review/doc-1</a>');
+    // Relative because same-origin by definition — no host to compare. The
+    // path spelled here is the canonical one; `/review/<docId>` no longer
+    // parses as a workspace link at all, so a bare one stays raw text.
+    const out = renderCommentMarkdown('see /workspaces/w-abc123/docs/doc-1 next');
+    expect(out).toContain('<a href="/workspaces/w-abc123/docs/doc-1"');
+    expect(out).toContain('>/workspaces/w-abc123/docs/doc-1</a>');
   });
 });
 
