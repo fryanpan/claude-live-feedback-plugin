@@ -13,21 +13,28 @@
  * of them.
  *
  * WHY IT IS NIGHTLY AND NOT A PR GATE (Bryan, 2026-09-05). It wants a Chrome
- * binary, a server process and four full page renders. That is the expensive
+ * binary, TWO server processes and six full page renders. That is the expensive
  * kind of job, and the regressions it catches are the kind that can wait a day.
  * The stylesheet-reading tests in packages/workspaces-app/test stay on every
  * PR; this does not replace them, it stands behind them with a layout engine.
  *
- * THE SERVER POSTURE IT MEASURES. `CW_REQUIRE_SIGNIN_TO_WRITE=0`, i.e. what a
- * signed-in person sees. The anonymous posture inserts `.signin-bar` as a
- * fourth in-flow child of `#shell` and switches `#shell` to a four-track grid
- * (`body.signin-gated #shell` in styles.css), which is a different layout and
- * deserves its own checks; measuring both in one pass would report one page's
- * bug against the other's expectations.
+ * THE SERVER POSTURES IT MEASURES — BOTH OF THEM, one server each.
+ * `CW_REQUIRE_SIGNIN_TO_WRITE=0` is what a signed-in person sees; `=1` with a
+ * browser that has proven nobody is what a reader following a shared link
+ * gets, and it inserts `.signin-bar` as a fourth in-flow child of `#shell` and
+ * re-declares the shell's track list (`body.signin-gated #shell` in
+ * styles.css). This file used to run only the first and say in this paragraph
+ * that the second "deserves its own checks" — which was true, and was standing
+ * in for a check that did not exist. The signed-out doc then shipped the exact
+ * dead band `shell-main-reaches-bottom` is named after while this job was
+ * green every night on a page it never rendered.
  *
- * Everything it creates — the data dir, the seeded workspace, the sample file,
- * the server process — is thrown away on exit, including on a signal. `--keep`
- * leaves the data dir behind when something needs looking at by hand.
+ * `--port` names the FIRST port; each further posture takes the next one up.
+ *
+ * Everything it creates — a data dir, a seeded workspace and a sample file per
+ * posture, and the server processes — is thrown away on exit, including on a
+ * signal, and each posture's server is stopped as soon as its shots are taken.
+ * `--keep` leaves the data dirs behind when something needs looking at by hand.
  */
 import { type ChildProcess, spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -35,6 +42,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  type Posture,
   type ProbeReading,
   SHOTS,
   type Shot,
@@ -178,17 +186,71 @@ async function takeShot(shot: Shot, url: string): Promise<ProbeReading> {
   return summary.result;
 }
 
+/**
+ * One posture's server, alive for as long as its shots need it.
+ *
+ * A posture is a SERVER setting (`CW_REQUIRE_SIGNIN_TO_WRITE`), so covering
+ * both means two servers rather than two URLs. They run one after the other on
+ * two ports with their own data dirs: nothing is shared, and a run that dies
+ * part-way leaves neither behind. Sequential rather than concurrent because
+ * the expensive part is Chrome, not the servers, and two headless browsers
+ * competing on a CI runner is how a render starts timing out.
+ */
+interface BootedPosture {
+  base: string;
+  seeded: Seeded;
+  stop: () => void;
+}
+
+async function bootPosture(posture: Posture, port: number): Promise<BootedPosture> {
+  const dataDir = mkdtempSync(join(tmpdir(), `cw-ui-nightly-${posture}-`));
+  const base = `http://localhost:${port}`;
+  log(`[${posture}] data dir ${dataDir}`);
+  log(`[${posture}] booting the server on :${port}`);
+  const proc = spawn(
+    'bun',
+    [
+      'run',
+      join(repoRoot, 'packages/server/src/bin.ts'),
+      '--port',
+      String(port),
+      '--data-dir',
+      dataDir,
+    ],
+    {
+      cwd: repoRoot,
+      // The whole difference between the two postures. Everything else is
+      // inherited so a runner's PATH and HOME still work.
+      env: { ...process.env, CW_REQUIRE_SIGNIN_TO_WRITE: posture === 'signed-out' ? '1' : '0' },
+      stdio: ['ignore', 'inherit', 'inherit'],
+    },
+  );
+  const stop = () => {
+    if (proc.exitCode === null) proc.kill('SIGKILL');
+    if (!KEEP) rmSync(dataDir, { recursive: true, force: true });
+  };
+  try {
+    await waitForServer(base, proc);
+    const seeded = await seed(base, dataDir);
+    log(`[${posture}] seeded workspace ${seeded.workspaceId}, doc ${seeded.docId}`);
+    return { base, seeded, stop };
+  } catch (e) {
+    stop();
+    throw e;
+  }
+}
+
 async function main(): Promise<number> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'cw-ui-nightly-'));
   mkdirSync(OUT_DIR, { recursive: true });
 
-  let server: ChildProcess | undefined;
+  // Registered before anything starts, and emptied as each posture is torn
+  // down: a signal arriving mid-boot must find the servers that already exist.
+  const running: Array<() => void> = [];
   let cleaned = false;
   const cleanup = () => {
     if (cleaned) return;
     cleaned = true;
-    if (server && server.exitCode === null) server.kill('SIGKILL');
-    if (!KEEP) rmSync(dataDir, { recursive: true, force: true });
+    for (const stop of running.splice(0)) stop();
   };
   process.on('exit', cleanup);
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
@@ -198,44 +260,41 @@ async function main(): Promise<number> {
     });
   }
 
-  const base = `http://localhost:${PORT}`;
-  log(`data dir ${dataDir}`);
-  log(`booting the server on :${PORT}`);
-  server = spawn(
-    'bun',
-    [
-      'run',
-      join(repoRoot, 'packages/server/src/bin.ts'),
-      '--port',
-      String(PORT),
-      '--data-dir',
-      dataDir,
-    ],
-    {
-      cwd: repoRoot,
-      // Signed-in posture — see the header. Everything else is inherited so a
-      // runner's PATH and HOME still work.
-      env: { ...process.env, CW_REQUIRE_SIGNIN_TO_WRITE: '0' },
-      stdio: ['ignore', 'inherit', 'inherit'],
-    },
-  );
-
   try {
-    await waitForServer(base, server);
-    const seeded = await seed(base, dataDir);
-    log(`seeded workspace ${seeded.workspaceId}, doc ${seeded.docId}`);
-
     const readings = new Map<string, ProbeReading | Error>();
-    for (const shot of SHOTS) {
-      const url = urlFor(shot, base, seeded);
-      const started = Date.now();
+    const postures = [...new Set(SHOTS.map((s) => s.posture))];
+    for (const [i, posture] of postures.entries()) {
+      const port = PORT + i;
+      let posted: BootedPosture;
       try {
-        readings.set(shot.id, await takeShot(shot, url));
-        log(`${shot.id} rendered in ${Date.now() - started}ms`);
+        posted = await bootPosture(posture, port);
       } catch (e) {
-        readings.set(shot.id, e instanceof Error ? e : new Error(String(e)));
-        log(`${shot.id} FAILED after ${Date.now() - started}ms: ${String(e)}`);
+        // A posture that never booted fails ITS shots and lets the other one
+        // still report. `judge` turns a missing reading into a failure of every
+        // check that wanted it, so nothing is quietly skipped.
+        const err = e instanceof Error ? e : new Error(String(e));
+        log(`[${posture}] FAILED to boot: ${err.message}`);
+        for (const shot of SHOTS.filter((s) => s.posture === posture)) {
+          readings.set(shot.id, err);
+        }
+        continue;
       }
+      running.push(posted.stop);
+      for (const shot of SHOTS.filter((s) => s.posture === posture)) {
+        const url = urlFor(shot, posted.base, posted.seeded);
+        const started = Date.now();
+        try {
+          readings.set(shot.id, await takeShot(shot, url));
+          log(`${shot.id} rendered in ${Date.now() - started}ms`);
+        } catch (e) {
+          readings.set(shot.id, e instanceof Error ? e : new Error(String(e)));
+          log(`${shot.id} FAILED after ${Date.now() - started}ms: ${String(e)}`);
+        }
+      }
+      // This posture is done with; free the port and the data dir before the
+      // next one boots rather than holding every server to the end of the run.
+      posted.stop();
+      running.splice(running.indexOf(posted.stop), 1);
     }
 
     const verdicts = judge(readings);

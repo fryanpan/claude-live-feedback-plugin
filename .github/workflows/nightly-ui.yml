@@ -2,9 +2,10 @@ name: Nightly UI
 
 # NIGHTLY, AND DELIBERATELY NOT ON PULL REQUESTS (Bryan, 2026-09-05).
 # This job installs a browser, builds the client, boots a real server and
-# renders four full pages. That is the expensive kind of check, and the
-# regressions it catches — a tab covered by the feedback bubble, a dead band at
-# the bottom of the editor — are ones that can wait a day. The stylesheet tests
+# renders six full pages across two server postures (signed in and signed out).
+# That is the expensive kind of check, and the regressions it catches — a tab
+# covered by the feedback bubble, a dead band at the bottom of the editor —
+# are ones that can wait a day. The stylesheet tests
 # in packages/workspaces-app/test stay on every PR; this stands behind them
 # with an actual layout engine rather than replacing them.
 #

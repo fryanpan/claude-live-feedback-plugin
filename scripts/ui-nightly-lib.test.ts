@@ -21,6 +21,12 @@ import {
  *   hover-guards               `@media (hover: hover)` → `@media (min-width: 1px)`
  *   no-horizontal-overflow     `body.board-body { min-width: 900px }`
  *
+ * The signed-out readings in `the signed-out doc` needed no break at all: they
+ * are what a browser returned on 2026-09-06 against the shipped stylesheet,
+ * where `body.signin-gated #shell` declared a fourth track and no placement to
+ * go with it. That is the reading this job could not have produced before,
+ * because it only ever rendered the other posture.
+ *
  * They are here rather than as prose because a check that has never been seen
  * to fail is a screenshot with extra steps — and two of these assertions were
  * VACUOUS when first written and were caught by exactly this exercise. The
@@ -40,6 +46,7 @@ function goodBoardPhone(): ProbeReading {
     scrollWidth: 430,
     clientWidth: 430,
     hoverSupported: false,
+    signedOut: false,
     navItems: [
       { label: 'Home', right: 138.25, hitsSelf: true, hitTag: 'svg' },
       { label: 'Tasks', right: 211.5, hitsSelf: true, hitTag: 'svg' },
@@ -87,6 +94,7 @@ function goodDoc(width: number, height: number): ProbeReading {
     scrollWidth: width,
     clientWidth: width,
     hoverSupported: width > 1100,
+    signedOut: false,
     navItems: [],
     hoverRules: goodBoardPhone().hoverRules,
     shell: {
@@ -102,12 +110,45 @@ function goodDoc(width: number, height: number): ProbeReading {
   };
 }
 
+/**
+ * The signed-out doc, captured the same way on 2026-09-06, after the
+ * four-track grid got the placements to match it. Topbar row 1, bar row 2, the
+ * hidden strip's row 3 at zero, the doc in row 4 — which is the flexible
+ * track, so `#main` reaches the bottom and there is no band to tap into.
+ *
+ * The bar's track is `auto`, and these numbers are why that is not a detail:
+ * 33px at 1180x820 but 49px at 430px, where its two spans wrap to a second
+ * line. The rule this replaced gave the bar a fixed 48px.
+ */
+function goodGatedDoc(width: number, height: number): ProbeReading {
+  const bar = width <= 430 ? 49 : 33;
+  return {
+    ...goodDoc(width, height),
+    signedOut: true,
+    shell: {
+      bottom: height,
+      tracks: `48px ${bar}px 0px ${height - 48 - bar}px`,
+      mainTop: 48 + bar,
+      mainBottom: height,
+      // Document order, as the probe walks `#shell.children`: the bar is
+      // inserted FIRST and rendered SECOND.
+      inFlow: [
+        { id: '.signin-bar', gridRow: '2', top: 48, bottom: 48 + bar },
+        { id: 'topbar', gridRow: '1', top: 0, bottom: 48 },
+        { id: 'main', gridRow: '4', top: 48 + bar, bottom: height },
+      ],
+    },
+  };
+}
+
 function goodRun(): Map<string, ProbeReading | Error> {
   return new Map<string, ProbeReading | Error>([
     ['board-phone', goodBoardPhone()],
     ['board-ipad', goodBoardIpad()],
     ['doc-phone', goodDoc(430, 932)],
     ['doc-ipad', goodDoc(1180, 820)],
+    ['doc-phone-gated', goodGatedDoc(430, 932)],
+    ['doc-ipad-gated', goodGatedDoc(1180, 820)],
   ]);
 }
 
@@ -186,6 +227,85 @@ describe('shell-main-reaches-bottom', () => {
     if (!near.shell) throw new Error('fixture lost its shell');
     near.shell.mainBottom = 931.5;
     expect(failing(judge(new Map(goodRun()).set('doc-phone', near)))).toEqual([]);
+  });
+});
+
+/**
+ * The signed-out posture, and the reading this whole pair of shots was added
+ * for. Every payload below is what a browser actually returned BEFORE the
+ * placements were added — not an invented mutation — so these say what the
+ * nightly would have reported on the night the bug shipped, had it rendered
+ * the page at all.
+ */
+describe('the signed-out doc', () => {
+  /** The gated doc exactly as it shipped: bar unplaced, #main in row 3 of 4. */
+  function asShipped(width: number, height: number): ProbeReading {
+    const topbar = width <= 430 ? 45 : 37;
+    const mainBottom = width <= 430 ? 876.66 : 817;
+    return {
+      ...goodGatedDoc(width, height),
+      shell: {
+        bottom: height,
+        tracks: width <= 430 ? '45px 48px 783.656px 55.3438px' : '37px 48px 732px 3px',
+        mainTop: topbar + 48,
+        mainBottom,
+        inFlow: [
+          { id: '.signin-bar', gridRow: 'auto', top: topbar, bottom: topbar + 48 },
+          { id: 'topbar', gridRow: '1', top: 0, bottom: topbar },
+          { id: 'main', gridRow: '3', top: topbar + 48, bottom: mainBottom },
+        ],
+      },
+    };
+  }
+
+  it.each([
+    ['doc-ipad-gated', 1180, 820, 3],
+    ['doc-phone-gated', 430, 932, 55.34],
+  ])('catches the band the gated grid shipped on %s (%spx)', (shot, w, h, gap) => {
+    const verdicts = judge(
+      new Map(goodRun()).set(shot as string, asShipped(w as number, h as number)),
+    );
+    const geometry = `shell-main-reaches-bottom-gated-${shot === 'doc-ipad-gated' ? 'ipad' : 'phone'}`;
+    // BOTH fire, and that is the point: the band is the symptom and the
+    // unplaced bar is the cause, so the log names the fix and not just the gap.
+    expect(failing(verdicts).sort()).toEqual([`posture-rendered-${shot}`, geometry].sort());
+    expect(detailOf(verdicts, geometry)).toContain(`${gap}px above`);
+    expect(detailOf(verdicts, geometry)).toContain('.signin-bar@row auto');
+    expect(detailOf(verdicts, `posture-rendered-${shot}`)).toContain('AUTO-PLACED');
+  });
+
+  it('fails when a gated shot came back as the ordinary signed-in page', () => {
+    // The failure that would make every other gated check vacuous: the server
+    // was gated, the browser was not, and the geometry read healthy because it
+    // was measuring the page that has always been fine.
+    const wrongPage = { ...goodDoc(430, 932), signedOut: false };
+    const verdicts = judge(new Map(goodRun()).set('doc-phone-gated', wrongPage));
+    expect(failing(verdicts)).toEqual(['posture-rendered-doc-phone-gated']);
+    expect(detailOf(verdicts, 'posture-rendered-doc-phone-gated')).toContain(
+      'does not carry `signin-gated`',
+    );
+  });
+
+  it('fails when the class is on <body> but no bar became a grid item', () => {
+    const noBar = goodGatedDoc(430, 932);
+    if (!noBar.shell) throw new Error('fixture lost its shell');
+    noBar.shell.inFlow = noBar.shell.inFlow.filter((c) => c.id !== '.signin-bar');
+    const verdicts = judge(new Map(goodRun()).set('doc-phone-gated', noBar));
+    expect(failing(verdicts)).toEqual(['posture-rendered-doc-phone-gated']);
+    expect(detailOf(verdicts, 'posture-rendered-doc-phone-gated')).toContain('not a grid item');
+  });
+
+  /**
+   * The control on the OTHER side. Without it, `postureRendered` could be
+   * satisfied by a build that mounted the bar for everybody — the gated shots
+   * would pass and the page every signed-in reader sees would have silently
+   * gained a row.
+   */
+  it('control: a signed-in shot that gained the gated class fails too', () => {
+    const gatedEverywhere = { ...goodDoc(1180, 820), signedOut: true };
+    const verdicts = judge(new Map(goodRun()).set('doc-ipad', gatedEverywhere));
+    expect(failing(verdicts)).toEqual(['posture-rendered-doc-ipad']);
+    expect(detailOf(verdicts, 'posture-rendered-doc-ipad')).toContain('carries `signin-gated`');
   });
 });
 
@@ -299,7 +419,7 @@ describe('a shot that never rendered', () => {
 describe('the report', () => {
   it('lists every check and says the run was clean', () => {
     const text = formatReport(judge(goodRun()));
-    expect(text).toContain('All 9 checks passed.');
+    expect(text).toContain(`All ${CHECKS.length} checks passed.`);
     for (const check of CHECKS) expect(text).toContain(check.id);
     expect(text).not.toContain('FAIL');
   });
@@ -311,7 +431,7 @@ describe('the report', () => {
     readings.set('board-phone', broken);
     const text = formatReport(judge(readings));
     expect(text).toContain('FAIL  nav-clears-widget');
-    expect(text).toContain('1 of 9 checks failed:');
+    expect(text).toContain(`1 of ${CHECKS.length} checks failed:`);
     expect(text.indexOf('checks failed:')).toBeGreaterThan(text.indexOf('FAIL  nav-clears-widget'));
   });
 });

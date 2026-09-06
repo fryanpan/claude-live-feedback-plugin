@@ -19,13 +19,13 @@ unrelated work for the duration of the meeting.
 
 1. **Bind the docs.** `attach_folder` over the folder holding the main doc
    and its secondary research docs (all-files sidebar, lazy open), or
-   `create_review_doc` per doc with one shared `setId`.
+   `attach_markdown` per doc with one shared `setId`.
 2. **Create `meeting-notes.md`** next to the docs and bind it into the
    same set, with sections: `## Agenda`, `## Tasks`, `## Requests`,
    `## Doc durability` (list each doc as `durable` or `ephemeral` —
    ask Bryan if unclear; default: docs under `docs/` durable, scratch
    notes ephemeral).
-3. **Watch everything** (`create_review_doc` auto-subscribes; call
+3. **Watch everything** (`attach_markdown` auto-subscribes; call
    `watch_doc` for docs bound by someone else).
 4. **Prime.** Read every bound doc end-to-end AND the key source files
    they describe, before the meeting starts. Your answer speed during

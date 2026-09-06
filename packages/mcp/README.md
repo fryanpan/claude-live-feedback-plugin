@@ -29,7 +29,7 @@ The MCP surface is intentionally primitive — agents compose these into whateve
 **Doc lifecycle**
 - `list_docs` — list all docs the server knows about (returns `reviewUrl` per markdown doc).
 - `get_doc(docId)` — flat plain-text + per-block markdown + thread metadata.
-- `create_review_doc(docId, path, title?)` — create a markdown review doc backed by a file. The server reads the file, parses it, and sets up bidirectional sync (debounced doc→file write + `fs.watch` file→doc reload). Path should be absolute. **Every markdown review doc is file-backed; this is the only way to create one.**
+- `attach_markdown(docId, path, title?)` — create a markdown review doc backed by a file. The server reads the file, parses it, and sets up bidirectional sync (debounced doc→file write + `fs.watch` file→doc reload). Path should be absolute. **Every markdown review doc is file-backed; this is the only way to create one.**
 
 **Editing**
 - `find_and_replace(docId, find, replace, { contextBefore?, contextAfter?, occurrence? })` — text edits across all block types including table cells.
@@ -62,7 +62,7 @@ See [`src/mcp.ts`](https://github.com/fryanpan/claude-workspaces-plugin/blob/mai
 ## Environment
 
 - `FEEDBACK_BASE_URL` — defaults to discovery via `~/.claude/live-feedback/server.json` (written by the supervisor on startup), then `http://localhost:8787` as a last resort.
-- `FEEDBACK_AGENT_NAME` — this agent's display name (e.g. `Quick Build`). Set it in the agent's own environment; it wins over `FEEDBACK_AUTHOR` (which the plugin's `.mcp.json` pins to `agent`), so each fleet peer shows up under its own name and color instead of the shared "Agent" identity.
+- `FEEDBACK_AGENT_NAME` — this agent's display name (e.g. `Docs Bot`). Set it in the agent's own environment; it wins over `FEEDBACK_AUTHOR` (which the plugin's `.mcp.json` pins to `agent`), so each fleet peer shows up under its own name and color instead of the shared "Agent" identity.
 - `FEEDBACK_AUTHOR` — fallback author key/name (`bryan`, `agent`, or any free-form name). Default: `agent`.
 
 ## Channel capability

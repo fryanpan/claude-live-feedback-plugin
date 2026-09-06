@@ -107,7 +107,7 @@ describe('a doc thread reaches the boards holding the doc', () => {
     return { workspaceId: workspace.id, heard: listen(stream) };
   }
 
-  /** `create_review_doc(docId, path, hubWorkspaceId)` over the real route. */
+  /** `attach_markdown(docId, path, hubWorkspaceId)` over the real route. */
   async function makeDoc(docId: string, hubWorkspaceId?: string): Promise<void> {
     const path = join(srcDir, `${docId}.md`);
     writeFileSync(path, `# ${docId}\n\nFirst paragraph.\n`);

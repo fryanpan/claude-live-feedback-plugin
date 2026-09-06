@@ -291,9 +291,20 @@ function mountSignInBar(bar: HTMLElement): void {
     boardTopbar.insertAdjacentElement('afterend', bar);
     return;
   }
-  // The doc. `#shell` is a two-row grid (`48px 1fr`), so declaring the row is
-  // as necessary as inserting it — appended without the class the bar would
-  // land in the topbar's 48px track and be clipped.
+  // The doc. `#shell` is a grid whose every in-flow child is PINNED to a row
+  // by `grid-row`, so inserting the bar is only half of mounting it. The class
+  // switches the shell to the four-track template that has a row for the bar,
+  // and `body.signin-gated .signin-bar { grid-row: 2 }` is what puts it there.
+  // Without the class it lands in the topbar's track and is clipped; without
+  // the placement it auto-places into whatever row happens to be free and
+  // leaves the flexible track empty at the bottom of the window — the dead
+  // band styles.css describes at length beside those rules.
+  //
+  // It goes in as the FIRST child while the grid renders it SECOND, under the
+  // topbar, which is where the board branch above puts it too. The row is what
+  // a reader sees; the DOM order is what a screen reader hears. The two
+  // disagreeing by one is worth knowing about rather than worth changing
+  // silently under a layout fix.
   const shell = document.getElementById('shell');
   if (shell) {
     shell.insertBefore(bar, shell.firstChild);

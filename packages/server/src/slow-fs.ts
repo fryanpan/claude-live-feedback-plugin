@@ -118,12 +118,12 @@ export const BOUND_READ_FRESH_MS = 5_000;
 
 export type BoundReadResult =
   | { status: 'ok'; exists: false }
-  | { status: 'ok'; exists: true; text: string; mtimeMs: number }
+  | { status: 'ok'; exists: true; text: string; mtimeMs: number; size: number }
   | { status: 'unavailable'; reason: 'timeout' | 'busy' | 'backoff' | 'error' };
 
 export type BoundStatResult =
   | { status: 'ok'; exists: false }
-  | { status: 'ok'; exists: true; mtimeMs: number }
+  | { status: 'ok'; exists: true; mtimeMs: number; size: number }
   | { status: 'unavailable'; reason: 'timeout' | 'busy' | 'backoff' | 'error' };
 
 function isEnoent(err: unknown): boolean {
@@ -226,7 +226,7 @@ class BoundFileReader {
     if (blocked) return blocked;
     const raced = await this.race('read', path, async () => {
       const [text, st] = await Promise.all([readFile(path, 'utf8'), stat(path)]);
-      return { text, mtimeMs: st.mtimeMs };
+      return { text, mtimeMs: st.mtimeMs, size: st.size };
     });
     if (raced.kind === 'late') return { status: 'unavailable', reason: 'timeout' };
     if (raced.kind === 'failed') {
@@ -251,6 +251,7 @@ class BoundFileReader {
       exists: true,
       text: raced.value.text,
       mtimeMs: raced.value.mtimeMs,
+      size: raced.value.size,
     };
     if (keep) this.keepFresh(path, result);
     return result;
@@ -333,7 +334,7 @@ class BoundFileReader {
       this.noteUnusable(path, raced.err, 'written');
       return { status: 'unavailable', reason: 'error' };
     }
-    return { status: 'ok', exists: true, mtimeMs: raced.value.mtimeMs };
+    return { status: 'ok', exists: true, mtimeMs: raced.value.mtimeMs, size: raced.value.size };
   }
 
   /** The mtime half of `read`, for the poll's change detection. */
@@ -351,7 +352,7 @@ class BoundFileReader {
       this.markStalled(path, errnoOf(raced.err) ?? 'stat failed', raced.err);
       return { status: 'unavailable', reason: 'error' };
     }
-    return { status: 'ok', exists: true, mtimeMs: raced.value.mtimeMs };
+    return { status: 'ok', exists: true, mtimeMs: raced.value.mtimeMs, size: raced.value.size };
   }
 
   /** Counters for the periodic stats line, so a stall is visible in the log. */

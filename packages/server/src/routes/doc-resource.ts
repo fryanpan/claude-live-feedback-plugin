@@ -354,8 +354,14 @@ export async function handleDocResourceCore(
       // Same rule as `sourceUrl` in PRIVATE_META_KEYS: host-machine
       // paths are not workspace content. syncError goes with it —
       // its message can embed the bound path (backup locations,
-      // parse errors naming the file).
-      const { path: _path, syncError: _syncError, ...visitorSafe } = status;
+      // parse errors naming the file) — and so does `sourceParked`,
+      // whose reason names the path the hydrate declined to open.
+      const {
+        path: _path,
+        syncError: _syncError,
+        sourceParked: _sourceParked,
+        ...visitorSafe
+      } = status;
       return j(200, visitorSafe);
     }
     return j(200, status);
