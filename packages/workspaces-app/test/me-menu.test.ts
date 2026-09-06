@@ -26,6 +26,11 @@ function wire(session: MeSession, extra: Partial<Parameters<typeof wireMeMenu>[0
     localName: 'Casey',
     fetchSession: async () => session,
     signinHref: '/signin?next=%2Fworkspaces%2Fw-1',
+    // Required now: `wireMeMenu` no longer reaches for the ambient
+    // `location` to build its own defaults — the caller inside the boot
+    // holds the address bar and passes these in.
+    onSignedOut: () => {},
+    onRenamed: () => {},
     ...extra,
   });
 }

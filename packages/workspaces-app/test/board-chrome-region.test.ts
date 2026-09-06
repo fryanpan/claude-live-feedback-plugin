@@ -2,6 +2,7 @@ import type { FeedbackClient } from '@feedback/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createBoardChromeRegion } from '../src/board/board-chrome-region.ts';
 import { presenceData } from '../src/board/presence-island.tsx';
+import { fakeLocation } from './boot-harness.ts';
 import { boardState, mountShell } from './support/board-region-harness.ts';
 
 /**
@@ -31,6 +32,7 @@ describe('createBoardChromeRegion', () => {
       state: boardState(),
       user: { name: 'Bryan Chan', color: '#123456' },
       el,
+      location: fakeLocation('https://board.test/workspaces/w-1/tasks'),
       awareness: fakeAwareness([]),
     });
     chrome.renderMe();
@@ -43,6 +45,7 @@ describe('createBoardChromeRegion', () => {
       state: boardState(),
       user: { name: 'Bryan', color: '' },
       el,
+      location: fakeLocation('https://board.test/workspaces/w-1/tasks'),
       awareness: fakeAwareness([
         [1, { user: { id: 'u-1', name: 'Bryan' }, surface: 'board' }],
         [2, { surface: 'board' }],
@@ -56,6 +59,7 @@ describe('createBoardChromeRegion', () => {
       state: boardState(),
       user: { name: 'Bryan', color: '' },
       el,
+      location: fakeLocation('https://board.test/workspaces/w-1/tasks'),
       awareness: fakeAwareness(
         [
           [7, { user: { id: 'u-1', name: 'Bryan' } }],
@@ -73,6 +77,7 @@ describe('createBoardChromeRegion', () => {
       state: boardState({ followedKey: 'u-2' }),
       user: { name: 'Bryan', color: '' },
       el,
+      location: fakeLocation('https://board.test/workspaces/w-1/tasks'),
       awareness: fakeAwareness([[1, { user: { id: 'u-1', name: 'Bryan' } }]]),
     });
     chrome.renderPresenceRegion();
@@ -85,6 +90,7 @@ describe('createBoardChromeRegion', () => {
       state: boardState(),
       user: { name: 'Bryan', color: '' },
       el,
+      location: fakeLocation('https://board.test/workspaces/w-1/tasks'),
       awareness: fakeAwareness([]),
     });
     chrome.renderPresenceRegion();
@@ -104,6 +110,7 @@ describe('createBoardChromeRegion', () => {
       }),
       user: { name: 'Bryan', color: '' },
       el,
+      location: fakeLocation('https://board.test/workspaces/w-1/tasks'),
       awareness: fakeAwareness([]),
     });
     chrome.renderPresenceRegion();
@@ -117,6 +124,7 @@ describe('createBoardChromeRegion', () => {
       state,
       user: { name: 'Bryan', color: '' },
       el,
+      location: fakeLocation('https://board.test/workspaces/w-1/tasks'),
       awareness: fakeAwareness([]),
     });
     chrome.renderSettingsPanel();

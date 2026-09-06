@@ -17,6 +17,7 @@
  * one of them — a write that lands, or a one-line report that it did not.
  */
 import { type CaptureMode, type HuddleKind, type User, parseWorkspaceLink } from '@feedback/core';
+import type { BootLocation } from '../boot-env.ts';
 import { HUDDLE_MODE_PARAM } from '../huddle-entry.ts';
 import type { RelatedEntry, TaskDiscussion } from './board-detail-render.ts';
 import {
@@ -233,6 +234,9 @@ export interface BoardActionDeps {
   /** Aim the next detail render's title at a row, so a task filed empty opens
    *  with the cursor in its name. */
   focusTitle: (taskId: string) => void;
+  /** The address bar the boot was handed. `startHuddle` leaves the board
+   *  through it, so a test can read where the press sent the browser. */
+  location: Pick<BootLocation, 'assign'>;
 }
 
 /**
@@ -241,7 +245,8 @@ export interface BoardActionDeps {
  * writes" once rather than naming twenty verbs — see `BoardActions`.
  */
 export function createBoardActions(deps: BoardActionDeps) {
-  const { workspaceId, author, state, renderAll, renderDetail, renderLead, focusTitle } = deps;
+  const { workspaceId, author, state, renderAll, renderDetail, renderLead, focusTitle, location } =
+    deps;
 
   /**
    * Put the controls back to what the SERVER says, after a write it refused.

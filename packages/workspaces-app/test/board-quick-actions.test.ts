@@ -4,6 +4,7 @@ import { type BoardTask, CHORES_ID } from '../src/board/board-model.ts';
 import { renderQuickActions } from '../src/board/board-render.ts';
 import { HUDDLE_MODE_PARAM } from '../src/huddle-entry.ts';
 import {
+  type Booted,
   WS,
   boardRow,
   bootTestBoard,
@@ -304,35 +305,21 @@ describe('board-app wires the three buttons to their routes', () => {
   });
 
   /**
-   * Where the huddle press sent the browser.
+   * Where the huddle press sent the browser, read off the boot's own address.
    *
-   * `startHuddle` calls the AMBIENT `location.assign`, not the `location` the
-   * boot was handed — the only navigation in the boot that does. In a browser
-   * the two are the same object, so nothing is wrong on the board; it does
-   * mean the harness's fake location cannot see this hop, and that the old
-   * `expect(body).toContain('location.assign(')` could not tell the two
-   * apart. Stub the global, which is what the page actually calls.
+   * `startHuddle` used to call the AMBIENT `location.assign` rather than the
+   * `location` the boot was handed — in a browser the two are the same object,
+   * so nothing was wrong on the board, but the fake could not see the hop and
+   * this helper had to stub the global to observe it at all. It goes through
+   * `BoardActionDeps.location` now, so the destination is read the same way
+   * every other navigation in the boot is: off `board.location.navigations`.
+   * `biome.json` bans the ambient global under `src/board/**` so the next one
+   * added cannot come back.
    */
-  async function navigatingPress(cls: string): Promise<string[]> {
-    const seen: string[] = [];
-    const real = globalThis.location.assign;
-    Object.defineProperty(globalThis.location, 'assign', {
-      configurable: true,
-      writable: true,
-      value: (u: string) => {
-        seen.push(u);
-      },
-    });
-    try {
-      await click(quick(cls));
-    } finally {
-      Object.defineProperty(globalThis.location, 'assign', {
-        configurable: true,
-        writable: true,
-        value: real,
-      });
-    }
-    return seen;
+  async function navigatingPress(board: Booted, cls: string): Promise<readonly string[]> {
+    const before = board.location.navigations.length;
+    await click(quick(cls));
+    return board.location.navigations.slice(before);
   }
 
   /** The one POST the press made to `path`, or undefined. */
@@ -392,8 +379,8 @@ describe('board-app wires the three buttons to their routes', () => {
   });
 
   it('Make a plan posts a plan huddle and leaves with the mic flag and the mode', async () => {
-    await bootTestBoard({ tasks: [boardRow('t-1')] });
-    const went = await navigatingPress('board-huddle-start');
+    const board = await bootTestBoard({ tasks: [boardRow('t-1')] });
+    const went = await navigatingPress(board, 'board-huddle-start');
     expect((posted(`/workspaces/${WS}/huddles`)?.body as { kind?: string })?.kind).toBe('plan');
     // The KIND rides the request body — the server seeds a plan doc with the
     // Goal heading — and the MODE rides the address, because the press on
@@ -407,8 +394,8 @@ describe('board-app wires the three buttons to their routes', () => {
   });
 
   it('Have a meeting is the same route with the other kind and the other mode', async () => {
-    await bootTestBoard({ tasks: [boardRow('t-1')] });
-    const went = await navigatingPress('board-conversation-start');
+    const board = await bootTestBoard({ tasks: [boardRow('t-1')] });
+    const went = await navigatingPress(board, 'board-conversation-start');
     expect((posted(`/workspaces/${WS}/huddles`)?.body as { kind?: string })?.kind).toBe(
       'discussion',
     );
