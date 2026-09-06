@@ -32,7 +32,7 @@ Over time, we've evolved this to try to cover all of these workflows and decisio
 - Building, testing, peer reviewing, and deploying software products
 - Having discussions
 
-There are lots of similarities between this tool and [Claude Desktop](https://claude.com/product/claude-code), [Claude Design,](https://claude.com/product/design) [Nimbalyst](https://nimbalyst.com/), [Conductor](https://www.conductor.build/), [Ink & Switch](https://www.inkandswitch.com/), [Fireflies](https://fireflies.ai/lpv/g110-fireflies?utm_source=google&utm_medium=cpc&utm_campaign=brand_fireflies&utm_content=us_eng&utm_term=fireflies&gad_source=1&gad_campaignid=21764657946&gbraid=0AAAAA-Os34oLUjX4hsXgMSHdyUt-3sWlf&gclid=Cj0KCQjwkt_UBhDMARIsALpnOAzs6_kZcSTN_oRsK4HiOF0Fu1671Wx9rzY7xXtcqHaLIm9mk-bagfoaAs1ZEALw_wcB), [Notion](https://www.notion.com/), but all of these other tools are inflexible and have major gaps for my workflow.
+There are lots of similarities between this tool and [Claude Desktop](https://claude.com/product/claude-code), [Claude Design,](https://claude.com/product/design) [Nimbalyst](https://nimbalyst.com/), [Conductor](https://www.conductor.build/), [Ink & Switch](https://www.inkandswitch.com/), [Fireflies](https://fireflies.ai/lpv/g110-fireflies), [Notion](https://www.notion.com/), but all of these other tools are inflexible and have major gaps for my workflow.
 
 **Goal:** one person and a team of agents share one live workspace — docs,
 mockups, dev servers, a board, meetings — so giving feedback is as fast as
