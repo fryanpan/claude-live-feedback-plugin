@@ -91,6 +91,31 @@ import type { TaskStore } from './tasks.ts';
  */
 export const STALL_ESCALATE_DEFAULT_MS = 60 * 60_000;
 
+/**
+ * How long a filed item must STAND before the board may take it back because
+ * its rows are moving again. Twenty minutes: the same span the gate uses to
+ * decide a row has gone quiet, which is the board's own unit for "this is not
+ * movement, it is a pause".
+ *
+ * It exists because the retraction test is far cheaper to trip than the
+ * filing test. Filing needs an hour of silence past a told lead; retraction
+ * needed one write — and the commonest write on any live board is the row's
+ * own agent posting its end-of-turn note. Measured 2026-09-05 on the board
+ * this shipped from: item filed 04:56:21, a `task.noted` by the row's own
+ * lead at 04:58:19, item withdrawn 04:58:20. For those two minutes it was a
+ * real ask: a watching session saw `review_item.added` and told the reader
+ * something was waiting for them, and it was not. An ask that retracts itself
+ * inside a pass costs more than filing nothing.
+ *
+ * Long enough that a row which wrote once and went quiet again keeps its ask;
+ * short enough that a row genuinely being worked loses it inside the window
+ * the board already calls "moving". It gates ONE door — movement — and none
+ * of the others: a done, archived or deleted anchor still moves or withdraws
+ * on the tick it is seen, because an item nobody can see is not an ask being
+ * kept, and a retired board still withdraws unconditionally.
+ */
+export const STALL_ESCALATION_SETTLE_DEFAULT_MS = 20 * 60_000;
+
 /** `<dataDir>/stall-escalations.json` — beside `workspaces/`, like the
  *  allow-rule sidecar and the nudger's stamps. Exported so a test asserts the
  *  file the server actually writes rather than a copy of its name. */
@@ -270,6 +295,11 @@ export interface StallEscalationOptions {
    *  test that is not about persistence wants. */
   dataDir?: string;
   escalateMs?: number;
+  /** Minimum life of a filed item before movement may retract it
+   *  (`STALL_ESCALATION_SETTLE_DEFAULT_MS`). Never longer than `escalateMs`:
+   *  an ask may not be un-retractable for longer than the silence that filed
+   *  it. */
+  settleMs?: number;
   /** Where a filing or a withdrawal is announced. Defaults to
    *  `console.error`, like the nudger's — this is the only record that the
    *  server wrote to somebody's queue on its own. */
@@ -285,11 +315,13 @@ export class StallEscalations {
   /** What the file already holds, so an unchanged sidecar costs no write —
    *  this runs once a minute per board forever. */
   private lastPersisted = '';
+  private readonly settleMs: number;
 
   constructor(opts: StallEscalationOptions) {
     this.store = opts.store;
     this.path = opts.dataDir === undefined ? null : join(opts.dataDir, STALL_ESCALATION_FILENAME);
     this.escalateMs = opts.escalateMs ?? STALL_ESCALATE_DEFAULT_MS;
+    this.settleMs = Math.min(opts.settleMs ?? STALL_ESCALATION_SETTLE_DEFAULT_MS, this.escalateMs);
     this.report = opts.report ?? ((message) => console.error(message));
     this.load();
   }
@@ -426,14 +458,8 @@ export class StallEscalations {
   }
 
   /**
-   * Does the item still hang where it can do its job — on a row that is still
-   * stuck, on a ticket the reader can still reach?
-   *
-   * Three facts, all readable while our own item masks the row from the gate:
-   * the ticket is not archived, it is not `done`, and nobody ELSE has
-   * touched it since we last wrote to it (our write set `updatedAt` to
-   * `wroteAt`, so a later bump is somebody else's — unless our own item
-   * explains it, see `ownActivityAt`).
+   * Can the item still be SEEN where it hangs — a ticket that exists, is not
+   * archived, and is not `done`?
    *
    * `done` is not a detail. `taskReviewItems` in `review-queue.ts` skips a
    * done ticket's items outright, so an item left on one is gone from the
@@ -441,13 +467,48 @@ export class StallEscalations {
    * becomes invisible, and every other stuck row on the board goes unreported
    * behind an item nobody can see (found in review, reproduced against a real
    * store). When this returns false the item MOVES rather than being revised
-   * in place.
+   * in place, and it does so on the tick it is seen: an ask nobody can read
+   * is not an ask being kept.
    */
-  private anchorHolds(prior: Filed, item: TaskReviewItem): boolean {
+  private anchorReachable(prior: Filed): boolean {
     const task = this.store.getTask(prior.taskId);
     if (!task) return false;
-    if (task.status === 'done' || task.archivedAt !== undefined) return false;
+    return task.status !== 'done' && task.archivedAt === undefined;
+  }
+
+  /**
+   * Has anybody ELSE written to the anchor since we last did?
+   *
+   * Our write set `updatedAt` to `wroteAt`, so a later bump is somebody
+   * else's — unless our own item explains it (`ownActivityAt`, which is what
+   * keeps a reader's question back on the item from reading as the row
+   * moving).
+   *
+   * This used to be half of `anchorHolds`, and `updateLive` acted on the two
+   * halves identically. They are not the same question. An unreachable
+   * anchor is a PLACEMENT fact and has to be acted on now; a write to the
+   * anchor is a claim that the row is moving again, and one write is a far
+   * weaker claim than the hour of silence that filed the item. Answering both
+   * with "withdraw immediately" is what produced asks that lived a single
+   * pass — see `STALL_ESCALATION_SETTLE_DEFAULT_MS`, which is now the gate on
+   * this one.
+   *
+   * Known limit, stated because the field cannot answer it: `updatedAt`
+   * carries no actor, so a note posted by the row's own agent and a takeover
+   * by a stranger are the same bump here. The settle window is what makes
+   * that tolerable rather than an actor test we have no way to run.
+   */
+  private anchorUntouched(prior: Filed, item: TaskReviewItem): boolean {
+    const task = this.store.getTask(prior.taskId);
+    if (!task) return false;
     return task.updatedAt <= Math.max(prior.wroteAt, ownActivityAt(item));
+  }
+
+  /** Has this item stood long enough that movement may take it back? See
+   *  `STALL_ESCALATION_SETTLE_DEFAULT_MS` for why an ask gets a minimum life
+   *  at all. */
+  private settled(item: TaskReviewItem, now: number): boolean {
+    return now - item.createdAt >= this.settleMs;
   }
 
   /** Revise the open item to the rows that still qualify, move it when its
@@ -459,7 +520,18 @@ export class StallEscalations {
     fresh: EscalatedRow[],
     now: number,
   ): void {
-    if (!this.anchorHolds(prior, item)) {
+    // An anchor the reader cannot see is acted on at once, whatever the item's
+    // age: keeping an invisible ask is not keeping an ask.
+    //
+    // A written-to anchor is the other case, and it waits for the item to
+    // settle. Re-anchoring or withdrawing on the first write after ours is
+    // how a filed ask came back off the queue sixty seconds later. Until the
+    // window is out the item is left where it is and revised like any other —
+    // and if the row goes quiet again in the meantime, nothing ever retracts
+    // it, which is the right answer for a row that posted one note and
+    // stopped.
+    const unreachable = !this.anchorReachable(prior);
+    if (unreachable || (!this.anchorUntouched(prior, item) && this.settled(item, now))) {
       // Re-anchored in the SAME tick and with no cooldown: the cooldown is
       // there to stop a board asking twice about a board-state that keeps
       // flickering, and this is one ask being moved to somewhere the reader
