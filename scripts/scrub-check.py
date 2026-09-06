@@ -66,10 +66,23 @@ that is text but reads as an asset), image types, and extension-less files.
 These were SKIPPED before, as "binaries", which made them the one place a
 leak could travel unread. See NEVER_ALLOW_EXTS.
 
+WHOLE-TEXT MATCHING. Patterns are searched against the file's text, not one
+line at a time. A private phrase that a formatter or an editor wrapped used to
+be handed to the patterns as two unrelated halves and match nothing, and a
+denylist regex spelling its own gap `\s+` was blind for the same reason — a
+newline never reached it. Literal entries and registry names are compiled with
+their gaps as `\s+` automatically (see `literal_pattern`); regex entries are
+NOT rewritten, because a space in a regex means different things in different
+places and a gate that edits its own patterns is a gate that can lie. `.` still
+refuses to cross a line break: `re.DOTALL` is deliberately not set.
+
 SCRUB-ALLOW is honoured only as a TRAILING COMMENT TOKEN — `# scrub-allow`,
 `// scrub-allow`, `<!-- scrub-allow ... -->`, `/* scrub-allow */` at the end
 of the line. The word appearing anywhere in a line used to exempt the line,
 which let a string literal or a URL fragment exempt itself.
+A match that spans a line break is exempted by the marker on ANY line it
+touches — conservative on purpose, so every suppression that worked before
+still works.
 
 This tool does NOT read stdin; piping a diff at it is an error, not a scan.
 
@@ -80,6 +93,7 @@ Bypass entirely with `SCRUB_SKIP=1` (logged; use sparingly).
 
 from __future__ import annotations
 
+import bisect
 import fnmatch
 import os
 import re
@@ -408,16 +422,38 @@ def load_denylist() -> List[Tuple[str, bool]]:
     return out
 
 
+def literal_pattern(value: str) -> str:
+    """A literal whose internal gaps match ANY run of whitespace.
+
+    `some private phrase` compiles to `some\\s+private\\s+phrase`, so a wrap
+    between two of its words is still the phrase. Done by construction rather
+    than per entry: whoever adds a phrase to the denylist gets this without
+    knowing it exists, which is the only version that stays true. No entry has
+    a gap today, so this changes nothing today — that is the expected result,
+    not a hole in the tests.
+
+    REGEX entries are deliberately NOT put through this. A space in a regex
+    means different things in different places — inside a character class it is
+    a class member, and rewriting it to `\\s+` would be a syntax change with a
+    silent meaning change behind it. A gate that quietly edits its own patterns
+    is a gate that can lie; those entries are hand-edited at the source.
+    """
+    tokens = value.split()
+    if len(tokens) < 2:
+        return re.escape(value)
+    return r"\s+".join(re.escape(t) for t in tokens)
+
+
 def build_patterns(names: Set[str], denylist: List[Tuple[str, bool]]) -> List[Tuple[str, re.Pattern]]:
     """Compile all match patterns. Names use a hyphen-aware word boundary."""
     patterns: List[Tuple[str, re.Pattern]] = []
     for name in sorted(names):
         # (?<![\w-]) and (?![\w-]) keep e.g. `some-proj` from matching inside `super-some-proj-foo`.
-        rx = re.compile(r"(?<![\w-])" + re.escape(name) + r"(?![\w-])", re.IGNORECASE)
+        rx = re.compile(r"(?<![\w-])" + literal_pattern(name) + r"(?![\w-])", re.IGNORECASE)
         patterns.append((f"registry-project: {name}", rx))
     for raw, is_regex in denylist:
         try:
-            body = raw if is_regex else re.escape(raw)
+            body = raw if is_regex else literal_pattern(raw)
             patterns.append((f"denylist: {raw}", re.compile(body, re.IGNORECASE)))
         except re.error as e:
             print(f"[scrub-check] bad regex in denylist: {raw!r} ({e})", file=sys.stderr)
@@ -456,29 +492,93 @@ def should_scan(path: str) -> bool:
     return ext in SCAN_EXTS
 
 
+class Finding(NamedTuple):
+    """One match. `line_no` is where it STARTS; `end_line_no` where it ends.
+
+    They differ when a wrap broke the matched phrase in half, and the report
+    says so — a finding that named only a line number would send the writer to
+    a line whose text does not contain the thing it was blocked for.
+    """
+
+    line_no: int
+    end_line_no: int
+    label: str
+    text: str
+
+
+def contiguous_runs(
+    lines: List[Tuple[int, str]]
+) -> List[List[Tuple[int, str]]]:
+    """Split into maximal runs of CONSECUTIVE line numbers.
+
+    Matching runs over joined text, so what gets joined has to be text that
+    was actually adjacent in the file. The whole-blob modes hand over every
+    line and produce one run; the commit gate hands over only the lines a
+    commit ADDS, and gluing two hunks eight lines apart would manufacture a
+    phrase the file does not contain — a false finding on content nobody
+    wrote, which is the failure that trains people into SCRUB_SKIP=1.
+    """
+    runs: List[List[Tuple[int, str]]] = []
+    for entry in lines:
+        if runs and entry[0] == runs[-1][-1][0] + 1:
+            runs[-1].append(entry)
+        else:
+            runs.append([entry])
+    return runs
+
+
 def scan_lines(
     path: str, lines: List[Tuple[int, str]], patterns: List[Tuple[str, re.Pattern]]
-) -> List[Tuple[int, str, str]]:
-    """Return [(line_no, label, line_text)] of matches among `lines`.
+) -> List[Finding]:
+    """Return the matches among `lines`, searched as TEXT rather than per line.
 
-    `path` decides only whether an inline `scrub-allow` may exempt a line:
-    never in a NEVER_ALLOW type, and elsewhere only as a trailing comment
-    token (ALLOW_RX). WHICH lines arrive here is the mode's decision, and it
-    is the whole difference between the two gates: the push gate hands over
-    every line of the blob it would publish, the commit gate hands over only
-    the lines this commit ADDS.
+    Each contiguous run is rejoined with its newlines and searched whole. Line
+    at a time, a private phrase that a formatter wrapped was handed over as two
+    unrelated halves and matched nothing — and a denylist regex that spells its
+    own gap `\\s+` was broken for the same reason, because a newline never
+    reached it. `re.DOTALL` is deliberately NOT set: `.` still refuses to cross
+    a line break, so a narrow pattern cannot start swallowing half a file.
+
+    `path` decides only whether an inline `scrub-allow` may exempt content:
+    never in a NEVER_ALLOW type, and elsewhere only as a trailing comment token
+    (ALLOW_RX). A match is suppressed if the marker sits on ANY line it spans —
+    conservative on purpose, so every suppression that worked before still
+    does. WHICH lines arrive here is the mode's decision, and it is the whole
+    difference between the two gates: the push gate hands over every line of
+    the blob it would publish, the commit gate only the lines this commit ADDS.
     """
-    findings: List[Tuple[int, str, str]] = []
+    findings: List[Finding] = []
     allow_ok = not is_never_allow(path)
-    for line_no, line in lines:
-        # A line documenting the gate itself may exempt itself — with a
-        # trailing comment, in a type where a comment means something.
-        if allow_ok and ALLOW_RX.search(line):
-            continue
+    for run in contiguous_runs(lines):
+        texts = [text for _, text in run]
+        joined = "\n".join(texts)
+        # Offset at which each line begins in `joined`, for offset -> line.
+        starts: List[int] = []
+        cursor = 0
+        for text in texts:
+            starts.append(cursor)
+            cursor += len(text) + 1
+        exempt = [allow_ok and ALLOW_RX.search(text) is not None for text in texts]
+
+        claimed: Dict[int, Finding] = {}
         for label, rx in patterns:
-            if rx.search(line):
-                findings.append((line_no, label, line))
-                break  # one finding per line is enough
+            for m in rx.finditer(joined):
+                first = bisect.bisect_right(starts, m.start()) - 1
+                last = bisect.bisect_right(starts, max(m.end() - 1, m.start())) - 1
+                if any(exempt[first : last + 1]):
+                    continue
+                if first in claimed:
+                    continue  # one finding per starting line is enough
+                # A wrapped match is shown with its break marked, so the
+                # snippet reads as the phrase it is and still prints on one
+                # line under the report's `  > ` prefix.
+                shown = (
+                    texts[first]
+                    if last == first
+                    else " \\n ".join(t.strip() for t in texts[first : last + 1])
+                )
+                claimed[first] = Finding(run[first][0], run[last][0], label, shown)
+        findings.extend(claimed[i] for i in sorted(claimed))
     return findings
 
 
@@ -490,12 +590,12 @@ def numbered_lines(data: bytes) -> List[Tuple[int, str]]:
 
 def scan_content(
     path: str, data: bytes, patterns: List[Tuple[str, re.Pattern]]
-) -> List[Tuple[int, str, str]]:
+) -> List[Finding]:
     """Whole-blob scan: every line of `data`."""
     return scan_lines(path, numbered_lines(data), patterns)
 
 
-def scan_file(path: str, patterns: List[Tuple[str, re.Pattern]]) -> List[Tuple[int, str, str]]:
+def scan_file(path: str, patterns: List[Tuple[str, re.Pattern]]) -> List[Finding]:
     """Scan a file on disk. Kept for callers that pass bare paths."""
     data = read_worktree(path)
     return [] if data is None else scan_content(path, data, patterns)
@@ -868,14 +968,20 @@ def main() -> int:
     total = 0
     files_with_findings = set()
     for f, lines in units:
-        for line_no, label, line in scan_lines(f, lines, patterns):
+        for line_no, end_line_no, label, line in scan_lines(f, lines, patterns):
             if total == 0:
                 print(f"[scrub-check] leaks detected:", file=sys.stderr)
             files_with_findings.add(f)
             snippet = line.strip()
             if len(snippet) > 100:
                 snippet = snippet[:97] + "..."
-            print(f"  {f}:{line_no}  ({label})", file=sys.stderr)
+            # A wrapped match starts on one line and ends on another. The
+            # start is what the writer navigates to; the span is what stops
+            # them staring at a line that does not contain the phrase.
+            where = f"{f}:{line_no}"
+            if end_line_no != line_no:
+                where += f"  (spans lines {line_no}-{end_line_no})"
+            print(f"  {where}  ({label})", file=sys.stderr)
             print(f"    > {snippet}", file=sys.stderr)
             note = attribute(blame_rev, publishing, f, line_no)
             if note:
