@@ -62,6 +62,7 @@ import {
   renderMockupNotFound,
   renderProjectPage,
   renderReviewNotFound,
+  renderSettingsShell,
   renderSigninShell,
   serveStatic,
   serveStaticUnder,
@@ -80,6 +81,16 @@ const ROOT_ALIASED_ASSETS = new Set([
   '/icon-512.png',
   '/apple-touch-icon.png',
 ]);
+
+/**
+ * The settings page's addresses: the section, the prompt list, and one prompt.
+ *
+ * `/settings` answers the same shell rather than redirecting, because the
+ * bundle's own router treats an unknown suffix as the list — one place
+ * decides what an address means, and it is not split across a redirect here
+ * and a fallback there.
+ */
+const SETTINGS_PAGE = /^\/settings(?:\/prompts(?:\/[^/]+)?)?\/?$/;
 
 /** What shell and static serving reads. Every member is long-lived; the
  *  request, its address and the admitted visitor arrive per call. */
@@ -560,6 +571,30 @@ export function createShellStatic(ctx: ShellStaticContext): ShellStatic {
       if (!extname(p)) p = join(p, 'index.html');
       const resp = serveStaticUnder(demosDir, p);
       if (resp) return resp;
+    }
+
+    // --- Settings ---
+    //
+    // OUTSIDE the board on purpose: five of the seven prompts this page lists
+    // belong to the server rather than to any one board, and the reader
+    // tuning them is tuning the machine. `?ws=` says which board he came
+    // from, which is context for the rail's links, and the bundle reads it.
+    //
+    // Both addresses serve the SAME shell — the list and one open prompt are
+    // the client's own routing — so a pasted `/settings/prompts/meeting-notes`
+    // lands on that prompt rather than on a 404. Same rule, and the same
+    // measured failure, as the board's nav suffixes above.
+    //
+    // Refused for a visitor: this is the machine's configuration, and a share
+    // is a grant over one board. A visitor never reaches here anyway (the
+    // share host's allowlist is closed by default); the check is the second
+    // lock rather than the first.
+    if (SETTINGS_PAGE.test(pathname) && req.method === 'GET') {
+      if (visitor) return j(403, { error: 'not available to share visitors' });
+      return new Response(
+        renderSettingsShell(browserSentry, readAppAssetManifest(markdownAppDist)),
+        { headers: HTML_SHELL_HEADERS },
+      );
     }
 
     // --- Sign-in page ---
