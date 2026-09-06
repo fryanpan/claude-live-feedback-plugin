@@ -5,8 +5,12 @@
  * but the two WORKSPACE endpoints in a visitor's scope built their payload
  * themselves rather than returning a DocMeta, so nothing redacted them:
  *
- *   GET /workspaces/<id>/tree   → `root` (absolute host path) + every
- *   GET /workspaces/<id>/files     node's `reviewUrl` on the tailnet host
+ *   GET /api/reviews/<setId>/tree  → `root` (absolute host path) + every
+ *   GET /api/reviews/<setId>/files    node's `reviewUrl` on the tailnet host
+ *
+ * Those are the addresses the calls below use. They also answered under
+ * `/workspaces/<setId>/…` once; the canonical-routes cutover deleted that
+ * alias, because `/workspaces/<id>/…` is a BOARD's address now.
  *
  * Found by probing the RUNNING server with a real workspace link over the
  * public hostname, not by reading the code — the unit layer was fine and the

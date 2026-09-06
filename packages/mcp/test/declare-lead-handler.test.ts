@@ -108,6 +108,23 @@ function text(result: Record<string, unknown>): string {
   return (content ?? []).map((c) => c.text ?? '').join('\n');
 }
 
+/**
+ * Every request that would change who holds the seat: the seat write itself
+ * (`PUT /workspaces/<id>/lead`) and the attach that has to precede it
+ * (`POST /workspaces/<id>/agents`, `declare-lead.ts`).
+ *
+ * ONE function, read by the refusal case and the positive control, because
+ * the refusal asserts this comes back EMPTY and an empty set proves nothing
+ * on its own — a filter naming a path nobody calls is empty for every run of
+ * every build. It said `/attachments$` until PR 722 moved the roster to
+ * `agents`, and it kept passing. The control below asserts the same filter
+ * comes back NON-empty on the named session, so the two cases cannot drift
+ * apart: whatever makes the refusal vacuous makes the control fail.
+ */
+function seatOrAttach(recorded: readonly Recorded[]): Recorded[] {
+  return recorded.filter((r) => /\/lead$/.test(r.path) || /\/agents$/.test(r.path));
+}
+
 describe('set_workspace_lead over the wire', () => {
   it('a session without CW_AGENT_NAME gets a tool error, and no seat request leaves the process', async () => {
     const child = new Child(port, undefined);
@@ -117,10 +134,8 @@ describe('set_workspace_lead over the wire', () => {
       expect(res.isError).toBe(true);
       expect(text(res)).toMatch(/CW_AGENT_NAME/);
       // Refused BEFORE any seat change: nothing attached, nothing claimed.
-      const seatOrAttach = seen.filter(
-        (r) => /\/lead$/.test(r.path) || /\/attachments$/.test(r.path),
-      );
-      expect(seatOrAttach).toEqual([]);
+      // The filter is proven able to match by the control below.
+      expect(seatOrAttach(seen)).toEqual([]);
     } finally {
       child.kill();
     }
@@ -135,6 +150,14 @@ describe('set_workspace_lead over the wire', () => {
       expect(seen.some((r) => r.method === 'PUT' && r.path === `/workspaces/${WS}/lead`)).toBe(
         true,
       );
+      // NON-VACUITY, for the case above. The same filter, over the same stub,
+      // on the run that DOES take the seat: it must name both halves. If it
+      // ever comes back short, the "nothing left the process" assertion has
+      // stopped being an assertion and this is what says so.
+      const claimed = seatOrAttach(seen);
+      expect(claimed.length).toBeGreaterThan(0);
+      expect(claimed.map((r) => r.path)).toContain(`/workspaces/${WS}/agents`);
+      expect(claimed.map((r) => r.path)).toContain(`/workspaces/${WS}/lead`);
     } finally {
       child.kill();
     }

@@ -12,6 +12,16 @@
  * land in. A heartbeat is worse still — `call-tool.ts` fires it and does not
  * await it, so it can land after the answer it was dispatched alongside.
  *
+ * EVERY PATTERN BELOW IS A LIVE ADDRESS, and `background-requests.test.ts`
+ * beside this file is what keeps it that way. A predicate matching a path
+ * nothing calls any more classifies nothing, and it fails OPEN: the traffic
+ * it was meant to hold back lands in the foreground array and displaces the
+ * verb, which is exactly the CI failure this file was written for. The
+ * heartbeat is the one that has already moved once — the roster went from
+ * `/workspaces/<id>/attachments` to `/workspaces/<id>/agents` (PR 722) and
+ * this pattern was left on the retired spelling, so the sibling test asserts
+ * the live one MATCHES and the retired one does not.
+ *
  * The failures that produced this file were both `seen.at(-n)` reading one of
  * those instead of the verb: on PR 680 `set_review_item_criteria` asserted a
  * path and got `/events/agent/<id>`, and on PR 701 a `request_more_info` case
@@ -36,7 +46,7 @@ export type BackgroundCandidate = { method: string; path: string };
 
 const AGENT_TOKEN = /^\/api\/agents\/[^/]+\/token$/;
 const AGENT_WATCHES = /^\/api\/agents\/[^/]+\/watches$/;
-const HEARTBEAT = /^\/api\/workspaces\/[^/]+\/attachments\/[^/]+\/heartbeat$/;
+const HEARTBEAT = /^\/workspaces\/[^/]+\/agents\/[^/]+\/heartbeat$/;
 
 /**
  * Whether this request is the child's own background traffic.
