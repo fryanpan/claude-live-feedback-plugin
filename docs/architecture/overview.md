@@ -125,6 +125,11 @@ a link edits the stored doc and calls the board. `core` is three tiers: wire typ
 is spelled — server writes it, browser reads it back, one definition so the
 two cannot drift into a suggestion nobody can accept).
 
+`prose-integrity.ts` belongs to that document-model tier and does not move the
+picture: it is the check the server runs after a write, asserting the live doc
+holds no markdown syntax that should have become blocks. It is named here so the
+next reader knows a new `prose-*` module was placed rather than missed.
+
 ## The core flows
 
 ```mermaid
