@@ -12,14 +12,24 @@
  * burst cannot answer it. So those lines are stamped and the rest are left
  * alone rather than sweeping 259 call sites in a change nobody asked for.
  *
- * **Do not put this on a `console.warn` or `console.error` line.**
- * `installLogSquelch` (`log-squelch.ts`) bounds a hot error loop by printing
- * one copy of an IDENTICAL line per window and collapsing the repeats into a
- * summary. A per-call timestamp makes every occurrence a distinct string, so
- * the ceiling stops working on exactly the lines that can loop — which is the
- * mechanism behind the 341 MiB log this repo already paid for once. The two
- * `[auth]` lines that can fire in a loop (the login-start ceiling and a
- * failing sender) are `console.error` for that reason, and they stay bare.
+ * **Do not put this on a `console.warn` or `console.error` line in a process
+ * that installs the squelch.** `installLogSquelch` (`log-squelch.ts`) bounds a
+ * hot error loop by printing one copy of an IDENTICAL line per window and
+ * collapsing the repeats into a summary. A per-call timestamp makes every
+ * occurrence a distinct string, so the ceiling stops working on exactly the
+ * lines that can loop — which is the mechanism behind the 341 MiB log this
+ * repo already paid for once. The two `[auth]` lines that can fire in a loop
+ * (the login-start ceiling and a failing sender) are `console.error` for that
+ * reason, and they stay bare.
+ *
+ * The squelch is installed in ONE place — `bin.ts`, the server process — so
+ * that constraint is about that process, not about the `console.error` verb.
+ * `scripts/serve.ts` is the supervisor: a separate process, no squelch, and
+ * its diagnostics ARE stamped (see `note` there). Every line it writes is
+ * about when something happened, and an undated supervisor log cannot answer
+ * "how many restarts in the last 24 hours" — a question the deploy criteria
+ * actually ask. If a squelch is ever installed in the supervisor, that
+ * stamping is what has to be reconsidered.
  *
  * If stamping ever has to reach those, the fix is in the squelch — key its
  * map on the line MINUS the stamp — not a timestamp added here and a ceiling
