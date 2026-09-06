@@ -81,6 +81,8 @@ describe('flat write-back', () => {
   });
 
   afterEach(() => {
+    // Stop before the dir goes — see git-ops-vs-bound.test.ts.
+    docStore.stop();
     rmSync(dataDir, { recursive: true, force: true });
   });
 
@@ -180,6 +182,10 @@ describe('flat write-back through bindDiff', () => {
   });
 
   afterEach(() => {
+    // Stop before the dirs go — see git-ops-vs-bound.test.ts. A store still
+    // running writes into directories that are no longer there, and the
+    // index write in that path used to escape as an unhandled rejection.
+    docStore.stop();
     rmSync(repo, { recursive: true, force: true });
     rmSync(dataDir, { recursive: true, force: true });
   });
@@ -210,8 +216,14 @@ describe('flat write-back through bindDiff', () => {
     const ktId = res.files.find((f) => f.relPath === 'Main.kt')?.docId ?? '';
     await waitForYdoc(dataDir, ktId);
     const docStore2 = makeDocStore(dataDir);
-    docStore2.get(ktId)?.ydoc.getText('content').insert(0, '// post-restart edit\n');
-    await waitForFile(join(repo, 'Main.kt'), (t) => t.includes('// post-restart edit'));
+    try {
+      docStore2.get(ktId)?.ydoc.getText('content').insert(0, '// post-restart edit\n');
+      await waitForFile(join(repo, 'Main.kt'), (t) => t.includes('// post-restart edit'));
+    } finally {
+      // The restarted store outlives the test unless it is stopped here, and
+      // `afterEach` removes the dirs it is still writing into.
+      docStore2.stop();
+    }
   });
 
   it('openEditableFile: companion markdown doc whose edits reach the working tree and the member', async () => {
