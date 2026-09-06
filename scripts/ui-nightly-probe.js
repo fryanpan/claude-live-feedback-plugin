@@ -138,6 +138,14 @@
     scrollWidth: document.body.scrollWidth,
     clientWidth: document.documentElement.clientWidth,
     hoverSupported: window.matchMedia('(hover: hover)').matches,
+    // WHICH POSTURE ACTUALLY RENDERED. `CW_REQUIRE_SIGNIN_TO_WRITE` is a
+    // SERVER setting, and the browser acts on it only after a session lookup
+    // that `fetchWriteAccess` deliberately fails OPEN on a timeout, a 404 or a
+    // junk body. So a run that asked for the gated page can get the ordinary
+    // one, and every geometry reading here would then describe the wrong page
+    // while looking perfectly healthy. This is the class the assertions check
+    // before they trust anything else.
+    signedOut: document.body.classList.contains('signin-gated'),
     navItems: navItems(),
     hoverRules: hoverRules(),
     shell: shell(),
