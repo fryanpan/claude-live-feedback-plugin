@@ -462,6 +462,57 @@ describe('DELETE /workspaces/:id — board workspace', () => {
     rmSync(docDir, { recursive: true, force: true });
   });
 
+  it('archives a doc the deleted board was the ONLY holder of', async () => {
+    const { wsId } = await seed();
+    const docId = 'sole-held-spec';
+    const docDir = mkdtempSync(join(tmpdir(), 'board-ws-delete-sole-'));
+    const docPath = join(docDir, 'sole.md');
+    writeFileSync(docPath, '# Sole\n\nHeld by exactly one board.\n');
+    const created = await post(`/workspaces/${wsId}/docs`, {
+      docId,
+      title: 'Sole',
+      type: 'markdown',
+      sourceUrl: docPath,
+    });
+    expect(created.status).toBe(200);
+    // The id handed in is an ALIAS; the store mints its own canonical id and
+    // the archive files itself under that one. Asserting on the alias reports
+    // a doc that was archived perfectly well as missing.
+    const canonicalId = handle?.docStore.get(docId)?.docId as string;
+    expect(canonicalId).toBeDefined();
+    expect(canonicalId).not.toBe(docId);
+    expect((await post(`/workspaces/${wsId}/docs:attach`, { docId })).status).toBe(200);
+    // Live before the delete. Without this the archive assertion below could
+    // pass for the wrong reason — on a doc that was never there to begin with.
+    expect(handle?.docStore.get(docId)).toBeDefined();
+
+    const delRes = await del(`/workspaces/${wsId}?force=true`);
+    expect(delRes.status).toBe(200);
+    // The route reports what it retired, so a silent no-op cannot pass as a
+    // successful delete.
+    expect(((await delRes.json()) as { archivedDocs?: number }).archivedDocs).toBe(1);
+
+    // The sibling test above deletes a board that merely CITED the doc, with a
+    // second board still holding it, and asserts the doc keeps working. That is
+    // this test's control: the two differ only in whether another holder
+    // exists, so a change that archived BOTH would turn that one red.
+    //
+    // Here there is no other holder. A doc is reachable only THROUGH a board,
+    // so leaving it live is leaving it addressable by nothing at all — it holds
+    // content and its threads, and no URL in the product reaches either. The
+    // archive is where a thing goes when it should stop being live without
+    // being destroyed; the markdown on disk is untouched either way.
+    expect(handle?.docStore.get(docId)).toBeUndefined();
+    // Archived, not destroyed — the project's rule is soft delete, and the
+    // round trip is the only assertion that actually proves it. A doc that had
+    // merely been dropped would fail here, and so would one whose files were
+    // removed rather than parked.
+    expect(existsSync(join(dataDir as string, '_archive', `${canonicalId}.ydoc`))).toBe(true);
+    expect(handle?.docStore.unarchiveDoc(canonicalId, { archivedBy: 'test' }).ok).toBe(true);
+    expect(handle?.docStore.get(canonicalId)).toBeDefined();
+    rmSync(docDir, { recursive: true, force: true });
+  });
+
   it('404s on an id that is neither a board nor a doc grouping', async () => {
     // Non-vacuous because the same route returns 200 above on a real id.
     await seed();
