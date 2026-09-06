@@ -854,6 +854,15 @@ package and breaks another. `review-items/`, `routes/`, `share/`, `auth/`,
 `middleware/`, `board/`, `redline/`, `code/` and `signin/` already sit where
 they belong and are not in this group.
 
+Sequencing against the vocabulary task (Bryan, 2026-09-02): the extraction
+lanes (A1 to A8, B1 to B8) run first, because they only cut files and name
+no directories. Group F runs after them and uses the glossary's names, so it
+merges with the rename tickets rather than preceding them: F1 is the board
+(the glossary's word; the hub/ directory in markdown-app becomes board/ in
+the same pass), F3 is the document store (rooms becomes DocStore), F7 is the
+document editor (doc/ becomes editor/), and the package rename to
+workspaces-app comes last because it touches every path.
+
 ---
 
 # Findings against `exceptions.md`
