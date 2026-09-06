@@ -11,16 +11,13 @@
  */
 
 import { afterEach, describe, expect, it } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildNotesPrompt, createHaikuNotesComposer } from '../src/meeting-notes-composer.ts';
 import type { NotesComposeInput } from '../src/meeting-notes.ts';
-import {
-  DEFAULT_NOTES_INSTRUCTIONS,
-  NOTES_PROMPT_FILENAME,
-  createNotesPromptStore,
-} from '../src/notes-prompt-store.ts';
+import { DEFAULT_NOTES_INSTRUCTIONS, NOTES_PROMPT_FILENAME } from '../src/notes-prompt-store.ts';
+import { PROMPTS_FILENAME, createPromptStore } from '../src/prompt-store.ts';
 
 const dirs: string[] = [];
 function tempDataDir(): string {
@@ -55,32 +52,57 @@ describe('the default instructions', () => {
   });
 
   it('are what an empty data dir resolves to', () => {
-    expect(createNotesPromptStore({ dataDir: tempDataDir() }).read()).toBe(
+    expect(createPromptStore({ dataDir: tempDataDir() }).read('meeting-notes')).toBe(
       DEFAULT_NOTES_INSTRUCTIONS,
     );
   });
 });
 
+/**
+ * `notes-prompt.md` was the whole override surface before the settings page
+ * existed, and a deployment that had edited it must not silently go back to
+ * the shipped words on the day the page ships. These cover the one-shot move
+ * into `prompts.json` and the rules the old file's store established.
+ */
 describe('an override in the data dir', () => {
   it('is read at call time, so an edit reaches the next tick', () => {
     const dataDir = tempDataDir();
-    const store = createNotesPromptStore({ dataDir });
-    expect(store.read()).toBe(DEFAULT_NOTES_INSTRUCTIONS);
+    const store = createPromptStore({ dataDir });
+    expect(store.read('meeting-notes')).toBe(DEFAULT_NOTES_INSTRUCTIONS);
+    store.write('meeting-notes', 'Write the notes as haiku.');
+    expect(store.read('meeting-notes')).toBe('Write the notes as haiku.');
+    store.write('meeting-notes', 'Write the notes as a limerick.');
+    expect(store.read('meeting-notes')).toBe('Write the notes as a limerick.');
+  });
+
+  it('brings the operator’s notes-prompt.md forward, once', () => {
+    const dataDir = tempDataDir();
     writeFileSync(join(dataDir, NOTES_PROMPT_FILENAME), 'Write the notes as haiku.\n');
-    expect(store.read()).toBe('Write the notes as haiku.');
-    writeFileSync(join(dataDir, NOTES_PROMPT_FILENAME), 'Write the notes as a limerick.\n');
-    expect(store.read()).toBe('Write the notes as a limerick.');
+    expect(createPromptStore({ dataDir }).read('meeting-notes')).toBe('Write the notes as haiku.');
+    // Migrated, so it is in the JSON — and the markdown file is left alone.
+    const file = JSON.parse(readFileSync(join(dataDir, PROMPTS_FILENAME), 'utf8')) as {
+      prompts: Record<string, { value?: string }>;
+    };
+    expect(file.prompts['meeting-notes']?.value).toBe('Write the notes as haiku.');
+    expect(readFileSync(join(dataDir, NOTES_PROMPT_FILENAME), 'utf8')).toContain('haiku');
+    // And a later edit through the store wins over the file it came from.
+    const store = createPromptStore({ dataDir });
+    store.write('meeting-notes', 'Write the notes as a limerick.');
+    writeFileSync(join(dataDir, NOTES_PROMPT_FILENAME), 'Ignore me.\n');
+    expect(createPromptStore({ dataDir }).read('meeting-notes')).toBe(
+      'Write the notes as a limerick.',
+    );
   });
 
   it('falls back to the default when the file is blank', () => {
     const dataDir = tempDataDir();
     writeFileSync(join(dataDir, NOTES_PROMPT_FILENAME), '   \n\n');
-    expect(createNotesPromptStore({ dataDir }).read()).toBe(DEFAULT_NOTES_INSTRUCTIONS);
+    expect(createPromptStore({ dataDir }).read('meeting-notes')).toBe(DEFAULT_NOTES_INSTRUCTIONS);
   });
 
   it('names the file it would read, so an operator can find it', () => {
     const dataDir = tempDataDir();
-    expect(createNotesPromptStore({ dataDir }).path).toBe(join(dataDir, NOTES_PROMPT_FILENAME));
+    expect(createPromptStore({ dataDir }).path).toBe(join(dataDir, PROMPTS_FILENAME));
   });
 });
 
@@ -100,27 +122,29 @@ describe('what the model actually receives', () => {
 
   it('sends the stored default when there is no override', async () => {
     const { bodies, impl } = captureFetch();
-    const store = createNotesPromptStore({ dataDir: tempDataDir() });
+    const store = createPromptStore({ dataDir: tempDataDir() });
     const composer = createHaikuNotesComposer({
       apiKey: 'test-key',
       fetchImpl: impl,
-      instructions: store.read,
+      instructions: () => store.read('meeting-notes'),
     });
     await composer?.compose(input);
     expect(bodies[0]?.system).toBe(DEFAULT_NOTES_INSTRUCTIONS);
   });
 
-  it('sends the override once the file is there', async () => {
+  it('sends the override the moment it is saved, with no restart', async () => {
     const { bodies, impl } = captureFetch();
     const dataDir = tempDataDir();
-    const store = createNotesPromptStore({ dataDir });
+    const store = createPromptStore({ dataDir });
     const composer = createHaikuNotesComposer({
       apiKey: 'test-key',
       fetchImpl: impl,
-      instructions: store.read,
+      instructions: () => store.read('meeting-notes'),
     });
-    writeFileSync(
-      join(dataDir, NOTES_PROMPT_FILENAME),
+    // Saved AFTER the composer was built — which is the whole promise the
+    // Save button makes: the next call uses this.
+    store.write(
+      'meeting-notes',
       'You are a notetaker. Fold new points into the headings that already cover them.',
     );
     await composer?.compose(input);

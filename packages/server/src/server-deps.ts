@@ -27,8 +27,8 @@ import { stamped } from './log-stamp.ts';
 import { createHaikuNotesComposer } from './meeting-notes-composer.ts';
 import { createHaikuTaskCaptureExtractor } from './meeting-task-capture.ts';
 import { haikuNoteAskJudge, noteAskJudgeEnabled } from './note-ask-judge.ts';
-import { createNotesPromptStore } from './notes-prompt-store.ts';
 import { createPluginRefresher } from './plugin-refresh.ts';
+import { createPromptStore } from './prompt-store.ts';
 import { createRecallCalendarClient } from './recall-calendar.ts';
 import { createRecallClient, recallStatusWebhookUrl } from './recall.ts';
 import { haikuReviewJudge, reviewGateEnabled } from './review-judge.ts';
@@ -74,6 +74,14 @@ export function createServerDeps(
   // key. An absent key or CW_SUMMARIES=0 makes every call on it a no-op.
   const summarizer = new ThreadSummarizer();
 
+  // The words every prompt on this server runs on, read from
+  // `<dataDir>/prompts.json` at call time so an edit made on the settings
+  // page reaches the next call without a restart or a deploy. ONE store for
+  // the process: it is handed to the three things built below AND to
+  // `createServer` through `ServerOptions.promptStore`, so the migration off
+  // `notes-prompt.md` happens once and is announced once.
+  const promptStore = createPromptStore({ dataDir: cfg.dataDir });
+
   // The ONLY place a real email sender is constructed, for the same reason the
   // summarizer is: `createServer` defaults to the log sender, so nothing that
   // merely spins a server up — every test, every embedded use — can reach the
@@ -111,7 +119,7 @@ export function createServerDeps(
   // is one task note's own text. Absent key or CW_NOTE_ASK_JUDGE=0 → null →
   // the deterministic prefilter decides alone, which is the documented
   // "no key" state rather than the detector being off.
-  const noteAskJudge = haikuNoteAskJudge();
+  const noteAskJudge = haikuNoteAskJudge({ system: () => promptStore.read('waiting-on-you') });
   if (!noteAskJudge) {
     console.log(
       noteAskJudgeEnabled()
@@ -305,11 +313,12 @@ export function createServerDeps(
   // would either duplicate it or cry wolf at every deployment whose public
   // hostname is not Access-gated at all.
 
-  // The instructions the note-taker runs on come from the data dir, re-read
-  // per tick, so retuning how the notes read is an edit to a file rather than
-  // a deploy (`notes-prompt-store.ts`).
-  const notesPrompt = createNotesPromptStore({ dataDir: cfg.dataDir });
-  const notesComposer = createHaikuNotesComposer({ instructions: notesPrompt.read });
+  // The instructions the note-taker runs on come from the prompt store,
+  // re-read per tick, so retuning how the notes read is an edit on the
+  // settings page rather than a deploy (`prompt-store.ts`).
+  const notesComposer = createHaikuNotesComposer({
+    instructions: () => promptStore.read('meeting-notes'),
+  });
   if (transcription && !notesComposer) {
     console.log(
       '[meeting-notes] no summary API key; meetings record transcripts, notes stay off. ' +
@@ -321,7 +330,9 @@ export function createServerDeps(
   // dedicated-key consent as the notes composer, because the same transcript
   // text leaves the machine. Absent key or CW_MEETING_TASKS=0 → null → the
   // notes still compose, they just never link or file board tasks.
-  const taskExtractor = createHaikuTaskCaptureExtractor();
+  const taskExtractor = createHaikuTaskCaptureExtractor({
+    instructions: () => promptStore.read('meeting-capture'),
+  });
   if (notesComposer && !taskExtractor) {
     console.log(
       '[meeting-tasks] task capture off (CW_MEETING_TASKS=0); meetings compose notes ' +
@@ -373,6 +384,7 @@ export function createServerDeps(
     : null;
   return {
     share,
+    promptStore,
     summarizer,
     codeSenderChoice,
     voiceComplete,
