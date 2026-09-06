@@ -47,6 +47,7 @@ import {
   migrateParkedRows,
 } from './park-migration.ts';
 import { parkNoteText } from './park-note.ts';
+import { malformedPathSegment } from './path-params.ts';
 import { createPromptStore } from './prompt-store.ts';
 import { publicBaseUrl } from './public-host.ts';
 import { createPushAnnounce } from './push-announce.ts';
@@ -1890,6 +1891,25 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     async fetch(req) {
       const startedAt = performance.now();
       const pathname = new URL(req.url).pathname;
+      // A stray `%` anywhere in the path is a caller's typo, and it has to
+      // be answered before anything decodes it: `decodeURIComponent` throws a
+      // `URIError` inside whichever matcher pulls the id out of the path, and
+      // that surfaces as a 500 naming nothing. Front door rather than per
+      // route — a check each route must remember covers only the routes
+      // somebody remembered to change, and there are 95 direct decode calls.
+      const badSegment = malformedPathSegment(pathname);
+      if (badSegment !== undefined) {
+        return applyCors(
+          req,
+          new Response(
+            JSON.stringify({
+              error: 'bad-path',
+              message: 'a path segment is not valid percent-encoding',
+            }),
+            { status: 400, headers: { 'content-type': 'application/json' } },
+          ),
+        );
+      }
       // A docId-addressed request may HYDRATE that doc, and hydration reads
       // the doc's bound file. That read used to run on the main thread, where
       // a cloud-sync folder that had stopped answering parked the whole

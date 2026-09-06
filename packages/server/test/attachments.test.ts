@@ -503,15 +503,23 @@ describe('attachment routes + lead-addressed delivery', () => {
     // which is neither an allow nor a deny and is chosen by the caller.
     //
     // REACHING an `expect` on `status` IS the assertion here: none of these
-    // lines can run if the handler threw.
+    // lines can run if the handler threw. That is still the whole point.
+    //
+    // The STATUS moved from a per-route verdict to one 400 (see
+    // `src/path-params.ts`): the malformed segment is now caught at the front
+    // door, ahead of every route, so none of these four reach the code that
+    // used to answer 404 or 200 for an id it could not decode. The number is
+    // incidental to what this test protects; what matters is that a caller's
+    // typo gets an answer naming the typo instead of a dropped connection.
+    // The positive control below is what keeps the four honest.
     const wsId = await makeWorkspace('bad-escape-board');
     const BAD = '%E0%A4%A';
-    expect((await post(`/workspaces/${wsId}/agents/${BAD}/heartbeat`, {})).status).toBe(404);
+    expect((await post(`/workspaces/${wsId}/agents/${BAD}/heartbeat`, {})).status).toBe(400);
     expect((await local(`/workspaces/${wsId}/agents/${BAD}`, { method: 'DELETE' })).status).toBe(
-      404,
+      400,
     );
-    expect((await post(`/workspaces/${wsId}/comment-queue/${BAD}/ack`, {})).status).toBe(200);
-    expect((await post(`/workspaces/${wsId}/voice-queue/${BAD}/ack`, {})).status).toBe(200);
+    expect((await post(`/workspaces/${wsId}/comment-queue/${BAD}/ack`, {})).status).toBe(400);
+    expect((await post(`/workspaces/${wsId}/voice-queue/${BAD}/ack`, {})).status).toBe(400);
 
     // POSITIVE CONTROL. Without it the four verdicts above are also what a
     // deleted route gives: the same two paths must answer a well-formed id,
