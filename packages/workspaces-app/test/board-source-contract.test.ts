@@ -1,27 +1,8 @@
-/**
- * The board's contracts that no rendered DOM used to be able to witness.
- *
- * Every one of these was found by looking at a staging board at 430px, which
- * is the only way this class of defect is ever found: the DOM is identical
- * either way, so nothing in the render suite goes red. They were written as
- * regexes over `board.css` for that reason. They are computed reads now — the
- * sheets are installed and the elements are built at the viewport the defect
- * appeared on, so a rule overridden later in the cascade, moved into a query
- * that no longer matches, or renamed off the element fails here.
- *
- * The two SOURCE contracts at the bottom stay source reads: "which module
- * mounts the voice capture" and "nothing renders the unplaced strip any more"
- * are facts about files, and no element can be built to witness them.
- *
- * Every assertion is paired with a positive control on the same read, so a
- * renamed selector or a sheet that failed to install fails loudly rather than
- * passing vacuously.
- */
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CHORES_ID, unplacedNotice } from '../src/board/board-model.ts';
+import { SPACE_HOLD_ARM_MS } from '../src/voice-capture.ts';
 import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
-import { BOARD_BOOT_SOURCES } from './support/board-boot-sources.ts';
+import { NOW, WS, boardRow, bootTestBoard, el, resetBoardServer } from './support/board-drive.ts';
 
 let cleanup = () => {};
 beforeEach(() => {
@@ -189,36 +170,87 @@ describe('settings popover + presence visibility', () => {
 });
 
 /**
- * Wiring, asserted against the source, because the failure is silent and no
- * element can witness it.
+ * One Space press starts ONE recognizer.
  *
- * `board-app.ts` mounts two voice captures on one page. Space is a singleton
- * gesture: if both bind it, one press starts both recognizers and each
- * finalizes its own transcript — the utterance goes to the agent AND into the
- * capture box, and nothing errors. Only one of the two may own Space, and no
- * unit test on `createVoiceCapture` can see which mounts opted out.
+ * The board used to mount two voice captures on one page. Space is a
+ * singleton gesture: if both bind it, one press starts both recognizers and
+ * each finalizes its own transcript — the utterance goes to the agent AND
+ * into the capture box, and nothing errors.
+ *
+ * DRIVEN, NOT GREPPED. This used to concatenate the seventeen boot modules,
+ * strip the comment lines and COUNT `createVoiceCapture({` in the result. A
+ * count over a fixed list of files can only see a second mount if it happens
+ * to be in one of them: a capture mounted from `board-live-wiring.ts`, from
+ * the doc surface, or from anything else the list does not name reads as one.
+ * The failure is silent in the browser too — so install a recognizer that
+ * counts itself, boot the board, and hold Space.
  */
 describe('board-app voice wiring', () => {
-  /** Comment lines stripped — prose ABOUT a call must not count as a call
-   *  site. (It did, on the first run of this test.) */
-  function code(): string {
-    const src = BOARD_BOOT_SOURCES.map((m) =>
-      readFileSync(resolve(`packages/workspaces-app/src/board/${m}.ts`), 'utf8'),
-    ).join('\n');
-    return src
-      .split('\n')
-      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
-      .join('\n');
+  /** A SpeechRecognition that records every start instead of opening a mic. */
+  class CountingRecognition {
+    static started: CountingRecognition[] = [];
+    continuous = false;
+    interimResults = false;
+    lang = '';
+    onresult: ((ev: unknown) => void) | null = null;
+    onend: (() => void) | null = null;
+    onerror: ((ev: unknown) => void) | null = null;
+    start(): void {
+      CountingRecognition.started.push(this);
+    }
+    stop(): void {}
   }
 
-  it('mounts exactly one capture, the docked one, and it owns the Space hotkey', () => {
-    const src = code();
-    const mounts = src.split('createVoiceCapture({').length - 1;
-    // Positive control: this counts real call sites, not zero of them. The
-    // quick-add box carried a second capture (`spaceHotkey: false`) until the
-    // box was replaced by the New task / Start a planning huddle buttons.
-    expect(mounts).toBe(1);
-    expect(src.split('spaceHotkey: false').length - 1).toBe(0);
+  /** Hold Space on the page for longer than the arm delay. */
+  async function holdSpace(): Promise<void> {
+    vi.useFakeTimers();
+    try {
+      document.body.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', bubbles: true }));
+      await vi.advanceTimersByTimeAsync(SPACE_HOLD_ARM_MS + 50);
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  let wasSecure: unknown;
+  beforeEach(() => {
+    (globalThis as Record<string, unknown>).SpeechRecognition = CountingRecognition;
+    // The capture refuses to arm on an insecure origin, and says so on the
+    // button — a real gate, and one happy-dom leaves false.
+    wasSecure = (globalThis as Record<string, unknown>).isSecureContext;
+    (globalThis as Record<string, unknown>).isSecureContext = true;
+    CountingRecognition.started = [];
+    resetBoardServer();
+  });
+  afterEach(() => {
+    (globalThis as Record<string, unknown>).SpeechRecognition = undefined;
+    (globalThis as Record<string, unknown>).isSecureContext = wasSecure;
+    document.body.innerHTML = '';
+  });
+
+  it('one press, one recognizer — and the board carries one mic to press', async () => {
+    await bootTestBoard({
+      url: `https://board.test/workspaces/${WS}/tasks`,
+      tasks: [boardRow('t-1')],
+    });
+    // Positive control: the press really armed something. Without it, "not
+    // two" is satisfied by a board whose mic never binds Space at all.
+    await holdSpace();
+    expect(CountingRecognition.started.length, 'the hold armed no recognizer').toBe(1);
+    // And exactly one button to press: a second capture is a second mic.
+    expect(document.querySelectorAll('.voice-mic')).toHaveLength(1);
+  });
+
+  it('a second press does not stack a second recognizer while the first is live', async () => {
+    // The same singleton rule inside one capture: the auto-repeat of a held
+    // key, and a second key going down, are the hold that is already running.
+    await bootTestBoard({
+      url: `https://board.test/workspaces/${WS}/tasks`,
+      tasks: [boardRow('t-1')],
+    });
+    await holdSpace();
+    await holdSpace();
+    expect(CountingRecognition.started.length).toBe(1);
   });
 });
 
@@ -232,18 +264,34 @@ describe('board-app voice wiring', () => {
  * draws it.
  */
 describe('the unplaced banner is gone from the board', () => {
-  it('board-app neither hosts the strip nor renders it', () => {
-    const src = BOARD_BOOT_SOURCES.map((m) =>
-      readFileSync(resolve(`packages/workspaces-app/src/board/${m}.ts`), 'utf8'),
-    )
-      .join('\n')
-      .split('\n')
-      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
-      .join('\n');
-    expect(src).not.toContain('board-unplaced');
-    expect(src).not.toContain('renderUnplacedStrip');
-    // Positive control: the board host it used to sit above is still there.
-    expect(src).toContain('id="board"');
+  it('a board full of unplaced rows says nothing about them above the board', async () => {
+    // DRIVEN, NOT GREPPED. This used to read the seventeen boot modules as one
+    // string and assert `board-unplaced` and `renderUnplacedStrip` were absent
+    // from it. Two absences in source text, and an absence is the weakest
+    // evidence there is: the same strip mounted under any other name passes
+    // both. What Bryan objected to is a SENTENCE on his board — so build the
+    // board he was looking at and read it.
+    resetBoardServer();
+    const unplaced = Array.from({ length: 3 }, (_, i) =>
+      boardRow(`t-${i + 1}`, { goal: CHORES_ID, order: i + 1, unplacedSince: NOW - 86_400_000 }),
+    );
+    await bootTestBoard({ url: `https://board.test/workspaces/${WS}/tasks`, tasks: unplaced });
+
+    // Positive control: the rows really are unplaced and really are on screen,
+    // in the Backlog band that already holds every one of them. Without this,
+    // "no notice" is satisfied by a board that failed to boot.
+    const notice = unplacedNotice(unplaced, NOW);
+    expect(notice?.count, 'the fixture is not actually unplaced').toBe(3);
+    expect(document.querySelectorAll('.board-task-row')).toHaveLength(3);
+
+    const board = el('board');
+    expect(board.textContent).toContain('Backlog');
+    // The line itself, in the model's own words rather than hand-copied.
+    expect(board.textContent, 'the unplaced strip is back').not.toContain(notice?.label);
+    expect(board.textContent).not.toContain('have no goal yet');
+    expect(board.textContent).not.toContain('has no goal yet');
+    expect(board.querySelector('.board-unplaced')).toBeNull();
+    document.body.innerHTML = '';
   });
 
   it('the stylesheet reaches no element carrying its class', () => {

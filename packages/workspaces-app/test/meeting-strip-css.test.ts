@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mountMeetingStrip } from '../src/meeting-strip.ts';
 import { IPAD, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 /**
@@ -29,7 +30,6 @@ import { IPAD, attach, installSheets, setViewport, styleOf } from './css-harness
  * speaker pill, the red wash while live, and the reduced-motion stand-down.
  */
 const SHELL = readFileSync(resolve(import.meta.dirname, '../index.html'), 'utf8');
-const MOUNT = readFileSync(resolve(import.meta.dirname, '../src/meeting-strip.ts'), 'utf8');
 const APP = readFileSync(resolve(import.meta.dirname, '../src/app.ts'), 'utf8');
 
 let cleanup = () => {};
@@ -89,18 +89,42 @@ describe('the shell reserves a row for the strip', () => {
 
   it('is hidden until a markdown doc mounts it, so a diff review keeps its layout', () => {
     expect(SHELL).toMatch(/id="meeting-strip"[\s\S]{0,80}?hidden/);
-    expect(MOUNT).toMatch(/root\.hidden = !stripVisible\(\)/);
-    expect(MOUNT).toMatch(/root\.hidden = true/);
-    // A hidden strip must not claim its grid row anyway — `display: flex`
-    // out-specifies the UA's `[hidden]` rule, so this override is load-bearing
-    // and is read as the value the browser would use, not as a declaration.
-    const hidden = styleOf(attach('meeting-strip', { attrs: { hidden: '' } }));
-    expect(hidden.display).toBe('none');
+    // The mount itself, run: a strip nobody is recording into hides, and the
+    // cascade then gives it no grid row. This used to be two regexes over
+    // `meeting-strip.ts` for `root.hidden = …`, which pass against a line the
+    // render no longer reaches — and `meeting-strip.test.ts` already drives
+    // the other three states of the same flag.
+    const el = attach('meeting-strip');
+    // Both readers stubbed: an unstubbed mount reaches for the server, and a
+    // rejection landing after the test is an error on a passing run.
+    const handle = mountMeetingStrip({
+      docId: 'doc-1',
+      root: el,
+      listEngines: () => Promise.resolve(null),
+      loadSpeakers: () => Promise.resolve(null),
+    });
+    try {
+      expect(el.hidden).toBe(true);
+      // A hidden strip must not claim its grid row anyway — `display: flex`
+      // out-specifies the UA's `[hidden]` rule, so this override is
+      // load-bearing and is read as the value the browser would use, not as a
+      // declaration.
+      expect(styleOf(el).display).toBe('none');
+    } finally {
+      handle.destroy();
+    }
+    // …and the teardown leaves it hidden, so a doc navigated away from does
+    // not leave a strip holding the row open behind it.
+    expect(el.hidden).toBe(true);
     // Positive control: without the override the class would win — the strip
     // that is NOT hidden is a flex row on the same cascade.
     expect(strip().style.display).toBe('flex');
     // The diff surface's own floating controls are absolutely positioned, so
     // they claim no track — but only the markdown mount adds the strip at all.
+    //
+    // NOT CONVERTED, and left counted rather than marked: this is a claim
+    // about `app.ts`'s per-doc mount decision, which no harness in this repo
+    // boots. See the PR that converted the rest of this file.
     expect(APP).toMatch(/docType === 'markdown'/);
   });
 });

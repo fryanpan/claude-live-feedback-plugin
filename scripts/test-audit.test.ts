@@ -46,13 +46,22 @@ const IGNORED_ABS = join(REPO, IGNORED_REL);
  * that whole class of site is gone — those tests install the sheets and read
  * a computed value now. It then named `channel-gate.test.ts`, whose read of
  * the built plugin bundle has since become a frame pushed through the running
- * bundle instead. What is left is the board's own source-contract tests,
- * which read `board/*.ts` as text on purpose. When this file stops being a
- * site, point this at another one from `bun run test:audit --list` rather
- * than deleting the assertion: it is the positive control for the two
- * negative controls below.
+ * bundle instead, and then `board-source-contract.test.ts`, which now boots
+ * the board rather than reading it.
+ *
+ * It names one of the THREE PERMANENT floor reads now, on purpose: the
+ * baseline says why they cannot be converted while `ui:shot` is a local dev
+ * tool, so this anchor stops chasing the conversion pass. When even that
+ * stops being a site, point this at another one from
+ * `bun run test:audit --list` rather than deleting the assertion — it is the
+ * positive control for the two negative controls below.
  */
-const TRACKED_SITE = join('packages', 'workspaces-app', 'test', 'board-source-contract.test.ts');
+const TRACKED_SITE = join(
+  'packages',
+  'workspaces-app',
+  'test',
+  'board-nav-widget-clearance-css.test.ts',
+);
 
 /** A file the sleep check must object to: one fixed wait, well over the bar. */
 const PROBE_SOURCE = `import { sleep } from 'bun';\n\nexport async function wait(): Promise<void> {\n  await sleep(2500);\n}\n`;
@@ -618,12 +627,17 @@ describe('the audit sees a source read one module away', () => {
     // module again, name it here — a rule whose only positive is planted is a
     // rule that can rot without a single test going red.
 
-    // And the real wrapped read. `review-item-comments.test.tsx` is the one to
-    // name now: `css-minify.test.ts` held this until it took a per-site marker,
-    // and these two are the only single-site files the widening added, so a
-    // line-based detector would still miss them.
+    // And the real wrapped read — a read whose own parentheses run past the
+    // line biome broke them on, which a line-based detector cannot see. This
+    // anchor has now moved twice: `css-minify.test.ts` held it until it took a
+    // per-site marker, then `review-item-comments.test.tsx`, until the suite
+    // stopped reading source at all. `board-nav-widget-clearance-css.test.ts`
+    // is named now because it is one of the THREE permanent floor reads the
+    // baseline names — a calc() of max() and env() that happy-dom discards
+    // whole — so it is the one real wrapped read that will still be here after
+    // the next conversion pass.
     expect(listed).toContain(
-      `${join('packages', 'workspaces-app', 'test', 'review-item-comments.test.tsx')}:633`,
+      `${join('packages', 'workspaces-app', 'test', 'board-nav-widget-clearance-css.test.ts')}:37`,
     );
   });
 });
