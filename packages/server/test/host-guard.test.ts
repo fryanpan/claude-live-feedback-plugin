@@ -1132,11 +1132,31 @@ describe('shareScopeAllows — a grouping filed on a shared board', () => {
     // These three are allowed for the SHARED workspace id only. A grouping has
     // no board record, no agent presence and no review queue; granting them by
     // reachability would answer a board question with a grouping's id.
-    for (const sub of ['', '/attachments', '/review-items']) {
+    //
+    // `/agents`, not `/attachments`: the roster moved in PR 722 and the table
+    // moved with it, so the old spelling is refused because it is not a route
+    // at all — a refusal every undefined suffix gets, which is not what this
+    // case is about. The control below is what makes the difference visible.
+    const boardOnly = ['', '/agents', '/review-items'];
+    for (const sub of boardOnly) {
       expect(shareScopeAllows(`/workspaces/rev-a${sub}`, 'GET', BOARD, workspacesOf), sub).toBe(
         false,
       );
     }
+    // POSITIVE CONTROL: each of the three IS allowed on the board the share
+    // actually names. Without it, "refused on the grouping" would also be
+    // satisfied by a suffix nothing serves — which is precisely how
+    // `/attachments` sat here passing after the route underneath it moved.
+    for (const sub of boardOnly) {
+      expect(shareScopeAllows(`/workspaces/board-1${sub}`, 'GET', BOARD, workspacesOf), sub).toBe(
+        true,
+      );
+    }
+    // And the retired spelling reaches nothing on EITHER id, so this test
+    // cannot quietly go back to asserting about a route that is gone.
+    expect(shareScopeAllows('/workspaces/board-1/attachments', 'GET', BOARD, workspacesOf)).toBe(
+      false,
+    );
     expect(shareScopeAllows('/workspaces/rev-a', 'GET', BOARD, workspacesOf)).toBe(false);
     expect(shareScopeAllows('/y/ws%3Arev-a', 'GET', BOARD, workspacesOf)).toBe(false);
     expect(shareScopeAllows('/workspaces/rev-a/events:stream', 'GET', BOARD, workspacesOf)).toBe(

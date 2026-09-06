@@ -51,6 +51,23 @@
  * dispatched by which store knows it. An existence check here would have to
  * ask both, and asking the doc store means scanning every doc on every
  * request. The routes that already dispatch by id keep doing it.
+ *
+ * ONE COLLECTION BYPASSES THIS ENTIRELY, and it is the exception rather than
+ * an oversight: `/workspaces/<id>/events:stream` is served ABOVE this
+ * middleware, in `routes/upgrade-stream.ts`, because an SSE open is taken
+ * over rather than answered and every gate a long-lived connection has must
+ * be decided at its handshake. So it keeps an existence check of its own —
+ * and that check asks a WIDER question than this file's: a stream exists for
+ * a board OR for any attachment set with a member doc, because task events
+ * and a review's thread events broadcast on the same `ws~<id>` channel. This
+ * one does not, which is correct for both and is why neither can be deleted
+ * in favour of the other.
+ *
+ * The cost of an exception is that it is the one route this file's own test
+ * would never exercise, so the collections table in
+ * `test/workspace-scope.test.ts` lists `events:stream` on purpose — the route
+ * that bypasses the middleware is the route most worth probing, and a table
+ * that skipped it would be silent about exactly the path nothing else covers.
  */
 import { isBoardPageRequest, matchWorkspaceRoute } from '../workspace-path.ts';
 

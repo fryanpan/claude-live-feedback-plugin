@@ -159,12 +159,23 @@ describe('the canonical routes, over HTTP', () => {
    * the handler needs one, so a 400 can never be mistaken for the 404 under
    * test. The point of the list is that it is a LIST: a collection missing
    * from it is a collection whose ids nothing checks.
+   *
+   * `events:stream` is in here even though it is the one entry the middleware
+   * never sees. It is served ABOVE this file's subject, in
+   * `routes/upgrade-stream.ts`, because an SSE open is taken over rather than
+   * answered — so it keeps an existence check of its own, and that check asks
+   * a wider question (a stream exists for a board OR for any attachment set
+   * with a member doc). An exception is the thing most worth probing, not the
+   * thing to leave out: without this row, the one route on the prefix that
+   * does NOT go through the middleware would be the one route the
+   * middleware's own suite never calls.
    */
   const COLLECTIONS: Array<[string, string, unknown]> = [
     ['GET', 'home?format=json&user=Jordan', undefined],
     ['GET', 'tasks?format=json', undefined],
     ['GET', 'settings', undefined],
     ['GET', 'events', undefined],
+    ['GET', 'events:stream', undefined],
     ['GET', 'agents', undefined],
     ['GET', 'review-items', undefined],
     ['GET', 'next', undefined],
@@ -176,15 +187,26 @@ describe('the canonical routes, over HTTP', () => {
     ['PUT', 'retired', { retired: true, author: PERSON }],
   ];
 
+  /** One call per table row. The body is cancelled rather than read: one row
+   *  opens an SSE stream that never ends on its own, and a live socket left
+   *  behind hangs the teardown rather than failing anything. */
+  const callCollection = async (
+    workspaceId: string,
+    [method, sub, body]: [string, string, unknown],
+  ): Promise<number> => {
+    const r = await local(`/workspaces/${workspaceId}/${sub}`, {
+      method,
+      ...(body === undefined
+        ? {}
+        : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+    });
+    await r.body?.cancel();
+    return r.status;
+  };
+
   it('refuses every collection on a board id nothing answers to', async () => {
-    for (const [method, sub, body] of COLLECTIONS) {
-      const r = await local(`/workspaces/no-such-board/${sub}`, {
-        method,
-        ...(body === undefined
-          ? {}
-          : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
-      });
-      expect(r.status, `${method} ${sub}`).toBe(404);
+    for (const row of COLLECTIONS) {
+      expect(await callCollection('no-such-board', row), `${row[0]} ${row[1]}`).toBe(404);
     }
   });
 
@@ -192,14 +214,8 @@ describe('the canonical routes, over HTTP', () => {
     // Without this, "404 everywhere" would also be satisfied by a middleware
     // that refused the whole prefix, which is the failure mode a negative
     // test cannot see.
-    for (const [method, sub, body] of COLLECTIONS) {
-      const r = await local(`/workspaces/${board}/${sub}`, {
-        method,
-        ...(body === undefined
-          ? {}
-          : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
-      });
-      expect(r.status, `${method} ${sub}`).not.toBe(404);
+    for (const row of COLLECTIONS) {
+      expect(await callCollection(board, row), `${row[0]} ${row[1]}`).not.toBe(404);
     }
   });
 
@@ -218,6 +234,43 @@ describe('the canonical routes, over HTTP', () => {
       author: PERSON,
     });
     expect(home.status).toBe(200);
+  });
+
+  it('the cascade read refuses a row that is a TASK, not a band', async () => {
+    // The middleware's `workspaceOfRow` resolves goals AND tasks — they share
+    // the `task:<id>` id space, which is what lets one lookup cover both
+    // collections — so `/workspaces/<A>/goals/<taskIdOnA>` gets past it. The
+    // read has to ask the narrower question itself, the way the write verbs
+    // already do. It answered 200 with an empty list until it did.
+    const filed = await post(`/workspaces/${board}/tasks`, {
+      title: 'A task, filed on this very board',
+      author: PERSON,
+    });
+    expect(filed.status).toBe(200);
+    const taskId = ((await filed.json()) as { task: { id: string } }).task.id;
+
+    const asBand = await local(`/workspaces/${board}/goals/${taskId}/cascade`);
+    expect(asBand.status).toBe(404);
+    // The same body an unknown board gets, so a real id learns nothing from
+    // being real.
+    expect(await asBand.json()).toEqual({ error: 'not-found' });
+    // The write verbs, which already refused, asserted here so the read and
+    // the writes cannot drift apart on the same id.
+    expect(
+      (await post(`/workspaces/${board}/goals/${taskId}/archive`, { author: PERSON })).status,
+    ).toBe(404);
+
+    // POSITIVE CONTROL: a real band on this board answers the same read, so
+    // the 404 above is the row's KIND rather than the route being gone.
+    const added = await post(`/workspaces/${board}/goals/add`, {
+      title: 'A band on the near board',
+      author: PERSON,
+    });
+    expect(added.status).toBe(200);
+    const bandId = ((await added.json()) as { goal: { id: string } }).goal.id;
+    const ok = await local(`/workspaces/${board}/goals/${bandId}/cascade`);
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual({ taskIds: [] });
   });
 
   it('answers nothing at the retired /api spellings', async () => {
