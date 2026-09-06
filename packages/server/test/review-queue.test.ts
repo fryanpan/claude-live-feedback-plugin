@@ -374,23 +374,36 @@ describe('asksPerson', () => {
   // machine's speed and goes red on a loaded CI box for a reason that has
   // nothing to do with the bug. What must not scale with comment length is how
   // many times the text is re-scanned for a paragraph break — once per address
-  // match under the bug, once for the whole call after the fix.
+  // under the bug, once for the whole call after the fix.
   //
-  // The counter is tied to `indexOf`, the primitive the fix uses. A rewrite
-  // that found the breaks some other way would read zero here and would need
-  // its own counter. That is narrower than a stopwatch, and it is the trade
-  // this test makes deliberately: it catches the regression on a FAST machine
-  // too, where 16,000 re-scans still fit inside any budget worth writing.
+  // The FIXTURE had to change too, and this is the part worth reading. The
+  // timed version repeated `**Jordan: x? `, whose very first address is a
+  // valid ask — so `findAsk` returned on match one and the per-match loop the
+  // bug lived in never ran at all. It was timing a single pass over a long
+  // string, in both the fixed and the broken build. Here every address MISSES
+  // (its paragraph holds no question; the only "?" is past the blank line,
+  // which is the paragraph rule this file tests above), so the loop runs once
+  // per address, which is the only shape in which the regression exists.
+  //
+  // The counter is tied to `indexOf`, the primitive both versions use. A
+  // rewrite that found the breaks some other way would read zero here and
+  // would need its own counter. That is narrower than a stopwatch, and it is
+  // the trade this test makes deliberately: it catches the regression on a
+  // FAST machine too, where the re-scans still fit inside any budget worth
+  // writing.
   it('scans for paragraph breaks once, not once per address match', () => {
-    const text = '**Jordan: x? '.repeat(16_000);
+    const ADDRESSES = 4_000;
+    const text = `${'**Jordan: x. '.repeat(ADDRESSES)}\n\nIs any of that worth doing?`;
     const realIndexOf = String.prototype.indexOf;
     let breakScans = 0;
+    let questionScans = 0;
     String.prototype.indexOf = function counted(
       this: string,
       search: string,
       position?: number,
     ): number {
       if (search === '\n\n') breakScans += 1;
+      if (search === '?') questionScans += 1;
       return realIndexOf.call(this, search, position);
     };
     let asked: boolean;
@@ -399,13 +412,18 @@ describe('asksPerson', () => {
     } finally {
       String.prototype.indexOf = realIndexOf;
     }
-    // Positive control: the fixture really did drive the matcher through all
-    // 16,000 of its addresses, so the count below is a claim about the
-    // algorithm and not about a text that matched nothing.
-    expect(asked).toBe(true);
+    // The answer, and the reason every address misses: the only question sits
+    // past a blank line, so it belongs to no address's paragraph.
+    expect(asked).toBe(false);
+    // Positive control, and the one that makes the ceiling below mean
+    // something: the loop really did walk every address — `sentenceQuestion`
+    // runs once per match and opens with a scan for "?" — so a low break-scan
+    // count is a claim about the algorithm and not about a loop that exited on
+    // its first pass. (The timed test this replaced would have failed here.)
+    expect(questionScans).toBeGreaterThanOrEqual(ADDRESSES);
     // A small constant, deliberately loose: the point is that it does not
-    // TRACK the match count. The old code scanned once per match, which drove
-    // this fixture past 16,000.
+    // TRACK the address count. The old code scanned once per match, which
+    // drives this fixture past 4,000.
     expect(breakScans).toBeLessThanOrEqual(4);
   });
 });
