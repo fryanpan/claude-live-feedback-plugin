@@ -58,13 +58,9 @@ export interface AppBootEnv {
  * name it had as a global, so the sequence reads as it did and what changed is
  * only where those names come from.
  *
- * Returns the router's `stop()` — remove the shell listeners and dispose the
- * live document mount. The page never calls it (the app owns the tab for its
- * lifetime), but a caller that is not a page has to, and until now there was
- * nothing to call. A mount left running keeps its debounced timers armed, and
- * the margin's relayout debounce reads `document` when it lands; in the suite
- * that landed after the environment was torn down, as an unhandled
- * `ReferenceError` charged to whichever file the worker was running.
+ * Returns the router's `stop()`. The page never calls it (it owns the tab for
+ * its lifetime); a caller that is not a page must, or the mount stays live with
+ * its debounced timers armed — see `app-boot.test.ts` for what that costs.
  */
 export async function bootApp(env: AppBootEnv): Promise<() => void> {
   const { document, location, localStorage, window, connect } = env;
