@@ -1226,6 +1226,29 @@ export class DocStore {
   }
 
   /**
+   * Why a doc came back from its `.ydoc` with no binding, keyed by CANONICAL
+   * docId (the id `resolveRoom` hydrates under, not an alias a caller asked
+   * with).
+   *
+   * A park is invisible from outside without this. `syncError` cannot carry
+   * it: that field lives on the BINDING, and the whole shape of a park is
+   * that no binding was made — so a doc whose cloud-sync folder stopped
+   * answering and a doc that was never file-backed both read as
+   * `bound: false` with nothing to tell them apart. The only account of the
+   * park was a `console.warn` in the server log, which is not a surface the
+   * doc's owner has.
+   *
+   * Recorded wherever a hydrate decides not to touch the file, cleared the
+   * moment a binding exists, and reported by `getDocStatus` / `getDoc`.
+   */
+  private readonly parkedSources = new Map<string, { reason: string; at: number }>();
+
+  /** Note why `docId` is parked, replacing any older reason. */
+  private parkSource(docId: string, reason: string): void {
+    this.parkedSources.set(docId, { reason, at: this.now() });
+  }
+
+  /**
    * Load ONE persisted doc into memory and re-arm its file binding. Returns
    * whether a binding was re-established.
    *
@@ -1234,8 +1257,22 @@ export class DocStore {
    * binding would read fine and never write back — the exact 2026-05-09 bug
    * hydration exists to prevent — so a second, drifting copy of this logic is
    * the thing most worth not having.
+   *
+   * The wrapper adds one thing to `hydrateDocInner`: clearing the park. It
+   * belongs here rather than at each binding site because every `return true`
+   * below means the same thing — a binding exists now — and a park reason
+   * that outlived its park would be worse than none.
    */
   private hydrateDoc(
+    docId: string,
+    opts: { blocking?: boolean; liveWins?: boolean } = {},
+  ): boolean {
+    const bound = this.hydrateDocInner(docId, opts);
+    if (bound) this.parkedSources.delete(docId);
+    return bound;
+  }
+
+  private hydrateDocInner(
     docId: string,
     opts: { blocking?: boolean; liveWins?: boolean } = {},
   ): boolean {
@@ -1293,6 +1330,11 @@ export class DocStore {
       if (!placement.placed) {
         console.warn(
           `[doc-store] ${docId}: doc origin repo unplaced at hydrate (${placement.reason}); writes parked`,
+        );
+        this.parkSource(
+          docId,
+          `the repo this doc is pinned to is not on this machine (${placement.reason}); ` +
+            'content is served from the .ydoc and writes are parked until it is placed',
         );
         return false;
       }
@@ -1368,11 +1410,21 @@ export class DocStore {
       console.warn(
         `[doc-store] ${docId}: bound file is not answering; writes parked (${redactBoundPath(path)})`,
       );
+      this.parkSource(
+        docId,
+        `the bound file stopped answering and is quarantined (${redactBoundPath(path)}); ` +
+          'content is served from the .ydoc and writes are parked until it answers again',
+      );
       return 'unavailable';
     }
     if (boundFiles.busy()) {
       console.warn(
         `[doc-store] ${docId}: bound reads are backed up; writes parked (${redactBoundPath(path)})`,
+      );
+      this.parkSource(
+        docId,
+        `bound-file reads are backed up behind another unresponsive path (${redactBoundPath(path)}); ` +
+          'content is served from the .ydoc and writes are parked until they drain',
       );
       return 'unavailable';
     }
@@ -1400,6 +1452,16 @@ export class DocStore {
     // read, and the read goes to the pool, which either brings it back and
     // binds a moment later or quarantines the path and says so once.
     if (blocking) return undefined;
+    // The ordinary deferral, and the one an owner is most likely to catch:
+    // the read is in flight and the binding lands a moment later. Recorded
+    // anyway, because from the outside this is indistinguishable from the
+    // quarantine above until it resolves, and a status call that arrived in
+    // the gap should say "reading" rather than imply the doc is unbacked.
+    this.parkSource(
+      docId,
+      `the bound file is being read off the main thread (${redactBoundPath(path)}); ` +
+        'content is served from the .ydoc and writes are parked until the read lands',
+    );
     this.bindAfterRead(docId, path);
     return 'unavailable';
   }
@@ -2080,6 +2142,10 @@ export class DocStore {
     }>;
     threads: Thread[];
     syncError?: { message: string; at: number };
+    /** Why this doc's source file was not opened — see `parkedSources`. The
+     *  content above came from the `.ydoc`, so it is readable but may be
+     *  behind the file, and writes are parked. */
+    sourceParked?: { reason: string; at: number };
   } | null {
     const room = this.resolveRoom(docId);
     if (!room) return null;
@@ -2089,11 +2155,13 @@ export class DocStore {
     if (contentKind(room.meta.type) === 'flat') {
       const text = room.ydoc.getText('content').toString();
       const syncError = this.bindings.getSyncError(room.docId);
+      const parked = this.bindings.has(room.docId) ? undefined : this.parkedSources.get(room.docId);
       return {
         plainText: text,
         blocks: [{ type: 'code', text, startOffset: 0, endOffset: text.length }],
         threads: listThreads(room.ydoc),
         ...(syncError ? { syncError } : {}),
+        ...(parked ? { sourceParked: parked } : {}),
       };
     }
     const fragment = prose.getProseFragment(room.ydoc);
@@ -2153,11 +2221,15 @@ export class DocStore {
     });
 
     const syncError = this.bindings.getSyncError(docId);
+    const sourceParked = this.bindings.has(room.docId)
+      ? undefined
+      : this.parkedSources.get(room.docId);
     return {
       plainText: walk.plainText,
       blocks,
       threads: listThreads(room.ydoc),
       ...(syncError ? { syncError } : {}),
+      ...(sourceParked ? { sourceParked } : {}),
     };
   }
 
@@ -2179,6 +2251,10 @@ export class DocStore {
      *  visitors, same rule as `sourceUrl` in PRIVATE_META_KEYS. */
     path?: string;
     syncError?: { message: string; at: number };
+    /** Set when the doc has a source file it deliberately did NOT open —
+     *  see `parkedSources`. Always paired with `bound: false`, and the only
+     *  thing that separates a parked doc from one that was never file-backed. */
+    sourceParked?: { reason: string; at: number };
     lastActivityAt?: number;
     textLength: number;
     blockCount: number;
@@ -2217,6 +2293,18 @@ export class DocStore {
       bound: Boolean(binding),
       ...(binding ? { path: binding.path } : {}),
       ...(binding?.syncError ? { syncError: binding.syncError } : {}),
+      // Keyed by the CANONICAL id, not the one the caller asked with:
+      // `resolveRoom` maps an alias to its target before hydrating, so the
+      // park was recorded against `room.docId`. Reading it back under the
+      // alias silently returns nothing, which reads exactly like a doc that
+      // never parked.
+      //
+      // Only while genuinely unbound. A doc that parked and then bound on the
+      // deferred read clears its reason in `hydrateDoc`, but a doc bound by
+      // some other route would otherwise carry a stale one to its owner.
+      ...(!binding && this.parkedSources.has(room.docId)
+        ? { sourceParked: this.parkedSources.get(room.docId) }
+        : {}),
       ...(meta.lastActivityAt !== undefined ? { lastActivityAt: meta.lastActivityAt } : {}),
       textLength,
       blockCount,
@@ -2480,7 +2568,14 @@ export class DocStore {
     seeded?: boolean;
     resolvedPath?: string;
   } {
-    return this.bindings.attachFile(docId, filePath, opts);
+    const res = this.bindings.attachFile(docId, filePath, opts);
+    // A doc can also be bound WITHOUT a hydrate — an explicit re-bind is how
+    // an owner recovers a doc whose folder has come back — so the park is
+    // cleared here as well as in `hydrateDoc`. `getDocStatus` and `getDoc`
+    // already refuse to report a reason while a binding exists, so this is
+    // about not keeping the entry, not about what gets reported.
+    if (res.ok) this.parkedSources.delete(this.aliases.get(docId) ?? docId);
+    return res;
   }
 
   /**
