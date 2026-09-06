@@ -241,6 +241,32 @@ export function resolveChromeBin(
   return chosen;
 }
 
+/**
+ * The `(hover:)` and `(pointer:)` a device of this kind reports.
+ *
+ * Chrome answers these from the HOST's input devices, not from the viewport,
+ * so the same page at the same preset reports `hover: hover` on a Mac with a
+ * trackpad and `hover: none` on a headless Linux CI runner with no pointing
+ * device at all. A screenshot tool whose media queries depend on which machine
+ * ran it is not modelling a device; it is reporting the operator's desk.
+ *
+ * `mobile` is already this script's "model a touch device" switch (it drives
+ * `Emulation.setDeviceMetricsOverride.mobile` and touch emulation), so the
+ * input capabilities follow it: a phone has no hover and a coarse pointer, a
+ * laptop or a landscape iPad with a trackpad has both fine.
+ */
+export function emulatedMediaFeatures(mobile: boolean): Array<{ name: string; value: string }> {
+  return mobile
+    ? [
+        { name: 'hover', value: 'none' },
+        { name: 'pointer', value: 'coarse' },
+      ]
+    : [
+        { name: 'hover', value: 'hover' },
+        { name: 'pointer', value: 'fine' },
+      ];
+}
+
 /** Env var carrying extra Chrome flags, space separated. */
 export const CHROME_ARGS_ENV = 'CW_CHROME_ARGS';
 

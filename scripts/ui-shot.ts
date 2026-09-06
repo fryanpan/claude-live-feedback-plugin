@@ -66,6 +66,7 @@ import {
   type ShotOptions,
   USAGE,
   UsageError,
+  emulatedMediaFeatures,
   extraChromeArgs,
   parseArgs,
   profilePrefix,
@@ -291,6 +292,9 @@ async function shoot(o: ShotOptions, cdp: Cdp): Promise<Record<string, unknown>>
     mobile: o.mobile,
   });
   if (o.mobile) await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true });
+  // Pin `(hover:)` and `(pointer:)` to the DEVICE being modelled. Left alone
+  // they come from whatever machine ran the shot — see emulatedMediaFeatures.
+  await cdp.send('Emulation.setEmulatedMedia', { features: emulatedMediaFeatures(o.mobile) });
 
   const started = Date.now();
   const loaded = cdp.once('Page.loadEventFired');

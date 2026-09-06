@@ -33,6 +33,7 @@ import {
   RUN_ID_ENV,
   UsageError,
   describeStaleProfiles,
+  emulatedMediaFeatures,
   extraChromeArgs,
   findStaleProfiles,
   parseArgs,
@@ -132,6 +133,22 @@ describe('ui-shot Chrome binary resolution', () => {
     expect(() => resolveChromeBin(undefined, { CW_CHROME_BIN: '/nope' }, exists([]))).toThrow(
       /CW_CHROME_BIN/,
     );
+  });
+});
+
+describe('ui-shot emulated media features', () => {
+  it('models a phone as no hover and a coarse pointer', () => {
+    expect(emulatedMediaFeatures(true)).toEqual([
+      { name: 'hover', value: 'none' },
+      { name: 'pointer', value: 'coarse' },
+    ]);
+  });
+
+  it('models a laptop or landscape iPad as hover with a fine pointer', () => {
+    expect(emulatedMediaFeatures(false)).toEqual([
+      { name: 'hover', value: 'hover' },
+      { name: 'pointer', value: 'fine' },
+    ]);
   });
 });
 
