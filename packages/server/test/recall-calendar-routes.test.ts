@@ -216,7 +216,9 @@ describe('calendar routes', () => {
   it('join and events answer not_connected until a calendar exists', async () => {
     const events = await fetch(`${base}/api/calendar/events`);
     expect(events.status).toBe(404);
-    const joinRes = await fetch(`${base}/api/calendar/events/evt-1/join`, { method: 'POST' });
+    const joinRes = await fetch(`${base}/workspaces/${WS}/calendar/events/evt-1/join`, {
+      method: 'POST',
+    });
     expect(joinRes.status).toBe(404);
     expect((await joinRes.json()).error).toBe('not_connected');
   });
@@ -335,10 +337,10 @@ describe('calendar routes', () => {
   });
 
   it('a taken join answers the meeting URL, sends the bot in, and opens a live doc', async () => {
-    const joinRes = await fetch(`${base}/api/calendar/events/evt-meet/join`, {
+    const joinRes = await fetch(`${base}/workspaces/${WS}/calendar/events/evt-meet/join`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ join: true, workspaceId: WS }),
+      body: JSON.stringify({ join: true }),
     });
     expect(joinRes.status).toBe(200);
     const joined = (await joinRes.json()) as {
@@ -383,17 +385,17 @@ describe('calendar routes', () => {
 
     // A repeat take is idempotent: the SAME doc answers, no second doc.
     const again = (await (
-      await fetch(`${base}/api/calendar/events/evt-meet/join`, {
+      await fetch(`${base}/workspaces/${WS}/calendar/events/evt-meet/join`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ join: true, workspaceId: WS }),
+        body: JSON.stringify({ join: true }),
       })
     ).json()) as { docId: string };
     expect(again.docId).toBe(joined.docId);
     expect(fakes.calls.botsCreated).toHaveLength(1);
 
     // Un-join sends the bot home and clears the join; the doc stays.
-    const leave = await fetch(`${base}/api/calendar/events/evt-meet/join`, {
+    const leave = await fetch(`${base}/workspaces/${WS}/calendar/events/evt-meet/join`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ join: false }),
@@ -412,10 +414,10 @@ describe('calendar routes', () => {
 
   it("a joined meeting's cancellation sends the bot home through the sync", async () => {
     const rejoin = (await (
-      await fetch(`${base}/api/calendar/events/evt-meet/join`, {
+      await fetch(`${base}/workspaces/${WS}/calendar/events/evt-meet/join`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId: WS }),
+        body: JSON.stringify({}),
       })
     ).json()) as { docId: string };
     expect(fakes.calls.botsCreated).toHaveLength(2);
@@ -435,10 +437,14 @@ describe('calendar routes', () => {
   });
 
   it('a join on an unknown or linkless event grants nothing', async () => {
-    const ghost = await fetch(`${base}/api/calendar/events/evt-ghost/join`, { method: 'POST' });
+    const ghost = await fetch(`${base}/workspaces/${WS}/calendar/events/evt-ghost/join`, {
+      method: 'POST',
+    });
     expect(ghost.status).toBe(404);
     expect((await ghost.json()).error).toBe('unknown_event');
-    const lunch = await fetch(`${base}/api/calendar/events/evt-lunch/join`, { method: 'POST' });
+    const lunch = await fetch(`${base}/workspaces/${WS}/calendar/events/evt-lunch/join`, {
+      method: 'POST',
+    });
     expect(lunch.status).toBe(400);
     expect((await lunch.json()).error).toBe('no_supported_link');
     expect(fakes.calls.botsCreated).toHaveLength(2);
@@ -477,7 +483,7 @@ describe('calendar routes without the feature', () => {
       expect((await fetch(`${base}/api/calendar/events`)).status).toBe(503);
       expect(
         (
-          await fetch(`${base}/api/calendar/events/evt-1/join`, {
+          await fetch(`${base}/workspaces/${WS}/calendar/events/evt-1/join`, {
             method: 'POST',
           })
         ).status,

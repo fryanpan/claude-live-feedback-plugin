@@ -28,6 +28,7 @@
  * doc in this one.
  */
 
+import { api } from './doc-path.ts';
 import {
   type BannerPick,
   type CalendarBannerEvent,
@@ -247,6 +248,12 @@ export class MeetingBannerEl extends HTMLElement {
     this.shadow.append(banner);
   }
 
+  /** The join verb's address, under the board this strip belongs to. */
+  private joinPath(eventId: string): string {
+    const attr = this.getAttribute('workspace-id');
+    return api(`calendar/events/${encodeURIComponent(eventId)}/join`, attr ?? undefined);
+  }
+
   private async join(event: CalendarBannerEvent): Promise<void> {
     if (this.busy) return;
     this.busy = true;
@@ -256,15 +263,15 @@ export class MeetingBannerEl extends HTMLElement {
     // the fetch below would otherwise cost the gesture.
     const win = this.openWindow();
     try {
-      const workspaceId = this.getAttribute('workspace-id');
-      const res = await this.fetchImpl(
-        `/api/calendar/events/${encodeURIComponent(event.id)}/join`,
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ join: true, ...(workspaceId ? { workspaceId } : {}) }),
-        },
-      );
+      // The board used to ride in the body; since the canonical-routes
+      // cutover it is part of the address, so the server's one path guard
+      // sees it. The attribute wins over the URL because the strip renders
+      // on pages that are not the board's own.
+      const res = await this.fetchImpl(this.joinPath(event.id), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ join: true }),
+      });
       const body = (await res.json().catch(() => ({}))) as {
         meetingUrl?: string;
         docUrl?: string;
@@ -297,14 +304,11 @@ export class MeetingBannerEl extends HTMLElement {
     this.error = null;
     this.render();
     try {
-      const res = await this.fetchImpl(
-        `/api/calendar/events/${encodeURIComponent(event.id)}/join`,
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ join: false }),
-        },
-      );
+      const res = await this.fetchImpl(this.joinPath(event.id), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ join: false }),
+      });
       if (res.ok) event.joined = false;
       else {
         const body = (await res.json().catch(() => ({}))) as { message?: string; error?: string };

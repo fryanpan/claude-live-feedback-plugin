@@ -17,7 +17,7 @@
  * 1. **Reads are never gated.** GET and HEAD pass whatever the flag says.
  *    Everyone who can reach this server can read it; that is the product.
  *    A handful of routes are POSTs only because a batch of inputs does not
- *    fit in a query string; `READ_SHAPED_POSTS` names them, and they pass
+ *    fit in a query string; `isReadShapedPost` names them, and they pass
  *    too.
  *
  * 2. **Agents are not browsers.** An MCP tool, a curl, a webhook and the
@@ -131,9 +131,9 @@ export function isSignInFlowPath(pathname: string): boolean {
 /**
  * Routes that are POSTs for their request SHAPE and reads in their effect.
  *
- * `POST /api/links/titles` batches a render burst's URLs into one lookup and
- * changes nothing; gated, an unsigned reader's link chips silently never
- * resolve, and the refusal tells them "Reading needs no account" while
+ * `POST /workspaces/<ws>/links:titles` batches a render burst's URLs into one
+ * lookup and changes nothing; gated, an unsigned reader's link chips silently
+ * never resolve, and the refusal tells them "Reading needs no account" while
  * refusing a read.
  *
  * This is an enumeration, which `isGatedWrite` refuses to be — and the
@@ -142,8 +142,19 @@ export function isSignInFlowPath(pathname: string): boolean {
  * omits a route and gates something harmlessly, which shows up as a visible
  * refusal on a read rather than as a silent hole. Only add a path here after
  * confirming its handler mutates nothing.
+ *
+ * Empty since the canonical-routes cutover moved its one member under a
+ * board; the set stays because the next read-shaped POST without an id in
+ * its path belongs here rather than in the pattern below.
  */
-const READ_SHAPED_POSTS: ReadonlySet<string> = new Set(['/api/links/titles']);
+const READ_SHAPED_POSTS: ReadonlySet<string> = new Set([]);
+
+/**
+ * The board-scoped twin of the set above: same contract — confirmed to
+ * mutate nothing — for a path that carries a board id and so cannot be
+ * enumerated. Anchored, never a prefix.
+ */
+const READ_SHAPED_BOARD_POST = /^\/workspaces\/[^/]+\/links:titles$/;
 
 /**
  * Opening a doc the caller may already READ.
@@ -179,7 +190,11 @@ const OPEN_FOR_READING_POST =
  *  carry an id. Never a prefix: that would hand the exemption to every future
  *  route beginning with the same characters. */
 export function isReadShapedPost(pathname: string): boolean {
-  return READ_SHAPED_POSTS.has(pathname) || OPEN_FOR_READING_POST.test(pathname);
+  return (
+    READ_SHAPED_POSTS.has(pathname) ||
+    READ_SHAPED_BOARD_POST.test(pathname) ||
+    OPEN_FOR_READING_POST.test(pathname)
+  );
 }
 
 /**

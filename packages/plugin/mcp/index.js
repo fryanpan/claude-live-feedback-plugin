@@ -16888,13 +16888,17 @@ var TOOL_LIST = {
     },
     {
       name: "list_backlinks",
-      description: "Which tasks point at this ref, across every board. This is what a url ref is for: paste a pull request or a dashboard link and find what work already cites it before filing a duplicate. Counts a promotion's origin too, so a task promoted from a thread comes back for that thread without anyone linking it by hand.",
+      description: "Which of THIS BOARD's tasks point at this ref. This is what a url ref is for: paste a pull request or a dashboard link and find what work already cites it before filing a duplicate. Counts a promotion's origin too, so a task promoted from a thread comes back for that thread without anyone linking it by hand. It used to answer across every board on the server; ask each board you are attached to if you need more than one.",
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           ref: { type: "object", description: "The ref to find citers of." }
         },
-        required: ["ref"]
+        required: ["workspaceId", "ref"]
       }
     },
     {
@@ -18173,7 +18177,7 @@ async function handleTaskTool(name, a, ctx) {
     }
     case "list_backlinks": {
       const { ref } = a;
-      const res = await http("POST", "/api/refs/backlinks", { ref });
+      const res = await http("POST", `${board()}/refs:backlinks`, { ref });
       return ok2({ ref, tasks: res.tasks });
     }
     case "unlink_refs": {
@@ -18867,7 +18871,7 @@ var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.175";
+var PLUGIN_VERSION = "0.1.176";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",

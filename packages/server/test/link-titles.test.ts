@@ -1,5 +1,5 @@
 /**
- * POST /api/links/titles — resolve pasted workspace URLs to display titles.
+ * POST /workspaces/<ws>/links:titles — pasted workspace URLs to display titles.
  *
  * Render-time title lookup for the client's comment renderer: the stored
  * comment keeps the raw URL, the reader sees the resource's current title.
@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 
-describe('POST /api/links/titles', () => {
+describe('POST /workspaces/<ws>/links:titles', () => {
   let dataDir: string;
   let handle: ServerHandle;
   let base: string;
@@ -43,7 +43,7 @@ describe('POST /api/links/titles', () => {
     statuses: Record<string, string>;
     planHeld: Record<string, boolean>;
   }> => {
-    const r = await post('/api/links/titles', { urls });
+    const r = await post(`/workspaces/${wsId}/links:titles`, { urls });
     expect(r.status).toBe(200);
     return (await r.json()) as {
       titles: Record<string, string | null>;
@@ -268,13 +268,13 @@ describe('POST /api/links/titles', () => {
   });
 
   it('refuses a malformed body', async () => {
-    expect((await post('/api/links/titles', {})).status).toBe(400);
-    expect((await post('/api/links/titles', { urls: 'nope' })).status).toBe(400);
+    expect((await post(`/workspaces/${wsId}/links:titles`, {})).status).toBe(400);
+    expect((await post(`/workspaces/${wsId}/links:titles`, { urls: 'nope' })).status).toBe(400);
   });
 
   it('caps the batch instead of resolving unbounded input', async () => {
     const urls = Array.from({ length: 250 }, (_, i) => `${base}/review/bulk-${i}`);
-    const r = await post('/api/links/titles', { urls });
+    const r = await post(`/workspaces/${wsId}/links:titles`, { urls });
     expect(r.status).toBe(200);
     const { titles } = (await r.json()) as { titles: Record<string, string | null> };
     expect(Object.keys(titles).length).toBeLessThanOrEqual(100);

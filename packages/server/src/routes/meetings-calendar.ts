@@ -390,8 +390,14 @@ export async function handleMeetingCalendarRoutes(
       return j(502, { error: err instanceof Error ? err.message : 'list_failed' });
     }
   }
-  const calendarJoin = pathname.match(/^\/api\/calendar\/events\/([^/]+)\/join$/);
-  if (calendarJoin) {
+  // Board-scoped since the canonical-routes cutover, unlike the calendar
+  // routes above it. Those are properties of the machine's one Google
+  // connection and belong to no board; this one MINTS A DOC and files it
+  // under a board, and it used to take that board from `body.workspaceId` —
+  // a board id arriving somewhere the path guard could not see it. The board
+  // is now part of the address and the guard has already checked it.
+  const calendarJoin = matchRest(scope, /^calendar\/events\/([^/]+)\/join$/);
+  if (calendarJoin && scope) {
     if (req.method !== 'POST') return j(405, { error: 'method not allowed' });
     if (!calendarSync || !calendarStore || !calendarBot) {
       return j(503, { error: 'not_configured' });
@@ -400,7 +406,6 @@ export async function handleMeetingCalendarRoutes(
     const eventId = decodeURIComponent(calendarJoin[1] ?? '');
     const body = (await req.json().catch(() => null)) as {
       join?: unknown;
-      workspaceId?: unknown;
     } | null;
     // Absent means "join" — the button this backs is the explicit
     // opt-IN (bots join nothing by default), and withdrawing it is the
@@ -468,8 +473,7 @@ export async function handleMeetingCalendarRoutes(
       }
       const attached = await docStore.attachFileAsync(docId, file);
       if (!attached.ok) return j(409, { error: 'attach_failed', attached });
-      const requestedWs = typeof body?.workspaceId === 'string' ? body.workspaceId : undefined;
-      fileUnderBoardWorkspace(docId, requestedWs);
+      fileUnderBoardWorkspace(docId, scope.workspaceId);
     }
 
     const invited = await recallRelay.invite({

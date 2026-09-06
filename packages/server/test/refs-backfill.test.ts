@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 /**
- * POST /api/refs/backfill + the settle-time doc scan (src/refs-backfill.ts):
+ * POST /workspaces/<ws>/refs:backfill + the settle-time doc scan
+ * (src/refs-backfill.ts):
  * links people already wrote — in doc prose, task/goal bodies, and stored
  * url-kind refs — become structured doc refs, idempotently.
  *
@@ -68,7 +69,7 @@ describe('refs backfill (route + settle scan)', () => {
     });
 
   const backfill = async (dryRun: boolean): Promise<Stats> => {
-    const r = await post('/api/refs/backfill', { dryRun });
+    const r = await post(`/workspaces/${wsId}/refs:backfill`, { dryRun });
     expect(r.status).toBe(200);
     return (await r.json()) as Stats;
   };
@@ -257,5 +258,113 @@ describe('refs backfill (route + settle scan)', () => {
     // filed on and every prose link names — comes back with it.
     expect(docRefsOf(handle.tasks.getGoalRow(goalId)?.links)).toEqual([docAId]);
     expect(docRefsOf(handle.tasks.getTask(plainTaskId)?.links)).toEqual([docAId]);
+  });
+});
+
+/**
+ * The sweep is one board's command, not the server's.
+ *
+ * Until the canonical-routes cutover this route sat outside `/workspaces/`
+ * and swept every doc, task and goal on the machine: any member of any board
+ * could start a write across everybody's data and read the sizes back. The
+ * board is now in the address, and these tests are written from both sides of
+ * that line — a run from A must leave B's row exactly as it found it, and the
+ * same run from B must land it, so an empty answer cannot pass for a boundary.
+ *
+ * Its own server: the suite above walks one board through a dry run, a real
+ * run, an idempotent re-run and a restart, and a second board seeded into
+ * that shared state would change the counts those tests assert.
+ */
+describe('refs backfill is scoped to the board that asks', () => {
+  let handle: ServerHandle;
+  let dataDir: string;
+  let base: string;
+  let aWs = '';
+  let bWs = '';
+  let aTask = '';
+  let bTask = '';
+
+  const post = (path: string, body: unknown) =>
+    fetch(`${base}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', host: `localhost:${handle.port}` },
+      body: JSON.stringify(body),
+    });
+
+  const backfill = async (workspaceId: string): Promise<Stats> => {
+    const r = await post(`/workspaces/${workspaceId}/refs:backfill`, { dryRun: false });
+    expect(r.status).toBe(200);
+    return (await r.json()) as Stats;
+  };
+
+  const docRefCount = (taskId: string): number =>
+    (handle.tasks.getTask(taskId)?.links ?? []).filter((r) => r.kind === 'doc').length;
+
+  /** A board holding one task and one doc whose prose links that task. */
+  const seedBoardWithLinkedDoc = async (name: string): Promise<{ ws: string; task: string }> => {
+    const wsRes = await post('/workspaces', { name, goal: `Ship ${name}.` });
+    const ws = ((await wsRes.json()) as { workspace: { id: string } }).workspace.id;
+    const taskRes = await post(`/workspaces/${ws}/tasks`, {
+      title: `Row on ${name}`,
+      goal: 'chores',
+      assignee: 'human',
+    });
+    const task = ((await taskRes.json()) as { task: { id: string } }).task.id;
+    const md = join(dataDir, `${name}.md`);
+    writeFileSync(md, `# ${name}\n\nSee [the row](/workspaces/${ws}?task=${task}).\n`);
+    const docRes = await post(`/workspaces/${ws}/docs`, {
+      docId: `${name}-doc`,
+      type: 'markdown',
+      sourceUrl: md,
+    });
+    expect(docRes.status).toBe(200);
+    // The tie is written from BOTH sides — the doc's prose above and the
+    // row's own body here — because the sweep walks docs and rows in two
+    // separate passes. A fixture that only had the doc side would leave the
+    // row pass unobserved, and a board filter dropped from it would look
+    // exactly like a board filter that worked.
+    expect(
+      handle.tasks.updateBodySnapshot(task, `Background in /workspaces/${ws}/docs/${name}-doc.`),
+    ).toBe(true);
+    return { ws, task };
+  };
+
+  beforeAll(async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'refs-backfill-scope-'));
+    handle = createServer({ port: 0, dataDir });
+    base = `http://localhost:${handle.port}`;
+    const a = await seedBoardWithLinkedDoc('board-a');
+    const b = await seedBoardWithLinkedDoc('board-b');
+    aWs = a.ws;
+    aTask = a.task;
+    bWs = b.ws;
+    bTask = b.task;
+    // The control for everything below: neither row is linked yet, so a
+    // later "still unlinked" assertion is about the sweep and not about a
+    // fixture that never had a link to find.
+    expect(docRefCount(aTask)).toBe(0);
+    expect(docRefCount(bTask)).toBe(0);
+  });
+
+  afterAll(async () => {
+    await handle.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("a run on one board lands its own refs and leaves the other board's alone", async () => {
+    const stats = await backfill(aWs);
+    expect(stats.workspacesTouched).toEqual([aWs]);
+    expect(docRefCount(aTask)).toBe(1);
+    // The other board's row cites its own doc just as plainly. It stays at
+    // zero because neither its doc nor its row was in this sweep's reach.
+    expect(docRefCount(bTask)).toBe(0);
+  });
+
+  it("the other board's own run lands the ref the first run declined", async () => {
+    // Without this the assertion above would pass on a backfill that had
+    // stopped working altogether.
+    const stats = await backfill(bWs);
+    expect(stats.workspacesTouched).toEqual([bWs]);
+    expect(docRefCount(bTask)).toBe(1);
   });
 });
