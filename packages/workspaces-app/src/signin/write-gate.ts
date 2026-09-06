@@ -300,14 +300,25 @@ function mountSignInBar(bar: HTMLElement): void {
   // leaves the flexible track empty at the bottom of the window — the dead
   // band styles.css describes at length beside those rules.
   //
-  // It goes in as the FIRST child while the grid renders it SECOND, under the
-  // topbar, which is where the board branch above puts it too. The row is what
-  // a reader sees; the DOM order is what a screen reader hears. The two
-  // disagreeing by one is worth knowing about rather than worth changing
-  // silently under a layout fix.
+  // It goes in AFTER the topbar — the row the grid renders it in, and where
+  // the board branch above puts it too. It used to go in as the FIRST child,
+  // and the explicit row made that look right: the grid is what a sighted
+  // reader sees, but tab order and the accessibility tree both follow the DOM,
+  // so the bar's "Sign in to comment or edit" link was the FIRST focus stop on
+  // the page while it painted second. Measured on a cold load, at 1180x820 and
+  // at 430px: Tab once and you were in the bar, Tab again and you were back up
+  // in the topbar you had already passed. That is WCAG 1.3.2, meaningful
+  // sequence — and it costs nothing here, because the placement rules key on
+  // `.signin-bar` under `body.signin-gated` and never on position in the child
+  // list, so the row is unchanged and the stylesheet needs no edit.
   const shell = document.getElementById('shell');
   if (shell) {
-    shell.insertBefore(bar, shell.firstChild);
+    // `:scope >` so a `#topbar` nested deeper in the shell could never become
+    // the anchor and land the bar outside the grid. With no topbar at all,
+    // first child — the old behaviour, and its declared row still holds.
+    const topbar = shell.querySelector(':scope > #topbar');
+    if (topbar) topbar.insertAdjacentElement('afterend', bar);
+    else shell.insertBefore(bar, shell.firstChild);
     document.body.classList.add('signin-gated');
     return;
   }
