@@ -20,6 +20,7 @@ import { join } from 'node:path';
 import { type ElementAnchor, type Thread, type User, summaryHash } from '@feedback/core';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { ThreadSummarizer } from '../src/summarize.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const bryan: User = { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' };
 // A NAMED agent: the shared `known-agent` category is refused as an author.
@@ -50,6 +51,9 @@ const stubFetch = (async (_url: string | URL | Request, init?: RequestInit) => {
   );
 }) as unknown as typeof fetch;
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('DocStore.backfillSummaries', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -57,7 +61,7 @@ describe('DocStore.backfillSummaries', () => {
   let summarizer: ThreadSummarizer;
   const priorEnv = process.env.CW_SUMMARIES;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'feedback-summary-backfill-'));
     summarizer = new ThreadSummarizer({
       apiKey: 'test-key-never-sent-anywhere',
@@ -68,6 +72,7 @@ describe('DocStore.backfillSummaries', () => {
     });
     handle = createServer({ port: 0, dataDir, summarizer });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterAll(async () => {
@@ -94,14 +99,14 @@ describe('DocStore.backfillSummaries', () => {
     const file = join(dataDir, `${docId}.md`);
     writeFileSync(file, `# Doc\n\n${SNIPPET}\n`);
     await j(
-      await fetch(`${base}/api/docs`, {
+      await fetch(`${base}/workspaces/${WS}/docs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ docId, type: 'markdown', sourceUrl: file }),
       }),
     );
     const { thread } = await j<{ thread: Thread }>(
-      await fetch(`${base}/api/docs/${docId}/threads`, {
+      await fetch(`${base}/workspaces/${WS}/docs/${docId}/threads`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ author: bryan, text: 'why does this not bubble up?', anchor }),
@@ -109,7 +114,7 @@ describe('DocStore.backfillSummaries', () => {
     );
     for (const text of replies) {
       await j(
-        await fetch(`${base}/api/docs/${docId}/threads/${thread.id}/comments`, {
+        await fetch(`${base}/workspaces/${WS}/docs/${docId}/threads/${thread.id}/comments`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ author: agent, text }),
@@ -121,7 +126,7 @@ describe('DocStore.backfillSummaries', () => {
 
   async function getThread(docId: string, threadId: string): Promise<Thread> {
     const { thread } = await j<{ thread: Thread }>(
-      await fetch(`${base}/api/docs/${docId}/threads/${threadId}`),
+      await fetch(`${base}/workspaces/${WS}/docs/${docId}/threads/${threadId}`),
     );
     return thread;
   }
@@ -189,7 +194,7 @@ describe('DocStore.backfillSummaries', () => {
     const docId = 'bf-resolved';
     const threadId = await seed(docId, ['agreed, real bug']);
     await j(
-      await fetch(`${base}/api/docs/${docId}/threads/${threadId}/resolve`, {
+      await fetch(`${base}/workspaces/${WS}/docs/${docId}/threads/${threadId}/resolve`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: '{}',

@@ -34,6 +34,7 @@ import { join } from 'node:path';
 import { type JSONWebKeySet, type JWK, SignJWT, exportJWK, generateKeyPair } from 'jose';
 import type { RecallClient } from '../src/recall.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoardOnHandle } from './workspace-seed.ts';
 
 const TEAM_DOMAIN = 'test.cloudflareaccess.com';
 const KID = 'recall-gate-kid';
@@ -126,7 +127,7 @@ const handles: ServerHandle[] = [];
  * Prod's shape: BOTH hostnames on one process — the operator's, Access-gated,
  * and the callback host beside it — varying only in Recall's two credentials.
  */
-const spinUp = (recall: { relay: boolean; secret: boolean }): ServerHandle => {
+const spinUp = async (recall: { relay: boolean; secret: boolean }): Promise<ServerHandle> => {
   const dataDir = mkdtempSync(join(tmpdir(), 'recall-gate-'));
   dirs.push(dataDir);
   const h = createServer({
@@ -139,6 +140,7 @@ const spinUp = (recall: { relay: boolean; secret: boolean }): ServerHandle => {
     ...(recall.relay ? { meetingBot: configuredClient() } : {}),
     ...(recall.secret ? { meetingBotWebhookSecret: WEBHOOK_SECRET } : {}),
   });
+  WS = seedBoardOnHandle(h);
   handles.push(h);
   return h;
 };
@@ -206,10 +208,13 @@ const rawRequest = (
     }).catch(reject);
   });
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('the callback hostname serves Recall, and only Recall', () => {
   let h: ServerHandle;
-  beforeAll(() => {
-    h = spinUp({ relay: true, secret: true });
+  beforeAll(async () => {
+    h = await spinUp({ relay: true, secret: true });
   });
 
   it('lets the websocket upgrade through to the route that owns the token', async () => {
@@ -277,7 +282,14 @@ describe('the callback hostname serves Recall, and only Recall', () => {
   it('POSITIVE CONTROL: the whole product is 404 on this hostname', async () => {
     // If any of these ever answers something else, the callback host has
     // stopped being two routes and every test above means nothing.
-    for (const path of ['/api/docs', '/api/share', '/', '/app', '/y/some-doc', '/widget.js']) {
+    for (const path of [
+      `/workspaces/${WS}/docs`,
+      '/api/share',
+      '/',
+      '/app',
+      `/workspaces/${WS}/docs/some-doc/y`,
+      '/widget.js',
+    ]) {
       const r = await callback(h, path);
       expect(r.status, path).toBe(404);
       expect(await r.json(), path).toEqual({ error: 'not_found' });
@@ -291,7 +303,7 @@ describe('the callback hostname serves Recall, and only Recall', () => {
     // The token is not what this hostname refuses on. A person who really is
     // the operator still cannot reach the product here — the surface is a
     // property of the NAME, not of who is asking.
-    const r = await fetch(`http://localhost:${h.port}/api/docs`, {
+    const r = await fetch(`http://localhost:${h.port}/workspaces/${WS}/docs`, {
       headers: { host: CALLBACK_HOST, ...CF_RAY, 'cf-access-jwt-assertion': operatorJwt },
     });
     expect(r.status).toBe(404);
@@ -369,8 +381,8 @@ describe('the callback hostname serves Recall, and only Recall', () => {
 
 describe('the operator hostname has NO exemptions left', () => {
   let h: ServerHandle;
-  beforeAll(() => {
-    h = spinUp({ relay: true, secret: true });
+  beforeAll(async () => {
+    h = await spinUp({ relay: true, secret: true });
   });
 
   it('gates both bot callbacks behind Access, exactly like every other path', async () => {
@@ -395,7 +407,7 @@ describe('the operator hostname has NO exemptions left', () => {
   it('POSITIVE CONTROL: the operator with a token still reaches the product', async () => {
     // Without this, the assertions above are satisfied by a server that
     // refuses everything on this hostname for some unrelated reason.
-    const r = await fetch(`http://localhost:${h.port}/api/docs`, {
+    const r = await fetch(`http://localhost:${h.port}/workspaces/${WS}/docs`, {
       headers: { host: PROXIED_HOST, ...CF_RAY, 'cf-access-jwt-assertion': operatorJwt },
     });
     expect(r.status).toBe(200);
@@ -404,7 +416,7 @@ describe('the operator hostname has NO exemptions left', () => {
   it('POSITIVE CONTROL: an untokened ordinary path is refused the same way', async () => {
     // Proves `missing_jwt` above is the gate's ordinary refusal and not
     // something specific to the recall paths.
-    const r = await on(h, PROXIED_HOST, '/api/docs');
+    const r = await on(h, PROXIED_HOST, `/workspaces/${WS}/docs`);
     expect(r.status).toBe(401);
     expect(await r.json()).toEqual({ error: 'missing_jwt' });
   });
@@ -414,7 +426,7 @@ describe('the credential conditions, over HTTP', () => {
   it('closes the websocket route when the relay is NOT configured', async () => {
     // No key and no public wss base: nothing on this server can have minted a
     // token, so there is no credential behind the route.
-    const h = spinUp({ relay: false, secret: true });
+    const h = await spinUp({ relay: false, secret: true });
     const r = await callback(h, `/recall/${TOKEN}`);
     expect(r.status).toBe(404);
     expect(await r.json()).toEqual({ error: 'not_found' });
@@ -427,7 +439,7 @@ describe('the credential conditions, over HTTP', () => {
   it('closes the status webhook when no signing secret is set', async () => {
     // Unset, the route accepts UNSIGNED bodies. Leaving it open here would
     // put that mode on the public internet with nothing in front of it.
-    const h = spinUp({ relay: true, secret: false });
+    const h = await spinUp({ relay: true, secret: false });
     const r = await callback(h, '/recall/status', 'POST', JSON.stringify({ event: 'bot.done' }));
     expect(r.status).toBe(404);
     expect(await r.json()).toEqual({ error: 'not_found' });
@@ -438,7 +450,7 @@ describe('the credential conditions, over HTTP', () => {
   });
 
   it('closes both when neither credential is configured', async () => {
-    const h = spinUp({ relay: false, secret: false });
+    const h = await spinUp({ relay: false, secret: false });
     const ws = await callback(h, `/recall/${TOKEN}`);
     expect(ws.status).toBe(404);
     expect(await ws.json()).toEqual({ error: 'not_found' });
@@ -461,6 +473,7 @@ describe('with no callback hostname configured, the class does not exist', () =>
       meetingBot: configuredClient(),
       meetingBotWebhookSecret: WEBHOOK_SECRET,
     });
+    WS = seedBoardOnHandle(h);
     handles.push(h);
     const r = await on(h, CALLBACK_HOST, `/recall/${TOKEN}`);
     expect(r.status).toBe(403);
@@ -484,14 +497,22 @@ describe('a bot that could not call back is not offered at all', () => {
     // over loopback — with `cfAccess` configured and no shares wired, this
     // server is in legacy whole-server mode, where even localhost presents a
     // token.)
-    const r = await fetch(`http://localhost:${h.port}/api/docs/any-doc/meeting-bot`, {
+    // The strip's config read is about the SERVER, not about this doc — the
+    // doc id only says which surface is asking. It still has to be a doc the
+    // board holds, because the scope middleware answers membership before any
+    // route runs, so the link is made and the doc itself left absent.
+    h.tasks.attachDoc(WS, 'any-doc');
+    const r = await fetch(`http://localhost:${h.port}/workspaces/${WS}/docs/any-doc/meeting-bot`, {
       headers: { host: PROXIED_HOST, ...CF_RAY, 'cf-access-jwt-assertion': operatorJwt },
     });
     expect(r.status).toBe(200);
     return (await r.json()) as { configured: boolean };
   };
 
-  const spinUpDialing = (wsBase: string, callbackHost: string | null): ServerHandle => {
+  const spinUpDialing = async (
+    wsBase: string,
+    callbackHost: string | null,
+  ): Promise<ServerHandle> => {
     const dataDir = mkdtempSync(join(tmpdir(), 'recall-reach-'));
     dirs.push(dataDir);
     const h = createServer({
@@ -504,26 +525,27 @@ describe('a bot that could not call back is not offered at all', () => {
       meetingBot: configuredClient(wsBase),
       meetingBotWebhookSecret: WEBHOOK_SECRET,
     });
+    WS = seedBoardOnHandle(h);
     handles.push(h);
     return h;
   };
 
   it('reports NOT configured when the callback URL is the Access-gated host', async () => {
-    const h = spinUpDialing(`wss://${PROXIED_HOST}`, null);
+    const h = await spinUpDialing(`wss://${PROXIED_HOST}`, null);
     expect((await meetingBotState(h)).configured).toBe(false);
   });
 
   it('POSITIVE CONTROL: the same server with a callback host is configured', async () => {
     // Without this, the assertion above is satisfied by a server that reports
     // `configured: false` for some entirely unrelated reason.
-    const h = spinUpDialing(`wss://${CALLBACK_HOST}`, CALLBACK_HOST);
+    const h = await spinUpDialing(`wss://${CALLBACK_HOST}`, CALLBACK_HOST);
     expect((await meetingBotState(h)).configured).toBe(true);
   });
 
   it('POSITIVE CONTROL: a public hostname this server does not gate still works', async () => {
     // The fallback the change had to preserve: no dedicated callback host,
     // and a public base URL that is not Access-fronted, behaves as before.
-    const h = spinUpDialing('wss://open.example.com', null);
+    const h = await spinUpDialing('wss://open.example.com', null);
     expect((await meetingBotState(h)).configured).toBe(true);
   });
 
@@ -534,7 +556,7 @@ describe('a bot that could not call back is not offered at all', () => {
     // an unreachable one has no callback hostname configured (the two states
     // that would produce it are contradictory: the ws origin is DERIVED from
     // the callback host) and its hostname is refused a step earlier.
-    const h = spinUpDialing(`wss://${CALLBACK_HOST}`, CALLBACK_HOST);
+    const h = await spinUpDialing(`wss://${CALLBACK_HOST}`, CALLBACK_HOST);
     const r = await on(h, CALLBACK_HOST, `/recall/${TOKEN}`);
     expect(r.status).toBe(404);
     expect(await r.json()).toEqual({ error: 'unknown endpoint' });

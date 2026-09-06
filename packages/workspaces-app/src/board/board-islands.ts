@@ -1,3 +1,5 @@
+import type { Thread, User } from '@feedback/core';
+import type { BootLocation } from '../boot-env.ts';
 /**
  * The Preact islands this page mounts ONCE, and the stable handlers they keep.
  *
@@ -21,8 +23,7 @@
  * controller are built, and a handler is only ever called by a tap long after
  * boot has finished — which is exactly the cycle a thunk exists to resolve.
  */
-import type { Thread, User } from '@feedback/core';
-import type { BootLocation } from '../boot-env.ts';
+import { currentWorkspaceId, docHref } from '../doc-path.ts';
 import { type BoardState, showToast } from './board-actions.ts';
 import type { BoardTask } from './board-model.ts';
 import type { ReviewItem } from './board-review-model.ts';
@@ -144,7 +145,7 @@ export function mountBoardIslands(deps: BoardIslandDeps): void {
     el('board-people'),
     {
       onTap: (chip) => {
-        if (chip.docId) location.assign(`/review/${encodeURIComponent(chip.docId)}`);
+        if (chip.docId) location.assign(docHref(chip.docId, currentWorkspaceId()));
       },
       onLongPress: (chip) => {
         state.followedKey = state.followedKey === chip.key ? null : chip.key;

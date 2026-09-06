@@ -119,8 +119,6 @@ export interface ShellStaticContext {
   isValidDocId: (id: string) => boolean;
   /** A 302 that keeps the query string. */
   redirectTo: (path: string, search: string) => Response;
-  /** The workspace a doc is filed under, for the compat redirects. */
-  resolveWorkspaceForDoc: (docId: string) => string | null;
   /** Doc metadata decorated with its review URL, for a project's artifacts. */
   withReviewUrl: <T extends { docId: string; type: DocType; sourceUrl?: string }>(
     meta: T,
@@ -163,27 +161,11 @@ export function createShellStatic(ctx: ShellStaticContext): ShellStatic {
     j,
     isValidDocId,
     redirectTo,
-    resolveWorkspaceForDoc,
     withReviewUrl,
     reviewItemsFor,
     homeQueueTotal,
     defaultBoardWorkspaceName,
   } = ctx;
-
-  /**
-   * The workspace to send THIS caller to for a doc.
-   *
-   * For a share visitor it is always the workspace they were shared, never
-   * whichever workspace happens to hold the doc first. The guard has already
-   * established the doc is in their scope by the time they reach a redirect,
-   * and sending them anywhere else fails twice over: it names a workspace
-   * nobody shared with them, and the guard then refuses the very URL we just
-   * handed out — so an old `/review/<docId>` bookmark, which is the shape
-   * every link in every existing comment thread has, would 403 for exactly
-   * the people shares exist to serve.
-   */
-  const addressableWorkspaceFor = (docId: string, visitor: ShareTarget | null): string | null =>
-    visitor?.workspaceId ?? resolveWorkspaceForDoc(docId);
 
   /**
    * Which member a review opens on: the meatiest change, matching the entry
@@ -205,7 +187,7 @@ export function createShellStatic(ctx: ShellStaticContext): ShellStatic {
   /** The review app shell for a doc, or its 404. Null when no app is built. */
   const serveDocShell = (docId: string, url: URL): Response | null => {
     if (!markdownAppDist) return null;
-    // Docs are file-backed and created upfront via POST /api/docs. Arriving
+    // Docs are file-backed and created upfront via POST /workspaces/:workspaceId/docs. Arriving
     // before an agent has done that gets a clean 404 — there is nothing the
     // app could render for a doc that does not exist.
     if (!docStore.get(docId)) {
@@ -287,7 +269,7 @@ export function createShellStatic(ctx: ShellStaticContext): ShellStatic {
    * does the capture answer, which is the case that used to be a 404 in front
    * of the reviewer. See mockup-capture.ts.
    */
-  const serveMockup = (docId: string): Response => {
+  const serveMockup = (docId: string, workspaceId: string): Response => {
     const notFound = () =>
       new Response(renderMockupNotFound(docId), {
         status: 404,
@@ -306,7 +288,7 @@ export function createShellStatic(ctx: ShellStaticContext): ShellStatic {
     // Sentry tags ride out with the widget embed, for the same reason and by
     // the same route: a mockup is somebody's own file, and neither the review
     // scaffolding nor the box's monitoring config belongs in it on disk.
-    const withWidget = injectWidget(html, doc.meta.docId);
+    const withWidget = injectWidget(html, doc.meta.docId, workspaceId);
     const body = injectSentryHead(
       withWidget,
       browserSentry,
@@ -452,6 +434,11 @@ export function createShellStatic(ctx: ShellStaticContext): ShellStatic {
     if (wsResourceMatch && req.method === 'GET') {
       const wsSeg = decodeURIComponent(wsResourceMatch[1] ?? '');
       const kind = wsResourceMatch[2] ?? '';
+      // No `.html` twin. `/mockup/<docId>.html` was accepted beside
+      // `/mockup/<docId>` because agents pasted whichever read like a page,
+      // and it is a second spelling of one resource — the thing this cutover
+      // exists to remove. The suffixed form now names a doc that does not
+      // exist, and answers the ordinary not-found page.
       const id = decodeURIComponent(wsResourceMatch[3] ?? '');
       if (kind === 'reviews') {
         // A review is a set of docs, not a page. Send the reader to the
@@ -471,7 +458,7 @@ export function createShellStatic(ctx: ShellStaticContext): ShellStatic {
       }
       if (!isValidDocId(id)) return j(400, { error: 'bad docId' });
       const canonical = docStore.get(id)?.docId ?? id;
-      if (kind === 'mockups') return serveMockup(canonical);
+      if (kind === 'mockups') return serveMockup(canonical, wsSeg);
       if (isMockupDoc(canonical)) {
         return redirectTo(
           `/workspaces/${encodeURIComponent(wsSeg)}/mockups/${encodeURIComponent(canonical)}`,
@@ -484,85 +471,22 @@ export function createShellStatic(ctx: ShellStaticContext): ShellStatic {
 
     // --- Markdown app (surface 1) ---
     //
-    // COMPAT. `/review/<docId>` is where every doc used to live, and it
-    // still answers — it redirects to the workspace path when the doc's
-    // workspace can be resolved, and serves in place when it cannot. See
-    // the compat block note above `resolveWorkspaceForDoc`.
-    if (pathname.startsWith('/review/')) {
-      const addressed = decodeURIComponent(pathname.slice('/review/'.length));
-      if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-      // A captured review URL carries whatever id it was copied with: a
-      // pre-migration doc's own id, or the readable alias of one minted
-      // since. Both land on the same doc, and the redirect below rewrites
-      // either into the canonical address.
-      const docId = docStore.get(addressed)?.docId ?? addressed;
-      // A mockup has no editor, so the doc route is the wrong destination
-      // for one — see `isMockupDoc`. Hand it to the mockup route's own
-      // resolution, which is the behaviour `/mockup/<docId>` already has.
-      if (isMockupDoc(docId)) {
-        const mockHome = addressableWorkspaceFor(docId, visitor);
-        if (mockHome) {
-          return redirectTo(
-            `/workspaces/${encodeURIComponent(mockHome)}/mockups/${encodeURIComponent(docId)}`,
-            url.search,
-          );
-        }
-        return serveMockup(docId);
-      }
-      // The redirect is deliberately OUTSIDE the `markdownAppDist` guard
-      // that wraps the serve below. Where a doc lives is a fact about
-      // addressing; whether the browser app has been built is a fact
-      // about this deployment. Tying the two together would make an old
-      // URL 404 on a server that simply has no app bundle, which is a
-      // different failure wearing the same status code.
-      if (docStore.get(docId)) {
-        const home = addressableWorkspaceFor(docId, visitor);
-        if (home) {
-          return redirectTo(
-            `/workspaces/${encodeURIComponent(home)}/docs/${encodeURIComponent(docId)}`,
-            url.search,
-          );
-        }
-      }
-      const served = serveDocShell(docId, url);
-      if (served) return served;
-    }
+    // `/review/<docId>` — where every doc used to live — IS GONE, and so is
+    // `/mockup/<docId>` below. Not redirected, not 410'd: deleted. That is
+    // the cutover's rule, and a redirect is the version of it that never
+    // finishes — every bookmark, comment thread and skill that still says
+    // `/review/<id>` keeps working, so nothing is ever rewritten and the
+    // second address stays in the product for as long as the redirect does.
+    // The cutover ships as one version bump with a session restart behind
+    // it, and a stale caller getting a 404 is the intended direction of the
+    // failure. A doc's page is `/workspaces/<ws>/docs/<id>`; a mockup's is
+    // `/workspaces/<ws>/mockups/<id>`, and both are served by the board-page
+    // branch above.
     if (markdownAppDist && pathname.startsWith('/app/')) {
       const rel = pathname.slice('/app/'.length);
       const p = join(markdownAppDist, rel);
       const resp = serveStaticUnder(markdownAppDist, p, appCacheControl(basename(rel)));
       if (resp) return resp;
-    }
-
-    // --- Mockup HTML — bound to a docId via bind_mock / POST /api/docs
-    //     with type='mockup'. Reads the file at the doc's sourceUrl
-    //     (any absolute path on disk) and streams it as text/html. The
-    //     pre-bind_mock workflow required symlinking each new HTML
-    //     into <plugin-repo>/demos/ — `/mockup/<docId>` replaces that
-    //     dance and matches the contract of `/review/<docId>` for
-    //     markdown docs: one MCP call, one URL, no filesystem juggling.
-    //     Single-file mockups only — assets the HTML references via
-    //     relative paths won't resolve since we don't serve the source
-    //     directory. Use the existing /demos/ multi-page path for
-    //     mockups that ship with sibling files.
-    //     COMPAT, same rule as `/review/`: redirect to the workspace path
-    //     when the mockup's workspace resolves, serve in place when it
-    //     does not.
-    if (pathname.startsWith('/mockup/')) {
-      const slug = decodeURIComponent(pathname.slice('/mockup/'.length));
-      // Tolerate `/mockup/<docId>.html` AND `/mockup/<docId>` — agents
-      // share whichever URL feels natural.
-      const addressed = slug.replace(/\.html?$/i, '');
-      if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-      const docId = docStore.get(addressed)?.docId ?? addressed;
-      const home = docStore.get(docId) ? addressableWorkspaceFor(docId, visitor) : null;
-      if (home) {
-        return redirectTo(
-          `/workspaces/${encodeURIComponent(home)}/mockups/${encodeURIComponent(docId)}`,
-          url.search,
-        );
-      }
-      return serveMockup(docId);
     }
 
     // --- Demos ---

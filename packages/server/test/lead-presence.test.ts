@@ -14,6 +14,10 @@ import type { LeadPresence } from '@feedback/core';
 import { createLeadPresenceMonitor, readLeadPresence } from '../src/lead-presence.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { openWorkspaceStream } from './agent-stream.ts';
+import { seedBoard } from './workspace-seed.ts';
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('lead presence monitor', () => {
   const world = () => {
@@ -110,7 +114,7 @@ describe('lead presence monitor', () => {
   });
 });
 
-describe('GET /api/docs/:docId/lead-presence and the lead.presence stream', () => {
+describe(`GET /workspaces/${WS}/docs/:docId/lead-presence and the lead.presence stream`, () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
@@ -124,7 +128,7 @@ describe('GET /api/docs/:docId/lead-presence and the lead.presence stream', () =
       body: JSON.stringify(body),
     });
   const presenceOf = async (): Promise<LeadPresence> => {
-    const res = await fetch(`${base}/api/docs/${docId}/lead-presence`);
+    const res = await fetch(`${base}/workspaces/${WS}/docs/${docId}/lead-presence`);
     expect(res.status).toBe(200);
     return (await res.json()) as LeadPresence;
   };
@@ -133,11 +137,13 @@ describe('GET /api/docs/:docId/lead-presence and the lead.presence stream', () =
     dataDir = mkdtempSync(join(tmpdir(), 'lead-presence-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     workspaceId = (
       (await (await post('/workspaces', { name: 'presence-board' })).json()) as {
         workspace: { id: string };
       }
     ).workspace.id;
+    WS = workspaceId;
     docId = (
       (await (await post(`/workspaces/${workspaceId}/huddles`, { kind: 'discussion' })).json()) as {
         docId: string;
@@ -158,7 +164,7 @@ describe('GET /api/docs/:docId/lead-presence and the lead.presence stream', () =
 
     // A page listening on the doc's stream.
     const controller = new AbortController();
-    const res = await fetch(`${base}/events/${docId}`, {
+    const res = await fetch(`${base}/workspaces/${WS}/docs/${docId}/events:stream`, {
       signal: controller.signal,
       headers: { accept: 'text/event-stream' },
     });

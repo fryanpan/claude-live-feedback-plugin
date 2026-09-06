@@ -7,6 +7,7 @@ import { type ServerHandle, createServer } from '../src/server.ts';
 import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 import { insideWriteBack, waitFor } from './wait-for.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 /**
  * A lost write into a bound doc must tell SOMEBODY — the syncError needs an
@@ -62,6 +63,9 @@ interface SyncErrorEvent {
   backupPath?: string;
   message?: string;
 }
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('doc.sync_error broadcast (in-process DocStore)', () => {
   let dataDir: string;
@@ -156,12 +160,13 @@ describe('doc.sync_error reaches a watching SSE stream (HTTP end-to-end)', () =>
   let base: string;
   let path: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-syncerr-http-'));
     path = join(dataDir, 'doc.md');
     writeFileSync(path, DOC);
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterEach(async () => {
@@ -170,7 +175,7 @@ describe('doc.sync_error reaches a watching SSE stream (HTTP end-to-end)', () =>
   });
 
   it('a watcher on /events/<docId> receives doc.sync_error after an overwrite conflict', async () => {
-    const create = await fetch(`${base}/api/docs`, {
+    const create = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'h1', type: 'markdown', sourceUrl: path }),
@@ -184,7 +189,9 @@ describe('doc.sync_error reaches a watching SSE stream (HTTP end-to-end)', () =>
 
     // Subscribe the way the MCP child does: a live SSE stream on the doc.
     const controller = new AbortController();
-    const res = await fetch(`${base}/events/h1`, { signal: controller.signal });
+    const res = await fetch(`${base}/workspaces/${WS}/docs/h1/events:stream`, {
+      signal: controller.signal,
+    });
     expect(res.ok).toBe(true);
     const reader = (res.body as ReadableStream<Uint8Array>).getReader();
     const decoder = new TextDecoder();

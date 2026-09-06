@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as Y from 'yjs';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 /**
  * End-to-end HTTP smoke test for the folder-review feature (folder bind →
@@ -12,17 +13,21 @@ import { type ServerHandle, createServer } from '../src/server.ts';
  * NOT the in-process DocStore API (bind-folder.test.ts already covers that).
  */
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('workspace folder-review e2e (HTTP)', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let folder: string;
   let base: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'ws-e2e-data-'));
     folder = mkdtempSync(join(tmpdir(), 'ws-e2e-src-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
 
     // A small workspace: one markdown, one ts, one json — nested so the tree
     // has a real directory level to roll up through.
@@ -58,7 +63,7 @@ describe('workspace folder-review e2e (HTTP)', () => {
     const r = await fetch(`${base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ folderPath: folder, owner: '/cwd' }),
+      body: JSON.stringify({ folderPath: folder, owner: '/cwd', hubWorkspaceId: WS }),
     });
     const body = await j<BindResp>(r);
     expect(body.ok).toBe(true);
@@ -74,7 +79,7 @@ describe('workspace folder-review e2e (HTTP)', () => {
     // Open the remaining files like a reviewer clicking the all-files tree.
     for (const relPath of ['src/index.ts', 'src/data.json']) {
       const cr = await fetch(
-        `${base}/api/reviews/${encodeURIComponent(workspaceId)}/context-file`,
+        `${base}/workspaces/${WS}/reviews/${encodeURIComponent(workspaceId)}/context-file`,
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -94,8 +99,10 @@ describe('workspace folder-review e2e (HTTP)', () => {
     expect([...files.keys()].sort()).toEqual(['README.md', 'src/data.json', 'src/index.ts']);
   });
 
-  it('(b) GET /api/reviews/:id/tree returns the nested tree with zero open counts', async () => {
-    const r = await fetch(`${base}/api/reviews/${encodeURIComponent(workspaceId)}/tree`);
+  it(`(b) GET /workspaces/${WS}/reviews/:id/tree returns the nested tree with zero open counts`, async () => {
+    const r = await fetch(
+      `${base}/workspaces/${WS}/reviews/${encodeURIComponent(workspaceId)}/tree`,
+    );
     type FileNode = { type: 'file'; relPath: string; openCount: number; fileType: string };
     type DirNode = { type: 'dir'; name: string; openCount: number; children: Node[] };
     type Node = FileNode | DirNode;
@@ -148,21 +155,26 @@ describe('workspace folder-review e2e (HTTP)', () => {
       snippet: { text: source.slice(from, to) },
     };
 
-    const tr = await fetch(`${base}/api/docs/${encodeURIComponent(codeDocId)}/threads`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        author: { id: 'u1', name: 'Reviewer', kind: 'known', color: '#2e7dd7' },
-        text: 'why 42?',
-        anchor,
-      }),
-    });
+    const tr = await fetch(
+      `${base}/workspaces/${WS}/docs/${encodeURIComponent(codeDocId)}/threads`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          author: { id: 'u1', name: 'Reviewer', kind: 'known', color: '#2e7dd7' },
+          text: 'why 42?',
+          anchor,
+        }),
+      },
+    );
     const { thread } = await j<{ thread: { id: string; status: string } }>(tr);
     expect(thread.status).toBe('open');
 
     // Re-fetch the tree: the code file's openCount is 1, and it rolls up
     // through the `src` folder and the workspace total.
-    const r2 = await fetch(`${base}/api/reviews/${encodeURIComponent(workspaceId)}/tree`);
+    const r2 = await fetch(
+      `${base}/workspaces/${WS}/reviews/${encodeURIComponent(workspaceId)}/tree`,
+    );
     type FileNode = { type: 'file'; relPath: string; openCount: number };
     type DirNode = { type: 'dir'; name: string; openCount: number; children: Node[] };
     type Node = FileNode | DirNode;
@@ -185,9 +197,9 @@ describe('workspace folder-review e2e (HTTP)', () => {
     expect(flat.get('README.md')).toBe(0);
   });
 
-  it('(d) GET /api/docs/:codeDocId/content returns the raw source as a code block', async () => {
+  it(`(d) GET /workspaces/${WS}/docs/:codeDocId/content returns the raw source as a code block`, async () => {
     const codeDocId = files.get('src/index.ts')!.docId;
-    const r = await fetch(`${base}/api/docs/${encodeURIComponent(codeDocId)}/content`);
+    const r = await fetch(`${base}/workspaces/${WS}/docs/${encodeURIComponent(codeDocId)}/content`);
     const doc = await j<{
       plainText: string;
       blocks: Array<{ type: string | null; text: string }>;

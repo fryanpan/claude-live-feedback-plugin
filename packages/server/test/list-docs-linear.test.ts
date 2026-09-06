@@ -28,6 +28,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { TaskStore } from '../src/tasks.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 interface DocMetaOut {
   docId: string;
@@ -38,7 +39,10 @@ interface DocMetaOut {
  *  unmistakable against the ceiling below, small enough to stay quick. */
 const DOC_COUNT = 30;
 
-describe('GET /api/docs does not re-list the workspaces per row', () => {
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
+describe(`GET /workspaces/${WS}/docs does not re-list the workspaces per row`, () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
@@ -70,6 +74,7 @@ describe('GET /api/docs does not re-list the workspaces per row', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'list-docs-linear-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
 
     // A board exists, so the workspace set is non-empty and a pass over it
     // costs something. None of the docs are attached to it — which is the
@@ -87,7 +92,7 @@ describe('GET /api/docs does not re-list the workspaces per row', () => {
       const name = `linear-doc-${i}`;
       const path = join(dataDir, `${name}.md`);
       writeFileSync(path, `# ${name}\n\nBody.\n`);
-      const r = await local('/api/docs', {
+      const r = await local(`/workspaces/${WS}/docs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ docId: name, type: 'markdown', sourceUrl: path }),
@@ -105,7 +110,7 @@ describe('GET /api/docs does not re-list the workspaces per row', () => {
 
   it('reads the workspace set a bounded number of times, not once per row', async () => {
     listCalls = 0;
-    const r = await local('/api/docs');
+    const r = await local(`/workspaces/${WS}/docs`);
     expect(r.status).toBe(200);
     const docs = ((await r.json()) as { docs: DocMetaOut[] }).docs;
 
@@ -125,11 +130,13 @@ describe('GET /api/docs does not re-list the workspaces per row', () => {
     // The batched lookup must not be a second, subtly different answer to the
     // question `GET /api/docs/<id>` already answers. Equivalence is the whole
     // safety argument for replacing the per-row path.
-    const listed = ((await (await local('/api/docs')).json()) as { docs: DocMetaOut[] }).docs;
+    const listed = (
+      (await (await local(`/workspaces/${WS}/docs`)).json()) as { docs: DocMetaOut[] }
+    ).docs;
     const byId = new Map(listed.map((d) => [d.docId, d.reviewUrl]));
 
     for (const id of mintedIds) {
-      const one = await local(`/api/docs/${encodeURIComponent(id)}`);
+      const one = await local(`/workspaces/${WS}/docs/${encodeURIComponent(id)}?format=json`);
       expect(one.status).toBe(200);
       const meta = ((await one.json()) as { meta: DocMetaOut }).meta;
       expect(byId.get(id)).toBe(meta.reviewUrl);

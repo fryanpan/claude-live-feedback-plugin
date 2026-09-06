@@ -24,6 +24,7 @@
  */
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { AgentAuthor } from '../author.ts';
+import { boardIdOf, boardPathOf } from '../board-path.ts';
 import { inactiveWatches } from '../sse-loop.ts';
 import { type ThreadCreateInput, threadCreateRequest } from '../thread-create.ts';
 import type { RestoreState, WatchCoverage } from '../watch-coverage.ts';
@@ -95,6 +96,9 @@ export async function handleDocsTool(
     IDENTITY_IS_SHARED,
     SHARED_IDENTITY_REASON,
   } = ctx;
+  /** The board this call is addressed under — see board-path.ts. */
+  const boardId = (): string => boardIdOf(name, a);
+  const board = (): string => boardPathOf(name, a);
   switch (name) {
     case 'list_docs': {
       // Every param has to reach the wire: this handler used to issue a
@@ -106,8 +110,7 @@ export async function handleDocsTool(
       // the legacy whole-server dump for REST callers, and that dump —
       // 7.4 MB on 2026-09-01, pretty-printed here on the way through — is
       // exactly what a fresh session's first tool call must never be.
-      const { workspaceId, kind, query, sourcePrefix, limit, cursor, full } = a as {
-        workspaceId?: string;
+      const { kind, query, sourcePrefix, limit, cursor, full } = a as {
         kind?: string;
         query?: string;
         sourcePrefix?: string;
@@ -116,7 +119,6 @@ export async function handleDocsTool(
         full?: boolean;
       };
       const params = new URLSearchParams();
-      if (workspaceId) params.set('workspaceId', workspaceId);
       if (kind) params.set('kind', kind);
       if (query) params.set('query', query);
       if (sourcePrefix) params.set('sourcePrefix', sourcePrefix);
@@ -126,20 +128,20 @@ export async function handleDocsTool(
       );
       if (cursor) params.set('cursor', cursor);
       if (full) params.set('full', '1');
-      const res = await http('GET', `/api/docs?${params.toString()}`);
+      const res = await http('GET', `${board()}/docs?${params.toString()}`);
       return ok(res);
     }
     case 'list_threads': {
       const { docId, status } = a as { docId: string; status?: string };
       const qs = status ? `?status=${encodeURIComponent(status)}` : '';
-      const res = await http('GET', `/api/docs/${encodeURIComponent(docId)}/threads${qs}`);
+      const res = await http('GET', `${board()}/docs/${encodeURIComponent(docId)}/threads${qs}`);
       return ok(res);
     }
     case 'get_thread': {
       const { docId, threadId } = a as { docId: string; threadId: string };
       const res = await http(
         'GET',
-        `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}`,
+        `${board()}/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}`,
       );
       return ok(res);
     }
@@ -152,7 +154,7 @@ export async function handleDocsTool(
       };
       const res = await http(
         'POST',
-        `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/comments`,
+        `${board()}/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/comments`,
         { author: AUTHOR, text, ...(review !== undefined ? { review } : {}) },
       );
       return ok(res);
@@ -174,7 +176,7 @@ export async function handleDocsTool(
       }
       const path =
         taskId !== undefined && taskId !== ''
-          ? `/api/tasks/${encodeURIComponent(taskId)}/notes`
+          ? `${board()}/tasks/${encodeURIComponent(taskId)}/notes`
           : '/api/agent-notes';
       const res = (await http('POST', path, {
         agent: AUTHOR.name,
@@ -196,7 +198,11 @@ export async function handleDocsTool(
     case 'create_thread': {
       // Two endpoints; omitting `find` opens the thread on the subject.
       // See thread-create.ts.
-      const { path, body } = threadCreateRequest(a as unknown as ThreadCreateInput, AUTHOR);
+      const { path, body } = threadCreateRequest(
+        a as unknown as ThreadCreateInput,
+        AUTHOR,
+        board(),
+      );
       const res = await http('POST', path, body);
       return ok(res);
     }
@@ -204,7 +210,7 @@ export async function handleDocsTool(
       const { docId, threadId } = a as { docId: string; threadId: string };
       const res = await http(
         'POST',
-        `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/resolve`,
+        `${board()}/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/resolve`,
       );
       return ok(res);
     }
@@ -216,7 +222,7 @@ export async function handleDocsTool(
       };
       const res = await http(
         'POST',
-        `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/summary`,
+        `${board()}/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/summary`,
         force ? { force: true } : undefined,
       );
       return ok(res);
@@ -225,7 +231,7 @@ export async function handleDocsTool(
       const { docId, threadId } = a as { docId: string; threadId: string };
       const res = await http(
         'POST',
-        `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/reopen`,
+        `${board()}/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/reopen`,
       );
       return ok(res);
     }
@@ -236,40 +242,31 @@ export async function handleDocsTool(
       // human edit before allowing a set_doc_content from this author.
       const res = await http(
         'GET',
-        `/api/docs/${encodeURIComponent(docId)}/content?reader=${encodeURIComponent(AUTHOR.id)}`,
+        `${board()}/docs/${encodeURIComponent(docId)}/content?reader=${encodeURIComponent(AUTHOR.id)}`,
       );
       return ok(res);
     }
     case 'doc_status': {
       const { docId } = a as { docId: string };
-      const res = await http('GET', `/api/docs/${encodeURIComponent(docId)}/status`);
+      const res = await http('GET', `${board()}/docs/${encodeURIComponent(docId)}/status`);
       return ok(res);
     }
     case 'create_review_doc':
     case 'attach_markdown': {
-      const {
-        docId,
-        path,
-        title,
-        setId,
-        hubWorkspaceId: boardWorkspaceId,
-        producedBy,
-      } = a as {
+      const { docId, path, title, setId, producedBy } = a as {
         docId: string;
         path: string;
         title?: string;
         setId?: string;
-        hubWorkspaceId?: string;
         producedBy?: { agentId?: string; sessionId?: string };
       };
-      const res = await http('POST', '/api/docs', {
+      const res = await http('POST', `${board()}/docs`, {
         docId,
         type: 'markdown',
         sourceUrl: path,
         owner: process.cwd(),
         ...(title ? { title } : {}),
         ...(setId ? { setId } : {}),
-        ...(boardWorkspaceId ? { hubWorkspaceId: boardWorkspaceId } : {}),
         ...(producedBy ? { producedBy } : {}),
       });
       return ok(res);
@@ -285,7 +282,7 @@ export async function handleDocsTool(
       // can judge this caller by its own get_doc reads instead of the blunt
       // 10-minute window. The confirm flag is forwarded only when true:
       // the default path stays the protected one.
-      const res = await http('POST', `/api/docs/${encodeURIComponent(docId)}/content`, {
+      const res = await http('POST', `${board()}/docs/${encodeURIComponent(docId)}/content`, {
         markdown,
         author: AUTHOR,
         ...(confirmOverwriteHumanEdits === true ? { confirmOverwriteHumanEdits: true } : {}),
@@ -294,13 +291,16 @@ export async function handleDocsTool(
     }
     case 'reparse_from_disk': {
       const { docId } = a as { docId: string };
-      const res = await http('POST', `/api/docs/${encodeURIComponent(docId)}/reparse_from_disk`);
+      const res = await http(
+        'POST',
+        `${board()}/docs/${encodeURIComponent(docId)}/reparse_from_disk`,
+      );
       return ok(res);
     }
     case 'delete_doc': {
       const { docId, force } = a as { docId: string; force?: boolean };
       const qs = force ? '?force=true' : '';
-      const res = await http('DELETE', `/api/docs/${encodeURIComponent(docId)}${qs}`);
+      const res = await http('DELETE', `${board()}/docs/${encodeURIComponent(docId)}${qs}`);
       return ok(res);
     }
     // COMPAT: `bind_mock` and `bind_folder` are the names these two had
@@ -311,46 +311,29 @@ export async function handleDocsTool(
     // only — one name for one thing in the table an agent reads.
     case 'bind_mock':
     case 'attach_mockup': {
-      const {
-        docId,
-        sourceHtmlPath,
-        title,
-        hubWorkspaceId: boardWorkspaceId,
-      } = a as {
+      const { docId, sourceHtmlPath, title } = a as {
         docId: string;
         sourceHtmlPath?: string;
         title?: string;
-        hubWorkspaceId?: string;
       };
-      // Same POST /api/docs route as attach_markdown, with type='mockup'.
+      // Same POST /workspaces/<ws>/docs route as attach_markdown, type='mockup'.
       // The server's getOrCreate accepts both shapes; `sourceUrl` is optional
       // for mockups (mockups are served via /demos/ rather than file-watched).
-      const res = await http('POST', '/api/docs', {
+      const res = await http('POST', `${board()}/docs`, {
         docId,
         type: 'mockup',
         owner: process.cwd(),
         ...(sourceHtmlPath ? { sourceUrl: sourceHtmlPath } : {}),
         ...(title ? { title } : {}),
-        ...(boardWorkspaceId ? { hubWorkspaceId: boardWorkspaceId } : {}),
       });
       return ok(res);
     }
     case 'bind_folder':
     case 'attach_folder': {
-      const {
-        folderPath,
-        workspaceId,
-        hubWorkspaceId: boardWorkspaceId,
-        title,
-        include,
-        exclude,
-        maxFiles,
-        subscribe,
-        producedBy,
-      } = a as {
+      const { folderPath, setId, title, include, exclude, maxFiles, subscribe, producedBy } = a as {
         folderPath: string;
+        setId?: string;
         workspaceId?: string;
-        hubWorkspaceId?: string;
         title?: string;
         include?: string[];
         exclude?: string[];
@@ -361,10 +344,17 @@ export async function handleDocsTool(
       const res = (await http('POST', '/workspaces', {
         folderPath,
         owner: process.cwd(),
-        ...(workspaceId ? { workspaceId } : {}),
-        // The BOARD, next to the review id above. Two ids, two meanings,
-        // one payload — which is why they are spelled apart.
-        ...(boardWorkspaceId ? { hubWorkspaceId: boardWorkspaceId } : {}),
+        // The SET's own id, re-used to refresh an existing attachment set.
+        // It used to be spelled `workspaceId` here, which is the word every
+        // other tool uses for the BOARD — two meanings on one name, on the
+        // one call that takes both. The board is `workspaceId` now, like
+        // everywhere else, and the set is `setId`, like delete_review's.
+        ...(setId ? { workspaceId: setId } : {}),
+        // Not a path: a folder bind MINTS the set, so it posts to the
+        // collection that fronts both stores. The board still has to be
+        // named, and `boardId()` is the same requirement the path form
+        // makes — one rule, two spellings of the same call.
+        hubWorkspaceId: boardId(),
         ...(title ? { title } : {}),
         ...(include ? { include } : {}),
         ...(exclude ? { exclude } : {}),
@@ -384,7 +374,6 @@ export async function handleDocsTool(
         base,
         target,
         reviewId,
-        hubWorkspaceId: boardWorkspaceId,
         title,
         exclude,
         groups,
@@ -396,7 +385,6 @@ export async function handleDocsTool(
         base: string;
         target?: string;
         reviewId?: string;
-        hubWorkspaceId?: string;
         title?: string;
         exclude?: string[];
         groups?: Array<{ title: string; paths: string[]; details?: string }>;
@@ -404,15 +392,12 @@ export async function handleDocsTool(
         subscribe?: boolean;
         producedBy?: { agentId?: string; sessionId?: string };
       };
-      const res = (await http('POST', '/api/diffs', {
+      const res = (await http('POST', `${board()}/reviews`, {
         repo,
         base,
         ...(target ? { target } : {}),
         owner: process.cwd(),
         ...(reviewId ? { reviewId } : {}),
-        // The BOARD, next to the review id above. Two ids, two meanings,
-        // one payload — which is why they are spelled apart.
-        ...(boardWorkspaceId ? { hubWorkspaceId: boardWorkspaceId } : {}),
         ...(title ? { title } : {}),
         ...(exclude ? { exclude } : {}),
         ...(groups ? { groups } : {}),
@@ -432,13 +417,13 @@ export async function handleDocsTool(
       const { setId, force, purge } = a as { setId: string; force?: boolean; purge?: boolean };
       const params = [force ? 'force=true' : '', purge ? 'purge=true' : ''].filter(Boolean);
       const qs = params.length > 0 ? `?${params.join('&')}` : '';
-      const res = await http('DELETE', `/api/reviews/${encodeURIComponent(setId)}${qs}`);
+      const res = await http('DELETE', `${board()}/reviews/${encodeURIComponent(setId)}${qs}`);
       return ok(res);
     }
     case 'archive_review':
     case 'archive_attachment_set': {
       const { setId, reason } = a as { setId: string; reason?: string };
-      const res = await http('POST', `/api/reviews/${encodeURIComponent(setId)}/archive`, {
+      const res = await http('POST', `${board()}/reviews/${encodeURIComponent(setId)}/archive`, {
         author: AUTHOR,
         ...(reason !== undefined ? { reason } : {}),
       });
@@ -447,14 +432,14 @@ export async function handleDocsTool(
     case 'unarchive_review':
     case 'unarchive_attachment_set': {
       const { setId } = a as { setId: string };
-      const res = await http('POST', `/api/reviews/${encodeURIComponent(setId)}/unarchive`, {
+      const res = await http('POST', `${board()}/reviews/${encodeURIComponent(setId)}/unarchive`, {
         author: AUTHOR,
       });
       return ok(res);
     }
     case 'archive_doc': {
       const { docId, reason } = a as { docId: string; reason?: string };
-      const res = await http('POST', `/api/docs/${encodeURIComponent(docId)}/archive`, {
+      const res = await http('POST', `${board()}/docs/${encodeURIComponent(docId)}/archive`, {
         author: AUTHOR,
         ...(reason !== undefined ? { reason } : {}),
       });
@@ -462,14 +447,14 @@ export async function handleDocsTool(
     }
     case 'unarchive_doc': {
       const { docId } = a as { docId: string };
-      const res = await http('POST', `/api/docs/${encodeURIComponent(docId)}/unarchive`, {
+      const res = await http('POST', `${board()}/docs/${encodeURIComponent(docId)}/unarchive`, {
         author: AUTHOR,
       });
       return ok(res);
     }
     case 'list_archived_reviews':
     case 'list_archived_attachments': {
-      const res = await http('GET', '/api/reviews/archived');
+      const res = await http('GET', `${board()}/reviews?archived=true`);
       return ok(res);
     }
     case 'delete_workspace': {
@@ -499,7 +484,7 @@ export async function handleDocsTool(
     case 'refresh_attachment_set': {
       const { setId, workspaceId } = a as { setId?: string; workspaceId?: string };
       const id = setId ?? workspaceId ?? '';
-      const res = await http('POST', `/api/reviews/${encodeURIComponent(id)}/refresh`, {});
+      const res = await http('POST', `${board()}/reviews/${encodeURIComponent(id)}/refresh`, {});
       return ok(res);
     }
     case 'set_workspace_groups':
@@ -511,7 +496,7 @@ export async function handleDocsTool(
         groups: Array<{ title: string; paths: string[]; details?: string }>;
       };
       const id = setId ?? workspaceId ?? '';
-      const res = await http('POST', `/api/reviews/${encodeURIComponent(id)}/groups`, {
+      const res = await http('POST', `${board()}/reviews/${encodeURIComponent(id)}/groups`, {
         groups,
       });
       return ok(res);
@@ -538,16 +523,20 @@ export async function handleDocsTool(
         parseInlineMarks?: boolean;
         suggest?: boolean;
       };
-      const res = await http('POST', `/api/docs/${encodeURIComponent(docId)}/find_and_replace`, {
-        find,
-        replace,
-        ...(contextBefore !== undefined ? { contextBefore } : {}),
-        ...(contextAfter !== undefined ? { contextAfter } : {}),
-        ...(occurrence !== undefined ? { occurrence } : {}),
-        ...(replaceAll === true ? { replaceAll: true } : {}),
-        ...(parseInlineMarks === true ? { parseInlineMarks: true } : {}),
-        ...(suggest === true ? { suggest: true, author: suggestionAuthor() } : {}),
-      });
+      const res = await http(
+        'POST',
+        `${board()}/docs/${encodeURIComponent(docId)}/find_and_replace`,
+        {
+          find,
+          replace,
+          ...(contextBefore !== undefined ? { contextBefore } : {}),
+          ...(contextAfter !== undefined ? { contextAfter } : {}),
+          ...(occurrence !== undefined ? { occurrence } : {}),
+          ...(replaceAll === true ? { replaceAll: true } : {}),
+          ...(parseInlineMarks === true ? { parseInlineMarks: true } : {}),
+          ...(suggest === true ? { suggest: true, author: suggestionAuthor() } : {}),
+        },
+      );
       return ok(res);
     }
     case 'rewrite_thread_region': {
@@ -560,7 +549,7 @@ export async function handleDocsTool(
       };
       const res = await http(
         'POST',
-        `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/rewrite_region`,
+        `${board()}/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/rewrite_region`,
         {
           replacement,
           ...(parseInlineMarks === true ? { parseInlineMarks: true } : {}),
@@ -571,14 +560,14 @@ export async function handleDocsTool(
     }
     case 'list_suggestions': {
       const { docId } = a as { docId: string };
-      const res = await http('GET', `/api/docs/${encodeURIComponent(docId)}/suggestions`);
+      const res = await http('GET', `${board()}/docs/${encodeURIComponent(docId)}/suggestions`);
       return ok(res);
     }
     case 'accept_suggestion': {
       const { docId, sid } = a as { docId: string; sid: string };
       const res = await http(
         'POST',
-        `/api/docs/${encodeURIComponent(docId)}/suggestions/${encodeURIComponent(sid)}/accept`,
+        `${board()}/docs/${encodeURIComponent(docId)}/suggestions/${encodeURIComponent(sid)}/accept`,
       );
       return ok(res);
     }
@@ -586,7 +575,7 @@ export async function handleDocsTool(
       const { docId, sid } = a as { docId: string; sid: string };
       const res = await http(
         'POST',
-        `/api/docs/${encodeURIComponent(docId)}/suggestions/${encodeURIComponent(sid)}/reject`,
+        `${board()}/docs/${encodeURIComponent(docId)}/suggestions/${encodeURIComponent(sid)}/reject`,
       );
       return ok(res);
     }
@@ -598,7 +587,7 @@ export async function handleDocsTool(
       };
       const res = await http(
         'POST',
-        `/api/docs/${encodeURIComponent(docId)}/suggestions/resolve_all`,
+        `${board()}/docs/${encodeURIComponent(docId)}/suggestions/resolve_all`,
         { action, ...(authorId !== undefined ? { authorId } : {}) },
       );
       return ok(res);
@@ -611,7 +600,7 @@ export async function handleDocsTool(
       };
       const res = await http(
         'POST',
-        `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_after`,
+        `${board()}/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_after`,
         { text },
       );
       return ok(res);
@@ -625,7 +614,7 @@ export async function handleDocsTool(
       };
       const res = await http(
         'POST',
-        `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_blocks_after`,
+        `${board()}/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_blocks_after`,
         { markdown, ...(placement !== undefined ? { placement } : {}) },
       );
       return ok(res);
@@ -639,7 +628,7 @@ export async function handleDocsTool(
         occurrence?: number;
         label?: string;
       };
-      const res = await http('POST', `/api/docs/${encodeURIComponent(docId)}/agent_anchors`, {
+      const res = await http('POST', `${board()}/docs/${encodeURIComponent(docId)}/agent_anchors`, {
         find,
         ...(contextBefore !== undefined ? { contextBefore } : {}),
         ...(contextAfter !== undefined ? { contextAfter } : {}),
@@ -656,7 +645,7 @@ export async function handleDocsTool(
       };
       const res = await http(
         'POST',
-        `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/edit`,
+        `${board()}/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/edit`,
         op,
       );
       return ok(res);
@@ -670,7 +659,7 @@ export async function handleDocsTool(
       };
       const res = await http(
         'POST',
-        `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/insert_blocks`,
+        `${board()}/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/insert_blocks`,
         { markdown, ...(placement !== undefined ? { placement } : {}) },
       );
       return ok(res);
@@ -679,7 +668,7 @@ export async function handleDocsTool(
       const { docId, anchorId } = a as { docId: string; anchorId: string };
       const res = await http(
         'DELETE',
-        `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}`,
+        `${board()}/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}`,
       );
       return ok(res);
     }
@@ -691,7 +680,7 @@ export async function handleDocsTool(
       };
       const res = await http(
         'POST',
-        `/api/docs/${encodeURIComponent(docId)}/delete_block_at_anchor`,
+        `${board()}/docs/${encodeURIComponent(docId)}/delete_block_at_anchor`,
         {
           ...(threadId !== undefined ? { threadId } : {}),
           ...(anchorId !== undefined ? { anchorId } : {}),
@@ -719,7 +708,7 @@ export async function handleDocsTool(
       };
       const res = await http(
         'POST',
-        `/api/docs/${encodeURIComponent(docId)}/delete_blocks_in_range`,
+        `${board()}/docs/${encodeURIComponent(docId)}/delete_blocks_in_range`,
         {
           startFind,
           endFind,
@@ -738,11 +727,15 @@ export async function handleDocsTool(
         level?: number;
         occurrence?: number;
       };
-      const res = await http('POST', `/api/docs/${encodeURIComponent(docId)}/delete_section`, {
-        heading,
-        ...(level !== undefined ? { level } : {}),
-        ...(occurrence !== undefined ? { occurrence } : {}),
-      });
+      const res = await http(
+        'POST',
+        `${board()}/docs/${encodeURIComponent(docId)}/delete_section`,
+        {
+          heading,
+          ...(level !== undefined ? { level } : {}),
+          ...(occurrence !== undefined ? { occurrence } : {}),
+        },
+      );
       return ok(res);
     }
     case 'observe_url': {

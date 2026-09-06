@@ -21,6 +21,7 @@
  * write.
  */
 
+import { api } from '../doc-path.ts';
 import { timeAgo } from './board-presence-model.ts';
 
 export type TaskAskKind = 'plan' | 'review';
@@ -105,14 +106,14 @@ export function taskAskReceipt(
 /**
  * Where a press goes. `task:<id>` is the ticket's body-doc id — the same
  * doc its comments already post to — and it is encoded as ONE path segment,
- * colon and all, because the route matches `/api/docs/([^/]+)` and an
+ * colon and all, because the route matches /workspaces/<ws>/docs/([^/]+) and an
  * unescaped id would still resolve while a slash in a future id would not.
  */
 export function taskAskRequestPath(taskId: string, kind: TaskAskKind): string {
-  return `/api/docs/${encodeURIComponent(`task:${taskId}`)}/${kind}-request`;
+  return api(`docs/${encodeURIComponent(`task:${taskId}`)}/${kind}-request`);
 }
 
 /** Where the panel reads the two stamps back from after a press or a reopen. */
 export function taskAskStatePath(taskId: string): string {
-  return `/api/docs/${encodeURIComponent(`task:${taskId}`)}`;
+  return api(`docs/${encodeURIComponent(`task:${taskId}`)}`);
 }

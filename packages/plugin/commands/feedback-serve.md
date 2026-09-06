@@ -25,7 +25,7 @@ happen over Tailscale or the local network. Private by default.
 After starting, suggest the user try:
 
 ```
-http://<tailscale-or-lan-host>:<port>/review/<docId>?as=bryan
+http://<tailscale-or-lan-host>:<port>/workspaces/<workspaceId>/docs/<docId>?as=bryan
 ```
 
 For a simulated phone viewport on a desktop browser, append

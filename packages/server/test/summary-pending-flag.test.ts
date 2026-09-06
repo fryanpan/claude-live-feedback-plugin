@@ -24,6 +24,7 @@ import type { ElementAnchor, Thread, User } from '@feedback/core';
 import type * as Y from 'yjs';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { ThreadSummarizer } from '../src/summarize.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const bryan: User = { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' };
 
@@ -64,14 +65,14 @@ async function seedThread(
   const file = join(dataDir, `${name}.md`);
   writeFileSync(file, '# Doc\n\nsome text\n');
   const { docId } = await j<{ docId: string }>(
-    await fetch(`${base}/api/docs`, {
+    await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: name, type: 'markdown', sourceUrl: file }),
     }),
   );
   const { thread } = await j<{ thread: Thread }>(
-    await fetch(`${base}/api/docs/${name}/threads`, {
+    await fetch(`${base}/workspaces/${WS}/docs/${name}/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ author: bryan, text: 'why does this not bubble up?', anchor }),
@@ -85,6 +86,9 @@ function markerOf(handle: ServerHandle, docId: string, threadId: string): unknow
   const threads = doc?.ydoc.getMap('threads') as Y.Map<Y.Map<unknown>> | undefined;
   return threads?.get(threadId)?.get('summaryPendingTs');
 }
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('summaryPendingTs marker', () => {
   const priorEnv = process.env.CW_SUMMARIES;
@@ -100,7 +104,7 @@ describe('summaryPendingTs marker', () => {
     let base: string;
     let summarizer: ThreadSummarizer;
 
-    beforeAll(() => {
+    beforeAll(async () => {
       Reflect.deleteProperty(process.env, 'CW_SUMMARIES');
       dataDir = mkdtempSync(join(tmpdir(), 'feedback-summary-marker-on-'));
       summarizer = new ThreadSummarizer({
@@ -111,6 +115,7 @@ describe('summaryPendingTs marker', () => {
       });
       handle = createServer({ port: 0, dataDir, summarizer });
       base = `http://localhost:${handle.port}`;
+      WS = await seedBoard(base);
     });
 
     afterAll(async () => {
@@ -159,13 +164,14 @@ describe('summaryPendingTs marker', () => {
     let base: string;
     let summarizer: ThreadSummarizer;
 
-    beforeAll(() => {
+    beforeAll(async () => {
       dataDir = mkdtempSync(join(tmpdir(), 'feedback-summary-marker-off-'));
       // apiKey: null is "no key" explicitly (omitting consults the Keychain,
       // which RESOLVES on the machine this feature runs on).
       summarizer = new ThreadSummarizer({ apiKey: null, fetchImpl: stubFetch });
       handle = createServer({ port: 0, dataDir, summarizer });
       base = `http://localhost:${handle.port}`;
+      WS = await seedBoard(base);
     });
 
     afterAll(async () => {

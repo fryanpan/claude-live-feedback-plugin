@@ -1,5 +1,6 @@
 import { suggestOps } from '@feedback/core';
 import type * as Y from 'yjs';
+import { api } from '../doc-path.ts';
 import { el, showToast } from '../doc/chrome-dom.ts';
 import type { MountScope } from '../mount-scope.ts';
 
@@ -88,7 +89,7 @@ export function mountSuggestionsSummary(opts: SuggestionsSummaryOpts): Suggestio
   async function resolveAll(action: 'accept' | 'reject'): Promise<void> {
     closeMenu();
     try {
-      const res = await fetch(`/api/docs/${encodeURIComponent(docId)}/suggestions/resolve_all`, {
+      const res = await fetch(api(`docs/${encodeURIComponent(docId)}/suggestions/resolve_all`), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action }),

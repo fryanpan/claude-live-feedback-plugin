@@ -197,7 +197,7 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
 
     const path = join(dataDir, 'shared-doc.md');
     writeFileSync(path, '# Shared doc\n\nA line worth a comment.\n');
-    const doc = await asOwnerJson('/api/docs', 'POST', {
+    const doc = await asOwnerJson(`/workspaces/${board}/docs`, 'POST', {
       docId: 'shared-doc',
       type: 'markdown',
       sourceUrl: path,
@@ -205,12 +205,12 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
     expect(doc.status).toBe(200);
     docId = ((await doc.json()) as { docId: string }).docId;
     expect(
-      (await asOwnerJson(`/workspaces/${encodeURIComponent(board)}/docs`, 'POST', { docId }))
+      (await asOwnerJson(`/workspaces/${encodeURIComponent(board)}/docs:attach`, 'POST', { docId }))
         .status,
     ).toBe(200);
 
     const thread = await asOwnerJson(
-      `/api/docs/${encodeURIComponent(docId)}/threads/by_find`,
+      `/workspaces/${board}/docs/${encodeURIComponent(docId)}/threads/by_find`,
       'POST',
       {
         author: { id: 'known-owner', name: 'Owner', kind: 'known' },
@@ -238,7 +238,11 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
   });
 
   describe('A. a cross-reference cannot reach off the board', () => {
-    const linkPath = (taskId: string) => `/api/tasks/${encodeURIComponent(taskId)}/links`;
+    // The BOARD is part of a task's address now, so a row on the other board
+    // is reached through the other board — asking for it under this one is a
+    // 404 about the pair, not a refusal about the link.
+    const linkPath = (taskId: string, ws: string = board) =>
+      `/workspaces/${ws}/tasks/${encodeURIComponent(taskId)}/links`;
 
     it('refuses a link from the member’s own row to a row on another board', async () => {
       const res = await asMemberJson(linkPath(ownTask), 'POST', {
@@ -282,7 +286,9 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
     it('refuses a doc ref pointing at a board they were never given', async () => {
       const path = join(dataDir, 'private-doc.md');
       writeFileSync(path, '# Private\n\nNot theirs.\n');
-      const created = await asOwnerJson('/api/docs', 'POST', {
+      // Filed on the OTHER board, which is the whole point: a doc created on
+      // the member's own board would be one they are entitled to.
+      const created = await asOwnerJson(`/workspaces/${otherBoard}/docs`, 'POST', {
         docId: 'private-doc',
         type: 'markdown',
         sourceUrl: path,
@@ -291,7 +297,7 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
       const privateDocId = ((await created.json()) as { docId: string }).docId;
       expect(
         (
-          await asOwnerJson(`/workspaces/${encodeURIComponent(otherBoard)}/docs`, 'POST', {
+          await asOwnerJson(`/workspaces/${encodeURIComponent(otherBoard)}/docs:attach`, 'POST', {
             docId: privateDocId,
           })
         ).status,
@@ -344,7 +350,7 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
     });
 
     it('refuses the same ref when a promoted thread carries it', async () => {
-      const promote = `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/promote`;
+      const promote = `/workspaces/${board}/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/promote`;
       const res = await asMemberJson(promote, 'POST', {
         workspaceId: board,
         title: 'Promoted with a reach off the board',
@@ -366,7 +372,7 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
     it('leaves NO backlink chip on the board they were never given', async () => {
       // The point of all of the above, asked from the other side: the owner
       // reading the private row sees nothing pointing at it from outside.
-      const res = await asOwner(linkPath(foreignTask));
+      const res = await asOwner(linkPath(foreignTask, otherBoard));
       expect(res.status).toBe(200);
       const { backlinks } = (await res.json()) as { backlinks: Array<{ id: string }> };
       expect(backlinks).toEqual([]);
@@ -440,38 +446,56 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
       // doc is theirs to read, and the chip rides in on the back of it.
       expect(
         (
-          await asOwnerJson(`/api/tasks/${encodeURIComponent(foreignTask)}/links`, 'POST', {
-            ref: { kind: 'doc', docId },
-          })
+          await asOwnerJson(
+            `/workspaces/${otherBoard}/tasks/${encodeURIComponent(foreignTask)}/links`,
+            'POST',
+            {
+              ref: { kind: 'doc', docId },
+            },
+          )
         ).status,
       ).toBe(200);
       expect(
         (
-          await asOwnerJson(`/api/tasks/${encodeURIComponent(foreignTask)}/links`, 'POST', {
-            ref: { kind: 'thread', docId, threadId },
-          })
+          await asOwnerJson(
+            `/workspaces/${otherBoard}/tasks/${encodeURIComponent(foreignTask)}/links`,
+            'POST',
+            {
+              ref: { kind: 'thread', docId, threadId },
+            },
+          )
         ).status,
       ).toBe(200);
       // The same two links from a row on the member's own board, which is the
       // positive control every assertion below is measured against.
       expect(
         (
-          await asOwnerJson(`/api/tasks/${encodeURIComponent(ownTask)}/links`, 'POST', {
-            ref: { kind: 'doc', docId },
-          })
+          await asOwnerJson(
+            `/workspaces/${board}/tasks/${encodeURIComponent(ownTask)}/links`,
+            'POST',
+            {
+              ref: { kind: 'doc', docId },
+            },
+          )
         ).status,
       ).toBe(200);
       expect(
         (
-          await asOwnerJson(`/api/tasks/${encodeURIComponent(ownTask)}/links`, 'POST', {
-            ref: { kind: 'thread', docId, threadId },
-          })
+          await asOwnerJson(
+            `/workspaces/${board}/tasks/${encodeURIComponent(ownTask)}/links`,
+            'POST',
+            {
+              ref: { kind: 'thread', docId, threadId },
+            },
+          )
         ).status,
       ).toBe(200);
     });
 
     it('the doc’s own chips carry the member’s board and not the other one', async () => {
-      const res = await asMember(`/api/docs/${encodeURIComponent(docId)}`);
+      const res = await asMember(
+        `/workspaces/${board}/docs/${encodeURIComponent(docId)}?format=json`,
+      );
       expect(res.status).toBe(200);
       const { tasks = [] } = (await res.json()) as { tasks?: Array<{ id: string; title: string }> };
       const ids = tasks.map((t) => t.id);
@@ -482,7 +506,7 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
     });
 
     it('the dedicated chip route answers the same way', async () => {
-      const res = await asMember(`/api/docs/${encodeURIComponent(docId)}/tasks`);
+      const res = await asMember(`/workspaces/${board}/docs/${encodeURIComponent(docId)}/tasks`);
       expect(res.status).toBe(200);
       const { tasks } = (await res.json()) as { tasks: Array<{ id: string }> };
       expect(tasks.map((t) => t.id)).toContain(ownTask); // CONTROL
@@ -490,7 +514,7 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
     });
 
     it('a thread’s chips do too — same question, second spelling', async () => {
-      const res = await asMember(`/api/docs/${encodeURIComponent(docId)}/threads`);
+      const res = await asMember(`/workspaces/${board}/docs/${encodeURIComponent(docId)}/threads`);
       expect(res.status).toBe(200);
       const { threads } = (await res.json()) as {
         threads: Array<{ id: string; tasks?: Array<{ id: string }> }>;
@@ -503,7 +527,7 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
     });
 
     it('CONTROL: the owner still sees both, because the span is the point', async () => {
-      const res = await asOwner(`/api/docs/${encodeURIComponent(docId)}/tasks`);
+      const res = await asOwner(`/workspaces/${board}/docs/${encodeURIComponent(docId)}/tasks`);
       const { tasks } = (await res.json()) as { tasks: Array<{ id: string }> };
       const ids = tasks.map((t) => t.id);
       expect(ids).toContain(ownTask);
@@ -547,7 +571,7 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
     it('attributes the write to the email Cloudflare confirmed', async () => {
       const token = await mintImpostorToken();
       const res = await asMemberJson(
-        `/api/docs/${encodeURIComponent(docId)}/threads/by_find`,
+        `/workspaces/${board}/docs/${encodeURIComponent(docId)}/threads/by_find`,
         'POST',
         { text: 'written on the share host', find: 'A line worth a comment.' },
         { authorization: `Bearer ${token}`, origin: COLLAB_ORIGIN },
@@ -565,15 +589,18 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
       // The rung this narrows is otherwise untouched: on the local surface a
       // widget token is still exactly the attribution it was minted to be.
       const token = await mintImpostorToken(DEV_ORIGIN);
-      const res = await asOwner(`/api/docs/${encodeURIComponent(docId)}/threads/by_find`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${token}`,
-          origin: DEV_ORIGIN,
+      const res = await asOwner(
+        `/workspaces/${board}/docs/${encodeURIComponent(docId)}/threads/by_find`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            authorization: `Bearer ${token}`,
+            origin: DEV_ORIGIN,
+          },
+          body: JSON.stringify({ text: 'written from the dev server', find: 'Shared doc' }),
         },
-        body: JSON.stringify({ text: 'written from the dev server', find: 'Shared doc' }),
-      });
+      );
       expect(res.status, await res.clone().text()).toBe(200);
       const { thread } = (await res.json()) as {
         thread: { comments: Array<{ author: { name: string } }> };
@@ -589,7 +616,7 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
       // that has not listed its collaboration hostname as an allowed origin.
       const token = await mintImpostorToken(DEV_ORIGIN);
       const res = await asMemberJson(
-        `/api/docs/${encodeURIComponent(docId)}/threads/by_find`,
+        `/workspaces/${board}/docs/${encodeURIComponent(docId)}/threads/by_find`,
         'POST',
         { text: 'from a dev server, at the share host', find: 'Shared doc' },
         { authorization: `Bearer ${token}`, origin: DEV_ORIGIN },
@@ -598,7 +625,7 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
       // …and stripping the Origin does not help: the token is refused without
       // the one it was minted for.
       const bare = await asMemberJson(
-        `/api/docs/${encodeURIComponent(docId)}/threads/by_find`,
+        `/workspaces/${board}/docs/${encodeURIComponent(docId)}/threads/by_find`,
         'POST',
         { text: 'no origin at all', find: 'Shared doc' },
         { authorization: `Bearer ${token}` },
@@ -615,8 +642,10 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
   // cross-board edge to everybody — pinned below, because a route test that
   // only showed the 403 would not say why the 409 is safe.
   describe('F. a dependency edge cannot reach off the board either', () => {
-    const afterPath = (taskId: string) => `/api/tasks/${encodeURIComponent(taskId)}/after`;
-    const parkPath = (taskId: string) => `/api/tasks/${encodeURIComponent(taskId)}/park`;
+    const afterPath = (taskId: string) =>
+      `/workspaces/${board}/tasks/${encodeURIComponent(taskId)}/after`;
+    const parkPath = (taskId: string) =>
+      `/workspaces/${board}/tasks/${encodeURIComponent(taskId)}/park`;
     /** Not spelled like a real row id: the pre-push leak scanner reads
      *  `t-<slug>` as one wherever it appears. */
     const MADE_UP = 'no-such-row-anywhere';
@@ -715,7 +744,7 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
       });
       expect(wired.status, await wired.clone().text()).toBe(200);
       const res = await asMemberJson(
-        `/api/tasks/${encodeURIComponent(ownTask)}/transition`,
+        `/workspaces/${board}/tasks/${encodeURIComponent(ownTask)}/transition`,
         'POST',
         { to: 'in-progress' },
       );

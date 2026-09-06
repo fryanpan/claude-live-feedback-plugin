@@ -1,5 +1,5 @@
 import { prose, suggestOps } from '@feedback/core';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import { MountScope } from '../src/mount-scope.ts';
 import { mountSuggestionsSummary } from '../src/suggestions/suggestions-summary.ts';
@@ -12,6 +12,13 @@ import { mountSuggestionsSummary } from '../src/suggestions/suggestions-summary.
  * menu offering Accept all / Reject all across every author (not
  * per-suggestion — that lives in the balloon/chip card, markup-margin.ts).
  */
+
+/** The board the page is standing on — every resource route is under it. */
+const WS = 'w-1';
+
+beforeEach(() => {
+  history.replaceState(null, '', `/workspaces/${WS}/docs/d1`);
+});
 
 const open: Array<() => void> = [];
 afterEach(() => {
@@ -111,7 +118,7 @@ describe('mountSuggestionsSummary — Accept all / Reject all', () => {
     vi.stubGlobal('fetch', fetchSpy);
     (document.getElementById('suggestions-accept-all') as HTMLButtonElement).click();
     expect(fetchSpy).toHaveBeenCalledWith(
-      '/api/docs/d1/suggestions/resolve_all',
+      `/workspaces/${WS}/docs/d1/suggestions/resolve_all`,
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({ action: 'accept' }),
@@ -130,7 +137,7 @@ describe('mountSuggestionsSummary — Accept all / Reject all', () => {
     vi.stubGlobal('fetch', fetchSpy);
     (document.getElementById('suggestions-reject-all') as HTMLButtonElement).click();
     expect(fetchSpy).toHaveBeenCalledWith(
-      '/api/docs/d1/suggestions/resolve_all',
+      `/workspaces/${WS}/docs/d1/suggestions/resolve_all`,
       expect.objectContaining({ body: JSON.stringify({ action: 'reject' }) }),
     );
     expect(menu.classList.contains('hidden')).toBe(true);

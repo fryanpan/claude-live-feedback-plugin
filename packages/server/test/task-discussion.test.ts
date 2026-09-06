@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { taskBodyDocId, workspaceDocId } from '../src/task-projection.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' };
 
@@ -54,6 +55,9 @@ type ThreadPayload = {
   thread: { id: string; anchor: { kind: string }; comments: Array<{ text: string }> };
 };
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('task discussion', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -71,6 +75,7 @@ describe('task discussion', () => {
   async function makeTaskIn(title: string): Promise<{ taskId: string; workspaceId: string }> {
     const w = await post('/workspaces', { name: 'search-revamp', goal: 'Ship it.' });
     const { workspace } = (await w.json()) as { workspace: { id: string } };
+    WS = workspace.id;
     const r = await post(`/workspaces/${workspace.id}/tasks`, { author: PERSON, title });
     expect(r.status).toBe(200);
     const { task } = (await r.json()) as { task: { id: string } };
@@ -81,10 +86,11 @@ describe('task discussion', () => {
     return (await makeTaskIn(title)).taskId;
   }
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'task-discussion-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterAll(async () => {
@@ -96,7 +102,7 @@ describe('task discussion', () => {
     const taskId = await makeTask('Wire the index');
     const docId = taskBodyDocId(taskId);
 
-    const r = await post(`/api/docs/${encodeURIComponent(docId)}/threads`, {
+    const r = await post(`/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads`, {
       author: PERSON,
       text: 'Is this still the plan after the retriage?',
       anchor: { kind: 'subject' },
@@ -108,7 +114,7 @@ describe('task discussion', () => {
 
     // And it is READABLE — a thread that exists only in the store is the
     // failure this surface is meant to avoid.
-    const list = await get(`/api/docs/${encodeURIComponent(docId)}/threads`);
+    const list = await get(`/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads`);
     expect(list.status).toBe(200);
     const listed = (await list.json()) as {
       threads: Array<{ id: string; anchor: { kind: string } }>;
@@ -121,17 +127,20 @@ describe('task discussion', () => {
   // caring what it was handed.
   it('POSITIVE CONTROL: the route still refuses a thread with no anchor at all', async () => {
     const taskId = await makeTask('Wire the index');
-    const r = await post(`/api/docs/${encodeURIComponent(taskBodyDocId(taskId))}/threads`, {
-      author: PERSON,
-      text: 'no anchor here',
-    });
+    const r = await post(
+      `/workspaces/${WS}/docs/${encodeURIComponent(taskBodyDocId(taskId))}/threads`,
+      {
+        author: PERSON,
+        text: 'no anchor here',
+      },
+    );
     expect(r.status).toBe(400);
   });
 
   it('a reply lands on the subject thread and it stays a subject thread', async () => {
     const taskId = await makeTask('Wire the index');
     const docId = taskBodyDocId(taskId);
-    const created = await post(`/api/docs/${encodeURIComponent(docId)}/threads`, {
+    const created = await post(`/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads`, {
       author: PERSON,
       text: 'Why is this above the API work?',
       anchor: { kind: 'subject' },
@@ -139,12 +148,12 @@ describe('task discussion', () => {
     const { thread } = (await created.json()) as ThreadPayload;
 
     const reply = await post(
-      `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(thread.id)}/comments`,
+      `/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(thread.id)}/comments`,
       { author: PERSON, text: 'Because the index unblocks two others.' },
     );
     expect(reply.status).toBe(200);
 
-    const list = await get(`/api/docs/${encodeURIComponent(docId)}/threads`);
+    const list = await get(`/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads`);
     const listed = (await list.json()) as {
       threads: Array<{ id: string; anchor: { kind: string }; comments: unknown[] }>;
     };
@@ -166,7 +175,7 @@ describe('task discussion', () => {
 
     expect(projected().commentCount ?? 0).toBe(0);
 
-    const created = await post(`/api/docs/${encodeURIComponent(docId)}/threads`, {
+    const created = await post(`/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads`, {
       author: PERSON,
       text: 'Is this still the plan?',
       anchor: { kind: 'subject' },
@@ -175,7 +184,7 @@ describe('task discussion', () => {
     expect(projected().commentCount).toBe(1);
 
     await post(
-      `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(thread.id)}/comments`,
+      `/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(thread.id)}/comments`,
       { author: PERSON, text: 'It is.' },
     );
     expect(projected().commentCount).toBe(2);
@@ -200,15 +209,21 @@ describe('task discussion', () => {
     // Positive control: this channel is live and delivering — without it,
     // "the comment arrived" and "the stream works at all" are the same
     // assertion, and an empty list would prove nothing.
-    await post(`/api/tasks/${taskId}/transition`, { to: 'in-progress', author: PERSON });
+    await post(`/workspaces/${workspaceId}/tasks/${taskId}/transition`, {
+      to: 'in-progress',
+      author: PERSON,
+    });
     await settle();
     expect(heard.events).toContain('task.transitioned');
 
-    await post(`/api/docs/${encodeURIComponent(taskBodyDocId(taskId))}/threads`, {
-      author: PERSON,
-      text: 'Is this still the plan?',
-      anchor: { kind: 'subject' },
-    });
+    await post(
+      `/workspaces/${workspaceId}/docs/${encodeURIComponent(taskBodyDocId(taskId))}/threads`,
+      {
+        author: PERSON,
+        text: 'Is this still the plan?',
+        anchor: { kind: 'subject' },
+      },
+    );
     await settle();
     heard.stop();
     expect(heard.events).toContain('thread.created');

@@ -17,10 +17,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ChatAudit, chatAuditLogPath, normalizeAgent } from '../src/chat-audit.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('ChatAudit store', () => {
   let dir: string;
-  afterEach(() => {
+  afterEach(async () => {
     if (dir) rmSync(dir, { recursive: true, force: true });
   });
 
@@ -117,13 +121,14 @@ describe('ChatAudit store', () => {
   });
 });
 
-describe('/api/chat-audit routes', () => {
+describe(`/workspaces/${WS}/chat-audit routes`, () => {
   let handle: ServerHandle | null = null;
   let dataDir: string | null = null;
 
-  const start = () => {
+  const start = async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'chat-audit-route-'));
     handle = createServer({ port: 0, dataDir });
+    WS = await seedBoard(`http://localhost:${handle.port}`);
     return `http://localhost:${handle.port}`;
   };
 
@@ -147,17 +152,17 @@ describe('/api/chat-audit routes', () => {
   };
 
   it('a session reads its own number back: null before any audit, the count after', async () => {
-    const base = start();
+    const base = await start();
 
     // Before any publish: a real answer, not an error — and explicitly null.
-    const before = await call(base, '/api/chat-audit/Alpha%20Agent', 'GET');
+    const before = await call(base, `/workspaces/${WS}/chat-audit/Alpha%20Agent`, 'GET');
     expect(before.status).toBe(200);
     expect(before.json.latest).toBeNull();
     expect(before.json.today).toBeNull();
     expect(typeof before.json.day).toBe('string');
 
     const day = before.json.day as string;
-    const post = await call(base, '/api/chat-audit', 'POST', {
+    const post = await call(base, `/workspaces/${WS}/chat-audit`, 'POST', {
       day,
       auditor: 'Team Lead',
       entries: [{ agent: 'Alpha Agent', unfiledAsks: 3, note: 'two asks in chat, one filed' }],
@@ -166,38 +171,38 @@ describe('/api/chat-audit routes', () => {
     expect((post.json.rows as Array<{ unfiledAsks: number }>)[0]?.unfiledAsks).toBe(3);
 
     // The positive control for `before`: the same probe now sees the number.
-    const after = await call(base, '/api/chat-audit/Alpha%20Agent', 'GET');
+    const after = await call(base, `/workspaces/${WS}/chat-audit/Alpha%20Agent`, 'GET');
     expect(after.status).toBe(200);
     expect((after.json.today as { unfiledAsks: number }).unfiledAsks).toBe(3);
     expect((after.json.latest as { auditor?: string }).auditor).toBe('Team Lead');
 
     // A different agent still reads null — counts are per agent.
-    const other = await call(base, '/api/chat-audit/Beta%20Agent', 'GET');
+    const other = await call(base, `/workspaces/${WS}/chat-audit/Beta%20Agent`, 'GET');
     expect(other.json.latest).toBeNull();
   });
 
   it('lists the latest row per agent for the audit to reference', async () => {
-    const base = start();
-    await call(base, '/api/chat-audit', 'POST', {
+    const base = await start();
+    await call(base, `/workspaces/${WS}/chat-audit`, 'POST', {
       entries: [
         { agent: 'Alpha', unfiledAsks: 2 },
         { agent: 'Beta', unfiledAsks: 0 },
       ],
     });
-    const list = await call(base, '/api/chat-audit', 'GET');
+    const list = await call(base, `/workspaces/${WS}/chat-audit`, 'GET');
     expect(list.status).toBe(200);
     expect(list.json.rows as unknown[]).toHaveLength(2);
   });
 
   it('refuses a bad publish with a 400 that names the problem', async () => {
-    const base = start();
-    const noEntries = await call(base, '/api/chat-audit', 'POST', { entries: [] });
+    const base = await start();
+    const noEntries = await call(base, `/workspaces/${WS}/chat-audit`, 'POST', { entries: [] });
     expect(noEntries.status).toBe(400);
-    const shared = await call(base, '/api/chat-audit', 'POST', {
+    const shared = await call(base, `/workspaces/${WS}/chat-audit`, 'POST', {
       entries: [{ agent: 'agent', unfiledAsks: 1 }],
     });
     expect(shared.status).toBe(400);
-    const sharedRead = await call(base, '/api/chat-audit/agent', 'GET');
+    const sharedRead = await call(base, `/workspaces/${WS}/chat-audit/agent`, 'GET');
     expect(sharedRead.status).toBe(400);
   });
 });

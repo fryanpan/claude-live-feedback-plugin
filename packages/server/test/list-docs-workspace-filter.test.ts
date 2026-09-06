@@ -16,13 +16,17 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 interface DocMetaOut {
   docId: string;
   workspaceId?: string;
 }
 
-describe('GET /api/docs honours its workspaceId filter', () => {
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
+describe(`GET /workspaces/${WS}/docs honours its workspaceId filter`, () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
@@ -47,7 +51,7 @@ describe('GET /api/docs honours its workspaceId filter', () => {
       body: JSON.stringify(body),
     });
   const listDocs = async (qs = ''): Promise<DocMetaOut[]> => {
-    const r = await local(`/api/docs${qs}`);
+    const r = await local(`/workspaces/${WS}/docs${qs}`);
     expect(r.status).toBe(200);
     return ((await r.json()) as { docs: DocMetaOut[] }).docs;
   };
@@ -61,21 +65,24 @@ describe('GET /api/docs honours its workspaceId filter', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'list-docs-ws-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
 
     const a = await post('/workspaces', { name: 'board-a', goal: 'Ship A.' });
     wsA = ((await a.json()) as { workspace: { id: string } }).workspace.id;
     const b = await post('/workspaces', { name: 'board-b', goal: 'Ship B.' });
     wsB = ((await b.json()) as { workspace: { id: string } }).workspace.id;
+    // The listings below are addressed under board A. `WS` is what `listDocs`
+    // spells in the path, and the path is now the OUTER scope of the listing.
+    WS = wsA;
 
     for (const [docId, ws] of [
       ['doc-in-a', wsA],
       ['doc-in-b', wsB],
     ] as const) {
-      const r = await post('/api/docs', {
+      const r = await post(`/workspaces/${ws}/docs`, {
         docId,
         type: 'markdown',
         sourceUrl: mdFile(`${docId}.md`),
-        hubWorkspaceId: ws,
       });
       expect(r.status).toBe(200);
       mintedId[docId] = ((await r.json()) as { docId: string }).docId;
@@ -87,20 +94,31 @@ describe('GET /api/docs honours its workspaceId filter', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it('returns only the named workspace’s docs, not the whole server', async () => {
-    // Positive control first: without the param both docs are in the listing,
-    // so "absent when filtered" below is a claim about the filter.
+  it('returns only the board in the PATH, and the param can only narrow it', async () => {
+    // The path is the scope now, before any query filter. `?workspaceId=` used
+    // to be the ONLY scope this listing had, and leaving it that way under
+    // `/workspaces/<id>/docs` would have let a member of one board read
+    // another board's listing through it.
     const all = (await listDocs()).map((d) => d.docId);
     expect(all).toContain(mintedId['doc-in-a']);
-    expect(all).toContain(mintedId['doc-in-b']);
+    expect(all).not.toContain(mintedId['doc-in-b']);
 
+    // The param survives as a FILTER on top — a review set's grouping tag is
+    // spelled the same way (the test below) — and naming board A again is a
+    // no-op rather than a second scope.
     const scoped = (await listDocs(`?workspaceId=${encodeURIComponent(wsA)}`)).map((d) => d.docId);
     expect(scoped).toContain(mintedId['doc-in-a']);
     expect(scoped).not.toContain(mintedId['doc-in-b']);
 
+    // …and naming the OTHER board through it widens nothing: board B's doc
+    // stays out of board A's listing however the param is spelled.
+    const crossed = (await listDocs(`?workspaceId=${encodeURIComponent(wsB)}`)).map((d) => d.docId);
+    expect(crossed).not.toContain(mintedId['doc-in-b']);
+    expect(crossed).not.toContain(mintedId['doc-in-a']);
+
     // …and the readable name the caller chose still addresses the doc it
     // named, which is the other half of the alias contract.
-    const byName = await local('/api/docs/doc-in-a');
+    const byName = await local(`/workspaces/${WS}/docs/doc-in-a?format=json`);
     expect(byName.status).toBe(200);
     expect(((await byName.json()) as { meta: DocMetaOut }).meta.docId).toBe(mintedId['doc-in-a']);
   });
@@ -109,7 +127,7 @@ describe('GET /api/docs honours its workspaceId filter', () => {
     // Folder binds and diff reviews stamp their members with a GROUPING
     // workspaceId in meta — a different id namespace from boards, held by
     // real callers asking the same scoped question.
-    const r = await post('/api/docs', {
+    const r = await post(`/workspaces/${WS}/docs`, {
       docId: 'doc-grouped',
       type: 'markdown',
       sourceUrl: mdFile('grouped.md'),

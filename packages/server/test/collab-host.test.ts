@@ -42,6 +42,7 @@ import { emailIdentityId } from '@feedback/core';
 import { type JSONWebKeySet, type JWK, SignJWT, exportJWK, generateKeyPair } from 'jose';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { ACCESS_SHARE_CONFIG, mockCfApi } from './access-share.ts';
+import { seedBoardOnHandle } from './workspace-seed.ts';
 
 const TEAM_DOMAIN = 'test.cloudflareaccess.com';
 const KID = 'collab-host-kid';
@@ -199,7 +200,7 @@ describe('the collaboration hostname over HTTP', () => {
       const id = ((await created.json()) as { workspace: { id: string } }).workspace.id;
       const path = join(dataDir, `${requestedDocId}.md`);
       writeFileSync(path, `# ${requestedDocId}\n\nBody.\n`);
-      const doc = await asOwner('/api/docs', {
+      const doc = await asOwner(`/workspaces/${id}/docs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ docId: requestedDocId, type: 'markdown', sourceUrl: path }),
@@ -208,7 +209,7 @@ describe('the collaboration hostname over HTTP', () => {
       const mintedDocId = ((await doc.json()) as { docId: string }).docId;
       // Filed by the readable name; the membership the board records is the
       // minted id, which is what the scope checks below are measured against.
-      const filed = await asOwner(`/workspaces/${encodeURIComponent(id)}/docs`, {
+      const filed = await asOwner(`/workspaces/${encodeURIComponent(id)}/docs:attach`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ docId: requestedDocId }),
@@ -245,7 +246,9 @@ describe('the collaboration hostname over HTTP', () => {
       // Access normally challenges before the request ever arrives. This is
       // the server's own answer if it does not, which is the case that
       // matters: a misconfigured Access application must not mean an open one.
-      return req('/api/docs/design-doc', TUNNEL_HOST, { headers: CF_RAY }).then(async (r) => {
+      return req(`/workspaces/${board}/docs/design-doc?format=json`, TUNNEL_HOST, {
+        headers: CF_RAY,
+      }).then(async (r) => {
         expect(r.status).toBe(401);
         expect(await r.json()).toEqual({ error: 'missing_jwt' });
       });
@@ -253,7 +256,7 @@ describe('the collaboration hostname over HTTP', () => {
 
     it('rejects a token minted for a different Access application', async () => {
       const wrong = await signJwt('aud-for-some-other-app');
-      const r = await req(`/api/docs/${docId}`, TUNNEL_HOST, {
+      const r = await req(`/workspaces/${board}/docs/${docId}?format=json`, TUNNEL_HOST, {
         headers: { ...CF_RAY, 'cf-access-jwt-assertion': wrong },
       });
       expect(r.status).toBe(401);
@@ -263,7 +266,7 @@ describe('the collaboration hostname over HTTP', () => {
       // A LAN client can send any Host it likes. Without the proxy hop there
       // is no Access application in front of the request, so the opt-in list
       // must not recognise it — even holding a valid token.
-      const r = await req(`/api/docs/${docId}`, TUNNEL_HOST, {
+      const r = await req(`/workspaces/${board}/docs/${docId}?format=json`, TUNNEL_HOST, {
         headers: { 'cf-access-jwt-assertion': jwt },
       });
       expect(r.status).toBe(403);
@@ -274,7 +277,7 @@ describe('the collaboration hostname over HTTP', () => {
       // The veto this feature narrows is still doing its job for every
       // hostname that is not on the list.
       for (const host of ['localhost', '127.0.0.1', `attacker.${TUNNEL_HOST}`]) {
-        const r = await req('/api/docs', host, { headers: CF_RAY });
+        const r = await req(`/workspaces/${board}/docs`, host, { headers: CF_RAY });
         expect(r.status, host).toBe(403);
         expect(await r.json(), host).toEqual({ error: 'unknown_host' });
       }
@@ -291,11 +294,14 @@ describe('the collaboration hostname over HTTP', () => {
       expect(
         (await asCollaborator(`/workspaces/${encodeURIComponent(board)}?format=json`)).status,
       ).toBe(200);
-      const doc = await asCollaborator(`/api/docs/${docId}`);
+      const doc = await asCollaborator(`/workspaces/${board}/docs/${docId}?format=json`);
       expect(doc.status).toBe(200);
       expect(((await doc.json()) as { meta: { docId: string } }).meta.docId).toBe(docId);
-      expect((await asCollaborator(`/api/docs/${docId}/threads`)).status).toBe(200);
-      expect((await asCollaborator(`/review/${docId}`)).status).not.toBe(403);
+      expect((await asCollaborator(`/workspaces/${board}/docs/${docId}/threads`)).status).toBe(200);
+      // The doc PAGE, which is the same address without `?format=json`. It was
+      // `/review/<docId>` until this cutover; that shape is gone, and the gate
+      // is what is under test either way.
+      expect((await asCollaborator(`/workspaces/${board}/docs/${docId}`)).status).not.toBe(403);
     });
 
     it('loads the app shell, which belongs to no workspace', async () => {
@@ -303,7 +309,7 @@ describe('the collaboration hostname over HTTP', () => {
     });
 
     it('can comment — reviewing is the point of the surface', async () => {
-      const r = await asCollaborator(`/api/docs/${docId}/threads/by_find`, {
+      const r = await asCollaborator(`/workspaces/${board}/docs/${docId}/threads/by_find`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -315,7 +321,7 @@ describe('the collaboration hostname over HTTP', () => {
       expect(r.status).toBe(200);
       // …as a guest, not as whoever they claimed to be. Same rewrite a share
       // visitor gets: the collaboration host is an outsider surface.
-      const listed = await asOwner(`/api/docs/${docId}/threads`);
+      const listed = await asOwner(`/workspaces/${board}/docs/${docId}/threads`);
       const { threads } = (await listed.json()) as {
         threads: Array<{ comments: Array<{ author: { id: string; name: string } }> }>;
       };
@@ -328,7 +334,9 @@ describe('the collaboration hostname over HTTP', () => {
     });
 
     it('is not shown the absolute paths or the tailnet host', async () => {
-      const raw = await (await asCollaborator(`/api/docs/${docId}`)).text();
+      const raw = await (
+        await asCollaborator(`/workspaces/${board}/docs/${docId}?format=json`)
+      ).text();
       expect(raw).not.toContain(dataDir);
       expect(raw).not.toContain('.ts.net');
       const { meta } = JSON.parse(raw) as { meta: Record<string, unknown> };
@@ -339,7 +347,7 @@ describe('the collaboration hostname over HTTP', () => {
 
   describe('C. what stays privileged', () => {
     it('CANNOT enumerate the server — the doc list or the workspace list', async () => {
-      for (const p of ['/api/docs', '/workspaces']) {
+      for (const p of [`/workspaces/${board}/docs`, '/workspaces']) {
         const r = await asCollaborator(p);
         expect(r.status, p).toBe(403);
         expect(await r.json(), p).toEqual({ error: 'out_of_share_scope' });
@@ -347,7 +355,7 @@ describe('the collaboration hostname over HTTP', () => {
       // POSITIVE CONTROL: the owner over loopback still gets both, so the
       // refusals above are about the host and not about a server that has
       // stopped answering.
-      expect((await asOwner('/api/docs')).status).toBe(200);
+      expect((await asOwner(`/workspaces/${board}/docs`)).status).toBe(200);
       expect((await asOwner('/workspaces')).status).toBe(200);
     });
 
@@ -375,7 +383,7 @@ describe('the collaboration hostname over HTTP', () => {
         body: JSON.stringify({ folderPath: '/etc' }),
       });
       expect(bind.status).toBe(403);
-      const diff = await asCollaborator('/api/diffs', {
+      const diff = await asCollaborator(`/workspaces/${board}/reviews`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ repo: '/', base: 'HEAD' }),
@@ -393,18 +401,28 @@ describe('the collaboration hostname over HTTP', () => {
     });
 
     it('CANNOT delete a doc it can read, or rewrite it wholesale', async () => {
-      expect((await asCollaborator(`/api/docs/${docId}`, { method: 'DELETE' })).status).toBe(403);
-      const rewrite = await asCollaborator(`/api/docs/${docId}/content`, {
+      expect(
+        (
+          await asCollaborator(`/workspaces/${board}/docs/${docId}?format=json`, {
+            method: 'DELETE',
+          })
+        ).status,
+      ).toBe(403);
+      const rewrite = await asCollaborator(`/workspaces/${board}/docs/${docId}/content`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ markdown: '# Wiped\n' }),
       });
       expect(rewrite.status).toBe(403);
       expect(
-        (await asCollaborator(`/api/docs/${docId}/reparse_from_disk`, { method: 'POST' })).status,
+        (
+          await asCollaborator(`/workspaces/${board}/docs/${docId}/reparse_from_disk`, {
+            method: 'POST',
+          })
+        ).status,
       ).toBe(403);
       // …and the doc really is intact.
-      expect((await asOwner(`/api/docs/${docId}`)).status).toBe(200);
+      expect((await asOwner(`/workspaces/${board}/docs/${docId}?format=json`)).status).toBe(200);
     });
 
     it('CANNOT delete a board or reshape one', async () => {
@@ -412,11 +430,14 @@ describe('the collaboration hostname over HTTP', () => {
         (await asCollaborator(`/workspaces/${encodeURIComponent(board)}`, { method: 'DELETE' }))
           .status,
       ).toBe(403);
-      const regroup = await asCollaborator(`/api/reviews/${encodeURIComponent(board)}/groups`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ groups: [] }),
-      });
+      const regroup = await asCollaborator(
+        `/workspaces/${board}/reviews/${encodeURIComponent(board)}/groups`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ groups: [] }),
+        },
+      );
       expect(regroup.status).toBe(403);
       expect((await asOwner('/workspaces')).status).toBe(200);
     });
@@ -507,7 +528,7 @@ describe('the collaboration hostname over HTTP', () => {
       });
       expect(mine.status, await mine.clone().text()).toBe(200);
       const taskId = ((await mine.json()) as { task: { id: string } }).task.id;
-      const moved = await asCollaborator(`/api/tasks/${taskId}/transition`, {
+      const moved = await asCollaborator(`/workspaces/${board}/tasks/${taskId}/transition`, {
         method: 'POST',
         headers: json,
         body: JSON.stringify({ to: 'in-progress' }),
@@ -515,11 +536,15 @@ describe('the collaboration hostname over HTTP', () => {
       expect(moved.status, await moved.clone().text()).toBe(200);
 
       // `named@other.example` holds a board of their own and not this one.
-      const crossed = await asEmail(NAMED_EMAIL, `/api/tasks/${taskId}/transition`, {
-        method: 'POST',
-        headers: json,
-        body: JSON.stringify({ to: 'done' }),
-      });
+      const crossed = await asEmail(
+        NAMED_EMAIL,
+        `/workspaces/${board}/tasks/${taskId}/transition`,
+        {
+          method: 'POST',
+          headers: json,
+          body: JSON.stringify({ to: 'done' }),
+        },
+      );
       expect(crossed.status).toBe(403);
       expect(await crossed.json()).toEqual({ error: 'out_of_share_scope' });
       // POSITIVE CONTROL: the same address files on the board it DOES hold.
@@ -553,45 +578,51 @@ describe('the collaboration hostname over HTTP', () => {
       // the probe would have been worth. `/y/<id>` is gated before the
       // upgrade, so a 403 here is the gate rather than a failed handshake.
       for (const path of [
-        `/api/docs/${otherDocId}`,
-        `/api/docs/${otherDocId}/threads`,
+        `/workspaces/${otherBoard}/docs/${otherDocId}?format=json`,
+        `/workspaces/${otherBoard}/docs/${otherDocId}/threads`,
         `/review/${otherDocId}`,
-        `/y/${otherDocId}`,
-        `/y/ws:${encodeURIComponent(otherBoard)}`,
+        `/workspaces/${otherBoard}/docs/${otherDocId}/y`,
+        `/workspaces/${encodeURIComponent(otherBoard)}/y`,
         `/workspaces/${encodeURIComponent(otherBoard)}/events:stream`,
       ]) {
         expect((await asCollaborator(path)).status, path).toBe(403);
       }
       // POSITIVE CONTROL: the matching paths on the board they WERE given.
-      expect((await asCollaborator(`/api/docs/${docId}`)).status).toBe(200);
-      expect((await asCollaborator(`/api/docs/${docId}/threads`)).status).toBe(200);
-      expect((await asCollaborator(`/y/${docId}`)).status).not.toBe(403);
+      expect((await asCollaborator(`/workspaces/${board}/docs/${docId}?format=json`)).status).toBe(
+        200,
+      );
+      expect((await asCollaborator(`/workspaces/${board}/docs/${docId}/threads`)).status).toBe(200);
+      expect((await asCollaborator(`/workspaces/${board}/docs/${docId}/y`)).status).not.toBe(403);
     });
 
     it('cannot comment on a doc it was not given', async () => {
       // The one write a collaborator has. Refused by the gate, and the doc is
       // untouched afterwards.
-      const r = await asCollaborator(`/api/docs/${otherDocId}/threads/by_find`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          author: { id: 'x', name: 'x', kind: 'known', color: '#2e7dd7' },
-          text: 'should never land',
-          find: 'Body',
-        }),
-      });
+      const r = await asCollaborator(
+        `/workspaces/${otherBoard}/docs/${otherDocId}/threads/by_find`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            author: { id: 'x', name: 'x', kind: 'known', color: '#2e7dd7' },
+            text: 'should never land',
+            find: 'Body',
+          }),
+        },
+      );
       expect(r.status).toBe(403);
-      const listed = await asOwner(`/api/docs/${otherDocId}/threads`);
+      const listed = await asOwner(`/workspaces/${otherBoard}/docs/${otherDocId}/threads`);
       const { threads } = (await listed.json()) as { threads: unknown[] };
       expect(threads).toHaveLength(0);
     });
 
-    it('reaches a doc filed on TWO boards through EITHER board it holds', async () => {
-      // A doc belongs to every board it is filed on. Asking membership about
-      // only the first — whichever the store iterates first — refused a
-      // visitor the doc their own board shows them, while that board's own
-      // share hostname served it. Both orders are asserted, because the bug
-      // was invisible in one of them.
+    it('reaches a doc filed on TWO boards through the board the reader holds', async () => {
+      // A doc belongs to every board it is filed on, and now it has an
+      // ADDRESS under each. The bug this test was written for — membership
+      // asked about only the first board the store iterates, so a visitor was
+      // refused the doc their own board shows them — cannot be spelled any
+      // more: the board is in the path, so there is no "first" to pick. What
+      // replaces it is the pair, and both halves are asserted here.
       const first = await boardWith('Filed first', 'two-board-doc');
       const second = await asOwner('/workspaces', {
         method: 'POST',
@@ -600,26 +631,43 @@ describe('the collaboration hostname over HTTP', () => {
       });
       expect(second.status).toBe(200);
       const secondId = ((await second.json()) as { workspace: { id: string } }).workspace.id;
-      const filed = await asOwner(`/workspaces/${encodeURIComponent(secondId)}/docs`, {
+      const filed = await asOwner(`/workspaces/${encodeURIComponent(secondId)}/docs:attach`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ docId: 'two-board-doc' }),
       });
       expect(filed.status).toBe(200);
+      const doc = first.mintedDocId;
 
       // Shared on the SECOND board only — the one that is not first in the
-      // store's order.
+      // store's order, which is what used to decide the answer.
       await shareBoard(secondId, [NAMED_EMAIL]);
-      expect((await asEmail(NAMED_EMAIL, `/api/docs/${first.mintedDocId}`)).status).toBe(200);
+      expect(
+        (await asEmail(NAMED_EMAIL, `/workspaces/${secondId}/docs/${doc}?format=json`)).status,
+      ).toBe(200);
 
       // POSITIVE CONTROL, the reverse: share the FIRST board with a different
-      // address, and that address reaches the same doc too.
+      // address, and that address reaches the same doc through THAT board.
       await shareBoard(first.boardId, ['@partner.example']);
-      expect((await asCollaborator(`/api/docs/${first.mintedDocId}`)).status).toBe(200);
+      expect(
+        (await asCollaborator(`/workspaces/${first.boardId}/docs/${doc}?format=json`)).status,
+      ).toBe(200);
 
-      // …and a member of NEITHER board is still refused it, so the two 200s
-      // above are membership rather than a doc that answers anybody.
-      expect((await asEmail(NEIGHBOUR_EMAIL, `/api/docs/${first.mintedDocId}`)).status).toBe(403);
+      // THE BEHAVIOUR CHANGE, stated rather than discovered: holding one of a
+      // doc's boards is no longer a way in through the OTHER one. Each
+      // address is judged against the board it names, so the reader admitted
+      // to `secondId` is refused the same doc spelled under `first.boardId`.
+      expect(
+        (await asEmail(NAMED_EMAIL, `/workspaces/${first.boardId}/docs/${doc}?format=json`)).status,
+      ).toBe(403);
+
+      // …and a member of NEITHER board is refused both spellings, so the two
+      // 200s above are membership rather than a doc that answers anybody.
+      for (const ws of [secondId, first.boardId]) {
+        expect(
+          (await asEmail(NEIGHBOUR_EMAIL, `/workspaces/${ws}/docs/${doc}?format=json`)).status,
+        ).toBe(403);
+      }
     });
 
     it('still loads the app shell — an admitted non-member sees the page', async () => {
@@ -634,12 +682,12 @@ describe('the collaboration hostname over HTTP', () => {
 
   describe('D. the local surface is unchanged', () => {
     it('still serves loopback unauthenticated, share administration included', async () => {
-      expect((await asOwner('/api/docs')).status).toBe(200);
+      expect((await asOwner(`/workspaces/${board}/docs`)).status).toBe(200);
       expect((await asOwner('/api/share')).status).toBe(200);
     });
 
     it('still refuses an unrelated public hostname outright', async () => {
-      const r = await req('/api/docs', 'attacker.example.com', { headers: CF_RAY });
+      const r = await req(`/workspaces/${board}/docs`, 'attacker.example.com', { headers: CF_RAY });
       expect(r.status).toBe(403);
       expect(await r.json()).toEqual({ error: 'unknown_host' });
     });
@@ -650,7 +698,9 @@ describe('the collaboration hostname over HTTP', () => {
       // is not on the list at all. Link mode is retired, so it no longer
       // answers 401 for a missing session — the name resolves to no share and
       // is refused like any other unknown host.
-      const r = await req('/api/docs/design-doc', LINK_HOST, { headers: CF_RAY });
+      const r = await req(`/workspaces/${board}/docs/design-doc?format=json`, LINK_HOST, {
+        headers: CF_RAY,
+      });
       expect(r.status).toBe(403);
       expect(await r.json()).toEqual({ error: 'unknown_host' });
     });
@@ -681,8 +731,9 @@ describe('the opt-in fails closed', () => {
     // The (c) case from the brief, at the HTTP layer: a deployment that has
     // not opted in is bit-for-bit unchanged, Access configured or not.
     const h = spinUp({ cfAccess: { teamDomain: TEAM_DOMAIN, audience: COLLAB_AUD, jwks } });
+    const ws = seedBoardOnHandle(h);
     const jwt = await signJwt(COLLAB_AUD);
-    const r = await fetch(`http://localhost:${h.port}/api/docs`, {
+    const r = await fetch(`http://localhost:${h.port}/workspaces/${ws}/docs`, {
       headers: { host: TUNNEL_HOST, ...CF_RAY, 'cf-access-jwt-assertion': jwt },
     });
     expect(r.status).toBe(403);
@@ -694,14 +745,15 @@ describe('the opt-in fails closed', () => {
     // hand the share surface to anyone who can reach the tunnel and type the
     // hostname — the exact hole the cf-ray veto was added to close.
     const h = spinUp({ accessTunnelHosts: [TUNNEL_HOST] });
-    const r = await fetch(`http://localhost:${h.port}/api/docs`, {
+    const ws = seedBoardOnHandle(h);
+    const r = await fetch(`http://localhost:${h.port}/workspaces/${ws}/docs`, {
       headers: { host: TUNNEL_HOST, ...CF_RAY },
     });
     expect(r.status).toBe(403);
     expect(await r.json()).toEqual({ error: 'unknown_host' });
     // POSITIVE CONTROL: that server is alive and serving its local caller, so
     // the 403 is the gate rather than a server that answers nothing.
-    const local = await fetch(`http://localhost:${h.port}/api/docs`, {
+    const local = await fetch(`http://localhost:${h.port}/workspaces/${ws}/docs`, {
       headers: { host: `localhost:${h.port}` },
     });
     expect(local.status).toBe(200);
@@ -734,6 +786,8 @@ describe('the collaboration hostname, with email identity in effect', () => {
 
   interface Surface {
     port: number;
+    /** The board the doc is filed on — part of its address now. */
+    workspaceId: string;
     docId: string;
     sign: (email?: string) => Promise<string>;
   }
@@ -793,14 +847,14 @@ describe('the collaboration hostname, with email identity in effect', () => {
     const name = 'collab-identity-doc';
     const path = join(dataDir, `${name}.md`);
     writeFileSync(path, '# Doc\n\nBody to comment on.\n');
-    const doc = await local('/api/docs', {
+    const doc = await local(`/workspaces/${boardId}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: name, type: 'markdown', sourceUrl: path }),
     });
     expect(doc.status).toBe(200);
     const docId = ((await doc.json()) as { docId: string }).docId;
-    const filed = await local(`/workspaces/${encodeURIComponent(boardId)}/docs`, {
+    const filed = await local(`/workspaces/${encodeURIComponent(boardId)}/docs:attach`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: name }),
@@ -814,30 +868,36 @@ describe('the collaboration hostname, with email identity in effect', () => {
       body: JSON.stringify({ workspaceId: boardId, allowDomains: ['@example.com'] }),
     });
     expect(shared.status, await shared.clone().text()).toBe(200);
-    return { port: h.port, docId, sign };
+    return { port: h.port, workspaceId: boardId, docId, sign };
   }
 
   /** Comment as a collaborator claiming to be the owner; answer with the
    *  author the server actually recorded. */
   async function authorOfWrite(s: Surface, jwt: string): Promise<{ id: string; name: string }> {
-    const res = await fetch(`http://localhost:${s.port}/api/docs/${s.docId}/threads/by_find`, {
-      method: 'POST',
-      headers: {
-        host: TUNNEL_HOST,
-        ...CF_RAY,
-        'cf-access-jwt-assertion': jwt,
-        'content-type': 'application/json',
+    const res = await fetch(
+      `http://localhost:${s.port}/workspaces/${s.workspaceId}/docs/${s.docId}/threads/by_find`,
+      {
+        method: 'POST',
+        headers: {
+          host: TUNNEL_HOST,
+          ...CF_RAY,
+          'cf-access-jwt-assertion': jwt,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          author: { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' },
+          text: 'a collaborator note',
+          find: 'Body',
+        }),
       },
-      body: JSON.stringify({
-        author: { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' },
-        text: 'a collaborator note',
-        find: 'Body',
-      }),
-    });
+    );
     expect(res.status, await res.clone().text()).toBe(200);
-    const listed = await fetch(`http://localhost:${s.port}/api/docs/${s.docId}/threads`, {
-      headers: { host: `localhost:${s.port}` },
-    });
+    const listed = await fetch(
+      `http://localhost:${s.port}/workspaces/${s.workspaceId}/docs/${s.docId}/threads`,
+      {
+        headers: { host: `localhost:${s.port}` },
+      },
+    );
     const { threads } = (await listed.json()) as {
       threads: Array<{ comments: Array<{ author: { id: string; name: string } }> }>;
     };
@@ -859,29 +919,35 @@ describe('the collaboration hostname, with email identity in effect', () => {
     // of all, since there is no domain to compare. So the write is refused
     // before attribution is ever reached.
     const s = await surface();
-    const res = await fetch(`http://localhost:${s.port}/api/docs/${s.docId}/threads/by_find`, {
-      method: 'POST',
-      headers: {
-        host: TUNNEL_HOST,
-        ...CF_RAY,
-        'cf-access-jwt-assertion': await s.sign(),
-        'content-type': 'application/json',
+    const res = await fetch(
+      `http://localhost:${s.port}/workspaces/${s.workspaceId}/docs/${s.docId}/threads/by_find`,
+      {
+        method: 'POST',
+        headers: {
+          host: TUNNEL_HOST,
+          ...CF_RAY,
+          'cf-access-jwt-assertion': await s.sign(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          author: { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' },
+          text: 'a nameless note',
+          find: 'Body',
+        }),
       },
-      body: JSON.stringify({
-        author: { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' },
-        text: 'a nameless note',
-        find: 'Body',
-      }),
-    });
+    );
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: 'out_of_share_scope' });
     // POSITIVE CONTROL: the same request with an email the board admits.
     const named = await authorOfWrite(s, await s.sign('collaborator@example.com'));
     expect(named.id).toBe(emailIdentityId('collaborator@example.com'));
     // …and the nameless one really did land nothing.
-    const listed = await fetch(`http://localhost:${s.port}/api/docs/${s.docId}/threads`, {
-      headers: { host: `localhost:${s.port}` },
-    });
+    const listed = await fetch(
+      `http://localhost:${s.port}/workspaces/${s.workspaceId}/docs/${s.docId}/threads`,
+      {
+        headers: { host: `localhost:${s.port}` },
+      },
+    );
     const { threads } = (await listed.json()) as { threads: Array<{ comments: unknown[] }> };
     expect(threads).toHaveLength(1);
   });

@@ -45,19 +45,23 @@ describe('span names reduce to route patterns', () => {
   });
 
   it('drops it from a bare path too', () => {
-    expect(scrubSpanName(`/api/docs/${NEEDLE}/threads`)).toBe('/api/docs/:id/threads');
+    expect(scrubSpanName(`/workspaces/${WS_ID}/docs/${NEEDLE}/threads`)).toBe(
+      '/workspaces/:id/docs/:id/threads',
+    );
   });
 
   it('drops the query string outright rather than patterning over it', () => {
     // A query is the part of a URL most likely to carry a title or a token,
     // and no span name needs it.
-    expect(scrubSpanName(`/review/${NEEDLE}?q=salary%20bands`)).toBe('/review/:id');
+    expect(scrubSpanName(`/workspaces/${WS_ID}/docs/${NEEDLE}?q=salary%20bands`)).toBe(
+      '/workspaces/:id/docs/:id',
+    );
   });
 
   it('handles an absolute URL, which is the shape a fetch span uses', () => {
-    expect(scrubSpanName(`GET https://example.test/api/docs/${NEEDLE}/content`)).toBe(
-      'GET /api/docs/:id/content',
-    );
+    expect(
+      scrubSpanName(`GET https://example.test/workspaces/${WS_ID}/docs/${NEEDLE}/content`),
+    ).toBe('GET /workspaces/:id/docs/:id/content');
   });
 
   it('leaves a name that is not a path alone', () => {
@@ -82,8 +86,10 @@ describe('a browser transaction event, scrubbed', () => {
       spans: [
         {
           op: 'http.client',
-          description: `GET /api/docs/${NEEDLE}/content`,
-          data: { 'http.url': `https://example.test/api/docs/${NEEDLE}/content` },
+          description: `GET /workspaces/${WS_ID}/docs/${NEEDLE}/content`,
+          data: {
+            'http.url': `https://example.test/workspaces/${WS_ID}/docs/${NEEDLE}/content`,
+          },
         },
       ],
       breadcrumbs: [
@@ -116,7 +122,7 @@ describe('a browser transaction event, scrubbed', () => {
         .value,
     ).toBe(412);
     const span = (out.spans as Array<Record<string, unknown>>)[0];
-    expect(span?.description).toBe('GET /api/docs/:id/content');
+    expect(span?.description).toBe('GET /workspaces/:id/docs/:id/content');
     expect(span?.op).toBe('http.client');
     // The URL-named attribute is dropped by the key floor, not by the name
     // pass — both have to be running for this event to be safe.

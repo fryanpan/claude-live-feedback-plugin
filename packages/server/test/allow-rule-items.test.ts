@@ -25,6 +25,7 @@ import {
 import { normalizeAgent } from '../src/chat-audit.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { waitFor } from './wait-for.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-sam', name: 'Sam Reviewer', kind: 'person' };
 const LEAD = { id: 'agent-beacon-bot', name: 'Beacon Bot', kind: 'agent' };
@@ -67,6 +68,9 @@ function filesUnder(dir: string): string[] {
   return out;
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('allow-rule review items', () => {
   let handle: ServerHandle;
   let base: string;
@@ -93,10 +97,11 @@ describe('allow-rule review items', () => {
     return r;
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'allow-rule-items-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterEach(async () => {
@@ -108,13 +113,15 @@ describe('allow-rule review items', () => {
     const { workspace } = await jj<{ workspace: { id: string } }>(
       await post('/workspaces', { name, leadAgentId: LEAD.id }),
     );
+    WS = workspace.id;
     await jj(
       await post(`/workspaces/${workspace.id}/agents`, {
         agentId: LEAD.id,
         runtime: 'claude-code-local',
       }),
     );
-    return workspace.id;
+    WS = workspace.id;
+    return WS;
   }
 
   async function inProgressRow(workspaceId: string, title: string): Promise<string> {
@@ -128,10 +135,14 @@ describe('allow-rule review items', () => {
       }),
     );
     await jj(
-      await post(`/api/tasks/${task.id}/transition`, { to: 'todo', author: PERSON, workspaceId }),
+      await post(`/workspaces/${workspaceId}/tasks/${task.id}/transition`, {
+        to: 'todo',
+        author: PERSON,
+        workspaceId,
+      }),
     );
     await jj(
-      await post(`/api/tasks/${task.id}/transition`, {
+      await post(`/workspaces/${workspaceId}/tasks/${task.id}/transition`, {
         to: 'in-progress',
         author: LEAD,
         workspaceId,
@@ -212,7 +223,7 @@ describe('allow-rule review items', () => {
     const itemId = items(taskId)[0]?.id ?? '';
 
     await jj(
-      await post(`/api/tasks/${taskId}/review-items/${itemId}/answer`, {
+      await post(`/workspaces/${wsId}/tasks/${taskId}/review-items/${itemId}/answer`, {
         text: 'Never propose this shape again',
         answeredWith: 'never',
         author: PERSON,
@@ -237,7 +248,7 @@ describe('allow-rule review items', () => {
     for (let i = 0; i < 3; i++) await deny('git push');
     const first = (await untilItems(() => items(taskId), 1))[0];
     await jj(
-      await post(`/api/tasks/${taskId}/review-items/${first?.id}/answer`, {
+      await post(`/workspaces/${WS}/tasks/${taskId}/review-items/${first?.id}/answer`, {
         text: 'Keep blocking',
         answeredWith: 'keep-asking',
         author: PERSON,
@@ -295,7 +306,7 @@ describe('allow-rule review items', () => {
     // one of them (see agent-notes-routes.test.ts), and this test is about
     // the WINDOW and the cross-task tally, not about ambiguity.
     await jj(
-      await post(`/api/tasks/${older}/transition`, {
+      await post(`/workspaces/${wsId}/tasks/${older}/transition`, {
         to: 'done',
         author: LEAD,
         workspaceId: wsId,
@@ -317,6 +328,7 @@ describe('allow-rule review items', () => {
     await Bun.write(sidecarPath, JSON.stringify(sidecar));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
 
     await deny('git push');
     await settle();
@@ -334,11 +346,14 @@ describe('allow-rule review items', () => {
     for (let i = 0; i < 5; i++) await deny('git push');
     await untilItems(() => items(taskId), 1);
     await jj(
-      await post(`/api/tasks/${taskId}/review-items/${items(taskId)[0]?.id}/answer`, {
-        text: 'Keep blocking',
-        answeredWith: 'keep-asking',
-        author: PERSON,
-      }),
+      await post(
+        `/workspaces/${wsId}/tasks/${taskId}/review-items/${items(taskId)[0]?.id}/answer`,
+        {
+          text: 'Keep blocking',
+          answeredWith: 'keep-asking',
+          author: PERSON,
+        },
+      ),
     );
     await deny('git push');
     await deny('git push');
@@ -355,6 +370,7 @@ describe('allow-rule review items', () => {
     await handle.stop();
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     await deny('git push');
     await settle();
     expect(items(taskId)).toHaveLength(1);

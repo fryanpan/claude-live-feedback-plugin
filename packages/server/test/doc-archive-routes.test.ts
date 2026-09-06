@@ -14,13 +14,17 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 interface ArchivedListing {
   archived: Array<{ setId: string }>;
   docs: Array<{ docId: string; archivedBy: string; reason?: string; linkedWorkspaces: string[] }>;
 }
 
-describe('POST /api/docs/:id/archive', () => {
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
+describe(`POST /workspaces/${WS}/docs/:id/archive`, () => {
   let handle: ServerHandle;
   let dataDir: string;
   let folder: string;
@@ -45,16 +49,17 @@ describe('POST /api/docs/:id/archive', () => {
     return ((await r.json()) as { workspace: { docIds?: string[] } }).workspace.docIds ?? [];
   };
   const archivedListing = async (): Promise<ArchivedListing> => {
-    const r = await local('/api/reviews/archived');
+    const r = await local(`/workspaces/${WS}/reviews?archived=true`);
     expect(r.status).toBe(200);
     return (await r.json()) as ArchivedListing;
   };
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'doc-arch-'));
     folder = mkdtempSync(join(tmpdir(), 'doc-arch-src-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterAll(() => {
@@ -72,7 +77,8 @@ describe('POST /api/docs/:id/archive', () => {
   it('takes the doc off its board, and unarchive puts it back', async () => {
     const ws = await post('/workspaces', { name: 'drafts', goal: 'Ship the draft.' });
     const boardId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
-    const created = await post('/api/docs', {
+    WS = boardId;
+    const created = await post(`/workspaces/${boardId}/docs`, {
       docId: 'draft-doc',
       type: 'markdown',
       title: 'The Draft',
@@ -87,7 +93,7 @@ describe('POST /api/docs/:id/archive', () => {
     // "the row is gone" passes against a board that never had one.
     expect(await boardDocIds(boardId)).toContain(docId);
 
-    const archived = await post(`/api/docs/${docId}/archive`, {
+    const archived = await post(`/workspaces/${WS}/docs/${docId}/archive`, {
       author: { name: 'Tester' },
       reason: 'published',
     });
@@ -96,8 +102,8 @@ describe('POST /api/docs/:id/archive', () => {
     // The doc no longer loads — that is what taking it out of the top level
     // of the data dir buys. Not under its id, and not under the readable name
     // either: the alias goes with the doc it named.
-    expect((await local(`/api/docs/${docId}`)).status).toBe(404);
-    expect((await local('/api/docs/draft-doc')).status).toBe(404);
+    expect((await local(`/workspaces/${WS}/docs/${docId}?format=json`)).status).toBe(404);
+    expect((await local(`/workspaces/${WS}/docs/draft-doc?format=json`)).status).toBe(404);
 
     const listing = await archivedListing();
     expect(listing.docs.map((d) => d.docId)).toContain(docId);
@@ -110,12 +116,14 @@ describe('POST /api/docs/:id/archive', () => {
     // A doc is not a review: the review listing stays empty.
     expect(listing.archived).toEqual([]);
 
-    const back = await post(`/api/docs/${docId}/unarchive`, { author: { name: 'Tester' } });
+    const back = await post(`/workspaces/${WS}/docs/${docId}/unarchive`, {
+      author: { name: 'Tester' },
+    });
     expect(back.status).toBe(200);
-    expect((await local(`/api/docs/${docId}`)).status).toBe(200);
+    expect((await local(`/workspaces/${WS}/docs/${docId}?format=json`)).status).toBe(200);
     // The alias rides in the doc's own meta, so it comes back with it — a
     // link captured before the archive still resolves after the restore.
-    const byName = await local('/api/docs/draft-doc');
+    const byName = await local(`/workspaces/${WS}/docs/draft-doc?format=json`);
     expect(byName.status).toBe(200);
     expect(((await byName.json()) as { meta: { docId: string } }).meta.docId).toBe(docId);
     expect(await boardDocIds(boardId)).toContain(docId);
@@ -123,26 +131,31 @@ describe('POST /api/docs/:id/archive', () => {
   });
 
   it('404s an unknown id, and 409s a doc that belongs to a review', async () => {
-    expect((await post('/api/docs/no-such-doc/archive', {})).status).toBe(404);
-    expect((await post('/api/docs/no-such-doc/unarchive', {})).status).toBe(404);
+    expect((await post(`/workspaces/${WS}/docs/no-such-doc/archive`, {})).status).toBe(404);
+    expect((await post(`/workspaces/${WS}/docs/no-such-doc/unarchive`, {})).status).toBe(404);
 
     writeFileSync(join(folder, 'README.md'), '# Fixture\n\nbody\n');
     mkdirSync(join(folder, 'src'));
     writeFileSync(join(folder, 'src', 'util.ts'), 'export const y = 2;\n');
-    const bound = await post('/api/diffs', { repo: folder });
+    const bound = await post(`/workspaces/${WS}/reviews`, { repo: folder });
     expect(bound.status).toBe(200);
     const res = (await bound.json()) as { reviewId: string; files: Array<{ docId: string }> };
     const memberDocId = res.files[0]?.docId as string;
     expect(memberDocId).toBeTruthy();
 
-    const refused = await post(`/api/docs/${encodeURIComponent(memberDocId)}/archive`, {
-      author: { name: 'Tester' },
-    });
+    const refused = await post(
+      `/workspaces/${WS}/docs/${encodeURIComponent(memberDocId)}/archive`,
+      {
+        author: { name: 'Tester' },
+      },
+    );
     expect(refused.status).toBe(409);
     const body = (await refused.json()) as { error: string; setId?: string };
     expect(body.error).toBe('review-member');
     // Name the review, so the caller knows to reach for archive_attachment_set.
     expect(body.setId).toBe(res.reviewId);
-    expect((await local(`/api/docs/${encodeURIComponent(memberDocId)}`)).status).toBe(200);
+    expect(
+      (await local(`/workspaces/${WS}/docs/${encodeURIComponent(memberDocId)}?format=json`)).status,
+    ).toBe(200);
   });
 });

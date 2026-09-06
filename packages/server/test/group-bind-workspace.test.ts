@@ -30,6 +30,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 function git(repo: string, ...args: string[]): string {
   return execFileSync('git', ['-C', repo, ...args], {
@@ -56,6 +57,9 @@ interface FolderResponse {
   hubWorkspaceId?: string;
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('a group bind lands on a board, as one unit', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -78,6 +82,9 @@ describe('a group bind lands on a board, as one unit', () => {
       body: JSON.stringify(body),
     });
 
+  // Returns the new board WITHOUT taking over `WS`. `WS` is the board this
+  // file addresses its unfiled reviews through, and a helper that moved it
+  // made one test's holding pen the next test's destination.
   const newBoard = async (name: string): Promise<string> => {
     const r = await post('/workspaces', { name, goal: 'Ship.' });
     return ((await r.json()) as { workspace: { id: string } }).workspace.id;
@@ -91,7 +98,7 @@ describe('a group bind lands on a board, as one unit', () => {
     return dir;
   };
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'gbw-data-'));
     repo = mkdtempSync(join(tmpdir(), 'gbw-repo-'));
     git(repo, 'init', '-q');
@@ -106,6 +113,7 @@ describe('a group bind lands on a board, as one unit', () => {
 
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterAll(() => {
@@ -119,7 +127,7 @@ describe('a group bind lands on a board, as one unit', () => {
     // board IS supplied, that specific one comes back and holds the link — so
     // a non-empty hubWorkspaceId elsewhere means something.
     const boardId = await newBoard('named-diff-board');
-    const r = await post('/api/diffs', {
+    const r = await post(`/workspaces/${boardId}/reviews`, {
       repo,
       base: repoBase,
       reviewId: 'rev-named',
@@ -132,7 +140,11 @@ describe('a group bind lands on a board, as one unit', () => {
   });
 
   it('files a diff review with no board named, and says where it went', async () => {
-    const r = await post('/api/diffs', { repo, base: repoBase, reviewId: 'rev-unfiled' });
+    const r = await post(`/workspaces/${WS}/reviews`, {
+      repo,
+      base: repoBase,
+      reviewId: 'rev-unfiled',
+    });
     expect(r.status).toBe(200);
     const body = (await r.json()) as DiffResponse;
     expect(body.hubWorkspaceId).toBeTruthy();
@@ -154,7 +166,11 @@ describe('a group bind lands on a board, as one unit', () => {
   it('links the GROUPING, never its member docs', async () => {
     // The whole modelling decision in one assertion. Attaching each member
     // would put one row per changed file on a board nobody asked for.
-    const r = await post('/api/diffs', { repo, base: repoBase, reviewId: 'rev-members' });
+    const r = await post(`/workspaces/${WS}/reviews`, {
+      repo,
+      base: repoBase,
+      reviewId: 'rev-members',
+    });
     const body = (await r.json()) as DiffResponse;
     const boardId = body.hubWorkspaceId as string;
     // Positive control: the members exist and the grouping IS linked, so the
@@ -203,43 +219,63 @@ describe('a group bind lands on a board, as one unit', () => {
     // that re-runs it without repeating hubWorkspaceId must not have the
     // review swept back into the holding pen behind the reviewer's back.
     const boardId = await newBoard('sticky-board');
-    await post('/api/diffs', {
+    await post(`/workspaces/${boardId}/reviews`, {
       repo,
       base: repoBase,
       reviewId: 'rev-sticky',
       hubWorkspaceId: boardId,
     });
-    const again = await post('/api/diffs', { repo, base: repoBase, reviewId: 'rev-sticky' });
+    const again = await post(`/workspaces/${boardId}/reviews`, {
+      repo,
+      base: repoBase,
+      reviewId: 'rev-sticky',
+    });
     expect(((await again.json()) as DiffResponse).hubWorkspaceId).toBe(boardId);
     expect(handle.tasks.getWorkspace(boardId)?.docIds).toContain('rev-sticky');
   });
 
-  it('moving a review to a real board takes it out of the holding pen', async () => {
-    // The ordinary flow: the review is filed before anyone names a board for
-    // it, then attach_doc moves it. Left in both, `workspaceOfDoc` answers
-    // with whichever the store iterates first — and that is what share
-    // scoping resolves against.
-    const r = await post('/api/diffs', { repo, base: repoBase, reviewId: 'rev-moved' });
-    const holdingId = ((await r.json()) as DiffResponse).hubWorkspaceId as string;
-    expect(handle.tasks.getWorkspace(holdingId)?.docIds).toContain('rev-moved');
+  it('moving a review off the holding pen takes it out of the pen', async () => {
+    // The ordinary flow for the one route that can still arrive with no board
+    // named: a folder bind is top-level, so nothing in the path says where it
+    // goes and it lands in the pen. (A DIFF review reaches the server through
+    // `/workspaces/<id>/reviews`, so the path always names a board and the pen
+    // is not on its path at all.) Then attach_doc moves it. Left in both,
+    // `workspaceOfDoc` answers with whichever the store iterates first — and
+    // that is what share scoping resolves against.
+    const folder = newFolder('moved');
+    try {
+      const r = await post('/workspaces', { folderPath: folder });
+      const body = (await r.json()) as FolderResponse;
+      const setId = body.workspaceId;
+      const holdingId = body.hubWorkspaceId as string;
+      expect(handle.tasks.getWorkspace(holdingId)?.docIds).toContain(setId);
 
-    const realId = await newBoard('real-home-for-review');
-    expect((await post(`/workspaces/${realId}/docs`, { docId: 'rev-moved' })).status).toBe(200);
+      const realId = await newBoard('real-home-for-review');
+      expect((await post(`/workspaces/${realId}/docs:attach`, { docId: setId })).status).toBe(200);
 
-    expect(handle.tasks.getWorkspace(realId)?.docIds).toContain('rev-moved');
-    expect(handle.tasks.getWorkspace(holdingId)?.docIds).not.toContain('rev-moved');
-    expect(handle.tasks.workspaceOfDoc('rev-moved')).toBe(realId);
+      expect(handle.tasks.getWorkspace(realId)?.docIds).toContain(setId);
+      expect(handle.tasks.getWorkspace(holdingId)?.docIds).not.toContain(setId);
+      expect(handle.tasks.workspaceOfDoc(setId)).toBe(realId);
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
   });
 
   it('deleting a review leaves no tombstone on the board', async () => {
     // Filing every review means a board would otherwise collect one dangling
     // id per finished review — invisible in the UI and permanent in the store.
     // This is the group-bind twin of the doc-delete unlink in PR #127.
-    const r = await post('/api/diffs', { repo, base: repoBase, reviewId: 'rev-deleted' });
+    const r = await post(`/workspaces/${WS}/reviews`, {
+      repo,
+      base: repoBase,
+      reviewId: 'rev-deleted',
+    });
     const boardId = ((await r.json()) as DiffResponse).hubWorkspaceId as string;
     expect(handle.tasks.getWorkspace(boardId)?.docIds).toContain('rev-deleted');
 
-    const del = await local('/workspaces/rev-deleted?force=true', { method: 'DELETE' });
+    const del = await local(`/workspaces/${boardId}/reviews/rev-deleted?force=true`, {
+      method: 'DELETE',
+    });
     expect(del.status).toBe(200);
     expect(handle.tasks.getWorkspace(boardId)?.docIds).not.toContain('rev-deleted');
   });

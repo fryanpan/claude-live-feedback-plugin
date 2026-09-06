@@ -23,6 +23,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { normalizePublicBaseUrl } from '../src/public-host.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('normalizePublicBaseUrl', () => {
   it('treats unset / blank as "no override"', () => {
@@ -93,7 +97,8 @@ describe('the override reaches the links the route table hands out', () => {
     const docPath = join(dataDir, 'notes.md');
     writeFileSync(docPath, '# Notes\n\nBody.\n');
     handle = createServer({ port: 0, dataDir, publicBaseUrl: PUBLIC });
-    const created = await fetch(`http://localhost:${handle.port}/api/docs`, {
+    WS = await seedBoard(`http://localhost:${handle.port}`);
+    const created = await fetch(`http://localhost:${handle.port}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { host: `localhost:${handle.port}`, 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'doc-1', type: 'markdown', sourceUrl: docPath }),
@@ -109,9 +114,12 @@ describe('the override reaches the links the route table hands out', () => {
   const reviewUrlOf = async (): Promise<string> => {
     // Fetched through the READABLE ALIAS the caller asked for — the address is
     // the minted id, but `doc-1` still resolves to it.
-    const res = await fetch(`http://localhost:${handle.port}/api/docs/doc-1`, {
-      headers: { host: `localhost:${handle.port}` },
-    });
+    const res = await fetch(
+      `http://localhost:${handle.port}/workspaces/${WS}/docs/doc-1?format=json`,
+      {
+        headers: { host: `localhost:${handle.port}` },
+      },
+    );
     const body = (await res.json()) as { meta?: { docId?: string; reviewUrl?: string } };
     expect(body.meta?.docId).toBe(mintedId);
     // Assert the field is THERE before asserting anything about its content —
@@ -157,7 +165,8 @@ describe('without an override the server still describes itself', () => {
     const docPath = join(dataDir, 'notes.md');
     writeFileSync(docPath, '# Notes\n\nBody.\n');
     handle = createServer({ port: 0, dataDir });
-    const created = await fetch(`http://localhost:${handle.port}/api/docs`, {
+    WS = await seedBoard(`http://localhost:${handle.port}`);
+    const created = await fetch(`http://localhost:${handle.port}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { host: `localhost:${handle.port}`, 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'doc-1', type: 'markdown', sourceUrl: docPath }),
@@ -171,9 +180,12 @@ describe('without an override the server still describes itself', () => {
   });
 
   it('falls back to a plain-http URL carrying the listening port', async () => {
-    const res = await fetch(`http://localhost:${handle.port}/api/docs/doc-1`, {
-      headers: { host: `localhost:${handle.port}` },
-    });
+    const res = await fetch(
+      `http://localhost:${handle.port}/workspaces/${WS}/docs/doc-1?format=json`,
+      {
+        headers: { host: `localhost:${handle.port}` },
+      },
+    );
     const body = (await res.json()) as { meta?: { docId?: string; reviewUrl?: string } };
     expect(body.meta?.docId).toBe(mintedId);
     const reviewUrl = body.meta?.reviewUrl;

@@ -50,7 +50,7 @@ interface DocResponse {
   leadAgentId?: string;
 }
 
-describe('POST /api/docs/:docId/plan-request', () => {
+describe('POST /workspaces/<ws>/docs/:docId/plan-request', () => {
   let handle: ServerHandle;
   let access: AccessHarness;
   let dataDir: string;
@@ -75,17 +75,21 @@ describe('POST /api/docs/:docId/plan-request', () => {
     expect(res.ok, `${res.status} ${await res.clone().text()}`).toBe(true);
     return res.json() as Promise<T>;
   };
-  const newBoard = async (name: string, leadAgentId?: string): Promise<string> =>
-    (
-      await jj<{ workspace: { id: string } }>(
-        await post('/workspaces', { name, ...(leadAgentId ? { leadAgentId } : {}) }),
-      )
-    ).workspace.id;
+  // Returns the board WITHOUT taking over the default: this file makes a second one
+  // mid-test, and a helper that moved the default addressed the first board's
+  // docs through the second.
+  const newBoard = async (name: string, leadAgentId?: string): Promise<string> => {
+    const made = await jj<{ workspace: { id: string } }>(
+      await post('/workspaces', { name, ...(leadAgentId ? { leadAgentId } : {}) }),
+    );
+    return made.workspace.id;
+  };
   /** A fresh "Make a plan" doc — the only surface the float ever presses on. */
   const newPlanDoc = async (ws: string): Promise<string> =>
     (await jj<HuddleResponse>(await post(`/workspaces/${ws}/huddles`, { kind: 'plan' }))).docId;
-  const threadsOf = async (docId: string): Promise<ThreadRow[]> =>
-    (await jj<{ threads: ThreadRow[] }>(await local(`/api/docs/${docId}/threads`))).threads;
+  const threadsOf = async (docId: string, ws = workspaceId): Promise<ThreadRow[]> =>
+    (await jj<{ threads: ThreadRow[] }>(await local(`/workspaces/${ws}/docs/${docId}/threads`)))
+      .threads;
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'plan-request-'));
@@ -111,7 +115,7 @@ describe('POST /api/docs/:docId/plan-request', () => {
     expect(await threadsOf(docId)).toHaveLength(0);
 
     const r = await jj<PlanRequestResponse>(
-      await post(`/api/docs/${docId}/plan-request`, { author: PERSON }),
+      await post(`/workspaces/${workspaceId}/docs/${docId}/plan-request`, { author: PERSON }),
     );
     expect(r.docId).toBe(docId);
     expect(r.threadId).toBeTruthy();
@@ -140,14 +144,18 @@ describe('POST /api/docs/:docId/plan-request', () => {
 
   it('stamps planRequestedAt / planRequestedBy on the doc', async () => {
     const docId = await newPlanDoc(workspaceId);
-    const before = await jj<DocResponse>(await local(`/api/docs/${docId}`));
+    const before = await jj<DocResponse>(
+      await local(`/workspaces/${workspaceId}/docs/${docId}?format=json`),
+    );
     expect(before.meta.planRequestedAt).toBeUndefined();
     expect(before.meta.planRequestedBy).toBeUndefined();
 
     const r = await jj<PlanRequestResponse>(
-      await post(`/api/docs/${docId}/plan-request`, { author: PERSON }),
+      await post(`/workspaces/${workspaceId}/docs/${docId}/plan-request`, { author: PERSON }),
     );
-    const after = await jj<DocResponse>(await local(`/api/docs/${docId}`));
+    const after = await jj<DocResponse>(
+      await local(`/workspaces/${workspaceId}/docs/${docId}?format=json`),
+    );
     expect(after.meta.planRequestedAt).toBe(r.requestedAt);
     expect(after.meta.planRequestedBy).toBe('Jordan');
   });
@@ -155,30 +163,37 @@ describe('POST /api/docs/:docId/plan-request', () => {
   it('a second press re-asks: another thread, and the newer stamp wins', async () => {
     const docId = await newPlanDoc(workspaceId);
     const first = await jj<PlanRequestResponse>(
-      await post(`/api/docs/${docId}/plan-request`, { author: PERSON }),
+      await post(`/workspaces/${workspaceId}/docs/${docId}/plan-request`, { author: PERSON }),
     );
     // The clock has ms resolution; without a gap the two stamps can tie and
     // "the newer one won" would pass vacuously.
     await new Promise((r) => setTimeout(r, 5));
     const second = await jj<PlanRequestResponse>(
-      await post(`/api/docs/${docId}/plan-request`, {
+      await post(`/workspaces/${workspaceId}/docs/${docId}/plan-request`, {
         author: { ...PERSON, id: 'known-sam', name: 'Sam' },
       }),
     );
     expect(second.threadId).not.toBe(first.threadId);
     expect(second.requestedAt).toBeGreaterThan(first.requestedAt);
     expect(await threadsOf(docId)).toHaveLength(2);
-    const after = await jj<DocResponse>(await local(`/api/docs/${docId}`));
+    const after = await jj<DocResponse>(
+      await local(`/workspaces/${workspaceId}/docs/${docId}?format=json`),
+    );
     expect(after.meta.planRequestedBy).toBe('Sam');
     expect(after.meta.planRequestedAt).toBe(second.requestedAt);
   });
 
   it('refuses an unknown doc, a missing author, and a bare category author', async () => {
     const docId = await newPlanDoc(workspaceId);
-    expect((await post('/api/docs/no-such-doc/plan-request', { author: PERSON })).status).toBe(404);
-    expect((await post(`/api/docs/${docId}/plan-request`, {})).status).toBe(400);
+    expect(
+      (await post(`/workspaces/${workspaceId}/docs/no-such-doc/plan-request`, { author: PERSON }))
+        .status,
+    ).toBe(404);
+    expect((await post(`/workspaces/${workspaceId}/docs/${docId}/plan-request`, {})).status).toBe(
+      400,
+    );
     // "agent" names nobody — the same refusal every other comment door gives.
-    const category = await post(`/api/docs/${docId}/plan-request`, {
+    const category = await post(`/workspaces/${workspaceId}/docs/${docId}/plan-request`, {
       author: { id: 'agent', name: 'agent', kind: 'agent' },
     });
     expect(category.status).toBe(400);
@@ -193,10 +208,12 @@ describe('POST /api/docs/:docId/plan-request', () => {
     });
     const visitorHeaders = { ...visitor.headers, 'content-type': 'application/json' };
     // Presence: the same credentials DO read the doc.
-    const read = await fetch(`${base}/api/docs/${docId}`, { headers: visitorHeaders });
+    const read = await fetch(`${base}/workspaces/${workspaceId}/docs/${docId}?format=json`, {
+      headers: visitorHeaders,
+    });
     expect(read.status).toBe(200);
     // Absence: they ask for nothing.
-    const asked = await fetch(`${base}/api/docs/${docId}/plan-request`, {
+    const asked = await fetch(`${base}/workspaces/${workspaceId}/docs/${docId}/plan-request`, {
       method: 'POST',
       headers: visitorHeaders,
       body: JSON.stringify({ author: PERSON }),
@@ -210,11 +227,14 @@ describe('POST /api/docs/:docId/plan-request', () => {
     // so it rides the doc read rather than a second fetch from the editor.
     const led = await newBoard('led-board', 'Workspaces');
     const docId = await newPlanDoc(led);
-    const doc = await jj<DocResponse>(await local(`/api/docs/${docId}`));
+    const doc = await jj<DocResponse>(await local(`/workspaces/${led}/docs/${docId}?format=json`));
     expect(doc.leadAgentId).toBe('Workspaces');
     // Negative control: a board with no lead names none, and the float falls
     // back to "your agent" on the client.
     const unled = await newPlanDoc(workspaceId);
-    expect((await jj<DocResponse>(await local(`/api/docs/${unled}`))).leadAgentId).toBeUndefined();
+    expect(
+      (await jj<DocResponse>(await local(`/workspaces/${workspaceId}/docs/${unled}?format=json`)))
+        .leadAgentId,
+    ).toBeUndefined();
   });
 });

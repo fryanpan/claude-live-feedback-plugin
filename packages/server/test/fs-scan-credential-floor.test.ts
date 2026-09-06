@@ -25,6 +25,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { clearListingCache, isListedFile, scanFolderPaths } from '../src/fs-scan.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 function git(repo: string, ...args: string[]): string {
   return execFileSync('git', ['-C', repo, ...args], {
@@ -40,6 +41,9 @@ function git(repo: string, ...args: string[]): string {
 }
 
 const MARKER = 'FIXTURE_MARKER=not-a-real-secret';
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('the credential floor applies to the git listing, not just the fallback', () => {
   let repo: string;
@@ -125,7 +129,7 @@ describe('over the real routes: context-file refuses the un-ignored .env', () =>
     });
 
   const open = (relPath: string) =>
-    local(`/api/reviews/${reviewId}/context-file`, {
+    local(`/workspaces/${WS}/reviews/${reviewId}/context-file`, {
       method: 'POST',
       body: JSON.stringify({ relPath }),
     });
@@ -143,9 +147,10 @@ describe('over the real routes: context-file refuses the un-ignored .env', () =>
     clearListingCache();
 
     handle = createServer({ port: 0, dataDir });
+    WS = await seedBoard(`http://localhost:${handle.port}`);
     const bound = (await local('/workspaces', {
       method: 'POST',
-      body: JSON.stringify({ folderPath: repo }),
+      body: JSON.stringify({ folderPath: repo, hubWorkspaceId: WS }),
     }).then((r) => r.json())) as { workspaceId: string };
     reviewId = bound.workspaceId;
     expect(reviewId).toBeTruthy();
@@ -169,7 +174,7 @@ describe('over the real routes: context-file refuses the un-ignored .env', () =>
   });
 
   it('nor does it appear in the tree the visitor browses', async () => {
-    const raw = await local(`/api/reviews/${reviewId}/files`).then((r) => r.text());
+    const raw = await local(`/workspaces/${WS}/reviews/${reviewId}/files`).then((r) => r.text());
     expect(raw).toContain('note.md'); // control: the tree is not empty
     expect(raw).not.toContain('.env');
   });

@@ -23,6 +23,10 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('file-binding routes refuse browser callers', () => {
   let handle: ServerHandle;
@@ -30,7 +34,7 @@ describe('file-binding routes refuse browser callers', () => {
   let scratch: string;
   let base: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'bind-browser-data-'));
     scratch = mkdtempSync(join(tmpdir(), 'bind-browser-files-'));
     writeFileSync(join(scratch, 'doc.md'), '# fixture\n');
@@ -40,6 +44,7 @@ describe('file-binding routes refuse browser callers', () => {
     // is the binding gate alone — the thing this file is about.
     handle = createServer({ port: 0, dataDir, requireSignInToWrite: false });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterEach(async () => {
@@ -77,7 +82,7 @@ describe('file-binding routes refuse browser callers', () => {
     expect(((await r.json()) as { error: string }).error).toBe('browser_cannot_bind');
   };
 
-  describe('POST /api/docs', () => {
+  describe(`POST /workspaces/${WS}/docs`, () => {
     const body = (docId: string) => ({
       docId,
       type: 'markdown',
@@ -85,7 +90,7 @@ describe('file-binding routes refuse browser callers', () => {
     });
 
     it('positive control: an agent (no Origin) binds the file', async () => {
-      const r = await post('/api/docs', body('agent-bind'));
+      const r = await post(`/workspaces/${WS}/docs`, body('agent-bind'));
       expect(r.status).toBe(200);
     });
 
@@ -93,16 +98,18 @@ describe('file-binding routes refuse browser callers', () => {
       // Node's fetch sends `sec-fetch-mode: cors` and nothing else — the
       // exact header set the plugin's MCP bundle arrives with. It is an
       // agent, and the gate must read it as one.
-      const r = await post('/api/docs', body('node-bind'), { 'sec-fetch-mode': 'cors' });
+      const r = await post(`/workspaces/${WS}/docs`, body('node-bind'), {
+        'sec-fetch-mode': 'cors',
+      });
       expect(r.status).toBe(200);
     });
 
     it('a page on another local port cannot bind a path', async () => {
-      await expectRefused(await post('/api/docs', body('dev-bind'), devServerPage()));
+      await expectRefused(await post(`/workspaces/${WS}/docs`, body('dev-bind'), devServerPage()));
     });
 
     it('nor can a same-origin page — the app never binds from the browser', async () => {
-      await expectRefused(await post('/api/docs', body('same-bind'), samePage()));
+      await expectRefused(await post(`/workspaces/${WS}/docs`, body('same-bind'), samePage()));
     });
   });
 
@@ -122,24 +129,35 @@ describe('file-binding routes refuse browser callers', () => {
     });
   });
 
-  describe('POST /api/diffs', () => {
+  describe(`POST /workspaces/${WS}/reviews`, () => {
     // `repo` is the same kind of value as `folderPath`, and WIDER when
     // `base` is omitted: browse mode scans the whole folder and makes
     // every file in it lazily openable through `context-file`.
     it('positive control: an agent browses a folder', async () => {
-      const r = await post('/api/diffs', { repo: scratch, reviewId: 'agent-browse' });
+      const r = await post(`/workspaces/${WS}/reviews`, {
+        repo: scratch,
+        reviewId: 'agent-browse',
+      });
       expect(r.status).toBe(200);
     });
 
     it('a page on another local port cannot name a repo path', async () => {
       await expectRefused(
-        await post('/api/diffs', { repo: scratch, reviewId: 'dev-browse' }, devServerPage()),
+        await post(
+          `/workspaces/${WS}/reviews`,
+          { repo: scratch, reviewId: 'dev-browse' },
+          devServerPage(),
+        ),
       );
     });
 
     it('nor can a same-origin page — no browser client calls this route', async () => {
       await expectRefused(
-        await post('/api/diffs', { repo: scratch, reviewId: 'same-browse' }, samePage()),
+        await post(
+          `/workspaces/${WS}/reviews`,
+          { repo: scratch, reviewId: 'same-browse' },
+          samePage(),
+        ),
       );
     });
   });
@@ -149,6 +167,7 @@ describe('file-binding routes refuse browser callers', () => {
     beforeEach(async () => {
       const r = await post('/workspaces', { name: 'Import target' });
       workspaceId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+      WS = workspaceId;
     });
 
     it('positive control: an agent reads the file (dry run)', async () => {

@@ -23,6 +23,7 @@ import type { User } from '@feedback/core';
 import { REVIEW_REQUEST_COMMENT } from '../src/huddle.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON: User = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
 
@@ -50,7 +51,10 @@ interface DocResponse {
   };
 }
 
-describe('POST /api/docs/:docId/review-request', () => {
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
+describe(`POST /workspaces/${WS}/docs/:docId/review-request`, () => {
   let handle: ServerHandle;
   let access: AccessHarness;
   let dataDir: string;
@@ -78,9 +82,10 @@ describe('POST /api/docs/:docId/review-request', () => {
   const newHuddle = async (kind: 'plan' | 'discussion'): Promise<string> =>
     (await jj<HuddleResponse>(await post(`/workspaces/${workspaceId}/huddles`, { kind }))).docId;
   const threadsOf = async (docId: string): Promise<ThreadRow[]> =>
-    (await jj<{ threads: ThreadRow[] }>(await local(`/api/docs/${docId}/threads`))).threads;
+    (await jj<{ threads: ThreadRow[] }>(await local(`/workspaces/${WS}/docs/${docId}/threads`)))
+      .threads;
   const docOf = async (docId: string): Promise<DocResponse> =>
-    jj<DocResponse>(await local(`/api/docs/${docId}`));
+    jj<DocResponse>(await local(`/workspaces/${WS}/docs/${docId}?format=json`));
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'review-request-'));
@@ -91,11 +96,13 @@ describe('POST /api/docs/:docId/review-request', () => {
       ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     workspaceId = (
       await jj<{ workspace: { id: string } }>(
         await post('/workspaces', { name: 'review-request-board' }),
       )
     ).workspace.id;
+    WS = workspaceId;
   });
 
   afterAll(async () => {
@@ -111,7 +118,7 @@ describe('POST /api/docs/:docId/review-request', () => {
     expect(await threadsOf(docId)).toHaveLength(0);
 
     const r = await jj<ReviewRequestResponse>(
-      await post(`/api/docs/${docId}/review-request`, { author: PERSON }),
+      await post(`/workspaces/${WS}/docs/${docId}/review-request`, { author: PERSON }),
     );
     expect(r.docId).toBe(docId);
     expect(r.threadId).toBeTruthy();
@@ -133,7 +140,7 @@ describe('POST /api/docs/:docId/review-request', () => {
     expect(before.meta.reviewThreadId).toBeUndefined();
 
     const r = await jj<ReviewRequestResponse>(
-      await post(`/api/docs/${docId}/review-request`, { author: PERSON }),
+      await post(`/workspaces/${WS}/docs/${docId}/review-request`, { author: PERSON }),
     );
     const after = await docOf(docId);
     expect(after.meta.reviewRequestedAt).toBe(r.requestedAt);
@@ -146,11 +153,11 @@ describe('POST /api/docs/:docId/review-request', () => {
   it('a second press re-asks: another thread, and the stamp names the newer one', async () => {
     const docId = await newHuddle('discussion');
     const first = await jj<ReviewRequestResponse>(
-      await post(`/api/docs/${docId}/review-request`, { author: PERSON }),
+      await post(`/workspaces/${WS}/docs/${docId}/review-request`, { author: PERSON }),
     );
     await new Promise((r) => setTimeout(r, 5));
     const second = await jj<ReviewRequestResponse>(
-      await post(`/api/docs/${docId}/review-request`, {
+      await post(`/workspaces/${WS}/docs/${docId}/review-request`, {
         author: { ...PERSON, id: 'known-sam', name: 'Sam' },
       }),
     );
@@ -164,11 +171,11 @@ describe('POST /api/docs/:docId/review-request', () => {
 
   it('refuses an unknown doc, a missing author, and a bare category author', async () => {
     const docId = await newHuddle('discussion');
-    expect((await post('/api/docs/no-such-doc/review-request', { author: PERSON })).status).toBe(
-      404,
-    );
-    expect((await post(`/api/docs/${docId}/review-request`, {})).status).toBe(400);
-    const category = await post(`/api/docs/${docId}/review-request`, {
+    expect(
+      (await post(`/workspaces/${WS}/docs/no-such-doc/review-request`, { author: PERSON })).status,
+    ).toBe(404);
+    expect((await post(`/workspaces/${WS}/docs/${docId}/review-request`, {})).status).toBe(400);
+    const category = await post(`/workspaces/${WS}/docs/${docId}/review-request`, {
       author: { id: 'agent', name: 'agent', kind: 'agent' },
     });
     expect(category.status).toBe(400);
@@ -181,9 +188,11 @@ describe('POST /api/docs/:docId/review-request', () => {
       label: 'review-request share',
     });
     const visitorHeaders = { ...visitor.headers, 'content-type': 'application/json' };
-    const read = await fetch(`${base}/api/docs/${docId}`, { headers: visitorHeaders });
+    const read = await fetch(`${base}/workspaces/${WS}/docs/${docId}?format=json`, {
+      headers: visitorHeaders,
+    });
     expect(read.status).toBe(200);
-    const asked = await fetch(`${base}/api/docs/${docId}/review-request`, {
+    const asked = await fetch(`${base}/workspaces/${WS}/docs/${docId}/review-request`, {
       method: 'POST',
       headers: visitorHeaders,
       body: JSON.stringify({ author: PERSON }),

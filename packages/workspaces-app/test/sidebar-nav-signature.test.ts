@@ -63,7 +63,9 @@ afterEach(() => {
 describe('sidebar shared render signature', () => {
   it('same workspace + same file list → no DOM rebuild (scroll preserved)', async () => {
     const { list } = dom();
-    mockFetch(grouped([{ docId: 'a', name: 'a.ts', relPath: 'a.ts', reviewUrl: '/review/a' }]));
+    mockFetch(
+      grouped([{ docId: 'a', name: 'a.ts', relPath: 'a.ts', reviewUrl: '/workspaces/w-1/docs/a' }]),
+    );
 
     await renderDiffNav('a', 'W');
     const firstNode = list.querySelector('.diff-file a');
@@ -77,21 +79,23 @@ describe('sidebar shared render signature', () => {
 
   it('a newly changed file (#7) changes the signature → rebuild in place', async () => {
     const { list } = dom();
-    mockFetch(grouped([{ docId: 'a', name: 'a.ts', relPath: 'a.ts', reviewUrl: '/review/a' }]));
+    mockFetch(
+      grouped([{ docId: 'a', name: 'a.ts', relPath: 'a.ts', reviewUrl: '/workspaces/w-1/docs/a' }]),
+    );
     await renderDiffNav('a', 'W');
     const firstNode = list.querySelector('.diff-file a');
 
     // Agent edits add b.ts to the changed set; a plain nav must surface it.
     mockFetch(
       grouped([
-        { docId: 'a', name: 'a.ts', relPath: 'a.ts', reviewUrl: '/review/a' },
-        { docId: 'b', name: 'b.ts', relPath: 'b.ts', reviewUrl: '/review/b' },
+        { docId: 'a', name: 'a.ts', relPath: 'a.ts', reviewUrl: '/workspaces/w-1/docs/a' },
+        { docId: 'b', name: 'b.ts', relPath: 'b.ts', reviewUrl: '/workspaces/w-1/docs/b' },
       ]),
     );
     await renderDiffNav('a', 'W');
     // Rebuilt: old node replaced, b.ts now present.
     expect(list.contains(firstNode)).toBe(false);
-    expect(list.querySelector('a[href="/review/b"]')).not.toBeNull();
+    expect(list.querySelector('a[href="/workspaces/w-1/docs/b"]')).not.toBeNull();
   });
 
   it('cross-renderer (#4): diff-nav after a folder tree rebuilds, not left stale', async () => {
@@ -104,27 +108,35 @@ describe('sidebar shared render signature', () => {
           name: '',
           openCount: 0,
           children: [
-            { type: 'file', docId: 't', name: 't.ts', relPath: 't.ts', reviewUrl: '/review/t' },
+            {
+              type: 'file',
+              docId: 't',
+              name: 't.ts',
+              relPath: 't.ts',
+              reviewUrl: '/workspaces/w-1/docs/t',
+            },
           ],
         },
       },
     });
     await renderWorkspaceTree('t', 'T');
-    expect(list.querySelector('a[href="/review/t"]')).not.toBeNull();
+    expect(list.querySelector('a[href="/workspaces/w-1/docs/t"]')).not.toBeNull();
 
     // Back to a diff workspace W: must rebuild (different renderer + workspace),
     // not leave T's tree on screen because a per-renderer key still matched.
-    mockFetch(grouped([{ docId: 'w', name: 'w.ts', relPath: 'w.ts', reviewUrl: '/review/w' }]));
+    mockFetch(
+      grouped([{ docId: 'w', name: 'w.ts', relPath: 'w.ts', reviewUrl: '/workspaces/w-1/docs/w' }]),
+    );
     await renderDiffNav('w', 'W');
-    expect(list.querySelector('a[href="/review/t"]')).toBeNull();
-    expect(list.querySelector('a[href="/review/w"]')).not.toBeNull();
+    expect(list.querySelector('a[href="/workspaces/w-1/docs/t"]')).toBeNull();
+    expect(list.querySelector('a[href="/workspaces/w-1/docs/w"]')).not.toBeNull();
   });
 
   it('view toggle (#5) marks the CURRENT file after an in-place navigation', async () => {
     const { list } = dom();
     const files: GFile[] = [
-      { docId: 'a', name: 'a.ts', relPath: 'a.ts', reviewUrl: '/review/a' },
-      { docId: 'b', name: 'b.ts', relPath: 'b.ts', reviewUrl: '/review/b' },
+      { docId: 'a', name: 'a.ts', relPath: 'a.ts', reviewUrl: '/workspaces/w-1/docs/a' },
+      { docId: 'b', name: 'b.ts', relPath: 'b.ts', reviewUrl: '/workspaces/w-1/docs/b' },
     ];
     mockFetch({
       ...grouped(files),
@@ -134,14 +146,14 @@ describe('sidebar shared render signature', () => {
             relPath: 'a.ts',
             changed: true,
             docId: 'a',
-            reviewUrl: '/review/a',
+            reviewUrl: '/workspaces/w-1/docs/a',
             status: 'modified',
           },
           {
             relPath: 'b.ts',
             changed: true,
             docId: 'b',
-            reviewUrl: '/review/b',
+            reviewUrl: '/workspaces/w-1/docs/b',
             status: 'modified',
           },
         ],
@@ -160,8 +172,8 @@ describe('sidebar shared render signature', () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    const aAnchor = list.querySelector('a[href="/review/a"]');
-    const bAnchor = list.querySelector('a[href="/review/b"]');
+    const aAnchor = list.querySelector('a[href="/workspaces/w-1/docs/a"]');
+    const bAnchor = list.querySelector('a[href="/workspaces/w-1/docs/b"]');
     expect(bAnchor?.classList.contains('active')).toBe(true);
     expect(aAnchor?.classList.contains('active')).toBe(false);
   });
@@ -176,7 +188,7 @@ describe('sidebar shared render signature', () => {
           relPath: p,
           changed: false,
           docId: p,
-          reviewUrl: `/review/${p}`,
+          reviewUrl: `/workspaces/w-1/docs/${p}`,
         })),
       },
     });
@@ -194,14 +206,14 @@ describe('sidebar shared render signature', () => {
     mockFetch(files(['a.ts', 'b.ts']));
     await renderDiffNav('a.ts', 'B');
     expect(list.contains(firstNode)).toBe(false);
-    expect(list.querySelector('a[href="/review/b.ts"]')).not.toBeNull();
+    expect(list.querySelector('a[href="/workspaces/w-1/docs/b.ts"]')).not.toBeNull();
   });
 
   it('view toggle (#2) still works after nav though its wiring mount is disposed', async () => {
     const { list } = dom();
     const files: GFile[] = [
-      { docId: 'a', name: 'a.ts', relPath: 'a.ts', reviewUrl: '/review/a' },
-      { docId: 'b', name: 'b.ts', relPath: 'b.ts', reviewUrl: '/review/b' },
+      { docId: 'a', name: 'a.ts', relPath: 'a.ts', reviewUrl: '/workspaces/w-1/docs/a' },
+      { docId: 'b', name: 'b.ts', relPath: 'b.ts', reviewUrl: '/workspaces/w-1/docs/b' },
     ];
     mockFetch({
       ...grouped(files),
@@ -211,14 +223,14 @@ describe('sidebar shared render signature', () => {
             relPath: 'a.ts',
             changed: true,
             docId: 'a',
-            reviewUrl: '/review/a',
+            reviewUrl: '/workspaces/w-1/docs/a',
             status: 'modified',
           },
           {
             relPath: 'b.ts',
             changed: true,
             docId: 'b',
-            reviewUrl: '/review/b',
+            reviewUrl: '/workspaces/w-1/docs/b',
             status: 'modified',
           },
         ],
@@ -256,7 +268,9 @@ describe('sidebar shared render signature', () => {
       key: () => null,
       length: 0,
     });
-    const files: GFile[] = [{ docId: 'a', name: 'a.ts', relPath: 'a.ts', reviewUrl: '/review/a' }];
+    const files: GFile[] = [
+      { docId: 'a', name: 'a.ts', relPath: 'a.ts', reviewUrl: '/workspaces/w-1/docs/a' },
+    ];
     mockFetch({
       ...grouped(files),
       '/files': {
@@ -265,7 +279,7 @@ describe('sidebar shared render signature', () => {
             relPath: 'a.ts',
             changed: true,
             docId: 'a',
-            reviewUrl: '/review/a',
+            reviewUrl: '/workspaces/w-1/docs/a',
             status: 'modified',
           },
         ],
@@ -294,8 +308,8 @@ describe('sidebar shared render signature', () => {
   it('epoch (round-3): a toggle superseded mid-fetch does not clobber the new sidebar', async () => {
     const { list } = dom();
     const files: GFile[] = [
-      { docId: 'a', name: 'a.ts', relPath: 'a.ts', reviewUrl: '/review/a' },
-      { docId: 'b', name: 'b.ts', relPath: 'b.ts', reviewUrl: '/review/b' },
+      { docId: 'a', name: 'a.ts', relPath: 'a.ts', reviewUrl: '/workspaces/w-1/docs/a' },
+      { docId: 'b', name: 'b.ts', relPath: 'b.ts', reviewUrl: '/workspaces/w-1/docs/b' },
     ];
     mockFetch({
       ...grouped(files),
@@ -305,7 +319,7 @@ describe('sidebar shared render signature', () => {
             relPath: 'a.ts',
             changed: true,
             docId: 'a',
-            reviewUrl: '/review/a',
+            reviewUrl: '/workspaces/w-1/docs/a',
             status: 'modified',
           },
         ],
@@ -335,18 +349,24 @@ describe('sidebar shared render signature', () => {
     const { list } = dom();
     mockFetch(
       grouped([
-        { docId: 'a', name: 'a.ts', relPath: 'a.ts', reviewUrl: '/review/a' },
-        { docId: 'b', name: 'b.ts', relPath: 'b.ts', reviewUrl: '/review/b' },
+        { docId: 'a', name: 'a.ts', relPath: 'a.ts', reviewUrl: '/workspaces/w-1/docs/a' },
+        { docId: 'b', name: 'b.ts', relPath: 'b.ts', reviewUrl: '/workspaces/w-1/docs/b' },
       ]),
     );
     // Establish the sidebar with B active (the current document).
     await renderDiffNav('b', 'W');
-    expect(list.querySelector('a[href="/review/b"]')?.classList.contains('active')).toBe(true);
+    expect(
+      list.querySelector('a[href="/workspaces/w-1/docs/b"]')?.classList.contains('active'),
+    ).toBe(true);
 
     // A stale render for A whose navigation was superseded (scope disposed
     // during its fetch) must NOT re-mark A active over the live B.
     await renderDiffNav('a', 'W', false, { disposed: true });
-    expect(list.querySelector('a[href="/review/a"]')?.classList.contains('active')).toBe(false);
-    expect(list.querySelector('a[href="/review/b"]')?.classList.contains('active')).toBe(true);
+    expect(
+      list.querySelector('a[href="/workspaces/w-1/docs/a"]')?.classList.contains('active'),
+    ).toBe(false);
+    expect(
+      list.querySelector('a[href="/workspaces/w-1/docs/b"]')?.classList.contains('active'),
+    ).toBe(true);
   });
 });

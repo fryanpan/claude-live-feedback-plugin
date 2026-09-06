@@ -167,7 +167,7 @@ Use a label like `"ux-finding"`, `"code-review"`, `"a11y"` in
   `sourceUrl` matches your target path. **Sole-authoritative check** — the
   others are just hints. Pass the query: an unfiltered call is a page of the
   50 most recent docs, and a silent miss on page two is not a "no".
-- The user sent you a `/review/<docId>?as=bryan` URL recently.
+- The user sent you a `/workspaces/<workspaceId>/docs/<docId>?as=bryan` URL recently.
 
 When in doubt, check `list_docs` before touching a `.md` — one tool
 call. The cost of being wrong is a frustrating out-of-sync bug for
@@ -194,7 +194,7 @@ doc in the set; they hop between siblings via the sidebar.
 attach_markdown({ docId: "auth-rfc",     path: "/abs/auth-rfc.md",     setId: "feb-2026-rfcs" })
 attach_markdown({ docId: "billing-rfc",  path: "/abs/billing-rfc.md",  setId: "feb-2026-rfcs" })
 attach_markdown({ docId: "schema-rfc",   path: "/abs/schema-rfc.md",   setId: "feb-2026-rfcs" })
-# share /review/auth-rfc?as=bryan — sidebar lists all three.
+# share /workspaces/<workspaceId>/docs/auth-rfc?as=bryan — sidebar lists all three.
 ```
 
 `setId` is just a tag — pick any short string. No setup step needed

@@ -18,6 +18,7 @@ import type { ReviewPayload, Thread, User } from '@feedback/core';
 import type * as Y from 'yjs';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { ThreadSummarizer } from '../src/summarize.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const AGENT: User = {
   id: 'agent-onboarding',
@@ -65,7 +66,7 @@ async function mkdoc(): Promise<string> {
   const docId = `review-item-${seq++}`;
   const file = join(dataDir, `${docId}.md`);
   writeFileSync(file, BODY);
-  const res = await post('/api/docs', { docId, type: 'markdown', sourceUrl: file });
+  const res = await post(`/workspaces/${WS}/docs`, { docId, type: 'markdown', sourceUrl: file });
   expect(res.status).toBe(200);
   return docId;
 }
@@ -73,7 +74,7 @@ async function mkdoc(): Promise<string> {
 /** Read the doc's threads back through the list route — never the response
  *  body of the write, which is what a dropped param still looks right in. */
 async function storedThreads(docId: string): Promise<Thread[]> {
-  const res = await fetch(`${base}/api/docs/${docId}/threads`);
+  const res = await fetch(`${base}/workspaces/${WS}/docs/${docId}/threads`);
   expect(res.status).toBe(200);
   return ((await res.json()) as { threads: Thread[] }).threads;
 }
@@ -88,7 +89,7 @@ async function firstThread(docId: string): Promise<Thread> {
  *  a hand-made text-range with no startRel/endRel is accepted and then
  *  kills the re-anchor sweep on some unrelated request minutes later. */
 async function seedThread(docId: string, review?: ReviewPayload): Promise<Thread> {
-  const res = await post(`/api/docs/${docId}/threads/by_find`, {
+  const res = await post(`/workspaces/${WS}/docs/${docId}/threads/by_find`, {
     author: AGENT,
     text: 'The banner placement needs a call.',
     find: SNIPPET,
@@ -98,15 +99,19 @@ async function seedThread(docId: string, review?: ReviewPayload): Promise<Thread
   return ((await res.json()) as { thread: Thread }).thread;
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   dataDir = mkdtempSync(join(tmpdir(), 'review-item-routes-'));
   handle = createServer({ port: 0, dataDir });
   base = `http://localhost:${handle.port}`;
+  WS = await seedBoard(base);
 });
 afterAll(async () => {
   await handle.stop();
   rmSync(dataDir, { recursive: true, force: true });
 });
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('the three comment-writing routes forward `review`', () => {
   it('POST /threads/by_find stores it on the first comment', async () => {
@@ -122,7 +127,7 @@ describe('the three comment-writing routes forward `review`', () => {
     // Borrow a real anchor from a thread the server built, so this route
     // gets a structure it would actually have produced.
     const seeded = await seedThread(docId);
-    const res = await post(`/api/docs/${docId}/threads`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads`, {
       author: AGENT,
       text: 'Second look at the same line.',
       anchor: seeded.anchor,
@@ -136,7 +141,7 @@ describe('the three comment-writing routes forward `review`', () => {
   it('POST /threads/:id/comments stores it on the REPLY, not the thread', async () => {
     const docId = await mkdoc();
     const seeded = await seedThread(docId);
-    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/comments`, {
       author: AGENT,
       text: 'Now that both screens exist, this needs a call.',
       review: DECISION,
@@ -172,7 +177,7 @@ describe('a thin-but-valid declaration files, and the 200 says it was thin', () 
   it('rides the 200 from POST /threads/:id/comments', async () => {
     const docId = await mkdoc();
     const seeded = await seedThread(docId);
-    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/comments`, {
       author: AGENT,
       text: 'Both screens are built.',
       review: THIN,
@@ -188,7 +193,7 @@ describe('a thin-but-valid declaration files, and the 200 says it was thin', () 
 
   it('rides the 200 from POST /threads/by_find and POST /threads', async () => {
     const docId = await mkdoc();
-    const byFind = await post(`/api/docs/${docId}/threads/by_find`, {
+    const byFind = await post(`/workspaces/${WS}/docs/${docId}/threads/by_find`, {
       author: AGENT,
       text: 'Both screens are built.',
       find: SNIPPET,
@@ -198,7 +203,7 @@ describe('a thin-but-valid declaration files, and the 200 says it was thin', () 
     expect((await byFind.json()).reviewAdvice).toContain('review.detail');
 
     const seeded = await firstThread(docId);
-    const onSubject = await post(`/api/docs/${docId}/threads`, {
+    const onSubject = await post(`/workspaces/${WS}/docs/${docId}/threads`, {
       author: AGENT,
       text: 'And again on the subject.',
       anchor: seeded.anchor,
@@ -214,7 +219,7 @@ describe('a thin-but-valid declaration files, and the 200 says it was thin', () 
     // while `detail` was prose. The card renders `detail`.
     const docId = await mkdoc();
     const seeded = await seedThread(docId);
-    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/comments`, {
       author: AGENT,
       text: 'Diff is at [the review](/review/d-9fQ2) and the draft is [here](/docs/d-4kTx).',
       review: DECISION,
@@ -230,7 +235,7 @@ describe('a thin-but-valid declaration files, and the 200 says it was thin', () 
   it('says nothing when the detail carries the links itself', async () => {
     const docId = await mkdoc();
     const seeded = await seedThread(docId);
-    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/comments`, {
       author: AGENT,
       text: 'Diff is at [the review](/review/d-9fQ2).',
       review: { ...DECISION, detail: `${DECISION.detail} See [the review](/review/d-9fQ2).` },
@@ -244,7 +249,7 @@ describe('a thin-but-valid declaration files, and the 200 says it was thin', () 
   it('says nothing when the declaration is complete', async () => {
     const docId = await mkdoc();
     const seeded = await seedThread(docId);
-    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/comments`, {
       author: AGENT,
       text: 'Now that both screens exist, this needs a call.',
       review: DECISION,
@@ -265,7 +270,7 @@ describe('a thin-but-valid declaration files, and the 200 says it was thin', () 
   it('accepts a legacy payload and folds its why and lookFor into the body', async () => {
     const docId = await mkdoc();
     const seeded = await seedThread(docId);
-    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/comments`, {
       author: AGENT,
       text: 'Both screens are built.',
       review: {
@@ -291,7 +296,7 @@ describe('a thin-but-valid declaration files, and the 200 says it was thin', () 
   it('says nothing on an ordinary comment that declared nothing', async () => {
     const docId = await mkdoc();
     const seeded = await seedThread(docId);
-    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/comments`, {
       author: AGENT,
       text: 'Pushed the fix.',
     });
@@ -315,21 +320,21 @@ describe('a malformed declaration is refused at the door, not truncated', () => 
     it(`400s ${label} on every write route`, async () => {
       const docId = await mkdoc();
       const seeded = await seedThread(docId);
-      const byFind = await post(`/api/docs/${docId}/threads/by_find`, {
+      const byFind = await post(`/workspaces/${WS}/docs/${docId}/threads/by_find`, {
         author: AGENT,
         text: 'x',
         find: SNIPPET,
         review,
       });
       expect(byFind.status).toBe(400);
-      const threads = await post(`/api/docs/${docId}/threads`, {
+      const threads = await post(`/workspaces/${WS}/docs/${docId}/threads`, {
         author: AGENT,
         text: 'x',
         anchor: seeded.anchor,
         review,
       });
       expect(threads.status).toBe(400);
-      const comments = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+      const comments = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/comments`, {
         author: AGENT,
         text: 'x',
         review,
@@ -340,7 +345,7 @@ describe('a malformed declaration is refused at the door, not truncated', () => 
 
   it('the refusal quotes what is wrong, so a retry can act on the message alone', async () => {
     const docId = await mkdoc();
-    const res = await post(`/api/docs/${docId}/threads/by_find`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads/by_find`, {
       author: AGENT,
       text: 'x',
       find: SNIPPET,
@@ -354,7 +359,7 @@ describe('a malformed declaration is refused at the door, not truncated', () => 
   it('a refused declaration writes NOTHING — not the comment either', async () => {
     const docId = await mkdoc();
     const before = (await storedThreads(docId)).length;
-    await post(`/api/docs/${docId}/threads/by_find`, {
+    await post(`/workspaces/${WS}/docs/${docId}/threads/by_find`, {
       author: AGENT,
       text: 'this text must not land',
       find: SNIPPET,
@@ -369,7 +374,7 @@ describe('POST /threads/:id/answer', () => {
     const docId = await mkdoc();
     const seeded = await seedThread(docId, DECISION);
     const commentId = seeded.comments[0]?.id ?? '';
-    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/answer`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/answer`, {
       author: PERSON,
       text: 'Move below',
       commentId,
@@ -389,7 +394,7 @@ describe('POST /threads/:id/answer', () => {
     // to be ON the stored payload, read back through a second request.
     const docId = await mkdoc();
     const seeded = await seedThread(docId, DECISION);
-    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/answer`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/answer`, {
       author: PERSON,
       text: 'Move below',
       commentId: seeded.comments[0]?.id,
@@ -405,7 +410,7 @@ describe('POST /threads/:id/answer', () => {
   it('accepts a typed answer with no option id — it is not a lesser answer', async () => {
     const docId = await mkdoc();
     const seeded = await seedThread(docId, DECISION);
-    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/answer`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/answer`, {
       author: PERSON,
       text: 'Neither — put it in the sign-up flow instead.',
       commentId: seeded.comments[0]?.id,
@@ -422,7 +427,7 @@ describe('POST /threads/:id/answer', () => {
   it('refuses an option id the declaration never offered', async () => {
     const docId = await mkdoc();
     const seeded = await seedThread(docId, DECISION);
-    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/answer`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/answer`, {
       author: PERSON,
       text: 'Somewhere else',
       commentId: seeded.comments[0]?.id,
@@ -439,7 +444,7 @@ describe('POST /threads/:id/answer', () => {
   it('refuses a comment that declared nothing', async () => {
     const docId = await mkdoc();
     const seeded = await seedThread(docId);
-    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/answer`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/answer`, {
       author: PERSON,
       text: 'Sure',
       commentId: seeded.comments[0]?.id,
@@ -462,7 +467,7 @@ describe("a person's plain reply answers the item it lands on", () => {
   it('stamps an open question from a plain reply on /comments', async () => {
     const docId = await mkdoc();
     const seeded = await seedThread(docId, QUESTION);
-    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/comments`, {
       author: PERSON,
       text: 'Cut the second sentence — the first says it.',
     });
@@ -487,7 +492,7 @@ describe("a person's plain reply answers the item it lands on", () => {
     // asking posts as the ordinary reply it is; the item stays open behind it.
     const docId = await mkdoc();
     const seeded = await seedThread(docId, QUESTION);
-    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/comments`, {
       author: PERSON,
       text: 'Why is this important?',
     });
@@ -503,7 +508,7 @@ describe("a person's plain reply answers the item it lands on", () => {
     // The explicit answer composer is the door the incident came through.
     const docId = await mkdoc();
     const seeded = await seedThread(docId, QUESTION);
-    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/answer`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/answer`, {
       author: PERSON,
       text: 'Why is this important?',
       commentId: seeded.comments[0]?.id,
@@ -517,7 +522,7 @@ describe("a person's plain reply answers the item it lands on", () => {
     expect(review?.answeredBy).toBeUndefined();
     // Positive control: prose through the same door still answers — the
     // question above narrowed the verb without breaking it.
-    const picked = await post(`/api/docs/${docId}/threads/${seeded.id}/answer`, {
+    const picked = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/answer`, {
       author: PERSON,
       text: 'Cut the second sentence.',
       commentId: seeded.comments[0]?.id,
@@ -532,7 +537,7 @@ describe("a person's plain reply answers the item it lands on", () => {
     // the row is that only a person can retire it.
     const docId = await mkdoc();
     const seeded = await seedThread(docId, QUESTION);
-    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/comments`, {
       author: AGENT,
       text: 'Bumping this — still waiting on a read.',
     });
@@ -549,7 +554,7 @@ describe("a person's plain reply answers the item it lands on", () => {
     // let a line of small talk retire a decision and delete its card.
     const docId = await mkdoc();
     const seeded = await seedThread(docId, DECISION);
-    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/comments`, {
       author: PERSON,
       text: 'Why is it above the fold at all?',
     });
@@ -568,7 +573,7 @@ describe("a person's plain reply answers the item it lands on", () => {
     // would be the inference this deliberately does not make.
     const docId = await mkdoc();
     const seeded = await seedThread(docId, DECISION);
-    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/comments`, {
       author: PERSON,
       text: '  move below  ',
     });
@@ -586,11 +591,11 @@ describe("a person's plain reply answers the item it lands on", () => {
     // answer into `answerHistory` and rewrite who answered.
     const docId = await mkdoc();
     const seeded = await seedThread(docId, QUESTION);
-    await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+    await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/comments`, {
       author: PERSON,
       text: 'Cut the second sentence.',
     });
-    await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+    await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/comments`, {
       author: PERSON,
       text: 'Actually, reading it again on the phone now.',
     });
@@ -604,7 +609,7 @@ describe("a person's plain reply answers the item it lands on", () => {
     // old one. Both would otherwise be true of the same comment.
     const docId = await mkdoc();
     const seeded = await seedThread(docId, QUESTION);
-    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/comments`, {
       author: PERSON,
       text: 'Before I read it — which draft is current?',
       review: { shape: 'review', headline: 'Which draft is current?' },
@@ -626,7 +631,7 @@ describe("a person's plain reply answers the item it lands on", () => {
     const docId = await mkdoc();
     const seeded = await seedThread(docId, QUESTION);
     const commentId = seeded.comments[0]?.id ?? '';
-    const first = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+    const first = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/comments`, {
       author: PERSON,
       text: 'Cut the second sentence.',
     });
@@ -663,11 +668,11 @@ describe("a person's plain reply answers the item it lands on", () => {
     // displaced answer as history rather than dropping it.
     const docId = await mkdoc();
     const seeded = await seedThread(docId, QUESTION);
-    await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+    await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/comments`, {
       author: PERSON,
       text: 'Cut the second sentence.',
     });
-    const again = await post(`/api/docs/${docId}/threads/${seeded.id}/answer`, {
+    const again = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/answer`, {
       author: PERSON,
       text: 'On reflection, keep both.',
       commentId: seeded.comments[0]?.id,
@@ -683,7 +688,7 @@ describe("a person's plain reply answers the item it lands on", () => {
     // nothing takes a plain reply and gains no review payload from anywhere.
     const docId = await mkdoc();
     const seeded = await seedThread(docId);
-    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/comments`, {
       author: PERSON,
       text: 'Agreed.',
     });
@@ -699,7 +704,7 @@ describe('POST /threads/:id/answer/undo', () => {
   async function answered(docId: string): Promise<{ threadId: string; commentId: string }> {
     const seeded = await seedThread(docId, DECISION);
     const commentId = seeded.comments[0]?.id ?? '';
-    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/answer`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/answer`, {
       author: PERSON,
       text: 'Move below',
       commentId,
@@ -712,7 +717,7 @@ describe('POST /threads/:id/answer/undo', () => {
   it('clears the stamps, keeps the reply, and moves the answer into answerHistory', async () => {
     const docId = await mkdoc();
     const { threadId, commentId } = await answered(docId);
-    const res = await post(`/api/docs/${docId}/threads/${threadId}/answer/undo`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads/${threadId}/answer/undo`, {
       author: PERSON,
       commentId,
     });
@@ -741,11 +746,11 @@ describe('POST /threads/:id/answer/undo', () => {
   it('a re-answer after undo stamps fresh and keeps the history', async () => {
     const docId = await mkdoc();
     const { threadId, commentId } = await answered(docId);
-    await post(`/api/docs/${docId}/threads/${threadId}/answer/undo`, {
+    await post(`/workspaces/${WS}/docs/${docId}/threads/${threadId}/answer/undo`, {
       author: PERSON,
       commentId,
     });
-    const res = await post(`/api/docs/${docId}/threads/${threadId}/answer`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads/${threadId}/answer`, {
       author: PERSON,
       text: 'Keep above after all',
       commentId,
@@ -761,7 +766,7 @@ describe('POST /threads/:id/answer/undo', () => {
   it('400s an item nobody has answered — two racing undos must not both be told they took something back', async () => {
     const docId = await mkdoc();
     const seeded = await seedThread(docId, DECISION);
-    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/answer/undo`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/answer/undo`, {
       author: PERSON,
       commentId: seeded.comments[0]?.id,
     });
@@ -772,7 +777,7 @@ describe('POST /threads/:id/answer/undo', () => {
   it('400s a comment that declared nothing', async () => {
     const docId = await mkdoc();
     const seeded = await seedThread(docId);
-    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/answer/undo`, {
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads/${seeded.id}/answer/undo`, {
       author: PERSON,
       commentId: seeded.comments[0]?.id,
     });
@@ -784,10 +789,15 @@ describe('POST /threads/:id/answer/undo', () => {
     const docId = await mkdoc();
     const { threadId, commentId } = await answered(docId);
     expect(
-      (await post(`/api/docs/${docId}/threads/${threadId}/answer/undo`, { commentId })).status,
+      (await post(`/workspaces/${WS}/docs/${docId}/threads/${threadId}/answer/undo`, { commentId }))
+        .status,
     ).toBe(400);
     expect(
-      (await post(`/api/docs/${docId}/threads/${threadId}/answer/undo`, { author: PERSON })).status,
+      (
+        await post(`/workspaces/${WS}/docs/${docId}/threads/${threadId}/answer/undo`, {
+          author: PERSON,
+        })
+      ).status,
     ).toBe(400);
   });
 });
@@ -805,27 +815,34 @@ describe('answer + undo drive the shared queue — retire everywhere, reopen eve
     const ws = await post('/workspaces', { name: 'undo-rt', goal: 'Round-trip the record.' });
     expect(ws.status, await ws.clone().text()).toBe(200);
     const { workspace } = (await ws.json()) as { workspace: { id: string } };
+    WS = workspace.id;
     const docId = await mkdoc();
-    expect((await post(`/workspaces/${workspace.id}/docs`, { docId })).status).toBe(200);
+    expect((await post(`/workspaces/${workspace.id}/docs:attach`, { docId })).status).toBe(200);
 
     const seeded = await seedThread(docId, DECISION);
     const commentId = seeded.comments[0]?.id ?? '';
     // On the queue while unanswered — the positive control for both zeros.
     expect((await queueItems(workspace.id)).some((i) => i.threadId === seeded.id)).toBe(true);
 
-    const answer = await post(`/api/docs/${docId}/threads/${seeded.id}/answer`, {
-      author: PERSON,
-      text: 'Move below',
-      commentId,
-      optionId: 'below',
-    });
+    const answer = await post(
+      `/workspaces/${workspace.id}/docs/${docId}/threads/${seeded.id}/answer`,
+      {
+        author: PERSON,
+        text: 'Move below',
+        commentId,
+        optionId: 'below',
+      },
+    );
     expect(answer.status, await answer.clone().text()).toBe(200);
     expect((await queueItems(workspace.id)).some((i) => i.threadId === seeded.id)).toBe(false);
 
-    const undo = await post(`/api/docs/${docId}/threads/${seeded.id}/answer/undo`, {
-      author: PERSON,
-      commentId,
-    });
+    const undo = await post(
+      `/workspaces/${workspace.id}/docs/${docId}/threads/${seeded.id}/answer/undo`,
+      {
+        author: PERSON,
+        commentId,
+      },
+    );
     expect(undo.status, await undo.clone().text()).toBe(200);
     expect((await queueItems(workspace.id)).some((i) => i.threadId === seeded.id)).toBe(true);
   });
@@ -848,7 +865,7 @@ describe('undo respects the visitor gate — a share visitor cannot spend the AP
       { status: 200, headers: { 'content-type': 'application/json' } },
     )) as unknown as typeof fetch;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     gatedDir = mkdtempSync(join(tmpdir(), 'review-undo-gate-'));
     summarizer = new ThreadSummarizer({
       apiKey: 'test-key-never-sent-anywhere',
@@ -857,6 +874,7 @@ describe('undo respects the visitor gate — a share visitor cannot spend the AP
     });
     gatedHandle = createServer({ port: 0, dataDir: gatedDir, summarizer });
     gatedBase = `http://localhost:${gatedHandle.port}`;
+    WS = await seedBoard(gatedBase);
   });
   afterAll(async () => {
     summarizer.dispose();
@@ -874,7 +892,7 @@ describe('undo respects the visitor gate — a share visitor cannot spend the AP
     const name = 'undo-gate-doc';
     const file = join(gatedDir, `${name}.md`);
     writeFileSync(file, BODY);
-    const created = await fetch(`${gatedBase}/api/docs`, {
+    const created = await fetch(`${gatedBase}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: name, type: 'markdown', sourceUrl: file }),
@@ -883,7 +901,7 @@ describe('undo respects the visitor gate — a share visitor cannot spend the AP
     // The caller NAMED the doc; the server minted its id. The doc-store handle
     // below keys on the minted one, while the route still takes the name.
     const docId = ((await created.json()) as { docId: string }).docId;
-    const seeded = await fetch(`${gatedBase}/api/docs/${name}/threads/by_find`, {
+    const seeded = await fetch(`${gatedBase}/workspaces/${WS}/docs/${name}/threads/by_find`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({

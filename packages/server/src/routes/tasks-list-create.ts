@@ -30,7 +30,7 @@ export async function handleTaskListCreate(
     mergedHold,
     workspacesOfDoc,
   } = ctx;
-  const { req, pathname, url, authorFor, visitor } = rq;
+  const { req, pathname, scope, url, authorFor, visitor } = rq;
   const wsTasksMatch = pathname.match(/^\/workspaces\/([^/]+)\/tasks$/);
   // `?format=json`, for the reason `GET /workspaces/<id>` carries the same
   // gate: `tasks` is one of the board's four page tabs. The POST below needs
@@ -82,16 +82,13 @@ export async function handleTaskListCreate(
       }),
     });
   }
-  if (wsTasksMatch && req.method === 'POST') {
-    const workspaceId = decodeURIComponent(wsTasksMatch[1] ?? '');
+  if (wsTasksMatch && scope && req.method === 'POST') {
+    // The board comes off the scope. An unknown one was already a 404
+    // before anything about the task was judged — that is still true, and it
+    // is now true for every collection at once rather than because this route
+    // remembered to ask.
+    const { workspaceId, board: targetBoard } = scope;
     const body = await safeJson(req);
-    // An unknown workspace is a 404 before anything about the task is
-    // judged — otherwise a typo'd id comes back as a complaint about
-    // the body, and the caller fixes the wrong thing.
-    const targetBoard = taskStore.getWorkspace(workspaceId);
-    if (!targetBoard) {
-      return j(404, { error: 'workspace-not-found' });
-    }
     // A retired board takes no new work, and it says so about the BOARD
     // rather than about the body — a caller told its title is fine and
     // its goal is unknown fixes the wrong thing. `createTask` refuses

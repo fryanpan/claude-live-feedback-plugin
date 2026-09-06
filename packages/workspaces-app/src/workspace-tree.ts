@@ -12,7 +12,7 @@
  */
 
 import { setActiveFile } from './diff-nav.ts';
-import { docHref, workspaceIdFromPath } from './doc-path.ts';
+import { api, docHref, workspaceIdFromPath } from './doc-path.ts';
 import {
   beginSidebarRender,
   commitSidebarColumn,
@@ -148,7 +148,7 @@ export async function renderWorkspaceTree(
     // Re-fetch on every navigation; the shared signature below decides whether
     // the fetched tree actually needs a DOM rebuild (which resets scroll +
     // collapses folder state), or just an active-marker move.
-    const res = await fetch(`/api/reviews/${encodeURIComponent(workspaceId)}/tree`);
+    const res = await fetch(api(`reviews/${encodeURIComponent(workspaceId)}/tree`));
     // A failed fetch commits nothing in EITHER direction: a first load that
     // fails leaves the column unreserved (no empty panel), and a failed
     // heartbeat refresh leaves the rows already on screen alone.

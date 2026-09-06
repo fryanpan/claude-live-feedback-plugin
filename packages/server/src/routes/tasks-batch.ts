@@ -59,7 +59,7 @@ export async function handleTaskBatch(
     judgeReviewItem,
     judgeTaskDecision,
   } = ctx;
-  const { req, pathname, authorFor } = rq;
+  const { req, pathname, scope, authorFor } = rq;
   /**
    * Batch capture: a burst of ideas in ONE call, each landing owned and
    * placed, and the whole thing coming back in board order so the caller
@@ -73,13 +73,10 @@ export async function handleTaskBatch(
    * landed anyway: an unknown workspace, and a body with no rows in it.
    */
   const wsTasksBatchMatch = pathname.match(/^\/workspaces\/([^/]+)\/tasks\/batch$/);
-  if (wsTasksBatchMatch && req.method === 'POST') {
-    const workspaceId = decodeURIComponent(wsTasksBatchMatch[1] ?? '');
+  if (wsTasksBatchMatch && scope && req.method === 'POST') {
+    // The board comes off the scope — see `middleware/workspace-scope.ts`.
+    const { workspaceId, board: batchBoard } = scope;
     const body = await safeJson(req);
-    const batchBoard = taskStore.getWorkspace(workspaceId);
-    if (!batchBoard) {
-      return j(404, { error: 'workspace-not-found' });
-    }
     // Whole-batch, before any row is read: on a retired board every row
     // fails for the same reason, and a hundred copies of one sentence
     // is not a better answer than the sentence.

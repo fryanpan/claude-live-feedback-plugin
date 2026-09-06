@@ -53,6 +53,7 @@ import {
   type WorkspaceGoal,
 } from '../src/tasks.ts';
 import { type GoalIds, type SeedGoalSpec, seedGoals, seedGoalsOverHttp } from './goal-seed.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known' };
 const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known' };
@@ -94,6 +95,9 @@ const boardFor = (G: Bands): WorkspaceGoal[] => [
   { id: G.launchCopy, title: '1.2 Copy edit', dueAt: 1767000000000 },
   { id: G.perf, title: '2. Cut page weight' },
 ];
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('TaskStore.renameGoal', () => {
   let dataDir: string;
@@ -412,10 +416,11 @@ describe('the goal routes', () => {
   let dataDir: string;
   let base: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'goal-rename-http-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterAll(async () => {
@@ -447,6 +452,7 @@ describe('the goal routes', () => {
     const { workspace } = await jj<{ workspace: { id: string } }>(
       await post('/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
     );
+    WS = workspace.id;
     const G = bands(await seedGoalsOverHttp(base, workspace.id, GOAL_SPEC, PERSON));
     const mk = async (title: string) =>
       (
@@ -462,7 +468,7 @@ describe('the goal routes', () => {
     const done = await mk('book the slot');
     for (const to of ['in-progress', 'done']) {
       await jj(
-        await post(`/api/tasks/${done}/transition`, {
+        await post(`/workspaces/${WS}/tasks/${done}/transition`, {
           author: AGENT,
           to,
         }),

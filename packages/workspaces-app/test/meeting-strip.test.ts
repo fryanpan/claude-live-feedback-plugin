@@ -1277,7 +1277,7 @@ describe('teardown', () => {
 
 describe('the socket address', () => {
   it('is the doc audio path on this host', () => {
-    expect(meetingSocketPath('doc-1')).toBe('/audio/doc-1');
+    expect(meetingSocketPath('w-1', 'doc-1')).toBe('/workspaces/w-1/docs/doc-1/audio');
   });
 });
 

@@ -59,34 +59,39 @@ describe('safeLinkHref', () => {
 });
 
 describe('resolveDocLink', () => {
-  const ctx = { reviewId: 'rev-1', relPath: 'docs/main.md' };
+  /** The board the sibling is addressed under — passed in, never read off
+   *  `location`, so the resolver stays pure. */
+  const WS = 'w-1';
+  const ctx = { reviewId: 'rev-1', relPath: 'docs/main.md', workspaceId: WS };
 
   it('resolves a same-dir relative link to the sibling docId URL', () => {
     expect(resolveDocLink({ href: './research.md', ...ctx })).toBe(
-      `/review/${encodeURIComponent('rev-1:docs~research.md')}`,
+      `/workspaces/${WS}/docs/${encodeURIComponent('rev-1:docs~research.md')}`,
     );
     expect(resolveDocLink({ href: 'research.md', ...ctx })).toBe(
-      `/review/${encodeURIComponent('rev-1:docs~research.md')}`,
+      `/workspaces/${WS}/docs/${encodeURIComponent('rev-1:docs~research.md')}`,
     );
   });
 
   it('resolves ../ against the current doc directory', () => {
     expect(resolveDocLink({ href: '../README.md', ...ctx })).toBe(
-      `/review/${encodeURIComponent('rev-1:README.md')}`,
+      `/workspaces/${WS}/docs/${encodeURIComponent('rev-1:README.md')}`,
     );
     expect(resolveDocLink({ href: 'sub/notes.md', ...ctx })).toBe(
-      `/review/${encodeURIComponent('rev-1:docs~sub~notes.md')}`,
+      `/workspaces/${WS}/docs/${encodeURIComponent('rev-1:docs~sub~notes.md')}`,
     );
   });
 
   it('drops query strings and anchors', () => {
     expect(resolveDocLink({ href: './research.md#section', ...ctx })).toBe(
-      `/review/${encodeURIComponent('rev-1:docs~research.md')}`,
+      `/workspaces/${WS}/docs/${encodeURIComponent('rev-1:docs~research.md')}`,
     );
   });
 
   it('returns null outside a workspace or for non-relative links', () => {
-    expect(resolveDocLink({ href: './x.md', reviewId: '', relPath: '' })).toBeNull();
+    expect(
+      resolveDocLink({ href: './x.md', reviewId: '', relPath: '', workspaceId: WS }),
+    ).toBeNull();
     expect(resolveDocLink({ href: 'https://x.com/a.md', ...ctx })).toBeNull();
     expect(resolveDocLink({ href: '/abs/path.md', ...ctx })).toBeNull();
     expect(resolveDocLink({ href: '#anchor-only', ...ctx })).toBeNull();

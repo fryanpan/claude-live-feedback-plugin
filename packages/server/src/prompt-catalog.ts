@@ -16,7 +16,7 @@
  * SCOPE is where the words are stored, not a label anybody sees. `server`
  * prompts live in `<dataDir>/prompts.json` (`prompt-store.ts`); `board`
  * prompts are fields on a board's own record and are written through
- * `PUT /api/workspaces/<id>/settings`, which is where they already lived.
+ * `PUT /workspaces/<id>/settings`, which is where they already lived.
  * The page deliberately does not say which is which — one owner, one machine,
  * and a label he cannot act on is a label that costs a line and buys nothing.
  *

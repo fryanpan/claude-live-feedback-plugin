@@ -117,7 +117,7 @@ describe('the board wakes its lead over the wire', () => {
     return res.json() as Promise<T>;
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'ready-nudge-'));
     // A zero-length idle window: every ready board is idle the moment it is
     // read. The wall-clock gap is the one input a test cannot wait out, and
@@ -180,7 +180,7 @@ describe('the board wakes its lead over the wire', () => {
     // `triage` — which no dispatch read returns, so an unvetted row is not
     // ready work and correctly produces no wake. This is the real flow in two
     // lines: the agent proposes, a person agrees, and only then is it queued.
-    await post(`/api/tasks/${task.id}/transition`, {
+    await post(`/workspaces/${workspaceId}/tasks/${task.id}/transition`, {
       to: 'todo',
       author: PERSON,
       workspaceId,
@@ -212,7 +212,11 @@ describe('the board wakes its lead over the wire', () => {
       }),
     );
     await jj(
-      await post(`/api/tasks/${task.id}/transition`, { to: 'todo', author: PERSON, workspaceId }),
+      await post(`/workspaces/${workspaceId}/tasks/${task.id}/transition`, {
+        to: 'todo',
+        author: PERSON,
+        workspaceId,
+      }),
     );
     return task.id;
   }
@@ -258,7 +262,7 @@ describe('the board wakes its lead over the wire', () => {
     it('leaves a row owned by a person alone, and still names an agent-owned one', async () => {
       const { workspaceId, taskId, lead, tab } = await boardWithReadyWork();
       await jj(
-        await post(`/api/tasks/${taskId}/assignee`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/assignee`, {
           assignee: 'human',
           author: PERSON,
           workspaceId,
@@ -279,7 +283,7 @@ describe('the board wakes its lead over the wire', () => {
       // is still `todo`, still agent-owned, still unblocked — so every signal
       // the old wake read said "nobody has picked this up".
       await jj(
-        await post(`/api/tasks/${taskId}/review-items`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
           author: LEAD,
           workspaceId,
           review: {
@@ -306,7 +310,7 @@ describe('the board wakes its lead over the wire', () => {
       // thing it was waiting for arrives, with nothing to remember to clear.
       const { workspaceId, taskId, lead, tab } = await boardWithReadyWork();
       const { item } = await jj<{ item: { id: string } }>(
-        await post(`/api/tasks/${taskId}/review-items`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
           author: LEAD,
           workspaceId,
           review: {
@@ -325,10 +329,13 @@ describe('the board wakes its lead over the wire', () => {
       expect(nudges(lead.frames, READY_IDLE_EVENT)).toHaveLength(0);
 
       await jj(
-        await post(`/api/tasks/${taskId}/review-items/${encodeURIComponent(item.id)}/answer`, {
-          text: 'Recency. Dwell time is the follow-up.',
-          author: PERSON,
-        }),
+        await post(
+          `/workspaces/${workspaceId}/tasks/${taskId}/review-items/${encodeURIComponent(item.id)}/answer`,
+          {
+            text: 'Recency. Dwell time is the follow-up.',
+            author: PERSON,
+          },
+        ),
       );
       await settle();
 
@@ -360,7 +367,7 @@ describe('the board wakes its lead over the wire', () => {
       const { workspaceId, taskId, lead, tab } = await boardWithReadyWork();
       const blockerId = await addReadyRow(workspaceId, 'Rebuild the index');
       await jj(
-        await post(`/api/tasks/${taskId}/after`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/after`, {
           after: [blockerId],
           afterEnforce: [blockerId],
           author: PERSON,
@@ -469,7 +476,7 @@ describe('the board wakes its lead over the wire', () => {
       // one of them into a wake.
       const { workspaceId, taskId, lead, tab } = await boardWithReadyWork();
       await jj(
-        await post(`/api/tasks/${taskId}/transition`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/transition`, {
           to: 'in-progress',
           author: LEAD,
           workspaceId,
@@ -500,7 +507,7 @@ describe('the board wakes its lead over the wire', () => {
     it('records a real suppression and a real delivery from the same board', async () => {
       const { workspaceId, taskId, lead, tab } = await boardWithReadyWork();
       await jj(
-        await post(`/api/tasks/${taskId}/assignee`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/assignee`, {
           assignee: 'human',
           author: PERSON,
           workspaceId,
@@ -559,7 +566,7 @@ describe('the board wakes its lead over the wire', () => {
         { leaveInTriage: true },
       );
       await jj(
-        await post(`/api/tasks/${G.agreed}/transition`, {
+        await post(`/workspaces/${workspaceId}/tasks/${G.agreed}/transition`, {
           to: 'todo',
           author: PERSON,
           workspaceId,
@@ -567,10 +574,20 @@ describe('the board wakes its lead over the wire', () => {
       );
 
       // The board's existing ready row moves under the still-triage band...
-      await jj(await post(`/api/tasks/${taskId}/goal`, { goal: G.pending, author: PERSON }));
+      await jj(
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/goal`, {
+          goal: G.pending,
+          author: PERSON,
+        }),
+      );
       // ...and a second, genuinely free row moves under the agreed one.
       const freeId = await addReadyRow(workspaceId, 'Cache the facet counts');
-      await jj(await post(`/api/tasks/${freeId}/goal`, { goal: G.agreed, author: PERSON }));
+      await jj(
+        await post(`/workspaces/${workspaceId}/tasks/${freeId}/goal`, {
+          goal: G.agreed,
+          author: PERSON,
+        }),
+      );
       await settle();
 
       handle.nudgeReadyWork();
@@ -626,7 +643,7 @@ describe('the board wakes its lead over the wire', () => {
     await settle();
     expect(nudges(lead.frames, READY_IDLE_EVENT)).toHaveLength(1);
 
-    await post(`/api/tasks/${taskId}/transition`, {
+    await post(`/workspaces/${workspaceId}/tasks/${taskId}/transition`, {
       to: 'in-progress',
       author: LEAD,
       workspaceId,
@@ -681,7 +698,7 @@ describe('the board wakes its lead over the wire', () => {
     const { workspaceId, taskId, lead, tab } = await boardWithReadyWork();
 
     const { item } = await jj<{ item: { id: string } }>(
-      await post(`/api/tasks/${taskId}/review-items`, {
+      await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
         author: LEAD,
         workspaceId,
         review: {
@@ -697,10 +714,13 @@ describe('the board wakes its lead over the wire', () => {
 
     // Jordan answers. The lead is a different party, so it gets woken.
     await jj(
-      await post(`/api/tasks/${taskId}/review-items/${encodeURIComponent(item.id)}/answer`, {
-        text: 'Recency. Dwell time is the follow-up.',
-        author: PERSON,
-      }),
+      await post(
+        `/workspaces/${workspaceId}/tasks/${taskId}/review-items/${encodeURIComponent(item.id)}/answer`,
+        {
+          text: 'Recency. Dwell time is the follow-up.',
+          author: PERSON,
+        },
+      ),
     );
     await settle();
 
@@ -734,7 +754,7 @@ describe('the board wakes its lead over the wire', () => {
     lead.frames.length = 0;
 
     await jj(
-      await post(`/api/tasks/${taskId}/park`, {
+      await post(`/workspaces/${workspaceId}/tasks/${taskId}/park`, {
         parkedUntil: Date.now() + 7 * 86_400_000,
         reason: 'waiting on the index rebuild',
         author: PERSON,
@@ -882,15 +902,24 @@ describe('the board wakes its lead over the wire', () => {
           author: LEAD,
         }),
       );
-      await post(`/api/tasks/${busy.id}/transition`, { to: 'todo', author: PERSON, workspaceId });
-      await post(`/api/tasks/${busy.id}/transition`, {
+      await post(`/workspaces/${workspaceId}/tasks/${busy.id}/transition`, {
+        to: 'todo',
+        author: PERSON,
+        workspaceId,
+      });
+      await post(`/workspaces/${workspaceId}/tasks/${busy.id}/transition`, {
         to: 'in-progress',
         author: LEAD,
         workspaceId,
       });
       const worktree = mkdtempSync(join(tmpdir(), 'wt-cap-'));
       try {
-        await jj(await post('/api/dispatches', { taskId: busy.id, worktreePath: worktree }));
+        await jj(
+          await post(`/workspaces/${workspaceId}/dispatches`, {
+            taskId: busy.id,
+            worktreePath: worktree,
+          }),
+        );
 
         handle.nudgeReadyWork();
         const got = await waitForFrames(lead.frames, READY_IDLE_EVENT, 1);
@@ -912,9 +941,12 @@ describe('the board wakes its lead over the wire', () => {
         // Closing the dispatch frees the slot; the SAME row the cap was
         // holding is what the very next pass names.
         await jj(
-          await fetch(`${base}/api/dispatches/${encodeURIComponent(busy.id)}`, {
-            method: 'DELETE',
-          }),
+          await fetch(
+            `${base}/workspaces/${workspaceId}/dispatches/${encodeURIComponent(busy.id)}`,
+            {
+              method: 'DELETE',
+            },
+          ),
         );
         handle.nudgeReadyWork();
         const freed = await waitForFrames(lead.frames, READY_IDLE_EVENT, 2);

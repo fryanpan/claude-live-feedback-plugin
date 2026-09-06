@@ -1,10 +1,11 @@
+import { linkTitlesFor } from '../link-titles.ts';
 /**
  * A row's status, its evidence, its cross-references and its goal placement.
  *
  * Lifted verbatim out of `createServer`'s request closure; the handlers
  * read their collaborators off `TaskRoutesContext` instead of the scope.
  */
-import { linkTitlesFor } from '../link-titles.ts';
+import { matchRest } from '../middleware/workspace-scope.ts';
 import { runRefsBackfill } from '../refs-backfill.ts';
 import {
   OUT_OF_SHARE_SCOPE,
@@ -30,10 +31,10 @@ export async function handleTaskStatusAndLinks(
     boardsForDocIndexed,
     workspacesOfDoc,
   } = ctx;
-  const { req, pathname, authorFor, visitor } = rq;
+  const { req, pathname, scope, authorFor, visitor } = rq;
   // The single gate for status changes: attributed and
   // dependency-checked. 409 on an enforce-marked open dependency.
-  const taskTransitionMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/transition$/);
+  const taskTransitionMatch = matchRest(scope, /^tasks\/([^/]+)\/transition$/);
   if (taskTransitionMatch && req.method === 'POST') {
     const taskId = decodeURIComponent(taskTransitionMatch[1] ?? '');
     const body = await safeJson(req);
@@ -95,7 +96,7 @@ export async function handleTaskStatusAndLinks(
   // missing author) and records nothing for the rest. `ignored` is on
   // the response so a reader of a log can tell an accepted no-op from a
   // correction that landed.
-  const taskEvidenceMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/evidence$/);
+  const taskEvidenceMatch = matchRest(scope, /^tasks\/([^/]+)\/evidence$/);
   if (taskEvidenceMatch && req.method === 'POST') {
     const taskId = decodeURIComponent(taskEvidenceMatch[1] ?? '');
     const body = await safeJson(req);
@@ -114,7 +115,7 @@ export async function handleTaskStatusAndLinks(
   // Cross-references (§3.10 `.../links`): links are STORED on the
   // task; backlinks are COMPUTED per read, never stored, so the two
   // directions can't drift.
-  const taskLinksMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/links$/);
+  const taskLinksMatch = matchRest(scope, /^tasks\/([^/]+)\/links$/);
   if (taskLinksMatch && req.method === 'GET') {
     const taskId = decodeURIComponent(taskLinksMatch[1] ?? '');
     const task = taskStore.getTask(taskId);
@@ -253,7 +254,7 @@ export async function handleTaskStatusAndLinks(
   // placement until it restarts, and the 400 this route used to be able
   // to return would now fire on a field that means nothing. Accept the
   // old payload shape; there is an HTTP-level test that sends it.
-  const taskGoalMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/goal$/);
+  const taskGoalMatch = matchRest(scope, /^tasks\/([^/]+)\/goal$/);
   if (taskGoalMatch && req.method === 'POST') {
     const taskId = decodeURIComponent(taskGoalMatch[1] ?? '');
     const body = await safeJson(req);

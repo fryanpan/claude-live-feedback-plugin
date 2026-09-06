@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Thread, User } from '@feedback/core';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const creator: User = { id: 'known-casey', name: 'Casey', kind: 'known', color: '#2e7dd7' };
 const resolver: User = { id: 'agent-fix-bot', name: 'Fix Bot', kind: 'known', color: '#888' };
@@ -57,6 +58,9 @@ function listenData(res: Response): { frames: Array<Record<string, unknown>>; st
   };
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('resolve/reopen broadcast actor', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -72,11 +76,12 @@ describe('resolve/reopen broadcast actor', () => {
   const get = (path: string) =>
     fetch(`${base}${path}`, { headers: { host: `localhost:${handle.port}` } });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'resolve-actor-'));
     srcDir = mkdtempSync(join(tmpdir(), 'resolve-actor-src-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterEach(async () => {
@@ -88,8 +93,8 @@ describe('resolve/reopen broadcast actor', () => {
   async function seedThread(docId: string): Promise<string> {
     const path = join(srcDir, `${docId}.md`);
     writeFileSync(path, `# ${docId}\n\nBody.\n`);
-    await post('/api/docs', { docId, sourceUrl: path, title: docId });
-    const res = await post(`/api/docs/${docId}/threads`, {
+    await post(`/workspaces/${WS}/docs`, { docId, sourceUrl: path, title: docId });
+    const res = await post(`/workspaces/${WS}/docs/${docId}/threads`, {
       author: creator,
       text: 'please drop this paragraph',
       anchor: { kind: 'subject' },
@@ -100,11 +105,13 @@ describe('resolve/reopen broadcast actor', () => {
 
   it('thread.resolved carries the resolver as actor, not the creator, and no comment', async () => {
     const threadId = await seedThread('doc-resolve');
-    const stream = await get('/events/doc-resolve');
+    const stream = await get(`/workspaces/${WS}/docs/doc-resolve/events:stream`);
     const on = listenData(stream);
     await settle(150);
 
-    await post(`/api/docs/doc-resolve/threads/${threadId}/resolve`, { author: resolver });
+    await post(`/workspaces/${WS}/docs/doc-resolve/threads/${threadId}/resolve`, {
+      author: resolver,
+    });
     await settle();
     on.stop();
 
@@ -123,13 +130,17 @@ describe('resolve/reopen broadcast actor', () => {
 
   it('thread.reopened carries the reopening caller as actor', async () => {
     const threadId = await seedThread('doc-reopen');
-    await post(`/api/docs/doc-reopen/threads/${threadId}/resolve`, { author: creator });
+    await post(`/workspaces/${WS}/docs/doc-reopen/threads/${threadId}/resolve`, {
+      author: creator,
+    });
 
-    const stream = await get('/events/doc-reopen');
+    const stream = await get(`/workspaces/${WS}/docs/doc-reopen/events:stream`);
     const on = listenData(stream);
     await settle(150);
 
-    await post(`/api/docs/doc-reopen/threads/${threadId}/reopen`, { author: resolver });
+    await post(`/workspaces/${WS}/docs/doc-reopen/threads/${threadId}/reopen`, {
+      author: resolver,
+    });
     await settle();
     on.stop();
 
@@ -143,11 +154,11 @@ describe('resolve/reopen broadcast actor', () => {
   // at all (so the assertions above are not passing on an empty stream).
   it('thread.replied still carries the replying author on the comment', async () => {
     const threadId = await seedThread('doc-reply');
-    const stream = await get('/events/doc-reply');
+    const stream = await get(`/workspaces/${WS}/docs/doc-reply/events:stream`);
     const on = listenData(stream);
     await settle(150);
 
-    await post(`/api/docs/doc-reply/threads/${threadId}/comments`, {
+    await post(`/workspaces/${WS}/docs/doc-reply/threads/${threadId}/comments`, {
       author: resolver,
       text: 'done, removed it',
     });

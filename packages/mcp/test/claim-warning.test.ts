@@ -242,7 +242,11 @@ describe('the built bundle carries it', () => {
       expect(JSON.stringify(decl)).not.toContain('DO NOT START THAT COLUMN');
 
       await h.call('attach_agent', { workspaceId: 'w-stub' });
-      const claim = await h.call('task_transition', { taskId: 't-K69wx', to: 'in-progress' });
+      const claim = await h.call('task_transition', {
+        workspaceId: 'w-stub',
+        taskId: 't-K69wx',
+        to: 'in-progress',
+      });
 
       // The status the caller always got is untouched — the warning is
       // additive, which is the whole compat argument above.
@@ -284,7 +288,11 @@ describe('the built bundle carries it', () => {
         return {};
       });
       await h.call('attach_agent', { workspaceId: 'w-stub' });
-      const claim = await h.call('task_transition', { taskId: 't-K69wx', to: 'in-progress' });
+      const claim = await h.call('task_transition', {
+        workspaceId: 'w-stub',
+        taskId: 't-K69wx',
+        to: 'in-progress',
+      });
       expect((claim.json as { warning?: string }).warning).toBeUndefined();
     } finally {
       await h?.stop();
@@ -304,7 +312,11 @@ describe('the built bundle carries it', () => {
         return {};
       });
       await h.call('attach_agent', { workspaceId: 'w-stub' });
-      const done = await h.call('task_transition', { taskId: 't-K69wx', to: 'done' });
+      const done = await h.call('task_transition', {
+        workspaceId: 'w-stub',
+        taskId: 't-K69wx',
+        to: 'done',
+      });
       expect(done.sent.filter((r) => r.method === 'GET' && r.path.endsWith('/next'))).toEqual([]);
       expect((done.json as { warning?: string }).warning).toBeUndefined();
     } finally {

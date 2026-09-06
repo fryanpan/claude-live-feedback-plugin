@@ -19,6 +19,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 function git(repo: string, ...args: string[]): string {
   return execFileSync('git', ['-C', repo, ...args], {
@@ -52,6 +53,9 @@ function makeRepo(): { repo: string; base: string } {
   return { repo, base };
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('context-file opens only what git ls-files shows', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -69,8 +73,9 @@ describe('context-file opens only what git ls-files shows', () => {
   beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'ctx-listed-data-'));
     handle = createServer({ port: 0, dataDir });
+    WS = await seedBoard(`http://localhost:${handle.port}`);
     ({ repo, base } = makeRepo());
-    const bind = await post('/api/diffs', { repo, base });
+    const bind = await post(`/workspaces/${WS}/reviews`, { repo, base });
     expect(bind.status).toBe(200);
     reviewId = ((await bind.json()) as { reviewId: string }).reviewId;
   });
@@ -82,7 +87,7 @@ describe('context-file opens only what git ls-files shows', () => {
   });
 
   const open = (relPath: string, verb: 'context-file' | 'editable-file' = 'context-file') =>
-    post(`/api/reviews/${encodeURIComponent(reviewId)}/${verb}`, { relPath });
+    post(`/workspaces/${WS}/reviews/${encodeURIComponent(reviewId)}/${verb}`, { relPath });
 
   it('positive control: a tracked, unchanged file opens', async () => {
     const r = await open('note.md');
@@ -170,6 +175,7 @@ describe('the non-git listing carries its own floor', () => {
   beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'nogit-listed-data-'));
     handle = createServer({ port: 0, dataDir });
+    WS = await seedBoard(`http://localhost:${handle.port}`);
     // Deliberately NOT a git repo — `git ls-files` exits non-zero here, which
     // is the whole point of this block.
     folder = mkdtempSync(join(tmpdir(), 'nogit-listed-'));
@@ -178,7 +184,7 @@ describe('the non-git listing carries its own floor', () => {
     writeFileSync(join(folder, '.npmrc'), '//registry.example/:_authToken=FIXTURE_MARKER\n');
     writeFileSync(join(folder, 'server.key'), 'FIXTURE_MARKER_KEY\n');
     writeFileSync(join(folder, 'id_ed25519'), 'FIXTURE_MARKER_SSH\n');
-    const bind = await post('/workspaces', { folderPath: folder });
+    const bind = await post('/workspaces', { folderPath: folder, hubWorkspaceId: WS });
     expect(bind.status, await bind.clone().text()).toBe(200);
     // The GROUPING workspace id the bind returns — the id `context-file`
     // and `/files` are addressed by, not the board it is also filed under.
@@ -192,7 +198,7 @@ describe('the non-git listing carries its own floor', () => {
   });
 
   const open = (relPath: string) =>
-    post(`/api/reviews/${encodeURIComponent(workspaceId)}/context-file`, { relPath });
+    post(`/workspaces/${WS}/reviews/${encodeURIComponent(workspaceId)}/context-file`, { relPath });
 
   it('positive control: an ordinary file in the same folder opens', async () => {
     // Without this, every refusal below could be a bind that never happened.
@@ -211,7 +217,7 @@ describe('the non-git listing carries its own floor', () => {
     // The refusal above and the listing are the same rule; a tree that still
     // advertised `.env` would be telling a visitor a path worth guessing.
     const res = await fetch(
-      `http://localhost:${handle.port}/api/reviews/${encodeURIComponent(workspaceId)}/files`,
+      `http://localhost:${handle.port}/workspaces/${WS}/reviews/${encodeURIComponent(workspaceId)}/files`,
       { headers: { host: `localhost:${handle.port}` } },
     );
     expect(res.status).toBe(200);

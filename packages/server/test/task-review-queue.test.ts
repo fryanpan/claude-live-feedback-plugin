@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import type { ReviewPayload } from '@feedback/core';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import type { Task } from '../src/tasks.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
 const AGENT = { id: 'agent-scheduler', name: 'Scheduler Agent', kind: 'known', color: '#888888' };
@@ -74,7 +75,8 @@ async function seedWorkspace(): Promise<string> {
   const { workspace } = await jj<{ workspace: { id: string } }>(
     await post('/workspaces', { name: 'storage-cleanup', goal: 'Cut the storage bill.' }),
   );
-  return workspace.id;
+  WS = workspace.id;
+  return WS;
 }
 
 /** A LEGACY decision task: `needs: 'decision'` plus an embedded options array,
@@ -117,15 +119,19 @@ async function briefLine(workspaceId: string): Promise<string> {
   return brief.markdown;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   dataDir = mkdtempSync(join(tmpdir(), 'task-review-queue-'));
   handle = createServer({ port: 0, dataDir });
   base = `http://localhost:${handle.port}`;
+  WS = await seedBoard(base);
 });
 afterEach(async () => {
   await handle.stop();
   rmSync(dataDir, { recursive: true, force: true });
 });
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('GET /workspaces/:id/review-items — ticket-borne rows', () => {
   /**
@@ -161,7 +167,10 @@ describe('GET /workspaces/:id/review-items — ticket-borne rows', () => {
     const task = await seedDecision(ws);
     expect(await queueRows(ws)).toHaveLength(1);
     await jj(
-      await post(`/api/tasks/${task.id}/answer`, { text: 'Keep the disk one.', author: PERSON }),
+      await post(`/workspaces/${WS}/tasks/${task.id}/answer`, {
+        text: 'Keep the disk one.',
+        author: PERSON,
+      }),
     );
     expect(await queueRows(ws)).toEqual([]);
   });
@@ -209,14 +218,14 @@ describe('GET /workspaces/:id/review-items — ticket-borne rows', () => {
     // names — and the agent asks them directly. Since 2026-08-21 the thread
     // half of the queue admits only direct asks, not every agent comment.
     const { thread } = await jj<{ thread: { id: string } }>(
-      await post(`/api/docs/task:${task.id}/threads`, {
+      await post(`/workspaces/${WS}/docs/task:${task.id}/threads`, {
         anchor: { kind: 'subject' },
         text: 'Deploy cost needs a look.',
         author: PERSON,
       }),
     );
     await jj(
-      await post(`/api/docs/task:${task.id}/threads/${thread.id}/comments`, {
+      await post(`/workspaces/${WS}/docs/task:${task.id}/threads/${thread.id}/comments`, {
         text: 'Jordan — is the cold start acceptable on every deploy?',
         author: AGENT,
       }),
@@ -296,7 +305,9 @@ describe('the Home queue count', () => {
     await seedDecision(ws, 'keep disk or memory?');
     await seedDecision(ws, 'evict by age or by size?');
     const third = await seedDecision(ws, 'retain for a week or a month?');
-    await jj(await post(`/api/tasks/${third.id}/answer`, { text: 'A week.', author: PERSON }));
+    await jj(
+      await post(`/workspaces/${WS}/tasks/${third.id}/answer`, { text: 'A week.', author: PERSON }),
+    );
 
     const { tasks } = await jj<{ tasks: Task[] }>(
       await fetch(`${base}/workspaces/${ws}/tasks?format=json`),
@@ -473,7 +484,10 @@ describe('the create response names visibility', () => {
     const decision = await seedDecision(ws);
     expect(await briefLine(ws)).toContain('What needs your review is queued below.');
     await jj(
-      await post(`/api/tasks/${decision.id}/answer`, { text: 'Keep disk.', author: PERSON }),
+      await post(`/workspaces/${WS}/tasks/${decision.id}/answer`, {
+        text: 'Keep disk.',
+        author: PERSON,
+      }),
     );
     expect(await briefLine(ws)).toContain('Nothing is queued for your review right now.');
     expect(handle.tasks.listReviewItems(decision.id).map((i) => i.id)).toEqual(['r-legacy']);
@@ -491,7 +505,10 @@ describe('the board projection', () => {
     const ws = await seedWorkspace();
     const decision = await seedDecision(ws);
     await jj(
-      await post(`/api/tasks/${decision.id}/answer`, { text: 'Keep disk.', author: PERSON }),
+      await post(`/workspaces/${WS}/tasks/${decision.id}/answer`, {
+        text: 'Keep disk.',
+        author: PERSON,
+      }),
     );
     const action = await seedAction(ws);
     const added = handle.tasks.addReviewItem(action.id, REVIEW, { actor: AGENT });

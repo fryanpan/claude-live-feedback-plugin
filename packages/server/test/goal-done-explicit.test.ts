@@ -289,7 +289,7 @@ describe('over the route that already exists', () => {
   let handle: ServerHandle;
   let base: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dir = mkdtempSync(join(tmpdir(), 'goal-done-http-'));
     handle = createServer({ dataDir: dir, port: 0 });
     base = `http://localhost:${handle.port}`;
@@ -300,7 +300,7 @@ describe('over the route that already exists', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('declares a goal done through POST /api/tasks/:id/transition', async () => {
+  it('declares a goal done through POST /workspaces/:ws/tasks/:id/transition', async () => {
     const store = handle.tasks;
     const ws = store.createWorkspace('Board');
     const G = seedGoals(store, ws.id, [{ key: 'fast', title: 'Make review fast' }], AGENT);
@@ -312,11 +312,14 @@ describe('over the route that already exists', () => {
     });
     if (!child.ok) throw new Error('create refused');
 
-    const res = await fetch(`${base}/api/tasks/${encodeURIComponent(G.fast)}/transition`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ to: 'done', author: PERSON }),
-    });
+    const res = await fetch(
+      `${base}/workspaces/${ws.id}/tasks/${encodeURIComponent(G.fast)}/transition`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ to: 'done', author: PERSON }),
+      },
+    );
     // 200, not 409: an open child advises, it does not refuse.
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
@@ -344,15 +347,18 @@ describe('over the route that already exists', () => {
     const declared = store.transition(G.fast, 'done', { actor: PERSON });
     if (!declared.ok) throw new Error('declaration refused');
 
-    const res = await fetch(`${base}/api/tasks/${encodeURIComponent(G.fast)}/evidence`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        author: PERSON,
-        evidence: { commit: 'a1b2c3d' },
-        note: 'the proof was left off the declaration',
-      }),
-    });
+    const res = await fetch(
+      `${base}/workspaces/${ws.id}/tasks/${encodeURIComponent(G.fast)}/evidence`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          author: PERSON,
+          evidence: { commit: 'a1b2c3d' },
+          note: 'the proof was left off the declaration',
+        }),
+      },
+    );
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ignored: boolean; task: { id: string } };
     expect(body.task.id).toBe(G.fast);

@@ -59,6 +59,8 @@ interface StoredThread {
 
 // ── Unit: what reaches the model, and what the model alone may authorize ────
 
+/** The board this file's docs, tasks and reviews are filed under. */
+
 describe('prompt hygiene: workspace text is DATA, on one line, and bounded', () => {
   const index = {
     goal: 'Ship the new search.',
@@ -373,16 +375,22 @@ describe('voice actions, hardened: end to end', () => {
   const newDoc = async (docId: string): Promise<string> => {
     const file = join(dataDir, `${docId}.md`);
     writeFileSync(file, '# Ranking\n\nthe ranking clause\n');
-    const made = await post('/api/docs', { docId, type: 'markdown', sourceUrl: file });
+    const made = await post(`/workspaces/${boardId}/docs`, {
+      docId,
+      type: 'markdown',
+      sourceUrl: file,
+    });
     expect(made.status).toBe(200);
     const mintedId = ((await made.json()) as { docId: string }).docId;
-    expect((await post(`/workspaces/${boardId}/docs`, { docId: mintedId })).status).toBe(200);
+    expect((await post(`/workspaces/${boardId}/docs:attach`, { docId: mintedId })).status).toBe(
+      200,
+    );
     return mintedId;
   };
 
   /** An agent-DECLARED review item — the `declared` band. */
   const declare = async (docId: string, headline: string): Promise<string> => {
-    const r = await post(`/api/docs/${docId}/threads`, {
+    const r = await post(`/workspaces/${boardId}/docs/${docId}/threads`, {
       author: AGENT,
       text: `${headline} — both paths are built either way.`,
       anchor: { kind: 'subject' },
@@ -402,7 +410,7 @@ describe('voice actions, hardened: end to end', () => {
    *  a person by name — and that person must be in the workspace roster,
    *  which is why the caller seeds one (see `seedRosterPerson`). */
   const askPlainly = async (docId: string, text: string): Promise<string> => {
-    const r = await post(`/api/docs/${docId}/threads`, {
+    const r = await post(`/workspaces/${boardId}/docs/${docId}/threads`, {
       author: AGENT,
       text,
       anchor: { kind: 'subject' },
@@ -416,7 +424,7 @@ describe('voice actions, hardened: end to end', () => {
    *  person in the workspace — an address to a name the roster has never
    *  seen matches nothing, deliberately. One person comment seeds it. */
   const seedRosterPerson = async (docId: string): Promise<void> => {
-    const r = await post(`/api/docs/${docId}/threads`, {
+    const r = await post(`/workspaces/${boardId}/docs/${docId}/threads`, {
       author: PERSON,
       text: 'Watching this one.',
       anchor: { kind: 'subject' },
@@ -425,7 +433,7 @@ describe('voice actions, hardened: end to end', () => {
   };
 
   const threadsOf = async (docId: string): Promise<StoredThread[]> => {
-    const r = await local(`/api/docs/${docId}/threads`);
+    const r = await local(`/workspaces/${boardId}/docs/${docId}/threads`);
     expect(r.status).toBe(200);
     return ((await r.json()) as { threads: StoredThread[] }).threads;
   };

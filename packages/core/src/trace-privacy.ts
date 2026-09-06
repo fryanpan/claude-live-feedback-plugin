@@ -100,16 +100,17 @@ export function scrubEventForPrivacy(value: unknown, depth = 0): unknown {
 /**
  * Every REAL route this server dispatches on, as a whole-path template —
  * literal segments verbatim, `:id` marking a caller-controlled slot. Built
- * directly from server.ts's own route matchers (the `pathname.match(/^...$/)`
- * regexes, the `/api/docs/:id` catch-all's `rest` dispatch, and its nested
- * `threads`/`agent_anchors` sub-dispatches) — not retyped from memory.
+ * directly from server.ts's own route matchers (the workspace middleware's
+ * `scope.rest` patterns, the `docs/:id` catch-all's own `rest` dispatch, and
+ * its nested `threads`/`agent_anchors` sub-dispatches) — not retyped from
+ * memory.
  *
  * This used to be a flat allowlist of literal WORDS, checked per segment
  * independently of where in the path it sat. That was wrong: whether a
  * segment is static depends on its POSITION in a matched route, not its
  * VALUE — a caller-chosen id can legally equal any English word, including
  * one that happens to be a route keyword somewhere else in the API (a doc
- * literally titled "content", landing at `/api/docs/content/content`, kept
+ * literally titled "content", landing at `…/docs/content/content`, kept
  * BOTH occurrences of "content" as static under the old check, leaking the
  * id). Matching whole templates instead means a segment is only ever static
  * when it sits at the position a REAL route puts a literal, never merely
@@ -131,18 +132,18 @@ const ROUTE_TEMPLATES: readonly (readonly string[])[] = [
   ['api', 'auth', 'verify'],
   ['api', 'auth', 'widget-session'],
   ['api', 'auth', 'widget-token'],
-  ['api', 'chat-audit'],
+  ['workspaces', ':id', 'chat-audit'],
   ['api', 'deploy'],
-  ['api', 'diffs'],
-  ['api', 'dispatches'],
-  ['api', 'docs'],
+  ['workspaces', ':id', 'reviews'],
+  ['workspaces', ':id', 'dispatches'],
+  ['workspaces', ':id', 'docs'],
+  ['workspaces', ':id', 'docs:attach'],
   ['api', 'links', 'titles'],
   ['api', 'metrics'],
   ['api', 'plugin', 'refresh'],
   ['api', 'push', 'key'],
   ['api', 'push', 'subscriptions'],
   ['api', 'refs', 'backlinks'],
-  ['api', 'reviews', 'archived'],
   ['api', 'share'],
   ['api', 'share', 'doc'],
   ['api', 'share', 'enabled'],
@@ -157,111 +158,108 @@ const ROUTE_TEMPLATES: readonly (readonly string[])[] = [
   ['widget.iife.js'],
   ['widget.js'],
   // one id, top level
-  ['api', 'reviews', ':id'],
-  ['api', 'reviews', ':id', 'archive'],
-  ['api', 'reviews', ':id', 'unarchive'],
-  // reviewApi(sub): `/api/reviews/:id/<sub>`, and only there. Each of these
-  // eight used to be listed twice, because a review answered under
-  // `/api/workspaces/:id/<sub>` as well — compat for sessions and tabs nobody
-  // could restart. That alias is gone: `/workspaces/:id/…` is a BOARD's
-  // address now, and a review is not a board.
-  ['api', 'reviews', ':id', 'refresh'],
-  ['api', 'reviews', ':id', 'groups'],
-  ['api', 'reviews', ':id', 'grouped'],
-  ['api', 'reviews', ':id', 'threads'],
-  ['api', 'reviews', ':id', 'files'],
-  ['api', 'reviews', ':id', 'tree'],
-  ['api', 'reviews', ':id', 'context-file'],
-  ['api', 'reviews', ':id', 'editable-file'],
+  ['workspaces', ':id', 'reviews', ':id'],
+  ['workspaces', ':id', 'reviews', ':id', 'archive'],
+  ['workspaces', ':id', 'reviews', ':id', 'unarchive'],
+  // A review's eight subroutes, under the board that holds it. A review is
+  // not a board — it is a member of one — so it sits in the `reviews`
+  // collection rather than answering at the board's own address.
+  ['workspaces', ':id', 'reviews', ':id', 'refresh'],
+  ['workspaces', ':id', 'reviews', ':id', 'groups'],
+  ['workspaces', ':id', 'reviews', ':id', 'grouped'],
+  ['workspaces', ':id', 'reviews', ':id', 'threads'],
+  ['workspaces', ':id', 'reviews', ':id', 'files'],
+  ['workspaces', ':id', 'reviews', ':id', 'tree'],
+  ['workspaces', ':id', 'reviews', ':id', 'context-file'],
+  ['workspaces', ':id', 'reviews', ':id', 'editable-file'],
   ['share', ':id'],
   ['s', ':id'],
   ['api', 'share', ':id'],
   ['api', 'share', ':id', 'ttl'],
-  ['api', 'dispatches', ':id'],
-  ['api', 'chat-audit', ':id'],
-  ['review', ':id'],
-  ['mockup', ':id'],
-  ['audio', ':id'],
-  ['y', ':id'],
-  // /api/tasks/:id/...
-  ['api', 'tasks', ':id', 'transition'],
-  ['api', 'tasks', ':id', 'evidence'],
-  ['api', 'tasks', ':id', 'links'],
-  ['api', 'tasks', ':id', 'goal'],
-  ['api', 'tasks', ':id', 'answer'],
-  ['api', 'tasks', ':id', 'answer', 'undo'],
-  ['api', 'tasks', ':id', 'more-info'],
-  ['api', 'tasks', ':id', 'review-items'],
-  ['api', 'tasks', ':id', 'review-items', ':id', 'answer'],
-  ['api', 'tasks', ':id', 'review-items', ':id', 'more-info'],
-  ['api', 'tasks', ':id', 'review-items', ':id', 'release'],
-  ['api', 'tasks', ':id', 'review-items', ':id', 'revise'],
-  ['api', 'tasks', ':id', 'after'],
-  ['api', 'tasks', ':id', 'title'],
-  ['api', 'tasks', ':id', 'body'],
-  ['api', 'tasks', ':id', 'assignee'],
-  ['api', 'tasks', ':id', 'due'],
-  ['api', 'tasks', ':id', 'park'],
-  ['api', 'tasks', ':id', 'archive'],
-  ['api', 'tasks', ':id', 'restore'],
-  ['api', 'tasks', ':id', 'notes'],
+  ['workspaces', ':id', 'dispatches', ':id'],
+  ['workspaces', ':id', 'chat-audit', ':id'],
+  ['workspaces', ':id', 'docs', ':id', 'audio'],
+  ['workspaces', ':id', 'y'],
+  ['workspaces', ':id', 'docs', ':id', 'y'],
+  ['workspaces', ':id', 'docs', ':id', 'events:stream'],
+  // /workspaces/:id/tasks/:id/...
+  ['workspaces', ':id', 'tasks', ':id', 'transition'],
+  ['workspaces', ':id', 'tasks', ':id', 'evidence'],
+  ['workspaces', ':id', 'tasks', ':id', 'links'],
+  ['workspaces', ':id', 'tasks', ':id', 'goal'],
+  ['workspaces', ':id', 'tasks', ':id', 'answer'],
+  ['workspaces', ':id', 'tasks', ':id', 'answer', 'undo'],
+  ['workspaces', ':id', 'tasks', ':id', 'more-info'],
+  ['workspaces', ':id', 'tasks', ':id', 'review-items'],
+  ['workspaces', ':id', 'tasks', ':id', 'review-items', ':id', 'answer'],
+  ['workspaces', ':id', 'tasks', ':id', 'review-items', ':id', 'more-info'],
+  ['workspaces', ':id', 'tasks', ':id', 'review-items', ':id', 'release'],
+  ['workspaces', ':id', 'tasks', ':id', 'review-items', ':id', 'revise'],
+  ['workspaces', ':id', 'tasks', ':id', 'after'],
+  ['workspaces', ':id', 'tasks', ':id', 'title'],
+  ['workspaces', ':id', 'tasks', ':id', 'body'],
+  ['workspaces', ':id', 'tasks', ':id', 'assignee'],
+  ['workspaces', ':id', 'tasks', ':id', 'due'],
+  ['workspaces', ':id', 'tasks', ':id', 'park'],
+  ['workspaces', ':id', 'tasks', ':id', 'archive'],
+  ['workspaces', ':id', 'tasks', ':id', 'restore'],
+  ['workspaces', ':id', 'tasks', ':id', 'notes'],
   // /api/agents/:id/...
   ['api', 'agents', ':id', 'watches'],
   ['api', 'agents', ':id', 'merge'],
   ['api', 'agents', ':id', 'notes'],
-  // /api/docs/:id and its ~30 subroutes (canonicalized once in server.ts, then dispatched on the literal 'rest' of the path)
-  ['api', 'docs', ':id'],
-  ['api', 'docs', ':id', 'archive'],
-  ['api', 'docs', ':id', 'unarchive'],
-  ['api', 'docs', ':id', 'meetings'],
-  ['api', 'docs', ':id', 'meetings', ':id'],
-  ['api', 'docs', ':id', 'threads'],
-  ['api', 'docs', ':id', 'tasks'],
-  ['api', 'docs', ':id', 'content'],
-  ['api', 'docs', ':id', 'status'],
-  ['api', 'docs', ':id', 'reparse_from_disk'],
-  ['api', 'docs', ':id', 'diff'],
-  ['api', 'docs', ':id', 'activity'],
-  ['api', 'docs', ':id', 'find_and_replace'],
-  ['api', 'docs', ':id', 'agent_anchors'],
-  ['api', 'docs', ':id', 'suggestions'],
-  ['api', 'docs', ':id', 'suggestions', 'resolve_all'],
-  ['api', 'docs', ':id', 'suggestions', ':id', 'accept'],
-  ['api', 'docs', ':id', 'suggestions', ':id', 'reject'],
-  ['api', 'docs', ':id', 'delete_block_at_anchor'],
-  ['api', 'docs', ':id', 'delete_blocks_in_range'],
-  ['api', 'docs', ':id', 'delete_section'],
-  ['api', 'docs', ':id', 'hooks', 'fire'],
-  // /api/docs/:id/threads/:id/... (nested inside the rest dispatch above)
-  ['api', 'docs', ':id', 'threads', ':id', 'promote'],
-  ['api', 'docs', ':id', 'threads', ':id'],
-  ['api', 'docs', ':id', 'threads', ':id', 'comments'],
-  ['api', 'docs', ':id', 'threads', ':id', 'answer'],
-  ['api', 'docs', ':id', 'threads', ':id', 'revise'],
-  ['api', 'docs', ':id', 'threads', ':id', 'withdraw'],
-  ['api', 'docs', ':id', 'threads', ':id', 'withdraw', 'undo'],
-  ['api', 'docs', ':id', 'threads', ':id', 'answer', 'undo'],
-  ['api', 'docs', ':id', 'threads', ':id', 'summary'],
-  ['api', 'docs', ':id', 'threads', ':id', 'resolve'],
-  ['api', 'docs', ':id', 'threads', ':id', 'reopen'],
-  ['api', 'docs', ':id', 'threads', ':id', 'reanchor'],
-  ['api', 'docs', ':id', 'threads', ':id', 'rewrite_region'],
-  ['api', 'docs', ':id', 'threads', ':id', 'insert_after'],
-  ['api', 'docs', ':id', 'threads', ':id', 'insert_blocks_after'],
-  ['api', 'docs', ':id', 'threads', 'by_find'],
-  // /api/docs/:id/agent_anchors/:id/... (nested inside the rest dispatch above)
-  ['api', 'docs', ':id', 'agent_anchors', ':id'],
-  ['api', 'docs', ':id', 'agent_anchors', ':id', 'edit'],
-  ['api', 'docs', ':id', 'agent_anchors', ':id', 'insert_blocks'],
+  // /workspaces/:id/docs/:id and its ~30 subroutes (canonicalized once in
+  // server.ts, then dispatched on the literal 'rest' of the path)
+  ['workspaces', ':id', 'docs', ':id'],
+  ['workspaces', ':id', 'docs', ':id', 'archive'],
+  ['workspaces', ':id', 'docs', ':id', 'unarchive'],
+  ['workspaces', ':id', 'docs', ':id', 'meetings'],
+  ['workspaces', ':id', 'docs', ':id', 'meetings', ':id'],
+  ['workspaces', ':id', 'docs', ':id', 'threads'],
+  ['workspaces', ':id', 'docs', ':id', 'tasks'],
+  ['workspaces', ':id', 'docs', ':id', 'content'],
+  ['workspaces', ':id', 'docs', ':id', 'status'],
+  ['workspaces', ':id', 'docs', ':id', 'reparse_from_disk'],
+  ['workspaces', ':id', 'docs', ':id', 'diff'],
+  ['workspaces', ':id', 'docs', ':id', 'activity'],
+  ['workspaces', ':id', 'docs', ':id', 'find_and_replace'],
+  ['workspaces', ':id', 'docs', ':id', 'agent_anchors'],
+  ['workspaces', ':id', 'docs', ':id', 'suggestions'],
+  ['workspaces', ':id', 'docs', ':id', 'suggestions', 'resolve_all'],
+  ['workspaces', ':id', 'docs', ':id', 'suggestions', ':id', 'accept'],
+  ['workspaces', ':id', 'docs', ':id', 'suggestions', ':id', 'reject'],
+  ['workspaces', ':id', 'docs', ':id', 'delete_block_at_anchor'],
+  ['workspaces', ':id', 'docs', ':id', 'delete_blocks_in_range'],
+  ['workspaces', ':id', 'docs', ':id', 'delete_section'],
+  ['workspaces', ':id', 'docs', ':id', 'hooks', 'fire'],
+  // …/docs/:id/threads/:id/... (nested inside the rest dispatch above)
+  ['workspaces', ':id', 'docs', ':id', 'threads', ':id', 'promote'],
+  ['workspaces', ':id', 'docs', ':id', 'threads', ':id'],
+  ['workspaces', ':id', 'docs', ':id', 'threads', ':id', 'comments'],
+  ['workspaces', ':id', 'docs', ':id', 'threads', ':id', 'answer'],
+  ['workspaces', ':id', 'docs', ':id', 'threads', ':id', 'revise'],
+  ['workspaces', ':id', 'docs', ':id', 'threads', ':id', 'withdraw'],
+  ['workspaces', ':id', 'docs', ':id', 'threads', ':id', 'withdraw', 'undo'],
+  ['workspaces', ':id', 'docs', ':id', 'threads', ':id', 'answer', 'undo'],
+  ['workspaces', ':id', 'docs', ':id', 'threads', ':id', 'summary'],
+  ['workspaces', ':id', 'docs', ':id', 'threads', ':id', 'resolve'],
+  ['workspaces', ':id', 'docs', ':id', 'threads', ':id', 'reopen'],
+  ['workspaces', ':id', 'docs', ':id', 'threads', ':id', 'reanchor'],
+  ['workspaces', ':id', 'docs', ':id', 'threads', ':id', 'rewrite_region'],
+  ['workspaces', ':id', 'docs', ':id', 'threads', ':id', 'insert_after'],
+  ['workspaces', ':id', 'docs', ':id', 'threads', ':id', 'insert_blocks_after'],
+  ['workspaces', ':id', 'docs', ':id', 'threads', 'by_find'],
+  // …/docs/:id/agent_anchors/:id/... (nested inside the rest dispatch above)
+  ['workspaces', ':id', 'docs', ':id', 'agent_anchors', ':id'],
+  ['workspaces', ':id', 'docs', ':id', 'agent_anchors', ':id', 'edit'],
+  ['workspaces', ':id', 'docs', ':id', 'agent_anchors', ':id', 'insert_blocks'],
   // A board and everything it owns, at ONE prefix.
   //
-  // This list used to be two: the frontend shell's `/workspaces/:id/…` pages,
-  // and a parallel `/api/workspaces/:id/…` for the data behind them. The `/api`
-  // prefix is gone, so a tab in a browser and the JSON behind it are one
-  // address distinguished by `?format=json` — and a query string is not part
-  // of a route pattern, so `''`, `home` and `tasks` each appear ONCE here and
-  // cover both. Two entries would not have been wrong; they would have been a
-  // second place to forget.
+  // A tab in a browser and the JSON behind it are one address distinguished
+  // by `?format=json`, and a query string is not part of a route pattern, so
+  // `''`, `home` and `tasks` each appear ONCE here and cover both. Two
+  // entries would not have been wrong; they would have been a second place
+  // to forget.
   ['workspaces', ':id'],
   ['workspaces', ':id', 'home'],
   ['workspaces', ':id', 'home', 'read'],
@@ -270,10 +268,7 @@ const ROUTE_TEMPLATES: readonly (readonly string[])[] = [
   ['workspaces', ':id', 'tasks', 'batch'],
   ['workspaces', ':id', 'mine'],
   ['workspaces', ':id', 'activity'],
-  ['workspaces', ':id', 'docs'],
-  ['workspaces', ':id', 'docs', ':id'],
   ['workspaces', ':id', 'mockups', ':id'],
-  ['workspaces', ':id', 'reviews', ':id'],
   ['workspaces', ':id', 'review-items'],
   ['workspaces', ':id', 'next'],
   ['workspaces', ':id', 'related-work'],

@@ -13,6 +13,7 @@ import * as Y from 'yjs';
 import { eventsForDoc, runBackfill } from '../src/activity-backfill.ts';
 import { activityLogPath } from '../src/activity.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const bryan: User = { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' };
 // A NAMED agent: the shared `known-agent` category is refused as an author.
@@ -65,6 +66,9 @@ function readEvents(dataDir: string): ActivityEvent[] {
     .map((l) => JSON.parse(l) as ActivityEvent);
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('hands-on activity stream', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -76,10 +80,11 @@ describe('hands-on activity stream', () => {
    */
   let actDocId: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'feedback-activity-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
   afterAll(async () => {
     await handle.stop();
@@ -96,7 +101,7 @@ describe('hands-on activity stream', () => {
     writeFileSync(file, '# Heading\n\nSome prose to comment on.\n');
     actDocId = (
       await j<{ docId: string }>(
-        await fetch(`${base}/api/docs`, {
+        await fetch(`${base}/workspaces/${WS}/docs`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ docId: 'act-doc', type: 'markdown', sourceUrl: file }),
@@ -105,7 +110,7 @@ describe('hands-on activity stream', () => {
     ).docId;
 
     await j(
-      await fetch(`${base}/api/docs/act-doc/threads`, {
+      await fetch(`${base}/workspaces/${WS}/docs/act-doc/threads`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -139,14 +144,14 @@ describe('hands-on activity stream', () => {
     const file = join(dataDir, 'act-agent.md');
     writeFileSync(file, 'Agent target text.\n');
     const { docId: agentDocId } = await j<{ docId: string }>(
-      await fetch(`${base}/api/docs`, {
+      await fetch(`${base}/workspaces/${WS}/docs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ docId: 'act-agent', type: 'markdown', sourceUrl: file }),
       }),
     );
     await j(
-      await fetch(`${base}/api/docs/act-agent/threads`, {
+      await fetch(`${base}/workspaces/${WS}/docs/act-agent/threads`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ author: agent, text: 'agent note', anchor: fakeAnchor }),
@@ -161,7 +166,7 @@ describe('hands-on activity stream', () => {
   it('records a read_session via the activity endpoint with interactionBounded', async () => {
     const startTs = new Date(Date.now() - 60_000).toISOString();
     const endTs = new Date().toISOString();
-    const r = await fetch(`${base}/api/docs/act-doc/activity`, {
+    const r = await fetch(`${base}/workspaces/${WS}/docs/act-doc/activity`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -189,7 +194,7 @@ describe('hands-on activity stream', () => {
   });
 
   it('emits a doc_open event and rejects unknown activity types', async () => {
-    const ok = await fetch(`${base}/api/docs/act-doc/activity`, {
+    const ok = await fetch(`${base}/workspaces/${WS}/docs/act-doc/activity`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ type: 'doc_open', payload: { sessionId: 'open-1' } }),
@@ -197,7 +202,7 @@ describe('hands-on activity stream', () => {
     expect(ok.status).toBe(200);
     expect(readEvents(dataDir).some((e) => e.type === 'doc_open')).toBe(true);
 
-    const bad = await fetch(`${base}/api/docs/act-doc/activity`, {
+    const bad = await fetch(`${base}/workspaces/${WS}/docs/act-doc/activity`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ type: 'bogus', payload: {} }),
@@ -209,14 +214,14 @@ describe('hands-on activity stream', () => {
     const file = join(dataDir, 'act-dedup.md');
     writeFileSync(file, '# Dedup\n\nText to comment on.\n');
     const docRes = await j<{ docId: string; meta: DocMeta }>(
-      await fetch(`${base}/api/docs`, {
+      await fetch(`${base}/workspaces/${WS}/docs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ docId: 'act-dedup', type: 'markdown', sourceUrl: file }),
       }),
     );
     await j(
-      await fetch(`${base}/api/docs/act-dedup/threads`, {
+      await fetch(`${base}/workspaces/${WS}/docs/act-dedup/threads`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ author: bryan, text: 'dedup me', anchor: fakeAnchor }),
@@ -244,7 +249,7 @@ describe('hands-on activity stream', () => {
   });
 
   it('server re-clamps an over-cap read_session durationMs', async () => {
-    const r = await fetch(`${base}/api/docs/act-doc/activity`, {
+    const r = await fetch(`${base}/workspaces/${WS}/docs/act-doc/activity`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({

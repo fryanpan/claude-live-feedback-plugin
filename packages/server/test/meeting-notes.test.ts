@@ -36,6 +36,7 @@ import {
 } from '../src/meeting-notes.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { createMockTranscriptionEngine } from '../src/transcribe.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 /**
  * A scheduler the test advances by hand. `fire()` runs whatever is armed;
@@ -86,6 +87,9 @@ class ManualScheduler implements TickScheduler {
     return due.length;
   }
 }
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('the notes clocks', () => {
   /**
@@ -902,7 +906,7 @@ describe('notes through the audio socket', () => {
   /** What the composer was HANDED — the server resolves context per meeting. */
   const composed: NotesComposeInput[] = [];
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-meeting-notes-'));
     const stub = createStubNotesComposer();
     handle = createServer({
@@ -931,16 +935,17 @@ describe('notes through the audio socket', () => {
 
   it('a real meeting pauses into a tick and flushes the tail at stop', async () => {
     const base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     const path = join(dataDir, 'planning.md');
     writeFileSync(path, '# planning\n');
-    const res = await fetch(`${base}/api/docs`, {
+    const res = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'planning', sourceUrl: path, title: 'planning' }),
     });
     expect(res.status).toBe(200);
 
-    const ws = new WebSocket(`ws://localhost:${handle.port}${meetingSocketPath('planning')}`);
+    const ws = new WebSocket(`ws://localhost:${handle.port}${meetingSocketPath(WS, 'planning')}`);
     ws.binaryType = 'arraybuffer';
     const frames: { type: string; final?: boolean; text?: string }[] = [];
     ws.addEventListener('message', (ev) => {
@@ -1513,7 +1518,7 @@ describe('a tagged meeting through the audio socket', () => {
     },
   };
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-meeting-tags-'));
     handle = createServer({
       port: 0,
@@ -1535,16 +1540,17 @@ describe('a tagged meeting through the audio socket', () => {
 
   it('writes tags into the doc, and a rename moves one voice and not the other', async () => {
     const base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     const path = join(dataDir, 'huddle.md');
     writeFileSync(path, '# huddle\n');
-    const res = await fetch(`${base}/api/docs`, {
+    const res = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'huddle', sourceUrl: path, title: 'huddle' }),
     });
     expect(res.status).toBe(200);
 
-    const ws = new WebSocket(`ws://localhost:${handle.port}${meetingSocketPath('huddle')}`);
+    const ws = new WebSocket(`ws://localhost:${handle.port}${meetingSocketPath(WS, 'huddle')}`);
     ws.binaryType = 'arraybuffer';
     const frames: { type: string; final?: boolean; mode?: string }[] = [];
     ws.addEventListener('message', (ev) => {

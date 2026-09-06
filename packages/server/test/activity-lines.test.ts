@@ -27,6 +27,7 @@ import {
 } from '../../workspaces-app/src/board/board-presence-model.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { type Task, eventsLogPath } from '../src/tasks.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON: User = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
 const AGENT: User = {
@@ -35,6 +36,9 @@ const AGENT: User = {
   kind: 'known',
   color: '#888888',
 };
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('the activity view renders the rows the server really wrote', () => {
   let handle: ServerHandle;
@@ -70,8 +74,10 @@ describe('the activity view renders the rows the server really wrote', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'activity-lines-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     const ws = await post('/workspaces', { name: 'search-revamp' });
     wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
+    WS = wsId;
     const d = await post(`/workspaces/${wsId}/tasks`, {
       title: 'Ship Thursday or Friday?',
       assignee: 'human',
@@ -89,7 +95,7 @@ describe('the activity view renders the rows the server really wrote', () => {
   });
 
   it('keeps the words of a decision answer', async () => {
-    const r = await post(`/api/tasks/${decisionId}/answer`, {
+    const r = await post(`/workspaces/${WS}/tasks/${decisionId}/answer`, {
       text: 'Ship Friday, not Thursday.',
       author: PERSON,
     });
@@ -108,7 +114,7 @@ describe('the activity view renders the rows the server really wrote', () => {
   it('says an answer was taken back, in the words that were taken back', async () => {
     // Runs after the test above, which answered this decision — the undo has
     // to have something to undo.
-    const r = await post(`/api/tasks/${decisionId}/answer/undo`, { author: PERSON });
+    const r = await post(`/workspaces/${WS}/tasks/${decisionId}/answer/undo`, { author: PERSON });
     expect(r.status).toBe(200);
 
     const row = rowsOf('decision.answer_withdrawn').at(-1);
@@ -123,7 +129,7 @@ describe('the activity view renders the rows the server really wrote', () => {
     expect(line).not.toContain('decision.answer_withdrawn');
 
     // Re-answer, so the tests after this one see the state they expect.
-    await post(`/api/tasks/${decisionId}/answer`, {
+    await post(`/workspaces/${WS}/tasks/${decisionId}/answer`, {
       text: 'Ship Friday, not Thursday.',
       author: PERSON,
     });
@@ -154,7 +160,7 @@ describe('the activity view renders the rows the server really wrote', () => {
     expect(created.status).toBe(200);
     const taskId = ((await created.json()) as { task: Task }).task.id;
 
-    const r = await post(`/api/tasks/${taskId}/body`, {
+    const r = await post(`/workspaces/${WS}/tasks/${taskId}/body`, {
       markdown: 'Agent can rewrite a thin task so that the next reader knows when it is done.',
       author: AGENT,
     });
@@ -185,9 +191,9 @@ describe('the activity view renders the rows the server really wrote', () => {
     // Local noon, so the rendered day is the same in every timezone.
     const due = new Date(2026, 8, 2, 12).getTime();
 
-    expect((await post(`/api/tasks/${taskId}/due`, { dueAt: due, author: PERSON })).status).toBe(
-      200,
-    );
+    expect(
+      (await post(`/workspaces/${WS}/tasks/${taskId}/due`, { dueAt: due, author: PERSON })).status,
+    ).toBe(200);
     const set = rowsOf('task.due_set').at(-1);
     expect(set).toBeDefined();
     const line = describeEvent(set as ActivityEvent, () => 'Cut the release note');
@@ -198,9 +204,9 @@ describe('the activity view renders the rows the server really wrote', () => {
 
     // And the clear, which is a different sentence — a row that read "set due"
     // with no date would be worse than the slug.
-    expect((await post(`/api/tasks/${taskId}/due`, { dueAt: null, author: PERSON })).status).toBe(
-      200,
-    );
+    expect(
+      (await post(`/workspaces/${WS}/tasks/${taskId}/due`, { dueAt: null, author: PERSON })).status,
+    ).toBe(200);
     const cleared = describeEvent(
       rowsOf('task.due_set').at(-1) as ActivityEvent,
       () => 'Cut the release note',
@@ -223,7 +229,7 @@ describe('the activity view renders the rows the server really wrote', () => {
     expect(created.status).toBe(200);
     const taskId = ((await created.json()) as { task: Task }).task.id;
 
-    const r = await post(`/api/tasks/${taskId}/body`, {
+    const r = await post(`/workspaces/${WS}/tasks/${taskId}/body`, {
       title: 'Moving between shelves loses your place',
       markdown: 'Person can move between shelves so that planning keeps its place.',
       author: AGENT,
@@ -250,7 +256,7 @@ describe('the activity view renders the rows the server really wrote', () => {
     expect(created.status).toBe(200);
     const taskId = ((await created.json()) as { task: Task }).task.id;
 
-    const r = await post(`/api/tasks/${taskId}/body`, {
+    const r = await post(`/workspaces/${WS}/tasks/${taskId}/body`, {
       markdown: 'Agent can find archived rows so that history stays searchable.',
       author: AGENT,
       reason: 'the body did not say when the work is done',
@@ -275,7 +281,7 @@ describe('the activity view renders the rows the server really wrote', () => {
     expect(created.status).toBe(200);
     const taskId = ((await created.json()) as { task: Task }).task.id;
 
-    const r = await post(`/api/tasks/${taskId}/title`, {
+    const r = await post(`/workspaces/${WS}/tasks/${taskId}/title`, {
       title: 'Person can find results by relevance so that search earns its keep',
       author: AGENT,
       reason: 'named the outcome instead of the artifact',
@@ -304,7 +310,7 @@ describe('the activity view renders the rows the server really wrote', () => {
     expect(created.status).toBe(200);
     const taskId = ((await created.json()) as { task: Task }).task.id;
     const before = rowsOf('task.retitled').length;
-    const r = await post(`/api/tasks/${taskId}/title`, {
+    const r = await post(`/workspaces/${WS}/tasks/${taskId}/title`, {
       title: 'Already well named',
       author: AGENT,
     });
@@ -338,7 +344,7 @@ describe('the activity view renders the rows the server really wrote', () => {
 
     // The agent's placements carry the batch key, so N regroupings read as
     // one goal-list edit rather than N unexplained moves.
-    const placed = await post(`/api/tasks/${decisionId}/goal`, {
+    const placed = await post(`/workspaces/${WS}/tasks/${decisionId}/goal`, {
       goal: 'chores',
       author: AGENT,
       position: 5,

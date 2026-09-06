@@ -3,6 +3,7 @@ import type { AgentWatches } from '../agent-watches.ts';
 import type { DocStore } from '../doc-store.ts';
 import type { HomeBriefStore } from '../home-brief.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
+import type { WorkspaceScope } from '../middleware/workspace-scope.ts';
 import type { ReviewItemRow } from '../review-queue.ts';
 import type { SseBus } from '../sse.ts';
 import type { TaskProjection } from '../task-projection.ts';
@@ -100,6 +101,19 @@ export interface WorkspaceRoutesContext {
 
 /** What only this request knows. */
 export interface WorkspaceRouteRequest {
+  /**
+   * The board this canonical path named, and the remainder under it —
+   * resolved once by `middleware/workspace-scope.ts`, which has already
+   * refused an unknown board and a member filed on a different one.
+   *
+   * `undefined` when the path is not under `/workspaces/<id>/…` at all, and
+   * that is what makes the resolution structural rather than remembered: a
+   * resource route matches through `matchRest`, so with no scope it has no
+   * remainder to match and cannot answer. Read `scope.workspaceId` for the
+   * board rather than a body field — the path is the argument now.
+   */
+  scope?: WorkspaceScope<BoardWorkspace>;
+
   req: Request;
   pathname: string;
   url: URL;
@@ -112,13 +126,11 @@ export interface WorkspaceRouteRequest {
 }
 
 /**
- * The delete route's extra collaborator.
+ * The board delete's request. Nothing extra any more.
  *
- * `deleteReview` is built inside the request closure, further down the chain
- * than the context above is assembled, and `DELETE /api/reviews/:id` — which
- * is not a workspace route — still calls it there. So it travels with the
- * request rather than being hoisted or copied.
+ * It used to carry `deleteReview`, because the one DELETE fronted two stores
+ * and needed the review destroy to fall through to. The canonical shape
+ * addresses a review under the board that holds it, so that fall-through is
+ * gone and so is the field — the alias stays as the name the chain calls.
  */
-export interface WorkspaceDeleteRequest extends WorkspaceRouteRequest {
-  deleteReview: (setId: string, force: boolean, purge: boolean) => Response;
-}
+export type WorkspaceDeleteRequest = WorkspaceRouteRequest;

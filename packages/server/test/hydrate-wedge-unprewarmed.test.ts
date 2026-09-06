@@ -30,6 +30,7 @@ import { type ServerHandle, createServer } from '../src/server.ts';
 import { boundFiles } from '../src/slow-fs.ts';
 import { makeFifo, releaseFifosIn } from './fifo.ts';
 import { waitFor } from './wait-for.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const DOC_ID = 'unprewarmed-source-doc';
 
@@ -44,6 +45,9 @@ const DOC_ID = 'unprewarmed-source-doc';
  * thing that can delay it is a blocked loop.
  */
 const HEALTH_MS = 100;
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('hydration doors the request prewarm does not cover', () => {
   let dataDir: string;
@@ -62,7 +66,10 @@ describe('hydration doors the request prewarm does not cover', () => {
     // server goes away. This is the state the machine is in before the sync
     // folder stops answering.
     const first = createServer({ port: 0, dataDir, requireSignInToWrite: false });
-    const created = await fetch(`http://localhost:${first.port}/api/docs`, {
+    // Seeded once, on the FIRST server: the board lives in the data dir the
+    // restarts share, so every server below addresses the same one.
+    WS = await seedBoard(`http://localhost:${first.port}`);
+    const created = await fetch(`http://localhost:${first.port}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: DOC_ID, type: 'markdown', sourceUrl: boundPath }),
@@ -90,7 +97,7 @@ describe('hydration doors the request prewarm does not cover', () => {
 
   /** An unrelated route answers within its budget; never rejects. */
   function healthAnswers(base: string): Promise<string> {
-    const probe = fetch(`${base}/api/docs`).then((r) => `answered:${r.status}`);
+    const probe = fetch(`${base}/workspaces/${WS}/docs`).then((r) => `answered:${r.status}`);
     const tooSlow = new Promise<string>((resolve) =>
       setTimeout(() => resolve('wedged'), HEALTH_MS),
     );
@@ -104,7 +111,7 @@ describe('hydration doors the request prewarm does not cover', () => {
     // Nothing in this URL names a doc, so `docIdsAddressedBy` finds nothing
     // and the prewarm does not run. The route still hydrates DOC_ID to
     // re-bind it — straight into the synchronous read.
-    const rebind = fetch(`${base}/api/docs`, {
+    const rebind = fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: DOC_ID, type: 'markdown', sourceUrl: boundPath }),
@@ -141,7 +148,7 @@ describe('hydration doors the request prewarm does not cover', () => {
     // it must not do is stop the event loop: a timer armed before the scan
     // has to fire even though the scan touched a wedged file.
     let ticked = false;
-    setTimeout(() => {
+    setTimeout(async () => {
       ticked = true;
     }, 20);
 
@@ -168,7 +175,7 @@ describe('hydration doors the request prewarm does not cover', () => {
     handle = createServer({ port: 0, dataDir, requireSignInToWrite: false });
     const base = `http://localhost:${handle.port}`;
 
-    const rebind = await fetch(`${base}/api/docs`, {
+    const rebind = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: DOC_ID, type: 'markdown', sourceUrl: boundPath }),

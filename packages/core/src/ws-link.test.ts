@@ -64,42 +64,42 @@ describe('parseWorkspaceLink', () => {
     });
   });
 
-  it('parses doc URLs in both address shapes', () => {
+  it('parses a doc URL, absolute or root-relative', () => {
     expect(parseWorkspaceLink(`${HOST}/workspaces/w-abc123/docs/doc-1`)).toEqual({
       kind: 'doc',
       workspaceId: 'w-abc123',
       docId: 'doc-1',
     });
-    expect(parseWorkspaceLink(`${HOST}/review/doc-1`)).toEqual({
-      kind: 'doc',
-      workspaceId: null,
-      docId: 'doc-1',
-    });
     // Relative path with no host — sidebar/board comments use these.
-    expect(parseWorkspaceLink('/review/doc-1')).toEqual({
+    expect(parseWorkspaceLink('/workspaces/w-abc123/docs/doc-1')).toEqual({
       kind: 'doc',
-      workspaceId: null,
+      workspaceId: 'w-abc123',
       docId: 'doc-1',
     });
   });
 
+  it('CONTROL: the deleted `/review/` and `/mockup/` shapes parse as nothing', () => {
+    // A doc without the board that owns it is not an address any more. These
+    // two spellings named no workspace, which is exactly why the cutover
+    // removed them — leaving them parseable would keep a second address alive
+    // in every comment the board renders.
+    expect(parseWorkspaceLink(`${HOST}/review/doc-1`)).toBeNull();
+    expect(parseWorkspaceLink('/review/doc-1')).toBeNull();
+    expect(parseWorkspaceLink(`${HOST}/mockup/mock-1`)).toBeNull();
+  });
+
   it('decodes percent-encoded ids', () => {
-    expect(parseWorkspaceLink(`${HOST}/review/set%3Areadme.md`)).toEqual({
+    expect(parseWorkspaceLink(`${HOST}/workspaces/w-abc123/docs/set%3Areadme.md`)).toEqual({
       kind: 'doc',
-      workspaceId: null,
+      workspaceId: 'w-abc123',
       docId: 'set:readme.md',
     });
   });
 
-  it('parses mockup URLs in both address shapes', () => {
+  it('parses a mockup URL', () => {
     expect(parseWorkspaceLink(`${HOST}/workspaces/w-abc123/mockups/mock-1`)).toEqual({
       kind: 'mockup',
       workspaceId: 'w-abc123',
-      docId: 'mock-1',
-    });
-    expect(parseWorkspaceLink(`${HOST}/mockup/mock-1`)).toEqual({
-      kind: 'mockup',
-      workspaceId: null,
       docId: 'mock-1',
     });
   });

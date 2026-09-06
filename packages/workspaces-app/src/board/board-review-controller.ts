@@ -1,3 +1,4 @@
+import type { Thread, User } from '@feedback/core';
 /**
  * The review queue's controller: how a person opens an item, walks the sitting,
  * and answers or asks back — with the REST writes each of those ends in.
@@ -11,7 +12,7 @@
  * re-read BEFORE a walkthrough advance, because a position computed against a
  * list that still holds the answered item lands on the wrong card.
  */
-import type { Thread, User } from '@feedback/core';
+import { api } from '../doc-path.ts';
 import { activityCommentRequest } from './activity-model.ts';
 import type { BoardState } from './board-actions.ts';
 import { send, showToast } from './board-actions.ts';
@@ -97,7 +98,7 @@ export function createBoardReviewController(deps: BoardReviewControllerDeps) {
     // `text` is always the verbatim answer — tapping an option sends the
     // option's label as the answer and its id alongside, so nothing about the
     // recorded answer depends on the option list still existing later.
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/answer`, 'POST', {
+    const res = await send(api(`tasks/${encodeURIComponent(task.id)}/answer`), 'POST', {
       text,
       ...(optionId ? { optionId } : {}),
       author,
@@ -154,7 +155,7 @@ export function createBoardReviewController(deps: BoardReviewControllerDeps) {
     if (!item.threadId || item.commentId === undefined) return false;
     const doc = encodeURIComponent(item.docId ?? task.bodyDocId);
     const thread = encodeURIComponent(item.threadId);
-    const res = await send(`/api/docs/${doc}/threads/${thread}/answer/undo`, 'POST', {
+    const res = await send(api(`docs/${doc}/threads/${thread}/answer/undo`), 'POST', {
       author,
       commentId: item.commentId,
     });
@@ -176,7 +177,7 @@ export function createBoardReviewController(deps: BoardReviewControllerDeps) {
   }
 
   async function undoTaskAnswer(task: BoardTask): Promise<boolean> {
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/answer/undo`, 'POST', {
+    const res = await send(api(`tasks/${encodeURIComponent(task.id)}/answer/undo`), 'POST', {
       author,
     });
     if (!res.ok) {
@@ -198,7 +199,9 @@ export function createBoardReviewController(deps: BoardReviewControllerDeps) {
    */
   async function releaseHeldReviewItem(task: BoardTask, item: BoardReviewItem): Promise<boolean> {
     const res = await send(
-      `/api/tasks/${encodeURIComponent(task.id)}/review-items/${encodeURIComponent(item.id)}/release`,
+      api(
+        `tasks/${encodeURIComponent(task.id)}/review-items/${encodeURIComponent(item.id)}/release`,
+      ),
       'POST',
       { author },
     );
@@ -391,7 +394,7 @@ export function createBoardReviewController(deps: BoardReviewControllerDeps) {
   ): Promise<Thread | null> {
     const doc = encodeURIComponent(`task:${taskId}`);
     const res = await send(
-      `/api/docs/${doc}/threads/${encodeURIComponent(threadId)}/comments`,
+      api(`docs/${doc}/threads/${encodeURIComponent(threadId)}/comments`),
       'POST',
       {
         author,
@@ -427,7 +430,7 @@ export function createBoardReviewController(deps: BoardReviewControllerDeps) {
     // from; an undeclared one is a plain comment; and a TICKET-borne item
     // (`task-review`) posts to the task review-item answer route — it has no
     // thread, and before the routing was shared this handler would have
-    // posted its answer at `/api/docs/undefined/…`.
+    // posted its answer at /workspaces/<ws>/docs/undefined/….
     const reqSpec = reviewReplyRequest(item, text, optionId);
     if (!reqSpec) return false;
     const res = await send(reqSpec.path, 'POST', { ...reqSpec.body, author });

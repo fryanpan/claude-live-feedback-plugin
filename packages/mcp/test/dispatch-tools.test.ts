@@ -38,20 +38,24 @@ describe('dispatch tools', () => {
   it('register_dispatch requires the task and the worktree path', () => {
     const decl = mcp.tool('register_dispatch');
     expect(decl).toBeDefined();
-    expect(decl?.inputSchema?.required).toEqual(['taskId', 'worktreePath']);
+    expect(decl?.inputSchema?.required).toEqual(['workspaceId', 'taskId', 'worktreePath']);
     expect(Object.keys(decl?.inputSchema?.properties ?? {}).sort()).toEqual([
       'taskId',
+      'workspaceId',
       'worktreePath',
     ]);
   });
 
   it('register_dispatch POSTs the route the server serves, carrying both fields', async () => {
     const res = await mcp.call('register_dispatch', {
+      workspaceId: 'w-1',
       taskId: 't-K69wx',
       worktreePath: '/tmp/worktrees/builder-3',
     });
     expect(res.isError).toBe(false);
-    expect(res.sent.map((r) => `${r.method} ${r.path}`)).toEqual(['POST /api/dispatches']);
+    expect(res.sent.map((r) => `${r.method} ${r.path}`)).toEqual([
+      'POST /workspaces/w-1/dispatches',
+    ]);
     expect(res.sent[0]?.body).toEqual({
       taskId: 't-K69wx',
       worktreePath: '/tmp/worktrees/builder-3',
@@ -59,13 +63,16 @@ describe('dispatch tools', () => {
   });
 
   it('close_dispatch DELETEs the per-task route, with the id escaped into the path', async () => {
-    const res = await mcp.call('close_dispatch', { taskId: 't-K69wx/../other' });
+    const res = await mcp.call('close_dispatch', {
+      workspaceId: 'w-1',
+      taskId: 't-K69wx/../other',
+    });
     expect(res.isError).toBe(false);
     expect(res.sent).toHaveLength(1);
     expect(res.sent[0]?.method).toBe('DELETE');
     // Escaped, not interpolated raw: a task id carrying a slash must not be
     // able to walk out of the collection it addresses.
-    expect(res.sent[0]?.url).toBe('/api/dispatches/t-K69wx%2F..%2Fother');
+    expect(res.sent[0]?.url).toBe('/workspaces/w-1/dispatches/t-K69wx%2F..%2Fother');
   });
 
   it('both tools are declared to a client, not merely present in the file', () => {

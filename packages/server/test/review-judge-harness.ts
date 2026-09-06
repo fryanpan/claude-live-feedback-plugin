@@ -130,7 +130,7 @@ export function startJudgeHarness(): JudgeHarness {
         }),
       );
       await h.jj(
-        h.post(`/api/tasks/${task.id}/transition`, {
+        h.post(`/workspaces/${workspace.id}/tasks/${task.id}/transition`, {
           to: 'todo',
           author: PERSON,
           workspaceId: workspace.id,

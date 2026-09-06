@@ -38,7 +38,7 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 beforeEach(() => {
-  history.replaceState(null, '', '/review/a');
+  history.replaceState(null, '', '/workspaces/w-1/docs/a');
 });
 
 describe('router', () => {
@@ -53,7 +53,9 @@ describe('router', () => {
    * has already been answered.
    */
   it('hands the awaited session answer to every mount, including one reached by navigating', async () => {
-    sidebar('<li><a href="/review/a">a</a></li><li><a href="/review/b">b</a></li>');
+    sidebar(
+      '<li><a href="/workspaces/w-1/docs/a">a</a></li><li><a href="/workspaces/w-1/docs/b">b</a></li>',
+    );
     const seen: Array<{ docId: string; canWrite: boolean }> = [];
     stop = startRouter({
       user: { id: 'u', name: 'U', kind: 'known', color: '#000' },
@@ -66,7 +68,7 @@ describe('router', () => {
     });
     await flush();
     document
-      .querySelector('a[href="/review/b"]')!
+      .querySelector('a[href="/workspaces/w-1/docs/b"]')!
       .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     await flush();
 
@@ -77,7 +79,7 @@ describe('router', () => {
   });
 
   it('carries a yes the same way', async () => {
-    sidebar('<li><a href="/review/a">a</a></li>');
+    sidebar('<li><a href="/workspaces/w-1/docs/a">a</a></li>');
     const seen: boolean[] = [];
     stop = startRouter({
       user: { id: 'u', name: 'U', kind: 'known', color: '#000' },
@@ -91,7 +93,9 @@ describe('router', () => {
   });
 
   it('intercepts a sidebar file click, pushes state, and swaps without reload', async () => {
-    sidebar('<li><a href="/review/a">a</a></li><li><a href="/review/b">b</a></li>');
+    sidebar(
+      '<li><a href="/workspaces/w-1/docs/a">a</a></li><li><a href="/workspaces/w-1/docs/b">b</a></li>',
+    );
     const mounted: string[] = [];
     const disposed: string[] = [];
     stop = startRouter({
@@ -108,16 +112,16 @@ describe('router', () => {
     expect(mounted).toEqual(['a']);
 
     document
-      .querySelector('a[href="/review/b"]')!
+      .querySelector('a[href="/workspaces/w-1/docs/b"]')!
       .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     await flush();
-    expect(location.pathname).toBe('/review/b');
+    expect(location.pathname).toBe('/workspaces/w-1/docs/b');
     expect(mounted).toEqual(['a', 'b']);
     expect(disposed).toContain('a'); // old mount torn down
   });
 
   it('lets a ⌘-click through to the browser (open in new tab)', async () => {
-    sidebar('<li><a href="/review/b">b</a></li>');
+    sidebar('<li><a href="/workspaces/w-1/docs/b">b</a></li>');
     stop = startRouter({
       user: { id: 'u', name: 'U', kind: 'known', color: '#000' },
       canWrite: true,
@@ -126,7 +130,7 @@ describe('router', () => {
       mountFor: () => {},
     });
     await flush();
-    const a = document.querySelector('a[href="/review/b"]')!;
+    const a = document.querySelector('a[href="/workspaces/w-1/docs/b"]')!;
     const ev = new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true });
     a.dispatchEvent(ev);
     // The router must NOT intercept a modified click — the browser handles it
@@ -138,7 +142,7 @@ describe('router', () => {
   it('swaps for an absolute cross-origin sidebar href (pushes same-origin path)', async () => {
     // Sidebar reviewUrls can be absolute + a different host than the browsing
     // origin; navigateTo must push only the path so pushState doesn't reject it.
-    sidebar('<li><a href="http://other-host:8796/review/x?u=1">x</a></li>');
+    sidebar('<li><a href="http://other-host:8796/workspaces/w-1/docs/x?u=1">x</a></li>');
     const mounted: string[] = [];
     stop = startRouter({
       user: { id: 'u', name: 'U', kind: 'known', color: '#000' },
@@ -153,11 +157,13 @@ describe('router', () => {
       .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     await flush();
     expect(mounted).toContain('x');
-    expect(location.pathname).toBe('/review/x');
+    expect(location.pathname).toBe('/workspaces/w-1/docs/x');
   });
 
   it('handles popstate (back button) by swapping to the URL docId', async () => {
-    sidebar('<li><a href="/review/a">a</a></li><li><a href="/review/b">b</a></li>');
+    sidebar(
+      '<li><a href="/workspaces/w-1/docs/a">a</a></li><li><a href="/workspaces/w-1/docs/b">b</a></li>',
+    );
     const mounted: string[] = [];
     stop = startRouter({
       user: { id: 'u', name: 'U', kind: 'known', color: '#000' },
@@ -169,10 +175,10 @@ describe('router', () => {
     await flush();
     // Navigate a → b, then simulate Back to a.
     document
-      .querySelector('a[href="/review/b"]')!
+      .querySelector('a[href="/workspaces/w-1/docs/b"]')!
       .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     await flush();
-    history.replaceState(null, '', '/review/a');
+    history.replaceState(null, '', '/workspaces/w-1/docs/a');
     window.dispatchEvent(new PopStateEvent('popstate'));
     await flush();
     expect(mounted).toEqual(['a', 'b', 'a']);
@@ -180,7 +186,7 @@ describe('router', () => {
 
   it('last click wins under rapid navigation (no half-mounted surface)', async () => {
     sidebar(
-      '<li><a href="/review/a">a</a></li><li><a href="/review/b">b</a></li><li><a href="/review/c">c</a></li>',
+      '<li><a href="/workspaces/w-1/docs/a">a</a></li><li><a href="/workspaces/w-1/docs/b">b</a></li><li><a href="/workspaces/w-1/docs/c">c</a></li>',
     );
     const mounted: string[] = [];
     let delay = 0;
@@ -203,15 +209,15 @@ describe('router', () => {
 
     delay = 20; // b's fetch is slow
     document
-      .querySelector('a[href="/review/b"]')!
+      .querySelector('a[href="/workspaces/w-1/docs/b"]')!
       .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     document
-      .querySelector('a[href="/review/c"]')!
+      .querySelector('a[href="/workspaces/w-1/docs/c"]')!
       .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     await new Promise((r) => setTimeout(r, 40));
     // b's swap was superseded before it connected/mounted; only c mounted.
     expect(mounted).toEqual(['c']);
-    expect(location.pathname).toBe('/review/c');
+    expect(location.pathname).toBe('/workspaces/w-1/docs/c');
   });
 
   /**
@@ -245,7 +251,7 @@ describe('router', () => {
     });
 
     it('returns to the index when the next doc has no board', async () => {
-      document.body.innerHTML = `${crumb()}<aside id="set-pane"><ol id="set-pane-list"><li><a href="/review/b">b</a></li></ol></aside>`;
+      document.body.innerHTML = `${crumb()}<aside id="set-pane"><ol id="set-pane-list"><li><a href="/workspaces/w-1/docs/b">b</a></li></ol></aside>`;
       let backTo: { workspaceId: string; name: string } | undefined = {
         workspaceId: 'w-abc',
         name: 'search-revamp',
@@ -262,7 +268,7 @@ describe('router', () => {
 
       backTo = undefined;
       document
-        .querySelector('a[href="/review/b"]')!
+        .querySelector('a[href="/workspaces/w-1/docs/b"]')!
         .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
       await flush();
       expect(backHref()).toBe('/');
@@ -280,7 +286,7 @@ describe('router', () => {
     const label = () => document.querySelector('.doc-crumb .doc-label') as HTMLElement;
 
     it('names a live doc by its kind once its meta arrives, and unnames the next doc', async () => {
-      document.body.innerHTML = `${crumb()}<aside id="set-pane"><ol id="set-pane-list"><li><a href="/review/b">b</a></li></ol></aside>`;
+      document.body.innerHTML = `${crumb()}<aside id="set-pane"><ol id="set-pane-list"><li><a href="/workspaces/w-1/docs/b">b</a></li></ol></aside>`;
       let huddle = true;
       stop = startRouter({
         user: { id: 'u', name: 'U', kind: 'known', color: '#000' },
@@ -300,7 +306,7 @@ describe('router', () => {
 
       huddle = false;
       document
-        .querySelector('a[href="/review/b"]')!
+        .querySelector('a[href="/workspaces/w-1/docs/b"]')!
         .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
       await flush();
       expect(label().textContent).toBe('Editing:');

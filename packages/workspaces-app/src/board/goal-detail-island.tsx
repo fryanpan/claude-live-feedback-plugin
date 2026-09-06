@@ -1,3 +1,6 @@
+import { signal } from '@preact/signals';
+import { type RefObject, render } from 'preact';
+import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 /**
  * The goal detail panel — the band a reader opens to see what the goal is for,
  * declare it done or argue about it — as a Preact island.
@@ -57,9 +60,7 @@
  * a reader on a short screen reaches it by scrolling rather than by finding a
  * control.
  */
-import { signal } from '@preact/signals';
-import { type RefObject, render } from 'preact';
-import { useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { currentWorkspaceId, docHref } from '../doc-path.ts';
 import {
   BODY_LIVE_CLASS,
   type TaskDiscussion,
@@ -557,7 +558,7 @@ function GoalDetailPanel(props: {
           exactly the older servers that omit it. */}
       {section.bodyDocId !== undefined && (
         <p class="board-detail-body-link">
-          <a href={`/review/${encodeURIComponent(section.bodyDocId)}`}>Open in the full editor</a>
+          <a href={docHref(section.bodyDocId, currentWorkspaceId())}>Open in the full editor</a>
         </p>
       )}
 

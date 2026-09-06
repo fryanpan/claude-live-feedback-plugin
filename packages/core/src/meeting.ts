@@ -33,9 +33,17 @@ export const MEETING_AUDIO_ENCODING = 'pcm_s16le' as const;
  */
 export const MEETING_SAMPLE_RATE = 16_000;
 
-/** The WebSocket path for a doc's meeting audio. */
-export function meetingSocketPath(docId: string): string {
-  return `/audio/${encodeURIComponent(docId)}`;
+/**
+ * The WebSocket path for a doc's meeting audio.
+ *
+ * The board is part of the address like every other resource route: the
+ * socket is a doc's, and a doc is reached through a board that holds it. The
+ * top-level `/audio/<docId>` it replaces was the last shape that let a caller
+ * open a doc's stream without saying where the doc lived, and the upgrade
+ * guard therefore had to re-derive the board itself to know whose it was.
+ */
+export function meetingSocketPath(workspaceId: string, docId: string): string {
+  return `/workspaces/${encodeURIComponent(workspaceId)}/docs/${encodeURIComponent(docId)}/audio`;
 }
 
 /**

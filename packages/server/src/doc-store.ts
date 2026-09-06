@@ -430,7 +430,7 @@ export class DocStore {
 
   /**
    * docId → reader key → last time that reader fetched the doc's content
-   * (GET /api/docs/:id/content?reader=…). Pairs with `lastHumanEditAt` in
+   * (GET …/docs/:docId/content?reader=…). Pairs with `lastHumanEditAt` in
    * `staleWriteCheck`: a reader whose last read predates the last human edit
    * is holding a stale copy. In-memory, like the marker it is compared to.
    */
@@ -454,7 +454,7 @@ export class DocStore {
    *
    * This file is written by exactly one process — us — so the cache is
    * authoritative between writes, and `persistDocNow` refreshes it. Before
-   * this, every `list()` stat'd every doc: `GET /api/docs` alone was ~11k
+   * this, every `list()` stat'd every doc: one docs listing alone was ~11k
    * syscalls per request against the measured corpus, and `list()` is called
    * two or three times over by the workspace-thread and grouped-diff views.
    * Deleting an entry is always safe — the next read re-stats.
@@ -1474,7 +1474,7 @@ export class DocStore {
     // BLOCKING read inside `attachFile`. That is the door the 2026-09-04
     // outage came through, and closing only the request routes left it wide:
     // the per-request prewarm reads docIds out of the URL, so a docId in a
-    // request BODY (`POST /api/docs`), a route that fans out over a board's
+    // request BODY (the docs create route), a route that fans out over a board's
     // docIds (`listThreads` from the home queue, the workspace listing, the
     // archive route) and every background timer reached this line with
     // nothing in hand and opened the file on the only thread that runs
@@ -1648,7 +1648,7 @@ export class DocStore {
     // here — the three creation routes, both bind paths, the lazy sidebar
     // open, the task projection, and hydration — so the entitlement question
     // is asked once. Deliberately not an enumeration of entry points: the
-    // enumeration is what missed `POST /api/docs`.
+    // enumeration is what missed the docs create route.
     if ((opts?.authority ?? 'caller') === 'caller' && isReservedDocId(docId)) {
       throw new ReservedDocIdError(docId);
     }

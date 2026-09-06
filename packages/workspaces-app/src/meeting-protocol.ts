@@ -194,9 +194,9 @@ export function parseMeetingServerMessage(raw: unknown): MeetingServerMessage | 
   }
 }
 /** The doc's audio socket on this host. Same scheme rule as the Yjs socket. */
-export function meetingSocketUrl(docId: string): string {
+export function meetingSocketUrl(workspaceId: string, docId: string): string {
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-  return `${scheme}://${location.host}${meetingSocketPath(docId)}`;
+  return `${scheme}://${location.host}${meetingSocketPath(workspaceId, docId)}`;
 }
 
 /**

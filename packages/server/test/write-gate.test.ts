@@ -17,6 +17,9 @@ import {
 
 const headers = (h: Record<string, string>): Headers => new Headers(h);
 
+/** The board this file's docs, tasks and reviews are filed under. */
+const WS = 'w-1';
+
 describe('telling a browser from an agent', () => {
   it('calls a request with no Origin and no Sec-Fetch-* an agent', () => {
     // Every MCP tool, every curl, every webhook. They cannot sign in and must
@@ -66,19 +69,19 @@ describe('which requests the gate governs', () => {
   it('never governs a read', () => {
     // Reading stays open to everyone — the decision this gate was built to.
     for (const m of ['GET', 'HEAD', 'get', 'head']) {
-      expect(isGatedWrite(m, '/api/docs')).toBe(false);
+      expect(isGatedWrite(m, `/workspaces/${WS}/docs`)).toBe(false);
     }
   });
 
   it('never governs a preflight', () => {
     // OPTIONS is answered above the gate anyway; refusing it would break the
     // widget's cross-origin writes before the real request was ever sent.
-    expect(isGatedWrite('OPTIONS', '/api/docs')).toBe(false);
+    expect(isGatedWrite('OPTIONS', `/workspaces/${WS}/docs`)).toBe(false);
   });
 
   it('governs every mutating method', () => {
     for (const m of ['POST', 'PUT', 'PATCH', 'DELETE', 'post']) {
-      expect(isGatedWrite(m, '/api/docs/d1/threads')).toBe(true);
+      expect(isGatedWrite(m, `/workspaces/${WS}/docs/d1/threads`)).toBe(true);
     }
   });
 
@@ -127,12 +130,12 @@ describe('which requests the gate governs', () => {
     // reason, and the refusal also raised a blocking sign-in modal on plain
     // page load.
     for (const p of [
-      '/api/reviews/rev-1/editable-file',
-      '/api/reviews/rev-1/context-file',
+      `/workspaces/${WS}/reviews/rev-1/editable-file`,
+      `/workspaces/${WS}/reviews/rev-1/context-file`,
       // Both prefixes: `/workspaces/<id>/…` is the live alias every open
       // browser tab and un-restartable plugin bundle still calls.
-      '/api/reviews/rev-1/editable-file',
-      '/api/reviews/rev-1/context-file',
+      `/workspaces/${WS}/reviews/rev-1/editable-file`,
+      `/workspaces/${WS}/reviews/rev-1/context-file`,
     ]) {
       expect(isReadShapedPost(p)).toBe(true);
       expect(isGatedWrite('POST', p)).toBe(false);
@@ -143,12 +146,12 @@ describe('which requests the gate governs', () => {
     // The control. These are real writes on the very same prefix, and an
     // exemption that took them too would be a hole rather than a fix.
     for (const p of [
-      '/api/reviews/rev-1/refresh',
-      '/api/reviews/rev-1/groups',
-      '/api/reviews/rev-1/editable-file/extra',
-      '/api/reviews/rev-1/editable-fileX',
-      '/api/reviews/editable-file',
-      '/api/reviews/rev-1/sub/context-file',
+      `/workspaces/${WS}/reviews/rev-1/refresh`,
+      `/workspaces/${WS}/reviews/rev-1/groups`,
+      `/workspaces/${WS}/reviews/rev-1/editable-file/extra`,
+      `/workspaces/${WS}/reviews/rev-1/editable-fileX`,
+      `/workspaces/${WS}/reviews/editable-file?format=json`,
+      `/workspaces/${WS}/reviews/rev-1/sub/context-file`,
     ]) {
       expect(isReadShapedPost(p)).toBe(false);
       expect(isGatedWrite('POST', p)).toBe(true);

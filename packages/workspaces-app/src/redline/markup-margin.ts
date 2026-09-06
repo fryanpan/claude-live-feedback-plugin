@@ -2,6 +2,7 @@ import { type Thread, suggestOps, threadRenderKey } from '@feedback/core';
 import type { EditorView } from '@tiptap/pm/view';
 import { balloonMarginVisible } from '../card-placement.ts';
 import { keptComposerFocus, restoreComposerFocus } from '../composer-keep.ts';
+import { api } from '../doc-path.ts';
 import { showToast } from '../doc/chrome-dom.ts';
 import { COMPOSER_MOUNTED_EVENT } from '../md-composer.ts';
 import type { MountScope } from '../mount-scope.ts';
@@ -288,7 +289,7 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     relayout();
     try {
       const res = await fetch(
-        `/api/docs/${encodeURIComponent(docId)}/suggestions/${encodeURIComponent(sid)}/${action}`,
+        api(`docs/${encodeURIComponent(docId)}/suggestions/${encodeURIComponent(sid)}/${action}`),
         { method: 'POST' },
       );
       if (!res.ok) {

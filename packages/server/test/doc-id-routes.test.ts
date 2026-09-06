@@ -22,9 +22,13 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-fixture', name: 'Fixture Person', kind: 'known', color: '#2e7dd7' };
 const ALIAS = 'the-readable-name';
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('a doc answers to its readable alias everywhere it answers at all', () => {
   let handle: ServerHandle;
@@ -55,8 +59,9 @@ describe('a doc answers to its readable alias everywhere it answers at all', () 
     writeFileSync(join(folder, 'plan.md'), '# Plan\n\nA paragraph to anchor a thread on.\n');
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     const created = (await (
-      await post('/api/docs', {
+      await post(`/workspaces/${WS}/docs`, {
         docId: ALIAS,
         type: 'markdown',
         sourceUrl: join(folder, 'plan.md'),
@@ -80,10 +85,10 @@ describe('a doc answers to its readable alias everywhere it answers at all', () 
   describe('inside the canonicalizing block', () => {
     it('reads meta, content and status by the alias, reporting the minted id', async () => {
       for (const path of ['', '/content', '/status']) {
-        const r = await local(`/api/docs/${ALIAS}${path}`);
+        const r = await local(`/workspaces/${WS}/docs/${ALIAS}${path}?format=json`);
         expect(r.status).toBe(200);
       }
-      const meta = (await (await local(`/api/docs/${ALIAS}`)).json()) as {
+      const meta = (await (await local(`/workspaces/${WS}/docs/${ALIAS}?format=json`)).json()) as {
         meta: { docId: string; alias?: string };
       };
       expect(meta.meta.docId).toBe(mintedId);
@@ -91,7 +96,7 @@ describe('a doc answers to its readable alias everywhere it answers at all', () 
     });
 
     it('writes a thread by the alias and reads it back by the minted id', async () => {
-      const created = await post(`/api/docs/${ALIAS}/threads`, {
+      const created = await post(`/workspaces/${WS}/docs/${ALIAS}/threads`, {
         author: PERSON,
         text: 'A comment posted through the readable name.',
         anchor: {
@@ -104,14 +109,14 @@ describe('a doc answers to its readable alias everywhere it answers at all', () 
 
       // The write landed on the DOC, not on a second doc named by the alias.
       const byMinted = (await (
-        await local(`/api/docs/${encodeURIComponent(mintedId)}/threads`)
+        await local(`/workspaces/${WS}/docs/${encodeURIComponent(mintedId)}/threads`)
       ).json()) as { threads: Array<{ comments: Array<{ text: string }> }> };
       expect(byMinted.threads).toHaveLength(1);
       expect(byMinted.threads[0]?.comments[0]?.text).toContain('readable name');
 
       // And exactly one doc exists, which is what "two spellings, one doc"
       // has to mean on disk as well as in the map.
-      const listed = (await (await local('/api/docs')).json()) as {
+      const listed = (await (await local(`/workspaces/${WS}/docs`)).json()) as {
         docs: Array<{ docId: string }>;
       };
       expect(listed.docs.filter((d) => d.docId === mintedId)).toHaveLength(1);
@@ -125,7 +130,7 @@ describe('a doc answers to its readable alias everywhere it answers at all', () 
         workspace: { id: string };
       };
       const { thread } = (await (
-        await post(`/api/docs/${ALIAS}/threads`, {
+        await post(`/workspaces/${WS}/docs/${ALIAS}/threads`, {
           author: PERSON,
           text: 'This one should become a task.',
           anchor: {
@@ -136,7 +141,7 @@ describe('a doc answers to its readable alias everywhere it answers at all', () 
         })
       ).json()) as { thread: { id: string } };
 
-      const promoted = await post(`/api/docs/${ALIAS}/threads/${thread.id}/promote`, {
+      const promoted = await post(`/workspaces/${WS}/docs/${ALIAS}/threads/${thread.id}/promote`, {
         workspaceId: ws.workspace.id,
         author: PERSON,
         title: 'Promoted through the readable name',
@@ -148,7 +153,7 @@ describe('a doc answers to its readable alias everywhere it answers at all', () 
     });
 
     it('archives through the alias, and the archived doc stops resolving by either name', async () => {
-      const archived = await post(`/api/docs/${ALIAS}/archive`, {
+      const archived = await post(`/workspaces/${WS}/docs/${ALIAS}/archive`, {
         author: PERSON,
         reason: 'done with it',
       });
@@ -156,29 +161,34 @@ describe('a doc answers to its readable alias everywhere it answers at all', () 
 
       // Both spellings 404 now — the doc is gone, and an alias with no doc
       // must not keep answering.
-      expect((await local(`/api/docs/${ALIAS}`)).status).toBe(404);
-      expect((await local(`/api/docs/${encodeURIComponent(mintedId)}`)).status).toBe(404);
+      expect((await local(`/workspaces/${WS}/docs/${ALIAS}?format=json`)).status).toBe(404);
+      expect(
+        (await local(`/workspaces/${WS}/docs/${encodeURIComponent(mintedId)}?format=json`)).status,
+      ).toBe(404);
     });
 
     it('unarchives by the MINTED id, which is the id the archive listing hands back', async () => {
-      await post(`/api/docs/${ALIAS}/archive`, { author: PERSON });
+      await post(`/workspaces/${WS}/docs/${ALIAS}/archive`, { author: PERSON });
 
       // An archived doc has no doc, so there is nothing for an alias to
       // resolve against. The listing is where a caller gets the id that
       // works — asserted so the asymmetry is on the record rather than a
       // surprise someone rediscovers.
-      const listing = (await (await local('/api/reviews/archived')).json()) as {
+      const listing = (await (await local(`/workspaces/${WS}/reviews?archived=true`)).json()) as {
         docs: Array<{ docId: string }>;
       };
       expect(listing.docs.map((d) => d.docId)).toContain(mintedId);
 
-      const restored = await post(`/api/docs/${encodeURIComponent(mintedId)}/unarchive`, {
-        author: PERSON,
-      });
+      const restored = await post(
+        `/workspaces/${WS}/docs/${encodeURIComponent(mintedId)}/unarchive`,
+        {
+          author: PERSON,
+        },
+      );
       expect(restored.status).toBe(200);
 
       // And the readable name resolves again, having travelled with the doc.
-      const again = (await (await local(`/api/docs/${ALIAS}`)).json()) as {
+      const again = (await (await local(`/workspaces/${WS}/docs/${ALIAS}?format=json`)).json()) as {
         meta: { docId: string };
       };
       expect(again.meta.docId).toBe(mintedId);
@@ -209,26 +219,35 @@ describe('a doc answers to its readable alias everywhere it answers at all', () 
       const ws = (await (await post('/workspaces', { name: 'attach-board' })).json()) as {
         workspace: { id: string };
       };
-      const attached = await post(`/workspaces/${ws.workspace.id}/docs`, { docId: ALIAS });
+      const attached = await post(`/workspaces/${ws.workspace.id}/docs:attach`, { docId: ALIAS });
       expect(attached.status).toBe(200);
       const { workspace } = (await attached.json()) as { workspace: { docIds?: string[] } };
       expect(workspace.docIds).toContain(mintedId);
       expect(workspace.docIds).not.toContain(ALIAS);
     });
 
-    it('redirects /review/<alias> onto the canonical address', async () => {
+    it('404s /review/<alias> — the shape is gone, alias or not', async () => {
+      // It used to redirect onto the canonical address. No old-path support
+      // in this cutover: the retired spellings are deleted rather than
+      // redirected, because a redirect keeps the old shape alive in every
+      // comment thread that carries one.
       const r = await local(`/review/${ALIAS}`, { redirect: 'manual' });
-      expect(r.status).toBe(302);
-      expect(r.headers.get('location')).toContain(mintedId);
-      expect(r.headers.get('location')).not.toContain(ALIAS);
+      expect(r.status).toBe(404);
+      // Positive control on the same alias in the same pass: the canonical
+      // address resolves it, so the 404 is the retired shape rather than the
+      // alias failing to resolve.
+      expect((await local(`/workspaces/${WS}/docs/${ALIAS}?format=json`)).status).toBe(200);
     });
 
     it('opens the event stream on the doc, not on a channel named by the alias', async () => {
       // Both addresses must reach the SAME channel: a watcher subscribed by
       // the readable name and a writer firing on the canonical one have to
       // meet, and 404 vs 200 is the observable half of that here.
-      expect((await local(`/events/${ALIAS}`)).status).not.toBe(404);
-      expect((await local(`/events/${encodeURIComponent(mintedId)}`)).status).not.toBe(404);
+      expect((await local(`/workspaces/${WS}/docs/${ALIAS}/events:stream`)).status).not.toBe(404);
+      expect(
+        (await local(`/workspaces/${WS}/docs/${encodeURIComponent(mintedId)}/events:stream`))
+          .status,
+      ).not.toBe(404);
     });
   });
 });

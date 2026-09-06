@@ -33,7 +33,7 @@ interface HomePayload {
   generating: boolean;
 }
 
-function makeHarness(summarizer?: ThreadSummarizer) {
+async function makeHarness(summarizer?: ThreadSummarizer) {
   const dataDir = mkdtempSync(join(tmpdir(), 'home-routes-'));
   const handle = createServer({ port: 0, dataDir, ...(summarizer ? { summarizer } : {}) });
   const base = `http://localhost:${handle.port}`;
@@ -54,18 +54,18 @@ function makeHarness(summarizer?: ThreadSummarizer) {
   return { dataDir, handle, local, post: send('POST'), put: send('PUT') };
 }
 
-async function makeWorkspace(h: ReturnType<typeof makeHarness>): Promise<string> {
+async function makeWorkspace(h: Awaited<ReturnType<typeof makeHarness>>): Promise<string> {
   const res = await h.post('/workspaces', { name: 'Synthetic Board', goal: 'Ship it' });
   const data = (await res.json()) as { workspace: { id: string } };
   return data.workspace.id;
 }
 
 describe('home routes — deterministic server (no summarizer)', () => {
-  let h: ReturnType<typeof makeHarness>;
+  let h: Awaited<ReturnType<typeof makeHarness>>;
   let ws: string;
 
   beforeAll(async () => {
-    h = makeHarness();
+    h = await makeHarness();
     ws = await makeWorkspace(h);
   });
   afterAll(async () => {
@@ -219,11 +219,11 @@ describe('home routes — deterministic server (no summarizer)', () => {
  * "Nothing is queued", not a pointer at a queue that renders nothing.
  */
 describe('home brief queue count — blockers are not review items', () => {
-  let h: ReturnType<typeof makeHarness>;
+  let h: Awaited<ReturnType<typeof makeHarness>>;
   let ws: string;
 
   beforeAll(async () => {
-    h = makeHarness();
+    h = await makeHarness();
     ws = await makeWorkspace(h);
   });
   afterAll(async () => {
@@ -252,7 +252,7 @@ describe('home brief queue count — blockers are not review items', () => {
     });
     expect(dependent.status).toBe(200);
     const dependentId = ((await dependent.json()) as { task: { id: string } }).task.id;
-    const wired = await h.post(`/api/tasks/${dependentId}/after`, {
+    const wired = await h.post(`/workspaces/${ws}/tasks/${dependentId}/after`, {
       after: [blockerId],
       author: AGENT,
     });
@@ -280,7 +280,7 @@ describe('home brief queue count — blockers are not review items', () => {
 });
 
 describe('home routes — generated brief (stub summarizer)', () => {
-  let h: ReturnType<typeof makeHarness>;
+  let h: Awaited<ReturnType<typeof makeHarness>>;
   let ws: string;
   let calls: string[];
 
@@ -295,7 +295,7 @@ describe('home routes — generated brief (stub summarizer)', () => {
         headers: { 'content-type': 'application/json' },
       });
     }) as unknown as typeof fetch;
-    h = makeHarness(new ThreadSummarizer({ apiKey: 'test-key', fetchImpl: impl }));
+    h = await makeHarness(new ThreadSummarizer({ apiKey: 'test-key', fetchImpl: impl }));
     ws = await makeWorkspace(h);
     await h.post(`/workspaces/${ws}/tasks`, {
       title: 'Ship the fuzzy matcher',
@@ -405,12 +405,12 @@ describe('the queue count matches what Home places — thread rows', () => {
    * included inferred rows Home never drew — "something needs you" printed
    * over a list that showed nothing.
    */
-  let h: ReturnType<typeof makeHarness>;
+  let h: Awaited<ReturnType<typeof makeHarness>>;
   let ws: string;
   let taskId: string;
 
   beforeAll(async () => {
-    h = makeHarness();
+    h = await makeHarness();
     ws = await makeWorkspace(h);
     const created = await h.post(`/workspaces/${ws}/tasks`, {
       title: 'Sweep the cache dir',
@@ -438,7 +438,7 @@ describe('the queue count matches what Home places — thread rows', () => {
   };
 
   it('counts a status note as nothing, because Home draws nothing for it', async () => {
-    const opened = await h.post(`/api/docs/task:${taskId}/threads`, {
+    const opened = await h.post(`/workspaces/${ws}/docs/task:${taskId}/threads`, {
       anchor: { kind: 'subject' },
       text: 'Started on the sweep; nothing needs a look yet.',
       author: AGENT,
@@ -452,17 +452,20 @@ describe('the queue count matches what Home places — thread rows', () => {
   it('counts a surviving direct ask, and stops when a person answers it', async () => {
     // A person speaks first — that seeds the roster of addressable names the
     // ask detector reads — then the agent asks them by name.
-    const opened = await h.post(`/api/docs/task:${taskId}/threads`, {
+    const opened = await h.post(`/workspaces/${ws}/docs/task:${taskId}/threads`, {
       anchor: { kind: 'subject' },
       text: 'How is the sweep going?',
       author: PERSON,
     });
     expect(opened.status).toBe(200);
     const threadId = ((await opened.json()) as { thread: { id: string } }).thread.id;
-    const asked = await h.post(`/api/docs/task:${taskId}/threads/${threadId}/comments`, {
-      text: 'Riley — should the sweep also purge the staging dir?',
-      author: AGENT,
-    });
+    const asked = await h.post(
+      `/workspaces/${ws}/docs/task:${taskId}/threads/${threadId}/comments`,
+      {
+        text: 'Riley — should the sweep also purge the staging dir?',
+        author: AGENT,
+      },
+    );
     expect(asked.status).toBe(200);
 
     const shipped = await rows();
@@ -471,17 +474,20 @@ describe('the queue count matches what Home places — thread rows', () => {
     expect(await briefLine()).toContain('What needs your review is queued below.');
 
     // The person's reply ends the unanswered run — no resolve, no flag.
-    const answered = await h.post(`/api/docs/task:${taskId}/threads/${threadId}/comments`, {
-      text: 'Yes, purge it too.',
-      author: PERSON,
-    });
+    const answered = await h.post(
+      `/workspaces/${ws}/docs/task:${taskId}/threads/${threadId}/comments`,
+      {
+        text: 'Yes, purge it too.',
+        author: PERSON,
+      },
+    );
     expect(answered.status).toBe(200);
     expect(await rows()).toEqual([]);
     expect(await briefLine()).toContain('Nothing is queued for your review right now.');
   });
 
   it('counts a declared item until it is resolved', async () => {
-    const declared = await h.post(`/api/docs/task:${taskId}/threads`, {
+    const declared = await h.post(`/workspaces/${ws}/docs/task:${taskId}/threads`, {
       anchor: { kind: 'subject' },
       text: 'The sweep schedule needs a call before this merges.',
       author: AGENT,
@@ -498,9 +504,12 @@ describe('the queue count matches what Home places — thread rows', () => {
     expect(shipped[0]).toMatchObject({ kind: 'task-thread', band: 'declared' });
     expect(await briefLine()).toContain('What needs your review is queued below.');
 
-    const resolved = await h.post(`/api/docs/task:${taskId}/threads/${threadId}/resolve`, {
-      author: PERSON,
-    });
+    const resolved = await h.post(
+      `/workspaces/${ws}/docs/task:${taskId}/threads/${threadId}/resolve`,
+      {
+        author: PERSON,
+      },
+    );
     expect(resolved.status).toBe(200);
     expect(await rows()).toEqual([]);
     expect(await briefLine()).toContain('Nothing is queued for your review right now.');

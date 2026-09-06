@@ -19,6 +19,7 @@
 import type { FeedbackClient, User } from '@feedback/core';
 import type { BootHistory, BootLocation, BootStorage, BootWindow } from '../boot-env.ts';
 import { renderConnectionBanner, watchConnection } from '../connection-state.ts';
+import { boardSocketUrl, docSocketUrl } from '../doc-path.ts';
 import { ensureUserIdentity } from '../identity-prompt.ts';
 import { wireKeyboardInset } from '../keyboard-inset.ts';
 import { pageSentry } from '../sentry-page.ts';
@@ -130,8 +131,7 @@ export async function bootBoard(env: BoardBootEnv): Promise<void> {
   }
 
   function wsUrl(docId: string, type: string): string {
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    return `${proto}://${location.host}/y/${encodeURIComponent(docId)}?type=${encodeURIComponent(type)}`;
+    return docSocketUrl(location, docId, type, workspaceIdFromPath());
   }
 
   // A refused write raises a sign-in prompt wherever it happened. The board's
@@ -242,7 +242,7 @@ export async function bootBoard(env: BoardBootEnv): Promise<void> {
   });
 
   // ── Realtime: the ws:<id> board doc ────────────────────────────────────
-  const client = connect(wsUrl(`ws:${workspaceId}`, 'workspace'));
+  const client = connect(boardSocketUrl(location, workspaceId));
   installStaleClientNotice(client);
   // The board had no reading of its own connection at all, in any viewport —
   // during a restart it just stopped updating. Wired here rather than in

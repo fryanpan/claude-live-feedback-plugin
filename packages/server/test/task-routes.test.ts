@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import type { Task } from '../src/tasks.ts';
 import { type GoalIds, seedGoalsOverHttp } from './goal-seed.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' };
 const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known', color: '#888888' };
@@ -24,6 +25,9 @@ const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known',
  *  accidentally a test of the gate. */
 const DECISION_BODY =
   'Which of these two? Both land this week; the second costs a migration. Blocked until answered: the PR.';
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('board workspace + task routes', () => {
   let handle: ServerHandle;
@@ -47,12 +51,13 @@ describe('board workspace + task routes', () => {
       body: JSON.stringify(body),
     });
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'taskr-data-'));
     folder = mkdtempSync(join(tmpdir(), 'taskr-folder-'));
     writeFileSync(join(folder, 'README.md'), '# Entry\n\nRead me.\n');
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterAll(async () => {
@@ -67,6 +72,7 @@ describe('board workspace + task routes', () => {
       const { workspace } = (await r.json()) as {
         workspace: { id: string; name: string };
       };
+      WS = workspace.id;
       expect(workspace.name).toBe('search-revamp');
       expect(workspace.id.length).toBeGreaterThanOrEqual(10);
 
@@ -94,13 +100,17 @@ describe('board workspace + task routes', () => {
     });
   });
 
-  describe('POST /workspaces/:id/docs (attach_doc)', () => {
+  describe('POST /workspaces/:id/docs:attach (attach_doc)', () => {
     it('attaches an existing doc; the workspace lists it; nothing is migrated', async () => {
       const mdPath = join(dataDir, 'plan.md');
       writeFileSync(mdPath, '# Plan\n\nBody.\n');
       const planDocId = (
         (await (
-          await post('/api/docs', { docId: 'board-plan-doc', type: 'markdown', sourceUrl: mdPath })
+          await post(`/workspaces/${WS}/docs`, {
+            docId: 'board-plan-doc',
+            type: 'markdown',
+            sourceUrl: mdPath,
+          })
         ).json()) as { docId: string }
       ).docId;
 
@@ -108,7 +118,9 @@ describe('board workspace + task routes', () => {
         workspace: { id: string };
       };
       // Attached by the readable name…
-      const r = await post(`/workspaces/${ws.workspace.id}/docs`, { docId: 'board-plan-doc' });
+      const r = await post(`/workspaces/${ws.workspace.id}/docs:attach`, {
+        docId: 'board-plan-doc',
+      });
       expect(r.status).toBe(200);
 
       const got = (await (await local(`/workspaces/${ws.workspace.id}?format=json`)).json()) as {
@@ -118,7 +130,7 @@ describe('board workspace + task routes', () => {
       // cannot become two rows on the board.
       expect(got.workspace.docIds).toEqual([planDocId]);
       // The doc itself keeps working at its current URL — no migration.
-      const doc = await local('/api/docs/board-plan-doc');
+      const doc = await local(`/workspaces/${WS}/docs/board-plan-doc?format=json`);
       expect(doc.status).toBe(200);
       const meta = (await doc.json()) as { meta: { workspaceId?: string } };
       expect(meta.meta.workspaceId).toBeUndefined();
@@ -130,7 +142,7 @@ describe('board workspace + task routes', () => {
       const ws = (await (await post('/workspaces', { name: 'attach-review-ws' })).json()) as {
         workspace: { id: string };
       };
-      const r = await post(`/workspaces/${ws.workspace.id}/docs`, { docId: reviewId });
+      const r = await post(`/workspaces/${ws.workspace.id}/docs:attach`, { docId: reviewId });
       expect(r.status).toBe(200);
     });
 
@@ -138,9 +150,9 @@ describe('board workspace + task routes', () => {
       const ws = (await (await post('/workspaces', { name: 'attach-404-ws' })).json()) as {
         workspace: { id: string };
       };
-      const noDoc = await post(`/workspaces/${ws.workspace.id}/docs`, { docId: 'no-such' });
+      const noDoc = await post(`/workspaces/${ws.workspace.id}/docs:attach`, { docId: 'no-such' });
       expect(noDoc.status).toBe(404);
-      const noWs = await post('/workspaces/w-nope/docs', { docId: 'board-plan-doc' });
+      const noWs = await post('/workspaces/w-nope/docs:attach', { docId: 'board-plan-doc' });
       expect(noWs.status).toBe(404);
     });
 
@@ -148,7 +160,7 @@ describe('board workspace + task routes', () => {
       const ws = (await (await post('/workspaces', { name: 'attach-400-ws' })).json()) as {
         workspace: { id: string };
       };
-      const r = await post(`/workspaces/${ws.workspace.id}/docs`, {});
+      const r = await post(`/workspaces/${ws.workspace.id}/docs:attach`, {});
       expect(r.status).toBe(400);
     });
   });
@@ -159,6 +171,7 @@ describe('board workspace + task routes', () => {
     beforeAll(async () => {
       const r = await post('/workspaces', { name: 'task-ws', goal: 'Ship.' });
       wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+      WS = wsId;
     });
 
     /**
@@ -296,7 +309,7 @@ describe('board workspace + task routes', () => {
         })
       ).json()) as { task: Task };
 
-      const refused = await post(`/api/tasks/${work.task.id}/transition`, {
+      const refused = await post(`/workspaces/${WS}/tasks/${work.task.id}/transition`, {
         to: 'in-progress',
         author: AGENT,
       });
@@ -310,8 +323,11 @@ describe('board workspace + task routes', () => {
       expect(body.blockers[0]?.enforce).toBe(true);
 
       // Positive control: complete the gate and the same call succeeds.
-      await post(`/api/tasks/${gate.task.id}/transition`, { to: 'done', author: PERSON });
-      const allowed = await post(`/api/tasks/${work.task.id}/transition`, {
+      await post(`/workspaces/${WS}/tasks/${gate.task.id}/transition`, {
+        to: 'done',
+        author: PERSON,
+      });
+      const allowed = await post(`/workspaces/${WS}/tasks/${work.task.id}/transition`, {
         to: 'in-progress',
         author: AGENT,
       });
@@ -391,7 +407,7 @@ describe('board workspace + task routes', () => {
       });
       expect(both.status).toBe(200);
       const work = ((await both.json()) as { task: Task }).task;
-      const refused = await post(`/api/tasks/${work.id}/transition`, {
+      const refused = await post(`/workspaces/${WS}/tasks/${work.id}/transition`, {
         to: 'in-progress',
         author: AGENT,
       });
@@ -570,7 +586,7 @@ describe('board workspace + task routes', () => {
       });
       const { task } = (await created.json()) as { task: Task };
 
-      const r = await post(`/api/tasks/${task.id}/links`, {
+      const r = await post(`/workspaces/${WS}/tasks/${task.id}/links`, {
         author: AGENT,
         add: [{ kind: 'thread', docId: 'plan-doc' }],
       });
@@ -602,6 +618,7 @@ describe('board workspace + task routes', () => {
     beforeAll(async () => {
       const r = await post('/workspaces', { name: 'risk-ws' });
       wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+      WS = wsId;
     });
 
     const mkTask = async (title: string, riskTier?: string): Promise<Task> => {
@@ -609,7 +626,7 @@ describe('board workspace + task routes', () => {
       const task = ((await r.json()) as { task: Task }).task;
       if (riskTier) {
         // The 0.1.54-and-earlier set_task_goal payload, `riskTier` included.
-        const g = await post(`/api/tasks/${task.id}/goal`, {
+        const g = await post(`/workspaces/${WS}/tasks/${task.id}/goal`, {
           goal: 'chores',
           author: AGENT,
           riskTier,
@@ -635,7 +652,7 @@ describe('board workspace + task routes', () => {
       // This route used to answer 400 here. It must not any more: a value the
       // server has stopped caring about cannot be a reason to fail a caller.
       const t = await mkTask('Nonsense tier');
-      const g = await post(`/api/tasks/${t.id}/goal`, {
+      const g = await post(`/workspaces/${WS}/tasks/${t.id}/goal`, {
         goal: 'chores',
         author: AGENT,
         riskTier: 'purple',
@@ -645,7 +662,7 @@ describe('board workspace + task routes', () => {
 
     it('an agent forward move on a formerly-red task is no longer refused', async () => {
       const red = await mkTask('Flip the repo public', 'red');
-      const moved = await post(`/api/tasks/${red.id}/transition`, {
+      const moved = await post(`/workspaces/${WS}/tasks/${red.id}/transition`, {
         to: 'in-progress',
         author: AGENT,
       });
@@ -659,7 +676,7 @@ describe('board workspace + task routes', () => {
     it('a transition still carrying confirmed:true succeeds, and records no flag', async () => {
       const yellow = await mkTask('Send the partner update', 'yellow');
       // Exactly what a 0.1.54 bundle sends after asking its human.
-      const r = await post(`/api/tasks/${yellow.id}/transition`, {
+      const r = await post(`/workspaces/${WS}/tasks/${yellow.id}/transition`, {
         to: 'in-progress',
         author: AGENT,
         confirmed: true,
@@ -685,7 +702,7 @@ describe('board workspace + task routes', () => {
           afterEnforce: [blocker.id],
         })
       ).json()) as { task: Task };
-      const refused = await post(`/api/tasks/${dependent.task.id}/transition`, {
+      const refused = await post(`/workspaces/${WS}/tasks/${dependent.task.id}/transition`, {
         to: 'done',
         author: AGENT,
       });
@@ -694,12 +711,13 @@ describe('board workspace + task routes', () => {
     });
   });
 
-  describe('POST /api/tasks/:id/transition', () => {
+  describe(`POST /workspaces/${WS}/tasks/:id/transition`, () => {
     let wsId: string;
 
     beforeAll(async () => {
       const r = await post('/workspaces', { name: 'transition-ws' });
       wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+      WS = wsId;
     });
 
     const mkTask = async (title: string): Promise<Task> => {
@@ -709,7 +727,7 @@ describe('board workspace + task routes', () => {
 
     it('attributes the actor through the route: person vs agent', async () => {
       const t = await mkTask('attributed');
-      const r = await post(`/api/tasks/${t.id}/transition`, {
+      const r = await post(`/workspaces/${WS}/tasks/${t.id}/transition`, {
         to: 'in-progress',
         author: PERSON,
         note: 'kicking off',
@@ -723,14 +741,17 @@ describe('board workspace + task routes', () => {
       });
       expect(task.transitions[0]?.note).toBe('kicking off');
 
-      const r2 = await post(`/api/tasks/${t.id}/transition`, { to: 'done', author: AGENT });
+      const r2 = await post(`/workspaces/${WS}/tasks/${t.id}/transition`, {
+        to: 'done',
+        author: AGENT,
+      });
       const done = ((await r2.json()) as { task: Task }).task;
       expect(done.transitions[1]?.by.kind).toBe('agent');
     });
 
     it('stamps note + usage through the route and reads back via list', async () => {
       const t = await mkTask('noted');
-      const r = await post(`/api/tasks/${t.id}/transition`, {
+      const r = await post(`/workspaces/${WS}/tasks/${t.id}/transition`, {
         to: 'done',
         author: AGENT,
         note: 'merged as #402',
@@ -748,7 +769,10 @@ describe('board workspace + task routes', () => {
 
     it('applies a done with nothing attached to it', async () => {
       const t = await mkTask('bare done');
-      const r = await post(`/api/tasks/${t.id}/transition`, { to: 'done', author: AGENT });
+      const r = await post(`/workspaces/${WS}/tasks/${t.id}/transition`, {
+        to: 'done',
+        author: AGENT,
+      });
       expect(r.status).toBe(200);
       const body = (await r.json()) as { task: Task };
       expect(body.task.status).toBe('done');
@@ -756,11 +780,17 @@ describe('board workspace + task routes', () => {
 
     it('400s a bad target status, 400s a missing author, 404s an unknown task', async () => {
       const t = await mkTask('errors');
-      const bad = await post(`/api/tasks/${t.id}/transition`, { to: 'held', author: AGENT });
+      const bad = await post(`/workspaces/${WS}/tasks/${t.id}/transition`, {
+        to: 'held',
+        author: AGENT,
+      });
       expect(bad.status).toBe(400);
-      const noAuthor = await post(`/api/tasks/${t.id}/transition`, { to: 'done' });
+      const noAuthor = await post(`/workspaces/${WS}/tasks/${t.id}/transition`, { to: 'done' });
       expect(noAuthor.status).toBe(400);
-      const missing = await post('/api/tasks/t-ghost/transition', { to: 'done', author: AGENT });
+      const missing = await post(`/workspaces/${WS}/tasks/t-ghost/transition`, {
+        to: 'done',
+        author: AGENT,
+      });
       expect(missing.status).toBe(404);
     });
   });
@@ -772,12 +802,13 @@ describe('board workspace + task routes', () => {
    * promise. What this block adds is the route-layer half: the ERROR shapes
    * an old caller already handles are unchanged, and nothing is written.
    */
-  describe('POST /api/tasks/:id/evidence (retired, kept as a no-op)', () => {
+  describe(`POST /workspaces/${WS}/tasks/:id/evidence (retired, kept as a no-op)`, () => {
     let wsId: string;
 
     beforeAll(async () => {
       const r = await post('/workspaces', { name: 'evidence-ws' });
       wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+      WS = wsId;
     });
 
     const mkTask = async (title: string): Promise<Task> => {
@@ -794,9 +825,9 @@ describe('board workspace + task routes', () => {
 
     it('accepts the old payload and writes nothing to the transition', async () => {
       const t = await mkTask('dropped evidence');
-      await post(`/api/tasks/${t.id}/transition`, { to: 'done', author: AGENT });
+      await post(`/workspaces/${WS}/tasks/${t.id}/transition`, { to: 'done', author: AGENT });
 
-      const r = await post(`/api/tasks/${t.id}/evidence`, {
+      const r = await post(`/workspaces/${WS}/tasks/${t.id}/evidence`, {
         author: AGENT,
         evidence: { commit: '621f371' },
         note: 'the field was dropped on my side',
@@ -812,9 +843,11 @@ describe('board workspace + task routes', () => {
 
     it('still 400s a missing author and 404s an unknown task', async () => {
       const t = await mkTask('evidence errors');
-      const noAuthor = await post(`/api/tasks/${t.id}/evidence`, { evidence: { commit: 'abc' } });
+      const noAuthor = await post(`/workspaces/${WS}/tasks/${t.id}/evidence`, {
+        evidence: { commit: 'abc' },
+      });
       expect(noAuthor.status).toBe(400);
-      const ghost = await post('/api/tasks/t-ghost/evidence', {
+      const ghost = await post(`/workspaces/${WS}/tasks/t-ghost/evidence`, {
         author: AGENT,
         evidence: { commit: 'abc' },
       });
@@ -823,8 +856,11 @@ describe('board workspace + task routes', () => {
 
     it('refuses a same-status re-send without pointing anywhere that is gone', async () => {
       const t = await mkTask('same status');
-      await post(`/api/tasks/${t.id}/transition`, { to: 'done', author: AGENT });
-      const retry = await post(`/api/tasks/${t.id}/transition`, { to: 'done', author: AGENT });
+      await post(`/workspaces/${WS}/tasks/${t.id}/transition`, { to: 'done', author: AGENT });
+      const retry = await post(`/workspaces/${WS}/tasks/${t.id}/transition`, {
+        to: 'done',
+        author: AGENT,
+      });
       expect(retry.status).toBe(400);
       const body = (await retry.json()) as { error: string; message?: string };
       expect(body.error).toBe('same-status');
@@ -837,6 +873,7 @@ describe('board workspace + task routes', () => {
     async function seed(): Promise<{ wsId: string; ids: Record<string, string>; G: GoalIds }> {
       const r = await post('/workspaces', { name: 'queue-ws', goal: 'Ship it.' });
       const wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+      WS = wsId;
       const G = await seedGoalsOverHttp(
         base,
         wsId,
@@ -886,6 +923,7 @@ describe('board workspace + task routes', () => {
     it('forwards assignee, limit and includeBlocked', async () => {
       const r = await post('/workspaces', { name: 'filter-ws', goal: 'Ship it.' });
       const wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+      WS = wsId;
       // PERSON for the same reason as `seed` above: queueable work, no triage.
       const mk = async (opts: Record<string, unknown>): Promise<string> => {
         const res = await post(`/workspaces/${wsId}/tasks`, { author: PERSON, ...opts });
@@ -926,6 +964,7 @@ describe('board workspace + task routes', () => {
       const { wsId, G } = await (async () => {
         const r = await post('/workspaces', { name: 'summary-ws', goal: 'Ship it.' });
         const id = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+        WS = id;
         const goals = await seedGoalsOverHttp(
           base,
           id,
@@ -971,6 +1010,7 @@ describe('board workspace + task routes', () => {
     it('lists an agent question on a task discussion, and drops it once a person answers', async () => {
       const r = await post('/workspaces', { name: 'review-ws', goal: 'Answer things.' });
       const wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+      WS = wsId;
       const t = await post(`/workspaces/${wsId}/tasks`, {
         author: AGENT,
         title: 'Pick a colour',
@@ -983,7 +1023,7 @@ describe('board workspace + task routes', () => {
       // thread on the task's own body doc is the same surface
       // `create_thread` writes to — and since 2026-08-21 only a DIRECT ask
       // reaches the queue, not every agent comment.
-      const made = await post(`/api/docs/${encodeURIComponent(bodyDoc)}/threads`, {
+      const made = await post(`/workspaces/${WS}/docs/${encodeURIComponent(bodyDoc)}/threads`, {
         author: PERSON,
         text: 'Banner colour needs a call.',
         anchor: { kind: 'subject' },
@@ -992,7 +1032,7 @@ describe('board workspace + task routes', () => {
       const threadId = ((await made.json()) as { thread: { id: string } }).thread.id;
       const askedText = 'Bryan — green or blue for the banner?';
       const askRes = await post(
-        `/api/docs/${encodeURIComponent(bodyDoc)}/threads/${encodeURIComponent(threadId)}/comments`,
+        `/workspaces/${WS}/docs/${encodeURIComponent(bodyDoc)}/threads/${encodeURIComponent(threadId)}/comments`,
         { author: AGENT, text: askedText },
       );
       expect(askRes.status).toBe(200);
@@ -1012,7 +1052,7 @@ describe('board workspace + task routes', () => {
 
       // …and a person's reply is the only thing that clears it.
       const replied = await post(
-        `/api/docs/${encodeURIComponent(bodyDoc)}/threads/${encodeURIComponent(threadId)}/comments`,
+        `/workspaces/${WS}/docs/${encodeURIComponent(bodyDoc)}/threads/${encodeURIComponent(threadId)}/comments`,
         { author: PERSON, text: 'blue' },
       );
       expect(replied.status).toBe(200);
@@ -1040,11 +1080,12 @@ describe('board workspace + task routes', () => {
     it('keeps a declared review item through an ordinary comment, and drops it on an answer', async () => {
       const r = await post('/workspaces', { name: 'declared-ws', goal: 'Answer things.' });
       const wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+      WS = wsId;
       const t = await post(`/workspaces/${wsId}/tasks`, { author: AGENT, title: 'Ship it' });
       const taskId = ((await t.json()) as { task: { id: string } }).task.id;
       const bodyDoc = encodeURIComponent(`task:${taskId}`);
 
-      const made = await post(`/api/docs/${bodyDoc}/threads`, {
+      const made = await post(`/workspaces/${WS}/docs/${bodyDoc}/threads`, {
         author: AGENT,
         text: 'Two ways to go, both fine.',
         anchor: { kind: 'subject' },
@@ -1066,7 +1107,7 @@ describe('board workspace + task routes', () => {
 
       // The reader says something that is not an answer — the exact act that
       // used to delete the card.
-      const chat = await post(`/api/docs/${bodyDoc}/threads/${threadId}/comments`, {
+      const chat = await post(`/workspaces/${WS}/docs/${bodyDoc}/threads/${threadId}/comments`, {
         author: PERSON,
         text: 'Reading this now, one sec.',
       });
@@ -1084,7 +1125,7 @@ describe('board workspace + task routes', () => {
       // Answering does clear it — the positive control, without which a route
       // that had simply stopped dropping anything would pass the assertion
       // above.
-      const answered = await post(`/api/docs/${bodyDoc}/threads/${threadId}/answer`, {
+      const answered = await post(`/workspaces/${WS}/docs/${bodyDoc}/threads/${threadId}/answer`, {
         author: PERSON,
         text: 'Neither — dim them on mobile only.',
         commentId,
@@ -1106,6 +1147,7 @@ describe('board workspace + task routes', () => {
     it('marks a question addressed to a person, and keeps it marked when an unrelated thread resolves', async () => {
       const r = await post('/workspaces', { name: 'direct-ws', goal: 'Answer things.' });
       const wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+      WS = wsId;
       const mkTask = async (title: string) => {
         const t = await post(`/workspaces/${wsId}/tasks`, { author: AGENT, title });
         return `task:${((await t.json()) as { task: { id: string } }).task.id}`;
@@ -1113,7 +1155,7 @@ describe('board workspace + task routes', () => {
       const seedDoc = await mkTask('Somewhere a person spoke');
       const askDoc = await mkTask('Pick a colour');
       const mkThread = async (docId: string, body: Record<string, unknown>) => {
-        const made = await post(`/api/docs/${encodeURIComponent(docId)}/threads`, {
+        const made = await post(`/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads`, {
           anchor: { kind: 'subject' },
           ...body,
         });
@@ -1146,7 +1188,7 @@ describe('board workspace + task routes', () => {
       // Resolving the person's own thread on ANOTHER task must not change who
       // counts as a person.
       const closed = await local(
-        `/api/docs/${encodeURIComponent(seedDoc)}/threads/${encodeURIComponent(seedThread)}/resolve`,
+        `/workspaces/${WS}/docs/${encodeURIComponent(seedDoc)}/threads/${encodeURIComponent(seedThread)}/resolve`,
         { method: 'POST' },
       );
       expect(closed.status).toBe(200);
@@ -1166,6 +1208,7 @@ describe('board workspace + task routes', () => {
     it('a created workspace survives into a fresh server on the same dataDir', async () => {
       const r = await post('/workspaces', { name: 'durable-ws', goal: 'Persist.' });
       const wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+      WS = wsId;
       await post(`/workspaces/${wsId}/tasks`, { author: AGENT, title: 'survives' });
       handle.tasks.flush();
 

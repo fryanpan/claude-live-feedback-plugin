@@ -21,6 +21,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { COMPRESS_MIN_BYTES, acceptsGzip, maybeCompress } from '../src/compress.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const json = (body: unknown, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), {
@@ -39,9 +40,12 @@ const bigDocs = () => ({
 });
 
 const req = (accept: string | null) =>
-  new Request('http://localhost/api/docs', {
+  new Request(`http://localhost/workspaces/${WS}/docs`, {
     headers: accept === null ? {} : { 'accept-encoding': accept },
   });
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('acceptsGzip', () => {
   it('reads gzip out of a real browser header', () => {
@@ -120,7 +124,7 @@ describe('maybeCompress', () => {
   });
 });
 
-describe('GET /api/docs over the wire', () => {
+describe(`GET /workspaces/${WS}/docs over the wire`, () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
@@ -132,12 +136,13 @@ describe('GET /api/docs over the wire', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'api-gzip-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     // Enough docs that the listing clears the threshold, as the real one does
     // by three orders of magnitude.
     for (let i = 0; i < 40; i++) {
       const p = join(dataDir, `f${i}.md`);
       writeFileSync(p, `# File ${i}\n\nBody.\n`);
-      const r = await fetch(`${base}/api/docs`, {
+      const r = await fetch(`${base}/workspaces/${WS}/docs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', host: `localhost:${handle.port}` },
         body: JSON.stringify({ docId: `gz-doc-${i}`, type: 'markdown', sourceUrl: p }),
@@ -153,7 +158,7 @@ describe('GET /api/docs over the wire', () => {
   });
 
   it('ships the listing gzipped, and it still parses', async () => {
-    const plain = await fetch(`${base}/api/docs`, {
+    const plain = await fetch(`${base}/workspaces/${WS}/docs`, {
       headers: { host: `localhost:${handle.port}`, 'accept-encoding': 'identity' },
     });
     const plainBytes = (await plain.arrayBuffer()).byteLength;
@@ -161,7 +166,7 @@ describe('GET /api/docs over the wire', () => {
     // the shrink measured below is the header doing something.
     expect(plainBytes).toBeGreaterThan(COMPRESS_MIN_BYTES);
 
-    const gz = await fetch(`${base}/api/docs`, {
+    const gz = await fetch(`${base}/workspaces/${WS}/docs`, {
       headers: { host: `localhost:${handle.port}`, 'accept-encoding': 'gzip' },
     });
     expect(gz.headers.get('content-encoding')).toBe('gzip');

@@ -19,6 +19,7 @@ import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const MSG_SYNC = 0;
 
@@ -83,6 +84,9 @@ function sweep(handle: ServerHandle): void {
   handle.sweepDeadShares();
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('expired shares lose their sockets', () => {
   let handle: ServerHandle | null = null;
   let access: AccessHarness;
@@ -105,6 +109,7 @@ describe('expired shares lose their sockets', () => {
       ...access.serverOptions,
     });
     const base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     const local = (path: string, init: RequestInit = {}) =>
       fetch(`${base}${path}`, {
         ...init,
@@ -119,7 +124,7 @@ describe('expired shares lose their sockets', () => {
     // grouping is filed on a board, and the share covers the board. `shared`
     // is the grouping's only member, which keeps the socket under test —
     // /y/shared — exactly the one the share authorized.
-    await local('/api/docs', {
+    await local(`/workspaces/${WS}/docs`, {
       method: 'POST',
       body: JSON.stringify({
         docId: 'shared',
@@ -134,7 +139,8 @@ describe('expired shares lose their sockets', () => {
     });
     expect(board.status).toBe(200);
     const boardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
-    const filed = await local(`/workspaces/${encodeURIComponent(boardId)}/docs`, {
+    WS = boardId;
+    const filed = await local(`/workspaces/${encodeURIComponent(boardId)}/docs:attach`, {
       method: 'POST',
       body: JSON.stringify({ docId: 'ws-shared' }),
     });
@@ -147,7 +153,7 @@ describe('expired shares lose their sockets', () => {
   it('closes a visitor socket once the share has expired', async () => {
     const { base, shareId } = await setup();
     const port = handle?.port ?? 0;
-    const conn = connect(`ws://localhost:${port}/y/shared`, {
+    const conn = connect(`ws://localhost:${port}/workspaces/${WS}/docs/shared/y`, {
       ...visitorHeaders,
     });
     // POSITIVE CONTROL: the socket has to be genuinely connected and synced,
@@ -199,8 +205,10 @@ describe('expired shares lose their sockets', () => {
   it('leaves the owner’s own socket alone — it carries no shareId', async () => {
     const { shareId } = await setup();
     const port = handle?.port ?? 0;
-    const owner = connect(`ws://localhost:${port}/y/shared`, { host: `localhost:${port}` });
-    const visitor = connect(`ws://localhost:${port}/y/shared`, {
+    const owner = connect(`ws://localhost:${port}/workspaces/${WS}/docs/shared/y`, {
+      host: `localhost:${port}`,
+    });
+    const visitor = connect(`ws://localhost:${port}/workspaces/${WS}/docs/shared/y`, {
       ...visitorHeaders,
     });
     await owner.synced;

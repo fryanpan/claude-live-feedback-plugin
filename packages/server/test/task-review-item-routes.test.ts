@@ -102,7 +102,7 @@ describe('task review-item routes', () => {
     return items;
   }
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'task-review-item-routes-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
@@ -123,7 +123,7 @@ describe('task review-item routes', () => {
       expect((await queueRows(wsId)).some((r) => r.taskId === task.id)).toBe(false);
 
       const created = await jj<{ item: { id: string }; reviewAdvice?: string }>(
-        await post(`/api/tasks/${task.id}/review-items`, {
+        await post(`/workspaces/${wsId}/tasks/${task.id}/review-items`, {
           review: FULL_DECISION,
           author: AGENT,
         }),
@@ -142,10 +142,16 @@ describe('task review-item routes', () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId);
       const first = await jj<{ item: { id: string } }>(
-        await post(`/api/tasks/${task.id}/review-items`, { review: FULL_DECISION, author: AGENT }),
+        await post(`/workspaces/${wsId}/tasks/${task.id}/review-items`, {
+          review: FULL_DECISION,
+          author: AGENT,
+        }),
       );
       const second = await jj<{ item: { id: string } }>(
-        await post(`/api/tasks/${task.id}/review-items`, { review: THIN_DECISION, author: AGENT }),
+        await post(`/workspaces/${wsId}/tasks/${task.id}/review-items`, {
+          review: THIN_DECISION,
+          author: AGENT,
+        }),
       );
       const ids = (await queueRows(wsId))
         .filter((r) => r.taskId === task.id)
@@ -162,7 +168,7 @@ describe('task review-item routes', () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId);
       const { headline: _dropped, ...noHeadline } = FULL_DECISION;
-      const r = await post(`/api/tasks/${task.id}/review-items`, {
+      const r = await post(`/workspaces/${wsId}/tasks/${task.id}/review-items`, {
         review: noHeadline,
         author: AGENT,
       });
@@ -180,7 +186,7 @@ describe('task review-item routes', () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId);
       const created = await jj<{ item: { id: string; review: Record<string, unknown> } }>(
-        await post(`/api/tasks/${task.id}/review-items`, {
+        await post(`/workspaces/${wsId}/tasks/${task.id}/review-items`, {
           review: {
             ...FULL_DECISION,
             why: 'The rebuild is blocked on this.',
@@ -202,7 +208,10 @@ describe('task review-item routes', () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId);
       const created = await jj<{ item: { id: string }; reviewAdvice?: string }>(
-        await post(`/api/tasks/${task.id}/review-items`, { review: THIN_DECISION, author: AGENT }),
+        await post(`/workspaces/${wsId}/tasks/${task.id}/review-items`, {
+          review: THIN_DECISION,
+          author: AGENT,
+        }),
       );
       expect(created.reviewAdvice ?? '').toContain('review.detail');
       // Advice is not a refusal: the item is on the queue all the same.
@@ -216,7 +225,7 @@ describe('task review-item routes', () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId);
       const created = await jj<{ item: { id: string }; reviewAdvice?: string }>(
-        await post(`/api/tasks/${task.id}/review-items`, {
+        await post(`/workspaces/${wsId}/tasks/${task.id}/review-items`, {
           review: {
             ...FULL_DECISION,
             headline: `Cache size for the rebuild, ${'x'.repeat(80)}`,
@@ -237,15 +246,20 @@ describe('task review-item routes', () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId);
       expect(
-        (await post('/api/tasks/t-missing/review-items', { review: FULL_DECISION, author: AGENT }))
-          .status,
+        (
+          await post(`/workspaces/${wsId}/tasks/t-missing/review-items`, {
+            review: FULL_DECISION,
+            author: AGENT,
+          })
+        ).status,
       ).toBe(404);
       expect(
-        (await post(`/api/tasks/${task.id}/review-items`, { review: FULL_DECISION })).status,
+        (await post(`/workspaces/${wsId}/tasks/${task.id}/review-items`, { review: FULL_DECISION }))
+          .status,
       ).toBe(400);
-      expect((await post(`/api/tasks/${task.id}/review-items`, { author: AGENT })).status).toBe(
-        400,
-      );
+      expect(
+        (await post(`/workspaces/${wsId}/tasks/${task.id}/review-items`, { author: AGENT })).status,
+      ).toBe(400);
     });
   });
 
@@ -256,10 +270,13 @@ describe('task review-item routes', () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId);
       const created = await jj<{ item: { id: string } }>(
-        await post(`/api/tasks/${task.id}/review-items`, { review: FULL_DECISION, author: AGENT }),
+        await post(`/workspaces/${wsId}/tasks/${task.id}/review-items`, {
+          review: FULL_DECISION,
+          author: AGENT,
+        }),
       );
       await jj(
-        await post(`/api/tasks/${task.id}/review-items/${created.item.id}/answer`, {
+        await post(`/workspaces/${wsId}/tasks/${task.id}/review-items/${created.item.id}/answer`, {
           text: 'Halve it',
           answeredWith: 'o-4b2e',
           author: PERSON,
@@ -277,13 +294,19 @@ describe('task review-item routes', () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId);
       const first = await jj<{ item: { id: string } }>(
-        await post(`/api/tasks/${task.id}/review-items`, { review: FULL_DECISION, author: AGENT }),
+        await post(`/workspaces/${wsId}/tasks/${task.id}/review-items`, {
+          review: FULL_DECISION,
+          author: AGENT,
+        }),
       );
       const second = await jj<{ item: { id: string } }>(
-        await post(`/api/tasks/${task.id}/review-items`, { review: THIN_DECISION, author: AGENT }),
+        await post(`/workspaces/${wsId}/tasks/${task.id}/review-items`, {
+          review: THIN_DECISION,
+          author: AGENT,
+        }),
       );
       await jj(
-        await post(`/api/tasks/${task.id}/review-items/${first.item.id}/answer`, {
+        await post(`/workspaces/${wsId}/tasks/${task.id}/review-items/${first.item.id}/answer`, {
           text: 'Keep it',
           author: PERSON,
         }),
@@ -298,13 +321,19 @@ describe('task review-item routes', () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId);
       const created = await jj<{ item: { id: string } }>(
-        await post(`/api/tasks/${task.id}/review-items`, { review: FULL_DECISION, author: AGENT }),
+        await post(`/workspaces/${wsId}/tasks/${task.id}/review-items`, {
+          review: FULL_DECISION,
+          author: AGENT,
+        }),
       );
-      const r = await post(`/api/tasks/${task.id}/review-items/${created.item.id}/answer`, {
-        text: 'Halve it',
-        answeredWith: 'o-ghost',
-        author: PERSON,
-      });
+      const r = await post(
+        `/workspaces/${wsId}/tasks/${task.id}/review-items/${created.item.id}/answer`,
+        {
+          text: 'Halve it',
+          answeredWith: 'o-ghost',
+          author: PERSON,
+        },
+      );
       expect(r.status).toBe(400);
       expect(((await r.json()) as { error: string }).error).toBe('unknown-option');
       const stored = (await getTasks(wsId)).find((t) => t.id === task.id);
@@ -315,17 +344,20 @@ describe('task review-item routes', () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId);
       const created = await jj<{ item: { id: string } }>(
-        await post(`/api/tasks/${task.id}/review-items`, { review: FULL_DECISION, author: AGENT }),
+        await post(`/workspaces/${wsId}/tasks/${task.id}/review-items`, {
+          review: FULL_DECISION,
+          author: AGENT,
+        }),
       );
       expect(
         (
-          await post('/api/tasks/t-missing/review-items/r-ghost/answer', {
+          await post(`/workspaces/${wsId}/tasks/t-missing/review-items/r-ghost/answer`, {
             text: 'x',
             author: PERSON,
           })
         ).status,
       ).toBe(404);
-      const ghost = await post(`/api/tasks/${task.id}/review-items/r-ghost/answer`, {
+      const ghost = await post(`/workspaces/${wsId}/tasks/${task.id}/review-items/r-ghost/answer`, {
         text: 'x',
         author: PERSON,
       });
@@ -333,9 +365,12 @@ describe('task review-item routes', () => {
       expect(((await ghost.json()) as { error: string }).error).toBe('unknown-review-item');
       expect(
         (
-          await post(`/api/tasks/${task.id}/review-items/${created.item.id}/answer`, {
-            author: PERSON,
-          })
+          await post(
+            `/workspaces/${wsId}/tasks/${task.id}/review-items/${created.item.id}/answer`,
+            {
+              author: PERSON,
+            },
+          )
         ).status,
       ).toBe(400);
     });
@@ -348,13 +383,19 @@ describe('task review-item routes', () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId);
       const created = await jj<{ item: { id: string } }>(
-        await post(`/api/tasks/${task.id}/review-items`, { review: FULL_DECISION, author: AGENT }),
+        await post(`/workspaces/${wsId}/tasks/${task.id}/review-items`, {
+          review: FULL_DECISION,
+          author: AGENT,
+        }),
       );
       await jj(
-        await post(`/api/tasks/${task.id}/review-items/${created.item.id}/more-info`, {
-          question: 'what does the second pass cost?',
-          author: PERSON,
-        }),
+        await post(
+          `/workspaces/${wsId}/tasks/${task.id}/review-items/${created.item.id}/more-info`,
+          {
+            question: 'what does the second pass cost?',
+            author: PERSON,
+          },
+        ),
       );
       const stored = (await getTasks(wsId)).find((t) => t.id === task.id);
       const item = stored?.reviews?.find((x) => x.id === created.item.id);
@@ -367,12 +408,15 @@ describe('task review-item routes', () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId);
       const created = await jj<{ item: { id: string } }>(
-        await post(`/api/tasks/${task.id}/review-items`, { review: FULL_DECISION, author: AGENT }),
+        await post(`/workspaces/${wsId}/tasks/${task.id}/review-items`, {
+          review: FULL_DECISION,
+          author: AGENT,
+        }),
       );
-      const at = `/api/tasks/${task.id}/review-items/${created.item.id}/more-info`;
+      const at = `/workspaces/${wsId}/tasks/${task.id}/review-items/${created.item.id}/more-info`;
       expect(
         (
-          await post('/api/tasks/t-missing/review-items/r-ghost/more-info', {
+          await post(`/workspaces/${wsId}/tasks/t-missing/review-items/r-ghost/more-info`, {
             question: 'x',
             author: PERSON,
           })
@@ -486,13 +530,19 @@ describe('task review-item routes', () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId);
       const filed = await jj<{ reviewAdvice?: string }>(
-        await post(`/api/tasks/${task.id}/review-items`, { review: LOOK, author: AGENT }),
+        await post(`/workspaces/${wsId}/tasks/${task.id}/review-items`, {
+          review: LOOK,
+          author: AGENT,
+        }),
       );
       expect(says(filed.reviewAdvice)).toBe(true);
       expect(filed.reviewAdvice).toContain('review.detail');
 
       const linked = await jj<{ reviewAdvice?: string }>(
-        await post(`/api/tasks/${task.id}/review-items`, { review: LOOK_LINKED, author: AGENT }),
+        await post(`/workspaces/${wsId}/tasks/${task.id}/review-items`, {
+          review: LOOK_LINKED,
+          author: AGENT,
+        }),
       );
       expect(linked.reviewAdvice).toBeUndefined();
     });
@@ -524,7 +574,7 @@ describe('task review-item routes', () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId);
       const made = await jj<{ thread: { id: string }; reviewAdvice?: string }>(
-        await post(`/api/docs/task:${task.id}/threads`, {
+        await post(`/workspaces/${wsId}/docs/task:${task.id}/threads`, {
           author: AGENT,
           text: 'Nav mockup is ready.',
           anchor: { kind: 'subject' },
@@ -534,7 +584,7 @@ describe('task review-item routes', () => {
       expect(says(made.reviewAdvice)).toBe(true);
 
       const linked = await jj<{ reviewAdvice?: string }>(
-        await post(`/api/docs/task:${task.id}/threads`, {
+        await post(`/workspaces/${wsId}/docs/task:${task.id}/threads`, {
           author: AGENT,
           text: 'Nav mockup is ready.',
           anchor: { kind: 'subject' },
@@ -548,14 +598,14 @@ describe('task review-item routes', () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId);
       const { thread } = await jj<{ thread: { id: string } }>(
-        await post(`/api/docs/task:${task.id}/threads`, {
+        await post(`/workspaces/${wsId}/docs/task:${task.id}/threads`, {
           author: AGENT,
           text: 'Opening the discussion.',
           anchor: { kind: 'subject' },
         }),
       );
       const replied = await jj<{ reviewAdvice?: string }>(
-        await post(`/api/docs/task:${task.id}/threads/${thread.id}/comments`, {
+        await post(`/workspaces/${wsId}/docs/task:${task.id}/threads/${thread.id}/comments`, {
           author: AGENT,
           text: 'Nav mockup is ready.',
           review: LOOK,
@@ -566,7 +616,7 @@ describe('task review-item routes', () => {
       // The older gap is the more actionable of the two when the links exist
       // and sit in the wrong place, so it is the one that speaks.
       const inComment = await jj<{ reviewAdvice?: string }>(
-        await post(`/api/docs/task:${task.id}/threads/${thread.id}/comments`, {
+        await post(`/workspaces/${wsId}/docs/task:${task.id}/threads/${thread.id}/comments`, {
           author: AGENT,
           text: 'Mockup: [nav v2](/mockup/nav-v2)',
           review: LOOK,

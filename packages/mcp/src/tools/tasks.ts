@@ -28,6 +28,7 @@
 import { parseThreadReviewItemId } from '@feedback/core/review-item-id';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { AgentAuthor } from '../author.ts';
+import { boardPathOf } from '../board-path.ts';
 import { projectTaskRows } from '../task-projection.ts';
 
 /** What the board tools read out of `mcp.ts`. */
@@ -114,6 +115,8 @@ function taskCreatedSummary(
 async function recordReviewAnswer(
   ctx: TaskToolContext,
   args: {
+    /** `/workspaces/<id>`, the board the row is on. */
+    board: string;
     taskId: string;
     text: string;
     reviewItemId?: string;
@@ -121,9 +124,9 @@ async function recordReviewAnswer(
   },
 ): Promise<{ task: TaskPayload }> {
   const { http, AUTHOR } = ctx;
-  const { taskId, text, reviewItemId, answeredWith } = args;
+  const { board, taskId, text, reviewItemId, answeredWith } = args;
   if (reviewItemId === undefined) {
-    return (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/answer`, {
+    return (await http('POST', `${board}/tasks/${encodeURIComponent(taskId)}/answer`, {
       text,
       ...(answeredWith !== undefined ? { optionId: answeredWith } : {}),
       author: AUTHOR,
@@ -131,7 +134,7 @@ async function recordReviewAnswer(
   }
   return (await http(
     'POST',
-    `/api/tasks/${encodeURIComponent(taskId)}/review-items/${encodeURIComponent(reviewItemId)}/answer`,
+    `${board}/tasks/${encodeURIComponent(taskId)}/review-items/${encodeURIComponent(reviewItemId)}/answer`,
     {
       text,
       ...(answeredWith !== undefined ? { answeredWith } : {}),
@@ -147,7 +150,7 @@ async function recordReviewAnswer(
  * Two id families, two paths: a derived `rt-…` id IS its address (the triple
  * decodes locally, no round-trip — the doc route it is then used against
  * still 404s a forged one), and a minted `r-…` id is resolved through
- * `GET /api/review-items/:id`, which also names the workspace whose board
+ * `GET /workspaces/<ws>/review-items/:id`, which also names the workspace whose board
  * the item is judged on. The fixed `r-legacy` id is refused there by name —
  * it is on every legacy-decision ticket at once, so alone it addresses
  * nothing; the ticket's own decision is addressed by `taskId` with no
@@ -155,6 +158,7 @@ async function recordReviewAnswer(
  */
 async function resolveReviewItemId(
   ctx: TaskToolContext,
+  board: string,
   reviewItemId: string,
 ): Promise<
   | { kind: 'doc-thread'; docId: string; threadId: string; commentId: string }
@@ -162,7 +166,10 @@ async function resolveReviewItemId(
 > {
   const thread = parseThreadReviewItemId(reviewItemId);
   if (thread) return { kind: 'doc-thread', ...thread };
-  const res = (await ctx.http('GET', `/api/review-items/${encodeURIComponent(reviewItemId)}`)) as {
+  const res = (await ctx.http(
+    'GET',
+    `${board}/review-items/${encodeURIComponent(reviewItemId)}`,
+  )) as {
     taskId: string;
     workspaceId?: string;
   };
@@ -198,6 +205,8 @@ export async function handleTaskTool(
   ctx: TaskToolContext,
 ): Promise<CallToolResult | undefined> {
   const { http, ok, err, AUTHOR, claimNoticeFor } = ctx;
+  /** The board this call is addressed under — see board-path.ts. */
+  const board = (): string => boardPathOf(name, a);
   switch (name) {
     case 'create_tasks': {
       const { workspaceId, tasks, sourceDoc } = a as {
@@ -309,7 +318,7 @@ export async function handleTaskTool(
       };
       const res = (await http(
         'POST',
-        `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/promote`,
+        `${board()}/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/promote`,
         {
           workspaceId,
           ...(title !== undefined ? { title } : {}),
@@ -411,7 +420,7 @@ export async function handleTaskTool(
       // cannot claim a task because the advisory read 500'd is strictly
       // worse off than one that claims it uninformed.
       const claimNotice = to === 'in-progress' ? await claimNoticeFor(taskId) : undefined;
-      const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/transition`, {
+      const res = (await http('POST', `${board()}/tasks/${encodeURIComponent(taskId)}/transition`, {
         to,
         author: AUTHOR,
         ...(note !== undefined ? { note } : {}),
@@ -436,7 +445,7 @@ export async function handleTaskTool(
         assignee: string;
         assigneeKind?: 'person' | 'agent';
       };
-      const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/assignee`, {
+      const res = (await http('POST', `${board()}/tasks/${encodeURIComponent(taskId)}/assignee`, {
         assignee,
         ...(assigneeKind !== undefined ? { assigneeKind } : {}),
         author: AUTHOR,
@@ -458,7 +467,7 @@ export async function handleTaskTool(
       if (ids.length === 0 || ids.some((id) => typeof id !== 'string' || id === '')) {
         return err('blockedBy must be a task id, or an array of them');
       }
-      const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/park`, {
+      const res = (await http('POST', `${board()}/tasks/${encodeURIComponent(taskId)}/park`, {
         blockedBy: ids,
         author: AUTHOR,
       })) as { task: TaskPayload; changed: boolean; after: string[] };
@@ -479,7 +488,7 @@ export async function handleTaskTool(
        Removing the tool cannot break a peer: every session launches its own
        MCP child from its own version-keyed bundle, so a session that has not
        restarted still HAS park_task and still calls it. What it calls is
-       `POST /api/tasks/:id/park`, which keeps accepting the old payload and
+       `POST /workspaces/<ws>/tasks/:id/park`, which keeps accepting the old payload and
        still parks — that route is the compatibility surface, not this
        switch. (See "Removing an MCP tool cannot break a peer" in
        learnings.md.) An alias arm was tried and is wrong here: the two verbs
@@ -488,7 +497,7 @@ export async function handleTaskTool(
        for one job. */
     case 'archive_task': {
       const { taskId, reason } = a as { taskId: string; reason?: string };
-      const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/archive`, {
+      const res = (await http('POST', `${board()}/tasks/${encodeURIComponent(taskId)}/archive`, {
         ...(reason !== undefined ? { reason } : {}),
         author: AUTHOR,
       })) as { task: TaskPayload; changed: boolean };
@@ -505,7 +514,7 @@ export async function handleTaskTool(
     }
     case 'unarchive_task': {
       const { taskId } = a as { taskId: string };
-      const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/restore`, {
+      const res = (await http('POST', `${board()}/tasks/${encodeURIComponent(taskId)}/restore`, {
         author: AUTHOR,
       })) as { task: TaskPayload; changed: boolean };
       return ok({
@@ -529,7 +538,7 @@ export async function handleTaskTool(
         // Body (with or without a title): one attributed act through the
         // /body route — ONE task.body_edited carrying both titles when the
         // same call renamed the row.
-        const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/body`, {
+        const res = (await http('POST', `${board()}/tasks/${encodeURIComponent(taskId)}/body`, {
           markdown: body,
           ...(title !== undefined ? { title } : {}),
           ...(reason !== undefined ? { reason } : {}),
@@ -547,7 +556,7 @@ export async function handleTaskTool(
       }
       // Title-only: the /title route, which emits an attributed
       // task.retitled when the name actually moves.
-      const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/title`, {
+      const res = (await http('POST', `${board()}/tasks/${encodeURIComponent(taskId)}/title`, {
         title,
         ...(reason !== undefined ? { reason } : {}),
         author: AUTHOR,
@@ -561,7 +570,7 @@ export async function handleTaskTool(
         position?: number;
         batchId?: string;
       };
-      const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/goal`, {
+      const res = (await http('POST', `${board()}/tasks/${encodeURIComponent(taskId)}/goal`, {
         goal,
         author: AUTHOR,
         ...(position !== undefined ? { position } : {}),
@@ -647,10 +656,14 @@ export async function handleTaskTool(
     }
     case 'add_review_item': {
       const { taskId, review } = a as { taskId: string; review: unknown };
-      const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/review-items`, {
-        review,
-        author: AUTHOR,
-      })) as {
+      const res = (await http(
+        'POST',
+        `${board()}/tasks/${encodeURIComponent(taskId)}/review-items`,
+        {
+          review,
+          author: AUTHOR,
+        },
+      )) as {
         item?: { id?: string };
         reviewAdvice?: string;
         held?: boolean;
@@ -685,13 +698,13 @@ export async function handleTaskTool(
             'which item? Pass its reviewItemId (from the queue row or the ticket), or taskId — alone for a ticket that is itself a decision, with reviewItemId for one of the items filed on it',
           );
         }
-        const address = await resolveReviewItemId(ctx, reviewItemId);
+        const address = await resolveReviewItemId(ctx, board(), reviewItemId);
         // An item raised on a doc thread records its answer where the ask
         // lives — the same door the reader's own tap goes through.
         if (address.kind === 'doc-thread') {
           await http(
             'POST',
-            `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(
+            `${board()}/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(
               address.threadId,
             )}/answer`,
             {
@@ -712,6 +725,7 @@ export async function handleTaskTool(
         effectiveTaskId = address.taskId;
       }
       const res = await recordReviewAnswer(ctx, {
+        board: board(),
         taskId: effectiveTaskId,
         text,
         ...(reviewItemId !== undefined ? { reviewItemId } : {}),
@@ -782,7 +796,7 @@ export async function handleTaskTool(
         }
         const docRes = (await http(
           'POST',
-          `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/revise`,
+          `${board()}/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/revise`,
           { ...patch, commentId },
         )) as { held?: boolean; heldReason?: string; message?: string };
         // The hold, forwarded. This used to be dropped with a comment
@@ -799,7 +813,7 @@ export async function handleTaskTool(
           );
         }
         // The universal address: the id alone says where the item lives.
-        const address = await resolveReviewItemId(ctx, reviewItemId);
+        const address = await resolveReviewItemId(ctx, board(), reviewItemId);
         if (address.kind === 'doc-thread') {
           if (reply !== undefined) {
             return err(
@@ -808,7 +822,7 @@ export async function handleTaskTool(
           }
           const docRes = (await http(
             'POST',
-            `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(
+            `${board()}/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(
               address.threadId,
             )}/revise`,
             { ...patch, commentId: address.commentId },
@@ -838,7 +852,7 @@ export async function handleTaskTool(
       const targetItemId = reviewItemId ?? 'r-legacy';
       const res = (await http(
         'POST',
-        `/api/tasks/${encodeURIComponent(effectiveTaskId)}/review-items/${encodeURIComponent(targetItemId)}/revise`,
+        `${board()}/tasks/${encodeURIComponent(effectiveTaskId)}/review-items/${encodeURIComponent(targetItemId)}/revise`,
         { ...patch, ...(reply !== undefined ? { reply } : {}) },
       )) as {
         threadId?: string;
@@ -876,7 +890,7 @@ export async function handleTaskTool(
       }) => {
         await http(
           'POST',
-          `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(
+          `${board()}/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(
             address.threadId,
           )}/withdraw${undo ? '/undo' : ''}`,
           { ...body, commentId: address.commentId },
@@ -898,11 +912,11 @@ export async function handleTaskTool(
         const address =
           taskId !== undefined
             ? { kind: 'task-item' as const, taskId }
-            : await resolveReviewItemId(ctx, reviewItemId);
+            : await resolveReviewItemId(ctx, board(), reviewItemId);
         if (address.kind === 'doc-thread') return docWithdraw(address);
         await http(
           'POST',
-          `/api/tasks/${encodeURIComponent(address.taskId)}/review-items/${encodeURIComponent(
+          `${board()}/tasks/${encodeURIComponent(address.taskId)}/review-items/${encodeURIComponent(
             reviewItemId,
           )}/withdraw${undo ? '/undo' : ''}`,
           body,
@@ -939,7 +953,7 @@ export async function handleTaskTool(
         // whatever unrelated thread it happens to name (codex review).
         const address = (await http(
           'GET',
-          `/api/review-items/${encodeURIComponent(reviewItemId)}`,
+          `${board()}/review-items/${encodeURIComponent(reviewItemId)}`,
         )) as
           | { kind: 'doc-thread'; docId: string; threadId: string }
           | { kind: 'task-item'; taskId: string };
@@ -950,7 +964,7 @@ export async function handleTaskTool(
         if (address.kind === 'doc-thread') {
           await http(
             'POST',
-            `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(
+            `${board()}/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(
               address.threadId,
             )}/comments`,
             { author: AUTHOR, text: question },
@@ -966,8 +980,8 @@ export async function handleTaskTool(
       }
       const path =
         reviewItemId === undefined
-          ? `/api/tasks/${encodeURIComponent(effectiveTaskId)}/more-info`
-          : `/api/tasks/${encodeURIComponent(effectiveTaskId)}/review-items/${encodeURIComponent(reviewItemId)}/more-info`;
+          ? `${board()}/tasks/${encodeURIComponent(effectiveTaskId)}/more-info`
+          : `${board()}/tasks/${encodeURIComponent(effectiveTaskId)}/review-items/${encodeURIComponent(reviewItemId)}/more-info`;
       const res = (await http('POST', path, { question, author: AUTHOR })) as {
         task: TaskPayload;
       };
@@ -989,6 +1003,7 @@ export async function handleTaskTool(
       // decides which door to knock on so the two verbs cannot drift into
       // two answers of the same act.
       const res = await recordReviewAnswer(ctx, {
+        board: board(),
         taskId,
         text,
         ...(reviewItemId !== undefined ? { reviewItemId } : {}),
@@ -1002,7 +1017,7 @@ export async function handleTaskTool(
         after: string[];
         afterEnforce?: string[];
       };
-      const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/after`, {
+      const res = (await http('POST', `${board()}/tasks/${encodeURIComponent(taskId)}/after`, {
         after,
         ...(afterEnforce !== undefined ? { afterEnforce } : {}),
         author: AUTHOR,
@@ -1031,7 +1046,7 @@ export async function handleTaskTool(
     }
     case 'link_refs': {
       const { taskId, ref } = a as { taskId: string; ref: unknown };
-      const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/links`, {
+      const res = (await http('POST', `${board()}/tasks/${encodeURIComponent(taskId)}/links`, {
         ref,
       })) as { changed: boolean };
       return ok({ taskId, changed: res.changed });
@@ -1045,7 +1060,7 @@ export async function handleTaskTool(
     }
     case 'unlink_refs': {
       const { taskId, ref } = a as { taskId: string; ref: unknown };
-      const res = (await http('DELETE', `/api/tasks/${encodeURIComponent(taskId)}/links`, {
+      const res = (await http('DELETE', `${board()}/tasks/${encodeURIComponent(taskId)}/links`, {
         ref,
       })) as { changed: boolean };
       return ok({ taskId, changed: res.changed });

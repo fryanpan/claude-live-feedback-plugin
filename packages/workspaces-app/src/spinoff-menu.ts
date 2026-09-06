@@ -52,6 +52,7 @@
  */
 
 import { type User, readyToWork, spinoffBody, spinoffDocHref } from '@feedback/core';
+import { api } from './doc-path.ts';
 
 /** Re-exported: the readiness rule now lives in core, shared with the meeting
  *  assistant's capture pass, which files a spoken ask by the same rule. */
@@ -312,7 +313,7 @@ export async function runSpinoff(
  */
 async function runResearch(deps: SpinoffDeps): Promise<ResearchSpinoffResult | null> {
   const topic = deriveTaskTitle(deps.quote, TITLE_MAX - 10);
-  const res = (await post(deps, `/api/docs/${encodeURIComponent(deps.docId)}/research-request`, {
+  const res = (await post(deps, api(`docs/${encodeURIComponent(deps.docId)}/research-request`), {
     author: deps.user,
     topic,
     anchor: deps.anchor,

@@ -37,6 +37,10 @@ installFakeBeacon();
 
 const NAME_KEY = 'feedback-user-name';
 
+/** The board every address in this file is under — resources are addressed
+ *  `/workspaces/<ws>/<collection>/<id>` and nothing else resolves. */
+const WS = 'w-1';
+
 /**
  * The shipped shell, so the boot's `getElementById` calls mean what they mean
  * in a browser. A hand-written subset would drift out from under them.
@@ -98,7 +102,7 @@ async function boot(url: string, seed: Record<string, string> = {}): Promise<Boo
 beforeEach(() => {
   server.reset();
   server.on('/api/auth/session', { authenticated: false, canWrite: true });
-  server.on('/api/docs/', { meta: { type: 'markdown', relPath: 'notes.md' } });
+  server.on(`/workspaces/${WS}/docs/`, { meta: { type: 'markdown', relPath: 'notes.md' } });
 });
 
 afterEach(() => {
@@ -115,20 +119,28 @@ afterEach(() => {
 
 describe('the editor boots against the doc the address names', () => {
   it('asks the server for that doc, and opens one socket for it', async () => {
-    const { sockets } = await boot('https://docs.test/review/d-notes');
-    expect(server.calls.some((c) => c.url === '/api/docs/d-notes')).toBe(true);
+    const { sockets } = await boot('https://docs.test/workspaces/w-1/docs/d-notes');
+    expect(server.calls.some((c) => c.url === `/workspaces/${WS}/docs/d-notes`)).toBe(true);
     expect(sockets.opened).toHaveLength(1);
-    expect(sockets.first().url).toBe('wss://docs.test/y/d-notes?type=markdown');
+    expect(sockets.first().url).toBe('wss://docs.test/workspaces/w-1/docs/d-notes/y?type=markdown');
   });
 
   it('uses a plain ws socket on an http page', async () => {
-    const { sockets } = await boot('http://localhost:8787/review/d-notes');
-    expect(sockets.first().url).toBe('ws://localhost:8787/y/d-notes?type=markdown');
+    const { sockets } = await boot('http://localhost:8787/workspaces/w-1/docs/d-notes');
+    expect(sockets.first().url).toBe(
+      'ws://localhost:8787/workspaces/w-1/docs/d-notes/y?type=markdown',
+    );
   });
 
-  it('reads the doc id out of a workspace path too', async () => {
-    const { sockets } = await boot('https://docs.test/workspaces/w-1/docs/d-notes');
-    expect(sockets.first().url).toContain('/y/d-notes?');
+  it('does not read a doc id out of a stale /review/ bookmark', async () => {
+    // The cutover DELETED `/review/<docId>`, and the parser deleted with it:
+    // an address that names no board names no doc either, so an old bookmark
+    // lands on the unbound surface rather than opening `d-notes` on a page
+    // that has no workspace to read it under. Keeping the parse would have
+    // been the dual-address this cutover exists to remove — this assertion is
+    // the control that says the old shape resolves to nothing.
+    const { sockets } = await boot('https://docs.test/review/d-notes');
+    expect(sockets.first().url).toBe('wss://docs.test/workspaces//docs/default/y?type=markdown');
   });
 
   it('mounts the `default` doc when the path names none', async () => {
@@ -137,13 +149,13 @@ describe('the editor boots against the doc the address names', () => {
     // rather than refusing and leaving a blank shell.
     const { sockets } = await boot('https://docs.test/');
     expect(sockets.opened).toHaveLength(1);
-    expect(sockets.first().url).toBe('wss://docs.test/y/default?type=markdown');
+    expect(sockets.first().url).toBe('wss://docs.test/workspaces//docs/default/y?type=markdown');
   });
 
   it('percent-decodes a doc id with a colon in it', async () => {
-    const { sockets } = await boot('https://docs.test/review/rev-1%3Asrc~app.ts');
+    const { sockets } = await boot('https://docs.test/workspaces/w-1/docs/rev-1%3Asrc~app.ts');
     expect(sockets.first().url).toBe(
-      `wss://docs.test/y/${encodeURIComponent('rev-1:src~app.ts')}?type=markdown`,
+      `wss://docs.test/workspaces/w-1/docs/${encodeURIComponent('rev-1:src~app.ts')}/y?type=markdown`,
     );
   });
 });
@@ -157,36 +169,36 @@ describe('the editor boots against the doc the address names', () => {
  * `{}` and throws inside a render nothing awaits.
  */
 function reviewOf(workspaceId: string, relPath: string): void {
-  server.on(`/api/reviews/${workspaceId}/grouped`, { groups: [] });
-  server.on(`/api/reviews/${workspaceId}/files`, {
+  server.on(`/workspaces/${WS}/reviews/${workspaceId}/grouped`, { groups: [] });
+  server.on(`/workspaces/${WS}/reviews/${workspaceId}/files`, {
     files: [{ docId: `${workspaceId}:${relPath}`, relPath, status: 'modified' }],
   });
 }
 
 describe('the surface that mounts matches what the doc IS', () => {
   it('a markdown doc mounts the prose editor', async () => {
-    await boot('https://docs.test/review/d-notes');
+    await boot('https://docs.test/workspaces/w-1/docs/d-notes');
     expect(document.querySelector('#editor .ProseMirror')).not.toBeNull();
     expect(document.body.classList.contains('code-mode')).toBe(false);
   });
 
   it('a code doc mounts the source surface instead', async () => {
-    server.on('/api/docs/', { meta: { type: 'code', relPath: 'server.ts' } });
-    await boot('https://docs.test/review/d-code');
+    server.on(`/workspaces/${WS}/docs/`, { meta: { type: 'code', relPath: 'server.ts' } });
+    await boot('https://docs.test/workspaces/w-1/docs/d-code');
     expect(document.body.classList.contains('code-mode')).toBe(true);
     expect(document.querySelector('#editor .ProseMirror')).toBeNull();
   });
 
   it('a MARKDOWN file inside a diff review reads as prose, not as source', async () => {
-    server.on('/api/docs/', {
+    server.on(`/workspaces/${WS}/docs/`, {
       meta: { type: 'diff', relPath: 'README.md', workspaceId: 'rev-1' },
     });
     reviewOf('rev-1', 'README.md');
-    server.on(`/api/docs/${encodeURIComponent('rev-1:README.md')}/diff`, {
+    server.on(`/workspaces/${WS}/docs/${encodeURIComponent('rev-1:README.md')}/diff`, {
       baseText: '# Title\n\nOne line before.\n',
       status: 'modified',
     });
-    await boot('https://docs.test/review/rev-1%3AREADME.md');
+    await boot('https://docs.test/workspaces/w-1/docs/rev-1%3AREADME.md');
     // The redline surface is the prose one; the point of the branch is that a
     // `.md` in a diff is NOT sent to the code surface.
     expect(document.body.classList.contains('redline-mode')).toBe(true);
@@ -194,28 +206,30 @@ describe('the surface that mounts matches what the doc IS', () => {
   });
 
   it('a markdown diff whose base text is gone falls back to the source view', async () => {
-    server.on('/api/docs/', {
+    server.on(`/workspaces/${WS}/docs/`, {
       meta: { type: 'diff', relPath: 'README.md', workspaceId: 'rev-1' },
     });
     reviewOf('rev-1', 'README.md');
-    server.on(`/api/docs/${encodeURIComponent('rev-1:README.md')}/diff`, { baseText: null });
-    await boot('https://docs.test/review/rev-1%3AREADME.md');
+    server.on(`/workspaces/${WS}/docs/${encodeURIComponent('rev-1:README.md')}/diff`, {
+      baseText: null,
+    });
+    await boot('https://docs.test/workspaces/w-1/docs/rev-1%3AREADME.md');
     expect(document.body.classList.contains('redline-mode')).toBe(false);
     expect(document.body.classList.contains('code-mode')).toBe(true);
   });
 
   it('a non-markdown file inside a diff review goes to the source surface', async () => {
-    server.on('/api/docs/', {
+    server.on(`/workspaces/${WS}/docs/`, {
       meta: { type: 'diff', relPath: 'src/server.ts', workspaceId: 'rev-1' },
     });
     reviewOf('rev-1', 'src/server.ts');
-    await boot('https://docs.test/review/rev-1%3Asrc~server.ts');
+    await boot('https://docs.test/workspaces/w-1/docs/rev-1%3Asrc~server.ts');
     expect(document.body.classList.contains('code-mode')).toBe(true);
   });
 
   it('falls back to prose when the meta read fails outright', async () => {
-    server.on('/api/docs/', {}, 500);
-    await boot('https://docs.test/review/d-notes');
+    server.on(`/workspaces/${WS}/docs/`, {}, 500);
+    await boot('https://docs.test/workspaces/w-1/docs/d-notes');
     expect(document.querySelector('#editor .ProseMirror')).not.toBeNull();
     expect(document.body.classList.contains('code-mode')).toBe(false);
   });
@@ -223,7 +237,7 @@ describe('the surface that mounts matches what the doc IS', () => {
 
 describe('the shell the boot wires once', () => {
   it('leaves the doc switcher shut, and opens it on a click once there is a set', async () => {
-    await boot('https://docs.test/review/d-notes');
+    await boot('https://docs.test/workspaces/w-1/docs/d-notes');
     const menu = document.getElementById('doc-menu') as HTMLElement;
     const button = document.getElementById('doc-switcher') as HTMLButtonElement;
     expect(menu.classList.contains('hidden')).toBe(true);
@@ -237,7 +251,7 @@ describe('the shell the boot wires once', () => {
   });
 
   it('Escape shuts an open switcher', async () => {
-    await boot('https://docs.test/review/d-notes');
+    await boot('https://docs.test/workspaces/w-1/docs/d-notes');
     const menu = document.getElementById('doc-menu') as HTMLElement;
     document.body.classList.add('has-set');
     (document.getElementById('doc-switcher') as HTMLButtonElement).click();
@@ -249,7 +263,7 @@ describe('the shell the boot wires once', () => {
 
 describe('identity and the write gate are settled before anything connects', () => {
   it('takes the stored name rather than prompting, and stamps it on awareness', async () => {
-    const { sockets } = await boot('https://docs.test/review/d-notes');
+    const { sockets } = await boot('https://docs.test/workspaces/w-1/docs/d-notes');
     expect(document.querySelector('.identity-prompt')).toBeNull();
     const state = sockets.first().awareness.getLocalState() as { user?: { name?: string } } | null;
     expect(state?.user?.name).toBe('Ada');
@@ -258,7 +272,7 @@ describe('identity and the write gate are settled before anything connects', () 
   it('does not let a ?as= in a shared link rebrand someone already named', async () => {
     // Review URLs get pasted around and the server emits `?as=` links; the
     // stored name is this browser's own answer and outranks both.
-    const { sockets } = await boot('https://docs.test/review/d-notes?as=Grace');
+    const { sockets } = await boot('https://docs.test/workspaces/w-1/docs/d-notes?as=Grace');
     const state = sockets.first().awareness.getLocalState() as { user?: { name?: string } } | null;
     expect(state?.user?.name).toBe('Ada');
   });
@@ -266,11 +280,11 @@ describe('identity and the write gate are settled before anything connects', () 
   it('stays anonymous, without prompting, when nothing is stored and writes are refused', async () => {
     server.on('/api/auth/session', { authenticated: false, canWrite: false });
     document.body.innerHTML = SHELL;
-    history.replaceState(null, '', '/review/d-notes');
+    history.replaceState(null, '', `/workspaces/${WS}/docs/d-notes`);
     const sockets = fakeSockets();
     await start({
       document,
-      location: fakeLocation('https://docs.test/review/d-notes'),
+      location: fakeLocation('https://docs.test/workspaces/w-1/docs/d-notes'),
       localStorage: fakeStorage(),
       window: new EventTarget(),
       connect: sockets.connect,
@@ -285,7 +299,7 @@ describe('identity and the write gate are settled before anything connects', () 
   it('has the write answer IN HAND before it opens the socket', async () => {
     server.on('/api/auth/session', { authenticated: false, canWrite: false });
     document.body.innerHTML = SHELL;
-    history.replaceState(null, '', '/review/d-notes');
+    history.replaceState(null, '', `/workspaces/${WS}/docs/d-notes`);
     const sockets = fakeSockets();
     // Read at the moment the doc opens. Ordering in the request log alone
     // cannot carry this claim: `ensureUserIdentity` asks the SAME endpoint,
@@ -294,7 +308,7 @@ describe('identity and the write gate are settled before anything connects', () 
     let barUpWhenSocketOpened = false;
     await start({
       document,
-      location: fakeLocation('https://docs.test/review/d-notes'),
+      location: fakeLocation('https://docs.test/workspaces/w-1/docs/d-notes'),
       localStorage: fakeStorage({ [NAME_KEY]: 'Ada' }),
       window: new EventTarget(),
       connect: (url) => {
@@ -323,11 +337,11 @@ describe('identity and the write gate are settled before anything connects', () 
     const sockets = fakeSockets();
     let wrappedWhenSocketOpened = false;
     document.body.innerHTML = SHELL;
-    history.replaceState(null, '', '/review/d-notes');
+    history.replaceState(null, '', `/workspaces/${WS}/docs/d-notes`);
     booted.push(
       await freshBoot({
         document,
-        location: fakeLocation('https://docs.test/review/d-notes'),
+        location: fakeLocation('https://docs.test/workspaces/w-1/docs/d-notes'),
         localStorage: fakeStorage({ [NAME_KEY]: 'Ada' }),
         window: new EventTarget(),
         connect: (url) => {
@@ -351,14 +365,14 @@ describe('identity and the write gate are settled before anything connects', () 
 
   it('raises the sign-in bar and locks the doc when the server refuses writes', async () => {
     server.on('/api/auth/session', { authenticated: false, canWrite: false });
-    await boot('https://docs.test/review/d-notes');
+    await boot('https://docs.test/workspaces/w-1/docs/d-notes');
     expect(document.querySelector('.signin-bar')).not.toBeNull();
     const toggle = document.getElementById('toggle-edit-mode') as HTMLButtonElement;
     expect(toggle.classList.contains('hidden') || toggle.disabled).toBe(true);
   });
 
   it('shows no bar when writes are allowed', async () => {
-    await boot('https://docs.test/review/d-notes');
+    await boot('https://docs.test/workspaces/w-1/docs/d-notes');
     expect(document.querySelector('.signin-bar')).toBeNull();
   });
 });
@@ -386,13 +400,13 @@ describe('the boot hands back an end for what it started', () => {
     const spy = vi.spyOn(document, 'getElementById');
     try {
       // Control: left running, the debounce lands and makes the read.
-      await boot('https://docs.test/review/d-notes');
+      await boot('https://docs.test/workspaces/w-1/docs/d-notes');
       spy.mockClear();
       await past(250);
       expect(spy.mock.calls.flat()).toContain(READ);
 
       // The same boot, ended: the debounce never lands.
-      await boot('https://docs.test/review/d-notes');
+      await boot('https://docs.test/workspaces/w-1/docs/d-notes');
       for (const stop of booted.splice(0)) stop();
       spy.mockClear();
       await past(250);

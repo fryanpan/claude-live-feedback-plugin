@@ -141,14 +141,14 @@ describe('share links over HTTP', () => {
     const id = ((await created.json()) as { workspace: { id: string } }).workspace.id;
     const path = join(dataDir, `${docName}.md`);
     writeFileSync(path, `# ${docName}\n\nBody.\n`);
-    const doc = await postLocal('/api/docs', {
+    const doc = await postLocal(`/workspaces/${id}/docs`, {
       docId: docName,
       type: 'markdown',
       sourceUrl: path,
     });
     expect(doc.status).toBe(200);
     const mintedDocId = ((await doc.json()) as { docId: string }).docId;
-    const filed = await postLocal(`/workspaces/${encodeURIComponent(id)}/docs`, {
+    const filed = await postLocal(`/workspaces/${encodeURIComponent(id)}/docs:attach`, {
       docId: docName,
     });
     expect(filed.status).toBe(200);
@@ -288,7 +288,7 @@ describe('share links over HTTP', () => {
       const { linkId } = await mintLink(board);
       await onShareHost(`/s/${linkId}`, REVIEWER);
       // No link in this request — the membership is the grant now.
-      const doc = await onShareHost(`/api/docs/${docId}`, REVIEWER);
+      const doc = await onShareHost(`/workspaces/${board}/docs/${docId}?format=json`, REVIEWER);
       expect(doc.status).toBe(200);
     });
 
@@ -381,7 +381,7 @@ describe('share links over HTTP', () => {
       // …and a token minted at the everyone-policy SHARE application,
       // presented at the operator's own door. This is the direction that
       // matters most: anyone on the internet can mint one by typing an email.
-      const wrongOnOwner = await req('/api/docs', OWNER_HOST, {
+      const wrongOnOwner = await req(`/workspaces/${board}/docs`, OWNER_HOST, {
         headers: { ...CF_RAY, 'cf-access-jwt-assertion': await signJwt(SHARE_AUD, OWNER_EMAIL) },
       });
       expect(wrongOnOwner.status).toBe(401);
@@ -392,7 +392,7 @@ describe('share links over HTTP', () => {
       expect((await onShareHost(`/s/${linkId}`, REVIEWER)).status).toBe(302);
       // The owner's own door, with the owner's own application and an email
       // on the operator allowlist: the whole product.
-      expect((await onOwnerHost('/api/docs', OWNER_EMAIL)).status).toBe(200);
+      expect((await onOwnerHost(`/workspaces/${board}/docs`, OWNER_EMAIL)).status).toBe(200);
     });
 
     it('a share-host member is still nobody at the owner door', async () => {
@@ -400,7 +400,7 @@ describe('share links over HTTP', () => {
       // the operator's address, whose allowlist is a different record.
       const { linkId } = await mintLink(board);
       await onShareHost(`/s/${linkId}`, REVIEWER);
-      const r = await onOwnerHost('/api/docs', REVIEWER);
+      const r = await onOwnerHost(`/workspaces/${board}/docs`, REVIEWER);
       expect(r.status).toBe(403);
     });
   });
@@ -417,10 +417,12 @@ describe('share links over HTTP', () => {
       expect(
         (await onShareHost(`/workspaces/${encodeURIComponent(board)}?format=json`, member)).status,
       ).toBe(200);
-      const doc = await onShareHost(`/api/docs/${docId}`, member);
+      const doc = await onShareHost(`/workspaces/${board}/docs/${docId}?format=json`, member);
       expect(doc.status).toBe(200);
       expect(((await doc.json()) as { meta: { docId: string } }).meta.docId).toBe(docId);
-      expect((await onShareHost(`/api/docs/${docId}/threads`, member)).status).toBe(200);
+      expect((await onShareHost(`/workspaces/${board}/docs/${docId}/threads`, member)).status).toBe(
+        200,
+      );
     });
 
     it('is refused every workspace it was not given', async () => {
@@ -428,7 +430,9 @@ describe('share links over HTTP', () => {
         (await onShareHost(`/workspaces/${encodeURIComponent(otherBoard)}?format=json`, member))
           .status,
       ).toBe(403);
-      expect((await onShareHost(`/api/docs/${otherDocId}`, member)).status).toBe(403);
+      expect(
+        (await onShareHost(`/workspaces/${board}/docs/${otherDocId}?format=json`, member)).status,
+      ).toBe(403);
       expect(
         (await onShareHost(`/workspaces/${encodeURIComponent(otherBoard)}?format=json`, member))
           .status,
@@ -439,7 +443,7 @@ describe('share links over HTTP', () => {
       // The point of routing this through `collabScope`: a route a share
       // visitor is refused is refused here by the same lines.
       for (const [path, init] of [
-        ['/api/docs', {}],
+        [`/workspaces/${board}/docs`, {}],
         ['/api/share', {}],
         [`/workspaces/${encodeURIComponent(board)}/rename`, { method: 'POST' }],
         [`/workspaces/${encodeURIComponent(board)}/retired`, { method: 'PUT' }],
@@ -469,7 +473,7 @@ describe('share links over HTTP', () => {
       // Attributed to the address Cloudflare Access verified, not to a claim.
       expect(task.createdBy).toBe(emailDisplayName(member));
 
-      const moved = await onShareHost(`/api/tasks/${task.id}/transition`, member, {
+      const moved = await onShareHost(`/workspaces/${board}/tasks/${task.id}/transition`, member, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ to: 'in-progress' }),
@@ -478,11 +482,15 @@ describe('share links over HTTP', () => {
 
       // The same row is refused to a signed-in stranger, and to a member of
       // no board at all — the boundary is the board, not the verb.
-      const byStranger = await onShareHost(`/api/tasks/${task.id}/transition`, STRANGER, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ to: 'done' }),
-      });
+      const byStranger = await onShareHost(
+        `/workspaces/${board}/tasks/${task.id}/transition`,
+        STRANGER,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ to: 'done' }),
+        },
+      );
       expect(byStranger.status).toBe(403);
       expect(await byStranger.json()).toEqual({ error: 'out_of_share_scope' });
     });
@@ -497,7 +505,7 @@ describe('share links over HTTP', () => {
       );
       expect(other.status).toBe(200);
       const otherTask = ((await other.json()) as { task: { id: string } }).task.id;
-      const r = await onShareHost(`/api/tasks/${otherTask}/transition`, member, {
+      const r = await onShareHost(`/workspaces/${board}/tasks/${otherTask}/transition`, member, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ to: 'done' }),
@@ -507,7 +515,7 @@ describe('share links over HTTP', () => {
     });
 
     it('gets nothing useful from root or any path naming no workspace', async () => {
-      for (const path of ['/', '/workspaces', '/api/diffs', '/demos']) {
+      for (const path of ['/', '/workspaces', `/workspaces/${board}/reviews`, '/demos']) {
         const r = await onShareHost(path, member);
         expect(r.status, path).toBe(403);
         expect(await r.json(), path).toEqual({ error: 'out_of_share_scope' });
@@ -589,7 +597,9 @@ describe('share links over HTTP', () => {
       };
       expect(body.hubWorkspaceId).toBe(board);
       // The doc it minted is on this board, so the member can now open it.
-      expect((await asMember(`/api/docs/${body.docId}`)).status).toBe(200);
+      expect((await asMember(`/workspaces/${board}/docs/${body.docId}?format=json`)).status).toBe(
+        200,
+      );
 
       // …and the reply says nothing about the machine. A huddle is seeded
       // into a file under the owner's data directory, and this route answers
@@ -616,7 +626,7 @@ describe('share links over HTTP', () => {
       // this fixture has no folder bind, so the reachable case is asserted on
       // the board's own doc, where the call is a no-op that still has to be
       // ALLOWED for the boundary below to mean anything.
-      const reachable = await postAsMember(`/workspaces/${encodeURIComponent(board)}/docs`, {
+      const reachable = await postAsMember(`/workspaces/${encodeURIComponent(board)}/docs:attach`, {
         docId,
       });
       expect(reachable.status, await reachable.clone().text()).toBe(200);
@@ -631,7 +641,9 @@ describe('share links over HTTP', () => {
       expect(await stolen.json()).toEqual({ error: 'out_of_share_scope' });
       // …and nothing landed: the doc is still refused, which the status alone
       // does not establish.
-      expect((await asMember(`/api/docs/${otherDocId}`)).status).toBe(403);
+      expect((await asMember(`/workspaces/${board}/docs/${otherDocId}?format=json`)).status).toBe(
+        403,
+      );
 
       // The 200 above is this refusal's control: one route, one member, two
       // targets, two answers — so the 403 is the target and not an attach
@@ -671,7 +683,7 @@ describe('share links over HTTP', () => {
       // The owner is unaffected — a typo from the box still says what went
       // wrong, which is what makes the member's answer a redaction rather
       // than a route that stopped working.
-      const owner = await postLocal(`/workspaces/${encodeURIComponent(board)}/docs`, {
+      const owner = await postLocal(`/workspaces/${encodeURIComponent(board)}/docs:attach`, {
         docId: 'no-such-doc-anywhere',
       });
       expect(owner.status).toBe(404);
@@ -859,14 +871,17 @@ describe('share links over HTTP', () => {
       const taskId = ((await filed.json()) as { task: { id: string } }).task.id;
 
       const headline = 'Which of the two goal orders do you want?';
-      const raised = await postLocal(`/api/tasks/${encodeURIComponent(taskId)}/review-items`, {
-        review: {
-          shape: 'review',
-          headline,
-          detail: 'Both orders ship the same work; they differ in what lands first.',
+      const raised = await postLocal(
+        `/workspaces/${board}/tasks/${encodeURIComponent(taskId)}/review-items`,
+        {
+          review: {
+            shape: 'review',
+            headline,
+            detail: 'Both orders ship the same work; they differ in what lands first.',
+          },
+          author: asker,
         },
-        author: asker,
-      });
+      );
       expect(raised.status, await raised.clone().text()).toBe(200);
 
       // Positive control: the id IS in the log, so the member's read below is
@@ -933,7 +948,7 @@ describe('share links over HTTP', () => {
       // Anchored by FINDING its text, so the region the rewrite targets
       // really resolves in the doc — a hand-built fingerprint orphans, and a
       // 409 would let this test pass without the guard ever being asked.
-      const th = await postLocal(`/api/docs/${docId}/threads/by_find`, {
+      const th = await postLocal(`/workspaces/${board}/docs/${docId}/threads/by_find`, {
         author: { id: 'owner', name: 'Owner', kind: 'person' },
         text: 'Tighten this',
         find: 'Body.',
@@ -941,15 +956,18 @@ describe('share links over HTTP', () => {
       expect(th.status, await th.clone().text()).toBe(200);
       const tid = ((await th.json()) as { thread: { id: string } }).thread.id;
 
-      const edited = await postAsMember(`/api/docs/${docId}/threads/${tid}/rewrite_region`, {
-        replacement: 'Body, rewritten by a member.',
-      });
+      const edited = await postAsMember(
+        `/workspaces/${board}/docs/${docId}/threads/${tid}/rewrite_region`,
+        {
+          replacement: 'Body, rewritten by a member.',
+        },
+      );
       expect(edited.status, await edited.clone().text()).toBe(200);
 
       // The same verb on the private board's doc is refused by the same line
       // that refuses reading it.
       const elsewhere = await postAsMember(
-        `/api/docs/${otherDocId}/threads/${tid}/rewrite_region`,
+        `/workspaces/${board}/docs/${otherDocId}/threads/${tid}/rewrite_region`,
         { replacement: 'Not yours.' },
       );
       expect(elsewhere.status).toBe(403);
@@ -958,19 +976,21 @@ describe('share links over HTTP', () => {
 
     it('reads the meeting surface of its own board’s doc, and cannot dial a bot out', async () => {
       expect((await asMember('/api/meeting-engines')).status).toBe(200);
-      expect((await asMember(`/api/docs/${docId}/meetings`)).status).toBe(200);
-      const bot = await asMember(`/api/docs/${docId}/meeting-bot`);
+      expect((await asMember(`/workspaces/${board}/docs/${docId}/meetings`)).status).toBe(200);
+      const bot = await asMember(`/workspaces/${board}/docs/${docId}/meeting-bot`);
       expect(bot.status).toBe(200);
       // Inviting one spends money at a vendor and sends a participant into a
       // call outside this server. Not a way to work THIS board.
-      const invite = await postAsMember(`/api/docs/${docId}/meeting-bot`, {
+      const invite = await postAsMember(`/workspaces/${board}/docs/${docId}/meeting-bot`, {
         meetingUrl: 'https://meet.example.com/abc',
       });
       expect(invite.status).toBe(403);
       expect(await invite.json()).toEqual({ error: 'out_of_share_scope' });
       // …and the same reads on the private board's doc.
-      expect((await asMember(`/api/docs/${otherDocId}/meetings`)).status).toBe(403);
-      expect((await asMember(`/api/docs/${otherDocId}/meeting-bot`)).status).toBe(403);
+      expect((await asMember(`/workspaces/${board}/docs/${otherDocId}/meetings`)).status).toBe(403);
+      expect((await asMember(`/workspaces/${board}/docs/${otherDocId}/meeting-bot`)).status).toBe(
+        403,
+      );
     });
 
     it('is still refused everything outside the board it was given', async () => {
@@ -987,8 +1007,8 @@ describe('share links over HTTP', () => {
         ['/api/plugin/refresh', { method: 'POST' }],
         // Anything that names a path on the owner's machine.
         ['/workspaces', { method: 'POST' }],
-        ['/api/docs', { method: 'POST' }],
-        ['/api/diffs', { method: 'POST' }],
+        [`/workspaces/${board}/docs`, { method: 'POST' }],
+        [`/workspaces/${board}/reviews`, { method: 'POST' }],
         // This board's own lifecycle: it was given to work on, not to retire.
         [`/workspaces/${encodeURIComponent(board)}/retired`, { method: 'PUT' }],
         [`/workspaces/${encodeURIComponent(board)}`, { method: 'DELETE' }],
@@ -1069,7 +1089,7 @@ describe('share links over HTTP', () => {
       member = 'escape-member@partner.example';
       const { linkId } = await mintLink(board);
       expect((await onShareHost(`/s/${linkId}`, member)).status).toBe(302);
-      const th = await postLocal(`/api/docs/${docId}/threads`, {
+      const th = await postLocal(`/workspaces/${board}/docs/${docId}/threads`, {
         author: { id: 'owner', name: 'Owner', kind: 'person' },
         text: 'Worth a ticket',
         anchor: {
@@ -1090,35 +1110,50 @@ describe('share links over HTTP', () => {
     });
 
     const promote = (destination: string) =>
-      onShareHost(`/api/docs/${docId}/threads/${threadId}/promote`, member, {
+      onShareHost(`/workspaces/${board}/docs/${docId}/threads/${threadId}/promote`, member, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId: destination, title: 'Promoted by a member' }),
       });
 
-    it('promotes a thread onto the board it holds, and refuses any other destination', async () => {
-      // The path names the DOC, which is in scope; the destination board is
-      // named in the BODY, which the scope check never read. So the guard
-      // said yes to a write that landed on a board this member was never
-      // given.
+    it('promotes onto the board in the PATH, whatever the body asks for', async () => {
+      // This route used to take its destination from the BODY: the guard read
+      // the path, found the doc in scope and said yes, and then
+      // `body.workspaceId` chose a different board and the row landed there.
+      // The destination is the first segment of the path the guard judged
+      // now, so the escape is not refused — it does not exist. The body field
+      // is ignored rather than validated, because accepting a second spelling
+      // of an argument the path already carries is how the two get to
+      // disagree again.
       const escaped = await promote(otherBoard);
-      expect(escaped.status).toBe(403);
-      expect(await escaped.json()).toEqual({ error: 'out_of_share_scope' });
+      expect(escaped.status, await escaped.clone().text()).toBe(200);
+      const { task: landed } = (await escaped.json()) as {
+        task: { id: string; workspaceId: string };
+      };
+      expect(landed.workspaceId).toBe(board);
 
-      // …and nothing landed there. A 403 whose row was already written is
-      // the failure this test exists for, so the board is read back rather
-      // than the status being trusted.
+      // …and nothing landed on the board the body named. A 200 whose row went
+      // somewhere else is the failure this test exists for, so the other
+      // board is read back rather than the status being trusted.
       const listed = await local(`/workspaces/${encodeURIComponent(otherBoard)}/tasks?format=json`);
       expect(listed.status).toBe(200);
       const { tasks } = (await listed.json()) as { tasks: Array<{ title: string }> };
       expect(tasks.map((t) => t.title)).not.toContain('Promoted by a member');
 
-      // Positive control: the same call naming their own board succeeds, so
-      // the refusal above is the destination and not a broken promote.
-      const kept = await promote(board);
-      expect(kept.status, await kept.clone().text()).toBe(200);
-      const { task } = (await kept.json()) as { task: { id: string; workspaceId: string } };
-      expect(task.workspaceId).toBe(board);
+      // Positive control on the address itself: the member cannot reach the
+      // promote route THROUGH the other board either, so there is no spelling
+      // of this call that writes there.
+      const throughOther = await onShareHost(
+        `/workspaces/${otherBoard}/docs/${docId}/threads/${threadId}/promote`,
+        member,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ title: 'Promoted by a member' }),
+        },
+      );
+      expect(throughOther.status).toBe(403);
+      expect(await throughOther.json()).toEqual({ error: 'out_of_share_scope' });
     });
 
     it('reads a row’s backlinks without learning what a private board points at', async () => {
@@ -1144,12 +1179,12 @@ describe('share links over HTTP', () => {
       );
       expect(onPrivate.status).toBe(200);
       const privateTask = ((await onPrivate.json()) as { task: { id: string } }).task.id;
-      const linked = await postLocal(`/api/tasks/${privateTask}/links`, {
+      const linked = await postLocal(`/workspaces/${otherBoard}/tasks/${privateTask}/links`, {
         ref: { kind: 'task', taskId: sharedTask },
       });
       expect(linked.status, await linked.clone().text()).toBe(200);
 
-      const asMember = await onShareHost(`/api/tasks/${sharedTask}/links`, member);
+      const asMember = await onShareHost(`/workspaces/${board}/tasks/${sharedTask}/links`, member);
       expect(asMember.status, await asMember.clone().text()).toBe(200);
       const memberView = (await asMember.json()) as {
         backlinks: Array<{ id: string; title: string }>;
@@ -1160,7 +1195,7 @@ describe('share links over HTTP', () => {
       // Positive control on the same row: the owner, who may see both boards,
       // still gets the backlink. Without this the assertion above passes on a
       // route that answers nothing at all.
-      const asOwner = await local(`/api/tasks/${sharedTask}/links`);
+      const asOwner = await local(`/workspaces/${board}/tasks/${sharedTask}/links`);
       expect(asOwner.status).toBe(200);
       const ownerView = (await asOwner.json()) as { backlinks: Array<{ id: string }> };
       expect(ownerView.backlinks.map((b) => b.id)).toContain(privateTask);
@@ -1180,7 +1215,7 @@ describe('share links over HTTP', () => {
       const rowId = ((await filed.json()) as { task: { id: string } }).task.id;
 
       for (const seg of ['toString', 'constructor', '__proto__', 'hasOwnProperty', 'valueOf']) {
-        const r = await onShareHost(`/api/tasks/${rowId}/${seg}`, member, {
+        const r = await onShareHost(`/workspaces/${board}/tasks/${rowId}/${seg}`, member, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ to: 'done' }),
@@ -1200,7 +1235,7 @@ describe('share links over HTTP', () => {
 
       // Positive control: a real subroute on the same row still answers, so
       // the loop above is not passing because the row or the member is broken.
-      const real = await onShareHost(`/api/tasks/${rowId}/transition`, member, {
+      const real = await onShareHost(`/workspaces/${board}/tasks/${rowId}/transition`, member, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ to: 'in-progress' }),
@@ -1378,11 +1413,17 @@ describe('share links over HTTP', () => {
      * find them: without the membership stamped on the connection, ejecting a
      * member left their `/y/<doc>` reading AND writing until it dropped.
      */
-    const openSocket = async (docPath: string, email: string) => {
+    // The board is part of the socket's address, so it is an argument: this
+    // block opens sockets on TWO boards, and a doc reached through the wrong
+    // one is refused at the handshake.
+    const openSocket = async (docPath: string, email: string, ws_ = board) => {
       const jwt = await signJwt(SHARE_AUD, email);
-      const ws = new WebSocket(`ws://localhost:${handle.port}/y/${docPath}`, {
-        headers: { host: SHARE_HOST, ...CF_RAY, 'cf-access-jwt-assertion': jwt },
-      } as unknown as string[]);
+      const ws = new WebSocket(
+        `ws://localhost:${handle.port}/workspaces/${ws_}/docs/${docPath}/y`,
+        {
+          headers: { host: SHARE_HOST, ...CF_RAY, 'cf-access-jwt-assertion': jwt },
+        } as unknown as string[],
+      );
       const opened = await new Promise<boolean>((resolve) => {
         ws.addEventListener('open', () => resolve(true));
         ws.addEventListener('error', () => resolve(false));
@@ -1400,9 +1441,12 @@ describe('share links over HTTP', () => {
     /** The owner's own socket, which neither sweep may ever reach. */
     const ownerSocket = async (docPath: string) => {
       const jwt = await signJwt(OWNER_AUD, OWNER_EMAIL);
-      const ws = new WebSocket(`ws://localhost:${handle.port}/y/${docPath}`, {
-        headers: { host: OWNER_HOST, ...CF_RAY, 'cf-access-jwt-assertion': jwt },
-      } as unknown as string[]);
+      const ws = new WebSocket(
+        `ws://localhost:${handle.port}/workspaces/${board}/docs/${docPath}/y`,
+        {
+          headers: { host: OWNER_HOST, ...CF_RAY, 'cf-access-jwt-assertion': jwt },
+        } as unknown as string[],
+      );
       const opened = await new Promise<boolean>((resolve) => {
         ws.addEventListener('open', () => resolve(true));
         ws.addEventListener('error', () => resolve(false));
@@ -1437,7 +1481,7 @@ describe('share links over HTTP', () => {
       const staying = 'other-board@partner.example';
       const { linkId } = await mintLink(otherBoard);
       expect((await onShareHost(`/s/${linkId}`, staying)).status).toBe(302);
-      const held = await openSocket(otherDocId, staying);
+      const held = await openSocket(otherDocId, staying, otherBoard);
       expect(held.opened).toBe(true);
 
       // Eject the SAME address from the other board. Membership is per

@@ -37,6 +37,9 @@ const LEAD = { id: 'agent-cartographer', name: 'Cartographer', kind: 'agent' };
 /** How long an unrelated route may take while a doc read is parked. */
 const ANSWER_WITHIN_MS = 100;
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('a doc whose file never answers, reached by every request address', () => {
   let dataDir: string;
   let scratch: string;
@@ -61,10 +64,22 @@ describe('a doc whose file never answers, reached by every request address', () 
       });
     const ws = await post('/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id });
     workspaceId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
+    WS = workspaceId;
     expect(
-      (await post('/api/docs', { docId: DOC_ID, type: 'markdown', sourceUrl: boundPath })).status,
+      (
+        await post(`/workspaces/${WS}/docs`, {
+          docId: DOC_ID,
+          type: 'markdown',
+          sourceUrl: boundPath,
+        })
+      ).status,
     ).toBe(200);
-    expect((await post(`/workspaces/${workspaceId}/docs`, { docId: DOC_ID })).status).toBe(200);
+    expect((await post(`/workspaces/${workspaceId}/docs:attach`, { docId: DOC_ID })).status).toBe(
+      200,
+    );
+    // Board writes are debounced; the rounds below boot a fresh server on this
+    // same data dir and read the board back off disk.
+    first.tasks.flush();
     await first.stop();
 
     unlinkSync(boundPath);
@@ -89,18 +104,20 @@ describe('a doc whose file never answers, reached by every request address', () 
     // structurally cannot cover (see `docIdsAddressedBy`) and which is held
     // instead by `attachFileAsync` doing its own pooled read.
     const addresses: Array<{ what: string; fire: () => Promise<Response> }> = [
-      { what: 'SSE subscribe', fire: () => fetch(`${base}/events/${DOC_ID}`) },
-      { what: 'doc GET', fire: () => fetch(`${base}/api/docs/${DOC_ID}`) },
-      { what: 'doc status', fire: () => fetch(`${base}/api/docs/${DOC_ID}/status`) },
-      { what: 'review shell', fire: () => fetch(`${base}/review/${DOC_ID}`) },
       {
-        what: 'canonical workspace address',
+        what: 'SSE subscribe',
+        fire: () => fetch(`${base}/workspaces/${WS}/docs/${DOC_ID}/events:stream`),
+      },
+      { what: 'doc GET', fire: () => fetch(`${base}/workspaces/${WS}/docs/${DOC_ID}?format=json`) },
+      { what: 'doc status', fire: () => fetch(`${base}/workspaces/${WS}/docs/${DOC_ID}/status`) },
+      {
+        what: 'the doc PAGE — the same address without ?format=json',
         fire: () => fetch(`${base}/workspaces/${workspaceId}/docs/${DOC_ID}`),
       },
       {
         what: 'docId in the request body',
         fire: () =>
-          fetch(`${base}/api/docs`, {
+          fetch(`${base}/workspaces/${WS}/docs`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ docId: DOC_ID, type: 'markdown', sourceUrl: boundPath }),
@@ -141,7 +158,7 @@ describe('a doc whose file never answers, reached by every request address', () 
     handle = createServer({ port: 0, dataDir, requireSignInToWrite: false });
     const base = `http://localhost:${handle.port}`;
 
-    const res = await fetch(`${base}/api/docs/${DOC_ID}`);
+    const res = await fetch(`${base}/workspaces/${WS}/docs/${DOC_ID}?format=json`);
     expect(res.status).toBe(200);
     for (let i = 0; i < 50 && handle.docStore.boundPathOf(DOC_ID) === undefined; i++) {
       await new Promise((r) => setTimeout(r, 20));

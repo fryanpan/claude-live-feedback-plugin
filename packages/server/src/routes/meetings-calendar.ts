@@ -28,6 +28,7 @@ import { meetingDocAlias, meetingDocFilePath, meetingDocTitle } from '../huddle.
 import type { MeetingRelay } from '../meeting-protocol.ts';
 import type { MeetingStore } from '../meetings.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
+import { type WorkspaceScope, matchRest } from '../middleware/workspace-scope.ts';
 import {
   type CalendarConnectionStore,
   type CalendarSyncConsumer,
@@ -38,7 +39,7 @@ import {
 import type { DocStore } from '../doc-store.ts';
 import type { RecallMeetingRelay } from '../recall-meeting.ts';
 import type { ServerOptions } from '../server-options.ts';
-import type { TaskStore } from '../tasks.ts';
+import type { BoardWorkspace, TaskStore } from '../tasks.ts';
 
 /** The long-lived collaborators these routes need, built once per server. */
 export interface MeetingCalendarRoutesContext {
@@ -77,6 +78,13 @@ export interface MeetingCalendarRoutesContext {
 
 /** What only this request knows. */
 export interface MeetingCalendarRouteRequest {
+  /**
+   * The board this canonical path named, and the remainder under it —
+   * resolved once by `middleware/workspace-scope.ts`. `undefined` when the
+   * path is not under `/workspaces/<id>/…`; a resource route matches through
+   * `matchRest`, so with no scope it has no remainder to match.
+   */
+  scope?: WorkspaceScope<BoardWorkspace>;
   req: Request;
   url: URL;
   pathname: string;
@@ -107,7 +115,7 @@ export async function handleMeetingCalendarRoutes(
     isValidDocId,
     fileUnderBoardWorkspace,
   } = ctx;
-  const { req, url, pathname, visitor } = rq;
+  const { req, url, pathname, scope, visitor } = rq;
 
   // --- A doc's meetings (read-only) ---
   //
@@ -118,7 +126,7 @@ export async function handleMeetingCalendarRoutes(
   // evicted. There is no write and no delete here — a transcript is the
   // least reconstructible thing this server holds, because the audio is
   // already gone.
-  const meetingsMatch = pathname.match(/^\/api\/docs\/([^/]+)\/meetings$/);
+  const meetingsMatch = matchRest(scope, /^docs\/([^/]+)\/meetings$/);
   if (meetingsMatch && req.method === 'GET') {
     const addressed = decodeURIComponent(meetingsMatch[1] ?? '');
     if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
@@ -134,7 +142,7 @@ export async function handleMeetingCalendarRoutes(
       ...(live ? { recording: live.meetingId } : {}),
     });
   }
-  const meetingMatch = pathname.match(/^\/api\/docs\/([^/]+)\/meetings\/([^/]+)$/);
+  const meetingMatch = matchRest(scope, /^docs\/([^/]+)\/meetings\/([^/]+)$/);
   if (meetingMatch && req.method === 'GET') {
     const addressed = decodeURIComponent(meetingMatch[1] ?? '');
     const meetingId = decodeURIComponent(meetingMatch[2] ?? '');
@@ -156,7 +164,7 @@ export async function handleMeetingCalendarRoutes(
   // into notes already written. A LIVE meeting is refused (409): its
   // rename must also rewrite the composer's memory of what it wrote,
   // which only the session on the socket can do.
-  const lateNameMatch = pathname.match(/^\/api\/docs\/([^/]+)\/meetings\/([^/]+)\/speakers$/);
+  const lateNameMatch = matchRest(scope, /^docs\/([^/]+)\/meetings\/([^/]+)\/speakers$/);
   if (lateNameMatch && req.method === 'POST') {
     // A durable write to the meeting record plus a rewrite of the doc's
     // notes: owner-side only, like every other mutating route here.
@@ -225,14 +233,15 @@ export async function handleMeetingCalendarRoutes(
   // the meeting URL to open, sends the bot into the call, and opens a
   // discussion doc the transcript lands in.
   //
-  // Where a calendar meeting's doc opens: the board it was filed on
-  // when the join minted it, or the bare review route for one that
-  // somehow is not filed. Board-relative like the huddle route's URL.
-  const docUrlFor = (docId: string): string => {
+  // Where a calendar meeting's doc opens: the board it was filed on when the
+  // join minted it. A doc no board holds has no address, so this answers
+  // `undefined` rather than the bare review route it used to fall back to —
+  // that route is gone, and emitting it would put a 404 on the calendar.
+  const docUrlFor = (docId: string): string | undefined => {
     const ws = taskStore.workspaceOfDoc(docId);
     return ws
       ? `/workspaces/${encodeURIComponent(ws)}/docs/${encodeURIComponent(docId)}`
-      : `/review/${encodeURIComponent(docId)}`;
+      : undefined;
   };
   //
   // All on the operator's surface — these are a PERSON's verbs, so they
@@ -506,7 +515,7 @@ export async function handleMeetingCalendarRoutes(
     return j(200, { engines, default: engines[0] ?? null });
   }
 
-  const botMatch = pathname.match(/^\/api\/docs\/([^/]+)\/meeting-bot$/);
+  const botMatch = matchRest(scope, /^docs\/([^/]+)\/meeting-bot$/);
   if (botMatch) {
     const addressed = decodeURIComponent(botMatch[1] ?? '');
     if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });

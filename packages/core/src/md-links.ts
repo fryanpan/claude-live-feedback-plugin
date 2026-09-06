@@ -10,8 +10,8 @@
  *
  * Plain-text extraction, not a markdown parse. Three spellings are read —
  * `[label](url)` inline links, bare absolute http(s) URLs, and bare
- * root-relative paths (`/review/…` and friends, which real task bodies carry
- * in prose) — because those are the shapes people and agents actually write.
+ * root-relative paths (`/workspaces/…`, which real task bodies carry in
+ * prose) — because those are the shapes people and agents actually write.
  * A URL quoted in a code span counts too; over-collecting is safe here
  * because a ref is an annotation ("a dangling annotation is visible and
  * harmless" — `isValidRef`'s stance), and under-collecting silently loses a
@@ -34,7 +34,7 @@ const MD_LINK = /\[[^\]]*\]\(\s*([^)\s]+)[^)]*\)/g;
 const BARE_ABS = /https?:\/\/[^\s<>()[\]{}"']+/g;
 // Bare root-relative path, only the shapes `parseWorkspaceLink` can read —
 // an unanchored `/` would match every fraction and file path in the text.
-const BARE_REL = /(?:^|[\s([])(\/(?:review|mockup|workspaces)\/[^\s<>()[\]{}"']+)/g;
+const BARE_REL = /(?:^|[\s([])(\/workspaces\/[^\s<>()[\]{}"']+)/g;
 
 const TRAILING_PUNCTUATION = /[.,;:!?]+$/;
 

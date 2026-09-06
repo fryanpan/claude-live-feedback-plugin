@@ -16,6 +16,9 @@ import { createThreadActions } from '../src/doc/thread-actions.ts';
 
 const USER = { id: 'u1', name: 'Ann', kind: 'known', color: '#2e7dd7' } as const;
 
+/** The board the page is standing on — every resource route is under it. */
+const WS = 'w-1';
+
 interface Call {
   url: string;
   body: Record<string, unknown> | undefined;
@@ -60,6 +63,7 @@ function actions(getSelection: () => ChromeSelection | null = () => SELECTION) {
 
 describe('the writes a comment card can make', () => {
   beforeEach(() => {
+    history.replaceState(null, '', `/workspaces/${WS}/docs/doc%2Fone`);
     document.body.innerHTML = '<div id="toast" class="hidden"></div>';
   });
   afterEach(() => {
@@ -74,12 +78,12 @@ describe('the writes a comment card can make', () => {
     await a.reply('t1', 'just talking');
     await a.reply('t1', 'Thursday works', 'c9', 'opt-2');
 
-    expect(calls[0]?.url).toBe('/api/docs/doc%2Fone/threads/t1/comments');
+    expect(calls[0]?.url).toBe(`/workspaces/${WS}/docs/doc%2Fone/threads/t1/comments`);
     expect(calls[0]?.body).toEqual({ author: USER, text: 'just talking' });
 
     // The `/answer` route is what stamps `answeredAt` and takes the item off
     // the Home queue; the optionId is provenance for a TAPPED answer.
-    expect(calls[1]?.url).toBe('/api/docs/doc%2Fone/threads/t1/answer');
+    expect(calls[1]?.url).toBe(`/workspaces/${WS}/docs/doc%2Fone/threads/t1/answer`);
     expect(calls[1]?.body).toEqual({
       author: USER,
       text: 'Thursday works',
@@ -138,11 +142,11 @@ describe('the writes a comment card can make', () => {
     const a = actions();
 
     await a.resolve('t1');
-    expect(calls[0]?.url).toBe('/api/docs/doc%2Fone/threads/t1/resolve');
+    expect(calls[0]?.url).toBe(`/workspaces/${WS}/docs/doc%2Fone/threads/t1/resolve`);
     expect(toast()).toBe('✓ Resolved');
 
     await a.reopen('t1');
-    expect(calls[1]?.url).toBe('/api/docs/doc%2Fone/threads/t1/reopen');
+    expect(calls[1]?.url).toBe(`/workspaces/${WS}/docs/doc%2Fone/threads/t1/reopen`);
     expect(toast()).toBe('✓ Reopened');
 
     vi.unstubAllGlobals();
@@ -161,7 +165,7 @@ describe('the writes a comment card can make', () => {
     expect(toast()).toBe('Select some text first');
 
     await actions().reanchor('t1');
-    expect(calls[0]?.url).toBe('/api/docs/doc%2Fone/threads/t1/reanchor');
+    expect(calls[0]?.url).toBe(`/workspaces/${WS}/docs/doc%2Fone/threads/t1/reanchor`);
     expect(calls[0]?.body).toEqual({
       anchor: {
         kind: 'text-range',

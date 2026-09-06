@@ -19,6 +19,7 @@ import { type ServerHandle, createServer } from '../src/server.ts';
 import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 import { insideWriteBack, pastWriteBack, waitFor, waitForFile } from './wait-for.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 /**
  * Regression suite for the disk-clobber incident class (2026-07-15 and
@@ -107,6 +108,9 @@ Intro paragraph, second external edit.
 
 Keep this sentence intact.
 `;
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 /**
  * Build the state a crash inside the write-back window leaves behind: the
@@ -524,12 +528,13 @@ describe('sync-clobber HTTP surface', () => {
   let base: string;
   let path: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-clobber-http-'));
     path = join(dataDir, 'doc.md');
     writeFileSync(path, DOC);
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterEach(async () => {
@@ -537,15 +542,15 @@ describe('sync-clobber HTTP surface', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it('POST /api/docs/:id/content forwards the whole payload (route-layer test per learnings)', async () => {
-    const create = await fetch(`${base}/api/docs`, {
+  it(`POST /workspaces/${WS}/docs/:id/content forwards the whole payload (route-layer test per learnings)`, async () => {
+    const create = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'h1', type: 'markdown', sourceUrl: path }),
     });
     expect(create.ok).toBe(true);
 
-    const set = await fetch(`${base}/api/docs/h1/content`, {
+    const set = await fetch(`${base}/workspaces/${WS}/docs/h1/content`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ markdown: '# Via HTTP\n\nRouted body.\n' }),
@@ -553,12 +558,12 @@ describe('sync-clobber HTTP surface', () => {
     expect(set.ok).toBe(true);
     expect(((await set.json()) as { ok: boolean }).ok).toBe(true);
 
-    const read = await fetch(`${base}/api/docs/h1/content`);
+    const read = await fetch(`${base}/workspaces/${WS}/docs/h1/content`);
     expect(await read.text()).toContain('Routed body.');
   });
 
   it('edit responses surface a pending syncError so agents see trouble when they act', async () => {
-    const create = await fetch(`${base}/api/docs`, {
+    const create = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'h2', type: 'markdown', sourceUrl: path }),
@@ -577,7 +582,7 @@ describe('sync-clobber HTTP surface', () => {
     writeExternal(path, EXT_ONE);
     expect(handle.docStore.reconcileNow(h2)).toBe('conflict');
 
-    const res = await fetch(`${base}/api/docs/h2/find_and_replace`, {
+    const res = await fetch(`${base}/workspaces/${WS}/docs/h2/find_and_replace`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ find: 'Keep this sentence intact.', replace: 'Changed.' }),
@@ -597,7 +602,7 @@ describe('sync-clobber HTTP surface', () => {
     );
     if (!created.ok) throw new Error('thread create failed');
     const rewrite = await fetch(
-      `${base}/api/docs/h2/threads/${encodeURIComponent(created.thread.id)}/rewrite_region`,
+      `${base}/workspaces/${WS}/docs/h2/threads/${encodeURIComponent(created.thread.id)}/rewrite_region`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },

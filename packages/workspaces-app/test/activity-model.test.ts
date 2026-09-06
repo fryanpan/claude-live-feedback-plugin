@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
   ACTIVITY_GROUP_CAP,
   ACTIVITY_NOTE_CAP,
@@ -20,6 +20,13 @@ import {
 import { type ReviewItem } from '../src/board/board-review-model.ts';
 
 /** All fixtures are synthetic — invented agents, short fake ids. */
+
+/** The board the page is standing on — every resource route is under it. */
+const WS = 'w-1';
+
+beforeEach(() => {
+  history.replaceState(null, '', `/workspaces/${WS}/tasks`);
+});
 
 const NOW = 1_700_000_000_000;
 const MIN = 60_000;
@@ -454,7 +461,7 @@ describe('asksOf', () => {
 describe('activityCommentRequest: where a comment on a note goes', () => {
   it('posts a subject thread on the task doc whose first comment quotes the phrase', () => {
     const req = activityCommentRequest('t-abc1', 'adding the download route', 'Which route?');
-    expect(req.path).toBe('/api/docs/task%3At-abc1/threads');
+    expect(req.path).toBe(`/workspaces/${WS}/docs/task%3At-abc1/threads`);
     expect(req.body).toEqual({
       text: '> adding the download route\n\nWhich route?',
       anchor: { kind: 'subject' },

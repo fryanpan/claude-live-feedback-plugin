@@ -221,7 +221,7 @@ flowchart LR
     S1 -->|channel frame| A1["Agent<br/>mcp watch_doc"]
   end
   subgraph f2["A task: MCP tool → board"]
-    A2[Agent] -->|tool call| M2[mcp] -->|"REST /api/tasks"| G2["write gate<br/>owner · shape · deps"]
+    A2[Agent] -->|tool call| M2[mcp] -->|"REST /workspaces/{id}/tasks"| G2["write gate<br/>owner · shape · deps"]
     G2 --> T2["TaskStore<br/>tasks.ts"] --> J2[("tasks JSON · activity JSONL")]
     T2 -->|SSE| H2[Board tab]
   end

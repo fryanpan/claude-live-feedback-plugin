@@ -10,7 +10,7 @@ doc editor + injectable widget) as a single install.
 - **MCP tools for the agent** — `list_docs`, `list_threads`, `get_thread`,
   `post_reply`, `resolve_thread`, `reopen_thread`, `push_edit`,
   `observe_url`. The agent watches for new comments and replies in place.
-- **Markdown review surface** — `/review/<docId>` for live-editing
+- **Markdown review surface** — `/workspaces/<workspaceId>/docs/<docId>` for live-editing
   markdown with anchored text-range comments (Tiptap + Yjs).
 - **Git diff review** — `create_diff_review(repo, base)` renders a
   GitHub-PR-style unified diff (per-file tree, old/new line numbers,

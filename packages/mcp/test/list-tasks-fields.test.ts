@@ -156,11 +156,11 @@ describe('doc_status wiring', () => {
     );
   });
 
-  it('GETs /api/docs/:id/status and returns what it got', async () => {
-    const res = await mcp.call('doc_status', { docId: 'doc-1' });
+  it('GETs the doc status under its board, and returns what it got', async () => {
+    const res = await mcp.call('doc_status', { workspaceId: 'w-1', docId: 'doc-1' });
     const status = res.sent.find((r) => r.path.endsWith('/status'));
     expect(status?.method).toBe('GET');
-    expect(status?.path).toBe('/api/docs/doc-1/status');
+    expect(status?.path).toBe('/workspaces/w-1/docs/doc-1/status');
     expect(res.json).toEqual({ docId: 'doc-1', blocks: 12, threads: 3 });
   });
 });

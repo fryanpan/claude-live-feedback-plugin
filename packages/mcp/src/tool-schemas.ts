@@ -180,6 +180,7 @@ export const TOOL_LIST: ListToolsResult = {
               'Return the whole doc meta for each row on this page (bind configuration, diff fields, owner, provenance) instead of the compact row. Default false.',
           },
         },
+        required: ['workspaceId'],
       },
     },
     {
@@ -188,10 +189,15 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: { type: 'string' },
           status: { type: 'string', enum: ['open', 'resolved'] },
         },
-        required: ['docId'],
+        required: ['workspaceId', 'docId'],
       },
     },
     {
@@ -200,10 +206,15 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: { type: 'string' },
           threadId: { type: 'string' },
         },
-        required: ['docId', 'threadId'],
+        required: ['workspaceId', 'docId', 'threadId'],
       },
     },
     {
@@ -213,12 +224,17 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: { type: 'string' },
           threadId: { type: 'string' },
           text: { type: 'string' },
           review: REVIEW_ITEM_SCHEMA,
         },
-        required: ['docId', 'threadId', 'text'],
+        required: ['workspaceId', 'docId', 'threadId', 'text'],
       },
     },
     {
@@ -228,6 +244,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD the row is on. Required WITH taskId — that note is addressed as /workspaces/<workspaceId>/tasks/<taskId>/notes. Without taskId the note goes to your current claim, which the server resolves, and no board is named or needed: this is the one tool where the board follows the id beside it.',
+          },
           text: { type: 'string' },
           taskId: {
             type: 'string',
@@ -245,6 +266,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: {
             type: 'string',
             description: 'Doc id. A task\'s discussion lives on "task:<taskId>".',
@@ -260,7 +286,7 @@ export const TOOL_LIST: ListToolsResult = {
           text: { type: 'string' },
           review: REVIEW_ITEM_SCHEMA,
         },
-        required: ['docId', 'text'],
+        required: ['workspaceId', 'docId', 'text'],
       },
     },
     {
@@ -270,10 +296,15 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: { type: 'string' },
           threadId: { type: 'string' },
         },
-        required: ['docId', 'threadId'],
+        required: ['workspaceId', 'docId', 'threadId'],
       },
     },
     {
@@ -283,6 +314,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: { type: 'string' },
           threadId: { type: 'string' },
           force: {
@@ -291,7 +327,7 @@ export const TOOL_LIST: ListToolsResult = {
               'Regenerate even when the stored summary is already current. Use when the existing line reads wrong, not routinely — it is a billed call.',
           },
         },
-        required: ['docId', 'threadId'],
+        required: ['workspaceId', 'docId', 'threadId'],
       },
     },
     {
@@ -300,10 +336,15 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: { type: 'string' },
           threadId: { type: 'string' },
         },
-        required: ['docId', 'threadId'],
+        required: ['workspaceId', 'docId', 'threadId'],
       },
     },
     {
@@ -312,8 +353,15 @@ export const TOOL_LIST: ListToolsResult = {
         "Read a doc's plain text and block structure. The plain text is the surface find_and_replace matches against and reflects concurrent edits. The result is body-sized and has run to 320KB on a real doc — if the question is health or shape rather than text, call doc_status.",
       inputSchema: {
         type: 'object',
-        properties: { docId: { type: 'string' } },
-        required: ['docId'],
+        properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
+          docId: { type: 'string' },
+        },
+        required: ['workspaceId', 'docId'],
       },
     },
     {
@@ -322,8 +370,15 @@ export const TOOL_LIST: ListToolsResult = {
         'Cheap doc health check — metadata and counts, no body, a few hundred bytes where get_doc can run to hundreds of KB. Use it to ask whether a doc is still bound and where, whether the last sync wedged (syncError), how big get_doc would be, and whether anything is waiting.',
       inputSchema: {
         type: 'object',
-        properties: { docId: { type: 'string' } },
-        required: ['docId'],
+        properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
+          docId: { type: 'string' },
+        },
+        required: ['workspaceId', 'docId'],
       },
     },
     {
@@ -333,6 +388,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: {
             type: 'string',
             description:
@@ -342,11 +402,6 @@ export const TOOL_LIST: ListToolsResult = {
           title: { type: 'string' },
           setId: { type: 'string' },
           subscribe: { type: 'boolean' },
-          hubWorkspaceId: {
-            type: 'string',
-            description:
-              'Optional board to file this under — the id `create_workspace` returned, not a grouping/review id. Omit it and it still lands on a board: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went.',
-          },
           producedBy: {
             type: 'object',
             description:
@@ -357,7 +412,7 @@ export const TOOL_LIST: ListToolsResult = {
             },
           },
         },
-        required: ['docId', 'path'],
+        required: ['workspaceId', 'docId', 'path'],
       },
     },
     {
@@ -367,6 +422,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: { type: 'string' },
           markdown: { type: 'string', description: 'Full replacement markdown for the doc.' },
           confirmOverwriteHumanEdits: {
@@ -375,7 +435,7 @@ export const TOOL_LIST: ListToolsResult = {
               'Acknowledge a 409 stale-write refusal AFTER re-reading the doc and re-applying your change onto its current content. Never pass it pre-emptively — it disables the guard that keeps a stale copy from destroying a human’s concurrent edits.',
           },
         },
-        required: ['docId', 'markdown'],
+        required: ['workspaceId', 'docId', 'markdown'],
       },
     },
     {
@@ -384,8 +444,15 @@ export const TOOL_LIST: ListToolsResult = {
         'Force-pull a bound file from disk into the live doc — recovery for when an external edit did not propagate. Destructive: un-flushed live edits are overwritten and anchors in replaced regions can orphan. Reach for it when get_doc returns stale content or a syncError, not routinely.',
       inputSchema: {
         type: 'object',
-        properties: { docId: { type: 'string' } },
-        required: ['docId'],
+        properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
+          docId: { type: 'string' },
+        },
+        required: ['workspaceId', 'docId'],
       },
     },
     {
@@ -395,22 +462,32 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: { type: 'string' },
           force: {
             type: 'boolean',
             description: 'Delete even if open threads exist. Default false.',
           },
         },
-        required: ['docId'],
+        required: ['workspaceId', 'docId'],
       },
     },
     {
       name: 'attach_mockup',
       description:
-        'Serve an HTML mockup at /mockup/<docId> and bind it for comments — the server reads the file at sourceHtmlPath on each request, so edits show up on reload, and captures what it read so the link keeps working after your scratch directory is cleaned up. An unreadable sourceHtmlPath fails HERE rather than 404ing later in front of the reviewer. Hand the returned meta.reviewUrl to a person. Single-file mockups only: relative CSS/JS siblings will not resolve. Idempotent.',
+        'Serve an HTML mockup at /workspaces/<workspaceId>/mockups/<docId> and bind it for comments — the server reads the file at sourceHtmlPath on each request, so edits show up on reload, and captures what it read so the link keeps working after your scratch directory is cleaned up. An unreadable sourceHtmlPath fails HERE rather than 404ing later in front of the reviewer. Hand the returned meta.reviewUrl to a person. Single-file mockups only: relative CSS/JS siblings will not resolve. Idempotent.',
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: {
             type: 'string',
             description:
@@ -419,13 +496,8 @@ export const TOOL_LIST: ListToolsResult = {
           sourceHtmlPath: { type: 'string' },
           title: { type: 'string' },
           subscribe: { type: 'boolean' },
-          hubWorkspaceId: {
-            type: 'string',
-            description:
-              'Optional board to file this under — the id `create_workspace` returned, not a grouping/review id. Omit it and it still lands on a board: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went.',
-          },
         },
-        required: ['docId', 'sourceHtmlPath'],
+        required: ['workspaceId', 'docId', 'sourceHtmlPath'],
       },
     },
     {
@@ -435,6 +507,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           folderPath: { type: 'string' },
           exclude: {
             type: 'array',
@@ -442,11 +519,10 @@ export const TOOL_LIST: ListToolsResult = {
             description:
               "Path prefixes (relative to the folder) to keep out of the review, e.g. ['node_modules', 'vendor']. Persisted, so refresh_attachment_set replays it.",
           },
-          workspaceId: { type: 'string' },
-          hubWorkspaceId: {
+          setId: {
             type: 'string',
             description:
-              'Optional board to file this under — the id `create_workspace` returned, not a grouping/review id. Omit it and it still lands on a board: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went.',
+              "The attachment SET's own id, to re-use rather than mint one — the id this call returned last time. It was spelled `workspaceId` here until the routes cutover, which is the word every other tool uses for the BOARD; this call is the one that takes both, so they are spelled apart.",
           },
           title: { type: 'string' },
           include: { type: 'array', items: { type: 'string' } },
@@ -462,7 +538,7 @@ export const TOOL_LIST: ListToolsResult = {
             },
           },
         },
-        required: ['folderPath'],
+        required: ['workspaceId', 'folderPath'],
       },
     },
     {
@@ -472,6 +548,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           repo: { type: 'string', description: 'Absolute path to the local git repo/worktree.' },
           base: {
             type: 'string',
@@ -487,11 +568,6 @@ export const TOOL_LIST: ListToolsResult = {
             type: 'string',
             description:
               'Optional review/workspace id. Defaults to <repo-basename>-<base7>-<target7|live>.',
-          },
-          hubWorkspaceId: {
-            type: 'string',
-            description:
-              'Optional board to file this under — the id `create_workspace` returned, not a grouping/review id. Omit it and it still lands on a board: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went.',
           },
           title: { type: 'string' },
           exclude: {
@@ -525,7 +601,7 @@ export const TOOL_LIST: ListToolsResult = {
             },
           },
         },
-        required: ['repo'],
+        required: ['workspaceId', 'repo'],
       },
     },
     {
@@ -535,6 +611,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           setId: {
             type: 'string',
             description:
@@ -550,7 +631,7 @@ export const TOOL_LIST: ListToolsResult = {
               'Destroy the persisted state instead of archiving it. Default false, and leaving it false is almost always right — a purged .ydoc cannot be restored and silently shortens the history the weekly analyses read.',
           },
         },
-        required: ['setId'],
+        required: ['workspaceId', 'setId'],
       },
     },
     {
@@ -560,6 +641,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           setId: {
             type: 'string',
             description:
@@ -570,7 +656,7 @@ export const TOOL_LIST: ListToolsResult = {
             description: 'Why this attachment set is finished — e.g. "merged in #301".',
           },
         },
-        required: ['setId'],
+        required: ['workspaceId', 'setId'],
       },
     },
     {
@@ -580,9 +666,14 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           setId: { type: 'string' },
         },
-        required: ['setId'],
+        required: ['workspaceId', 'setId'],
       },
     },
     {
@@ -592,13 +683,18 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: { type: 'string' },
           reason: {
             type: 'string',
             description: 'Why this doc is finished — e.g. "draft published".',
           },
         },
-        required: ['docId'],
+        required: ['workspaceId', 'docId'],
       },
     },
     {
@@ -608,16 +704,31 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: { type: 'string' },
         },
-        required: ['docId'],
+        required: ['workspaceId', 'docId'],
       },
     },
     {
       name: 'list_archived_attachments',
       description:
         'Everything archived on this server, newest first, in two keys: archived for whole attachment sets (feed to unarchive_attachment_set) and docs for single docs (feed to unarchive_doc). Each carries when, by whom, the reason, and the boards it will return to. This is the answer to "what can I bring back".',
-      inputSchema: { type: 'object', properties: {} },
+      inputSchema: {
+        type: 'object',
+        properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
+        },
+        required: ['workspaceId'],
+      },
     },
     {
       name: 'delete_workspace',
@@ -647,13 +758,18 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           setId: {
             type: 'string',
             description:
               'The attachment set: reviewId from create_diff_review, or setId from attach_folder.',
           },
         },
-        required: ['setId'],
+        required: ['workspaceId', 'setId'],
       },
     },
     {
@@ -663,6 +779,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           setId: {
             type: 'string',
             description: 'reviewId from create_diff_review.',
@@ -681,7 +802,7 @@ export const TOOL_LIST: ListToolsResult = {
             },
           },
         },
-        required: ['setId', 'groups'],
+        required: ['workspaceId', 'setId', 'groups'],
       },
     },
     {
@@ -691,6 +812,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: { type: 'string' },
           find: { type: 'string' },
           replace: { type: 'string' },
@@ -709,7 +835,7 @@ export const TOOL_LIST: ListToolsResult = {
               'Propose the change instead of applying it. Returns { suggestionId } instead of ok:true.',
           },
         },
-        required: ['docId', 'find', 'replace'],
+        required: ['workspaceId', 'docId', 'find', 'replace'],
       },
     },
     {
@@ -719,6 +845,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: { type: 'string' },
           threadId: { type: 'string' },
           replacement: { type: 'string' },
@@ -729,7 +860,7 @@ export const TOOL_LIST: ListToolsResult = {
               'Propose the rewrite instead of applying it. Returns { suggestionId } instead of ok:true.',
           },
         },
-        required: ['docId', 'threadId', 'replacement'],
+        required: ['workspaceId', 'docId', 'threadId', 'replacement'],
       },
     },
     {
@@ -739,9 +870,14 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: { type: 'string' },
         },
-        required: ['docId'],
+        required: ['workspaceId', 'docId'],
       },
     },
     {
@@ -751,10 +887,15 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: { type: 'string' },
           sid: { type: 'string' },
         },
-        required: ['docId', 'sid'],
+        required: ['workspaceId', 'docId', 'sid'],
       },
     },
     {
@@ -764,10 +905,15 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: { type: 'string' },
           sid: { type: 'string' },
         },
-        required: ['docId', 'sid'],
+        required: ['workspaceId', 'docId', 'sid'],
       },
     },
     {
@@ -777,11 +923,16 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: { type: 'string' },
           action: { type: 'string', enum: ['accept', 'reject'] },
           authorId: { type: 'string' },
         },
-        required: ['docId', 'action'],
+        required: ['workspaceId', 'docId', 'action'],
       },
     },
     {
@@ -791,11 +942,16 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: { type: 'string' },
           threadId: { type: 'string' },
           text: { type: 'string' },
         },
-        required: ['docId', 'threadId', 'text'],
+        required: ['workspaceId', 'docId', 'threadId', 'text'],
       },
     },
     {
@@ -805,6 +961,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: { type: 'string' },
           threadId: { type: 'string' },
           markdown: { type: 'string' },
@@ -815,7 +976,7 @@ export const TOOL_LIST: ListToolsResult = {
               "Where to splice. Default 'after-block' inserts after the anchor's innermost block, which nests under a list item when the anchor sits in one. Pass 'top-level' to insert after the whole containing list or table.",
           },
         },
-        required: ['docId', 'threadId', 'markdown'],
+        required: ['workspaceId', 'docId', 'threadId', 'markdown'],
       },
     },
     {
@@ -825,6 +986,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: { type: 'string' },
           find: { type: 'string' },
           contextBefore: { type: 'string' },
@@ -832,7 +998,7 @@ export const TOOL_LIST: ListToolsResult = {
           occurrence: { type: 'number' },
           label: { type: 'string' },
         },
-        required: ['docId', 'find'],
+        required: ['workspaceId', 'docId', 'find'],
       },
     },
     {
@@ -842,6 +1008,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: { type: 'string' },
           anchorId: { type: 'string' },
           op: {
@@ -853,7 +1024,7 @@ export const TOOL_LIST: ListToolsResult = {
             required: ['kind', 'text'],
           },
         },
-        required: ['docId', 'anchorId', 'op'],
+        required: ['workspaceId', 'docId', 'anchorId', 'op'],
       },
     },
     {
@@ -863,6 +1034,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: { type: 'string' },
           anchorId: { type: 'string' },
           markdown: { type: 'string' },
@@ -873,7 +1049,7 @@ export const TOOL_LIST: ListToolsResult = {
               "Where to splice. Default 'after-block' inserts after the anchor's innermost block, which nests under a list item when the anchor sits in one. Pass 'top-level' to insert after the whole containing list or table.",
           },
         },
-        required: ['docId', 'anchorId', 'markdown'],
+        required: ['workspaceId', 'docId', 'anchorId', 'markdown'],
       },
     },
     {
@@ -881,8 +1057,16 @@ export const TOOL_LIST: ListToolsResult = {
       description: 'Remove a previously-created agent anchor. Useful for cleanup between tasks.',
       inputSchema: {
         type: 'object',
-        properties: { docId: { type: 'string' }, anchorId: { type: 'string' } },
-        required: ['docId', 'anchorId'],
+        properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
+          docId: { type: 'string' },
+          anchorId: { type: 'string' },
+        },
+        required: ['workspaceId', 'docId', 'anchorId'],
       },
     },
     {
@@ -892,11 +1076,16 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: { type: 'string' },
           threadId: { type: 'string' },
           anchorId: { type: 'string' },
         },
-        required: ['docId'],
+        required: ['workspaceId', 'docId'],
       },
     },
     {
@@ -906,6 +1095,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: { type: 'string' },
           startFind: { type: 'string' },
           endFind: { type: 'string' },
@@ -914,7 +1108,7 @@ export const TOOL_LIST: ListToolsResult = {
           startOccurrence: { type: 'number' },
           endOccurrence: { type: 'number' },
         },
-        required: ['docId', 'startFind', 'endFind'],
+        required: ['workspaceId', 'docId', 'startFind', 'endFind'],
       },
     },
     {
@@ -924,12 +1118,17 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           docId: { type: 'string' },
           heading: { type: 'string' },
           level: { type: 'number' },
           occurrence: { type: 'number' },
         },
-        required: ['docId', 'heading'],
+        required: ['workspaceId', 'docId', 'heading'],
       },
     },
     {
@@ -938,7 +1137,9 @@ export const TOOL_LIST: ListToolsResult = {
         'Return the SSE URL that streams live thread events for a doc. Useful for long-running agents.',
       inputSchema: {
         type: 'object',
-        properties: { docId: { type: 'string' } },
+        properties: {
+          docId: { type: 'string' },
+        },
         required: ['docId'],
       },
     },
@@ -948,7 +1149,9 @@ export const TOOL_LIST: ListToolsResult = {
         "Subscribe this session to a doc's comment events, delivered as channel messages. Usually unnecessary — attach_markdown, attach_mockup and most docId-bearing tools subscribe you already, and set_workspace_lead covers every doc on your board. Reach for it for a doc you have not otherwise touched, such as a peer's review you only want to observe. persisted: false means a restart will drop it.",
       inputSchema: {
         type: 'object',
-        properties: { docId: { type: 'string' } },
+        properties: {
+          docId: { type: 'string' },
+        },
         required: ['docId'],
       },
     },
@@ -958,7 +1161,9 @@ export const TOOL_LIST: ListToolsResult = {
         'Stop pushing channel events for this doc, and forget it on the server so a respawn does not bring it back.',
       inputSchema: {
         type: 'object',
-        properties: { docId: { type: 'string' } },
+        properties: {
+          docId: { type: 'string' },
+        },
         required: ['docId'],
       },
     },
@@ -966,7 +1171,10 @@ export const TOOL_LIST: ListToolsResult = {
       name: 'list_watched_docs',
       description:
         'What this session is subscribed to — and, more usefully, what it is missing. coverage.unattachedBoards names boards you follow but are not live on, with what is queued for their lead and the remedy for each: set_workspace_lead when the seat is empty, heartbeat when it is yours and you went quiet, attach_agent when a live peer holds it. restore.status tells an empty list apart from a failed restore. coverage absent means unknown, never all-clear.',
-      inputSchema: { type: 'object', properties: {} },
+      inputSchema: {
+        type: 'object',
+        properties: {},
+      },
     },
     {
       name: 'share_workspace',
@@ -978,7 +1186,7 @@ export const TOOL_LIST: ListToolsResult = {
           workspaceId: {
             type: 'string',
             description:
-              'The BOARD to share — the id create_workspace returned, or the hubWorkspaceId attach_folder / create_diff_review reported. NOT a review/review id.',
+              'The BOARD to share — the id create_workspace returned, the same one every other tool takes as workspaceId. NOT a review/attachment-set id.',
           },
           ttlSeconds: {
             type: 'number',
@@ -1026,7 +1234,10 @@ export const TOOL_LIST: ListToolsResult = {
       name: 'list_shares',
       description:
         'Every share of every board: the links, who has redeemed each one and when, and whether each is live, revoked or expired — plus any shares still on the retired per-hostname mode, with their hostnames and allowed domains.',
-      inputSchema: { type: 'object', properties: {} },
+      inputSchema: {
+        type: 'object',
+        properties: {},
+      },
     },
     {
       name: 'unshare',
@@ -1034,7 +1245,9 @@ export const TOOL_LIST: ListToolsResult = {
         'Revoke a share by id. For a share link this stops anyone NEW redeeming it and leaves the people who already joined as members — use remove_share_member to eject somebody. For a share on the retired per-hostname mode it deletes the Cloudflare Access app and policy and removes the entry. Use it for early teardown; a link with a TTL otherwise lapses on its own, and one without never does.',
       inputSchema: {
         type: 'object',
-        properties: { shareId: { type: 'string' } },
+        properties: {
+          shareId: { type: 'string' },
+        },
         required: ['shareId'],
       },
     },
@@ -1106,7 +1319,9 @@ export const TOOL_LIST: ListToolsResult = {
         'Bring a retired board back. It ranks again, takes new work again, and stops warning readers. Nothing has to be restored — retiring only ever wrote one field — so this is a plain reversal and not a recovery.',
       inputSchema: {
         type: 'object',
-        properties: { workspaceId: { type: 'string', description: 'Board workspace id.' } },
+        properties: {
+          workspaceId: { type: 'string', description: 'Board workspace id.' },
+        },
         required: ['workspaceId'],
       },
     },
@@ -1314,7 +1529,7 @@ export const TOOL_LIST: ListToolsResult = {
               'The criteria, as prose the judge will read. Up to 4,000 characters. Omit to restore the default.',
           },
         },
-        required: [],
+        required: ['workspaceId'],
       },
     },
     {
@@ -1323,7 +1538,9 @@ export const TOOL_LIST: ListToolsResult = {
         "Read a board's goals in priority order, with per-goal task counts, plus the parallelism cap — its value, slots in use and free, and who last moved it and when. First row is the highest band. Call it before deciding what to work on — list_tasks returns goal ids only, so without this the ordering is invisible. Cheap by design: pair it with next_tasks, which carries the tasks themselves.",
       inputSchema: {
         type: 'object',
-        properties: { workspaceId: { type: 'string' } },
+        properties: {
+          workspaceId: { type: 'string' },
+        },
         required: ['workspaceId'],
       },
     },
@@ -1412,6 +1629,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           taskId: { type: 'string' },
           to: { type: 'string', enum: [...TASK_STATUSES] },
           note: { type: 'string' },
@@ -1423,7 +1645,7 @@ export const TOOL_LIST: ListToolsResult = {
             },
           },
         },
-        required: ['taskId', 'to'],
+        required: ['workspaceId', 'taskId', 'to'],
       },
     },
     {
@@ -1433,6 +1655,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           taskId: { type: 'string' },
           assignee: {
             type: 'string',
@@ -1446,7 +1673,7 @@ export const TOOL_LIST: ListToolsResult = {
               "'person' or 'agent' — say which whenever `assignee` is a name that is not your own. The board cannot tell a person from an agent of the same name and will not guess, so an undeclared owner shows as \"not recorded\". Not needed for yourself or for 'human'.",
           },
         },
-        required: ['taskId', 'assignee'],
+        required: ['workspaceId', 'taskId', 'assignee'],
       },
     },
     {
@@ -1456,6 +1683,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           taskId: { type: 'string' },
           blockedBy: {
             description:
@@ -1463,7 +1695,7 @@ export const TOOL_LIST: ListToolsResult = {
             oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
           },
         },
-        required: ['taskId', 'blockedBy'],
+        required: ['workspaceId', 'taskId', 'blockedBy'],
       },
     },
     {
@@ -1473,6 +1705,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           taskId: { type: 'string' },
           reason: {
             type: 'string',
@@ -1480,7 +1717,7 @@ export const TOOL_LIST: ListToolsResult = {
               'Why, in one line — e.g. "duplicate of the index row" or "the goal moved past this". Capped at 200 characters. Optional, and the row is archived either way; it is the half a later reader acts on.',
           },
         },
-        required: ['taskId'],
+        required: ['workspaceId', 'taskId'],
       },
     },
     {
@@ -1489,8 +1726,15 @@ export const TOOL_LIST: ListToolsResult = {
         'Put an archived task back — it rejoins its band at the position, status and owner it always had. Find archived rows with list_tasks(includeArchived: true). A row that was not archived answers changed: false rather than erroring.',
       inputSchema: {
         type: 'object',
-        properties: { taskId: { type: 'string' } },
-        required: ['taskId'],
+        properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
+          taskId: { type: 'string' },
+        },
+        required: ['workspaceId', 'taskId'],
       },
     },
     {
@@ -1500,6 +1744,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           taskId: { type: 'string' },
           title: {
             type: 'string',
@@ -1517,7 +1766,7 @@ export const TOOL_LIST: ListToolsResult = {
               'Why you are rewriting, in one line — e.g. "title named the artifact, not the outcome". Recorded on the audit row and rendered in the activity feed, so the filer can see what the rewrite was for.',
           },
         },
-        required: ['taskId', 'reason'],
+        required: ['workspaceId', 'taskId', 'reason'],
       },
     },
     {
@@ -1527,6 +1776,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           taskId: { type: 'string' },
           goal: { type: 'string', description: 'Goal id, or "chores".' },
           position: { type: 'number' },
@@ -1536,7 +1790,7 @@ export const TOOL_LIST: ListToolsResult = {
               'Echo the batchId from the `workspace.goals_changed` event this placement answers. It ties the move to the goal edit that prompted it, so the activity view reads N moves as one edit instead of N unexplained rereviews.',
           },
         },
-        required: ['taskId', 'goal'],
+        required: ['workspaceId', 'taskId', 'goal'],
       },
     },
     {
@@ -1619,10 +1873,15 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           taskId: { type: 'string', description: 'The ticket the question hangs on.' },
           review: TASK_REVIEW_ITEM_SCHEMA,
         },
-        required: ['taskId', 'review'],
+        required: ['workspaceId', 'taskId', 'review'],
       },
     },
     {
@@ -1632,6 +1891,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           taskId: { type: 'string' },
           reviewItemId: {
             type: 'string',
@@ -1645,7 +1909,7 @@ export const TOOL_LIST: ListToolsResult = {
               "The id of the option they picked, if they picked one. The answer is still `text` — pass the option's label as the text. Omit when they answered in their own words.",
           },
         },
-        required: ['text'],
+        required: ['workspaceId', 'text'],
       },
     },
     {
@@ -1655,6 +1919,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           taskId: { type: 'string' },
           reviewItemId: {
             type: 'string',
@@ -1663,7 +1932,7 @@ export const TOOL_LIST: ListToolsResult = {
           },
           question: { type: 'string', description: 'What they want to know, verbatim.' },
         },
-        required: ['question'],
+        required: ['workspaceId', 'question'],
       },
     },
     {
@@ -1673,6 +1942,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           taskId: {
             type: 'string',
             description:
@@ -1716,7 +1990,7 @@ export const TOOL_LIST: ListToolsResult = {
         // No unconditional required list: which ids are required depends on
         // which of the two addresses the caller is using, and the handler
         // refuses a half-written one by name.
-        required: [],
+        required: ['workspaceId'],
       },
     },
     {
@@ -1726,6 +2000,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           reviewItemId: {
             type: 'string',
             description:
@@ -1759,7 +2038,7 @@ export const TOOL_LIST: ListToolsResult = {
         // Which ids are required depends on which address the caller is
         // using — a bare reviewItemId, or the doc-thread triple — and the
         // handler refuses a half-written one by name.
-        required: [],
+        required: ['workspaceId'],
       },
     },
     {
@@ -1769,6 +2048,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           taskId: { type: 'string' },
           text: { type: 'string', description: "The human's verbatim answer." },
           optionId: {
@@ -1782,7 +2066,7 @@ export const TOOL_LIST: ListToolsResult = {
               "Which of the ticket's review items is being answered. Omit — as every caller before this field existed does — and the answer lands on the ticket's own decision, exactly as it always has.",
           },
         },
-        required: ['taskId', 'text'],
+        required: ['workspaceId', 'taskId', 'text'],
       },
     },
     {
@@ -1792,6 +2076,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           taskId: { type: 'string', description: 'The BLOCKED task — the one that waits.' },
           after: {
             type: 'array',
@@ -1806,7 +2095,7 @@ export const TOOL_LIST: ListToolsResult = {
               'Subset of `after` that hard-blocks transitions while open. Every id here MUST also appear in `after` — the call is refused rather than silently widening `after`.',
           },
         },
-        required: ['taskId', 'after'],
+        required: ['workspaceId', 'taskId', 'after'],
       },
     },
     {
@@ -1833,10 +2122,15 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           taskId: { type: 'string' },
           ref: { type: 'object' },
         },
-        required: ['taskId', 'ref'],
+        required: ['workspaceId', 'taskId', 'ref'],
       },
     },
     {
@@ -1846,10 +2140,15 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           taskId: { type: 'string' },
           ref: { type: 'object' },
         },
-        required: ['taskId', 'ref'],
+        required: ['workspaceId', 'taskId', 'ref'],
       },
     },
     {
@@ -1912,13 +2211,18 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           taskId: { type: 'string', description: 'The task the builder is working.' },
           worktreePath: {
             type: 'string',
             description: "Absolute path to the builder's git worktree on this machine.",
           },
         },
-        required: ['taskId', 'worktreePath'],
+        required: ['workspaceId', 'taskId', 'worktreePath'],
       },
     },
     {
@@ -1928,9 +2232,14 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           taskId: { type: 'string', description: 'The task whose dispatch to close.' },
         },
-        required: ['taskId'],
+        required: ['workspaceId', 'taskId'],
       },
     },
     {
@@ -1955,7 +2264,10 @@ export const TOOL_LIST: ListToolsResult = {
       name: 'request_plugin_refresh',
       description:
         "Ask this machine to fetch the newest plugin from the marketplace. Call it when a board's settings panel says sessions are running an older bundle. It requests rather than forces — the update rewrites a version-keyed cache, so nothing running is interrupted and each session picks it up at its next restart. changed: false with matching versions means the cache was already current.",
-      inputSchema: { type: 'object', properties: {} },
+      inputSchema: {
+        type: 'object',
+        properties: {},
+      },
     },
     {
       name: 'get_unfiled_ask_count',
@@ -1964,11 +2276,17 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           agent: {
             type: 'string',
             description: "Display name to read; defaults to this session's own (CW_AGENT_NAME).",
           },
         },
+        required: ['workspaceId'],
       },
     },
     {
@@ -1978,6 +2296,11 @@ export const TOOL_LIST: ListToolsResult = {
       inputSchema: {
         type: 'object',
         properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to.',
+          },
           day: { type: 'string', description: 'Audited day, YYYY-MM-DD. Defaults to today.' },
           entries: {
             type: 'array',
@@ -2001,7 +2324,7 @@ export const TOOL_LIST: ListToolsResult = {
             },
           },
         },
-        required: ['entries'],
+        required: ['workspaceId', 'entries'],
       },
     },
     {
@@ -2010,7 +2333,9 @@ export const TOOL_LIST: ListToolsResult = {
         "List the agents attached to a board workspace with their derived state: active, 'process up, agent unresponsive' (fresh heartbeat, stale tool calls), or 'away — requests queue'. The ambient-awareness read: who is where, and is anyone wedged.",
       inputSchema: {
         type: 'object',
-        properties: { workspaceId: { type: 'string' } },
+        properties: {
+          workspaceId: { type: 'string' },
+        },
         required: ['workspaceId'],
       },
     },

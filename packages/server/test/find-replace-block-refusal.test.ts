@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 /**
  * What an agent actually READS when find_and_replace refuses block markdown.
@@ -13,6 +14,9 @@ import { type ServerHandle, createServer } from '../src/server.ts';
  * test asserts the body text, over the real route, because that is the only
  * place the surfaced wording exists.
  */
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('find_and_replace refusal names the verb that does the job', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -22,9 +26,10 @@ describe('find_and_replace refusal names the verb that does the job', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'feedback-far-block-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     const file = join(dataDir, 'far-block.md');
     writeFileSync(file, 'A paragraph holding the anchor phrase.\n');
-    const created = await fetch(`${base}/api/docs`, {
+    const created = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'far-block', type: 'markdown', sourceUrl: file }),
@@ -38,7 +43,7 @@ describe('find_and_replace refusal names the verb that does the job', () => {
   });
 
   async function refuse(replace: string): Promise<{ status: number; text: string }> {
-    const res = await fetch(`${base}/api/docs/far-block/find_and_replace`, {
+    const res = await fetch(`${base}/workspaces/${WS}/docs/far-block/find_and_replace`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ find: 'anchor phrase', replace }),
@@ -62,13 +67,13 @@ describe('find_and_replace refusal names the verb that does the job', () => {
   });
 
   it('an ordinary inline replacement still succeeds', async () => {
-    const res = await fetch(`${base}/api/docs/far-block/find_and_replace`, {
+    const res = await fetch(`${base}/workspaces/${WS}/docs/far-block/find_and_replace`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ find: 'anchor phrase', replace: 'replacement phrase' }),
     });
     expect(res.status).toBe(200);
-    const doc = (await (await fetch(`${base}/api/docs/far-block/content`)).json()) as {
+    const doc = (await (await fetch(`${base}/workspaces/${WS}/docs/far-block/content`)).json()) as {
       plainText: string;
     };
     expect(doc.plainText).toContain('replacement phrase');

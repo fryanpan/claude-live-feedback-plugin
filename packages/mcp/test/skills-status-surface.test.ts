@@ -132,11 +132,15 @@ describe('the shipped bundle carries the verb the skills name', () => {
 
   it('declares post_status, and it posts a note on the named row', async () => {
     expect(mcp.tool('post_status')).toBeDefined();
-    const res = await mcp.call('post_status', { taskId: 't-1', text: 'Gates green, PR open.' });
+    const res = await mcp.call('post_status', {
+      workspaceId: 'w-1',
+      taskId: 't-1',
+      text: 'Gates green, PR open.',
+    });
     expect(res.isError).toBe(false);
     const sent = res.sent.find((r) => r.path.endsWith('/notes'));
     expect(sent?.method).toBe('POST');
-    expect(sent?.path).toBe('/api/tasks/t-1/notes');
+    expect(sent?.path).toBe('/workspaces/w-1/tasks/t-1/notes');
     // `kind: status` is what puts it on the Activity tab rather than in the
     // comment feed — the whole point of the verb the skills now name.
     expect((sent?.body as { kind?: string })?.kind).toBe('status');

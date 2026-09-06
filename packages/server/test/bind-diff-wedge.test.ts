@@ -26,6 +26,7 @@ import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { boundFiles } from '../src/slow-fs.ts';
 import { makeFifo, releaseFifosIn } from './fifo.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 /**
  * The budget an unrelated route has while the bind is parked on a file that
@@ -43,6 +44,9 @@ function git(repo: string, args: string[]): void {
   execFileSync('git', ['-C', repo, ...args], { stdio: 'pipe' });
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('binding a diff over a tree that has stopped answering', () => {
   let dataDir: string;
   let repo: string;
@@ -50,7 +54,7 @@ describe('binding a diff over a tree that has stopped answering', () => {
   let readable: string;
   let handle: ServerHandle | undefined;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     boundFiles.reset();
     dataDir = mkdtempSync(join(tmpdir(), 'bind-wedge-data-'));
     repo = mkdtempSync(join(tmpdir(), 'bind-wedge-repo-'));
@@ -88,7 +92,7 @@ describe('binding a diff over a tree that has stopped answering', () => {
 
   /** An unrelated route answers within its budget; never rejects. */
   function healthAnswers(base: string): Promise<string> {
-    const probe = fetch(`${base}/api/docs`).then((r) => `answered:${r.status}`);
+    const probe = fetch(`${base}/workspaces/${WS}/docs`).then((r) => `answered:${r.status}`);
     const tooSlow = new Promise<string>((resolve) =>
       setTimeout(() => resolve('wedged'), HEALTH_MS),
     );
@@ -98,15 +102,16 @@ describe('binding a diff over a tree that has stopped answering', () => {
   it('parks the file that will not answer and leaves the server answering', async () => {
     handle = createServer({ port: 0, dataDir, requireSignInToWrite: false });
     const base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     // Warm the route first. The very first request to a fresh server pays for
     // module loading and route compilation, and a budget this tight would
     // otherwise be measuring that rather than the event loop.
-    expect((await fetch(`${base}/api/docs`)).status).toBe(200);
+    expect((await fetch(`${base}/workspaces/${WS}/docs`)).status).toBe(200);
 
     // Caught, not bare: if the assertion below fails, `afterEach` stops the
     // server while this is still in flight, and a bare rejection would be
     // reported against whichever test runs next.
-    const bind = fetch(`${base}/api/diffs`, {
+    const bind = fetch(`${base}/workspaces/${WS}/reviews`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ repo, base: 'HEAD' }),
@@ -144,8 +149,9 @@ describe('binding a diff over a tree that has stopped answering', () => {
 
     handle = createServer({ port: 0, dataDir, requireSignInToWrite: false });
     const base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
 
-    const res = await fetch(`${base}/api/diffs`, {
+    const res = await fetch(`${base}/workspaces/${WS}/reviews`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ repo, base: 'HEAD' }),

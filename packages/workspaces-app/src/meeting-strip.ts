@@ -78,6 +78,7 @@ import {
 } from '@feedback/core';
 import type { MeetingTranscriptEvent } from '@feedback/core';
 import { parseRoomSpeakers } from '@feedback/core';
+import { currentWorkspaceId } from './doc-path.ts';
 import {
   type AdvancedState,
   advancedControls,
@@ -989,7 +990,11 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       return;
     }
     capture = started.capture;
-    const sock = openSocket(meetingSocketUrl(docId));
+    // The board this surface is on. Reading it from the URL rather than
+    // taking it as a prop keeps it the same board every other request from
+    // this page names — the strip is mounted on a doc page, which is always
+    // under one.
+    const sock = openSocket(meetingSocketUrl(currentWorkspaceId() ?? '', docId));
     socket = sock;
     sock.onopen = () => {
       socketOpen = true;

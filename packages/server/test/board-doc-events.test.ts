@@ -24,6 +24,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { taskBodyDocId, workspaceDocId } from '../src/task-projection.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-reviewer', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
 
@@ -57,6 +58,9 @@ function listen(res: Response): { events: string[]; stop: () => void } {
 
 const countOf = (events: string[], name: string) => events.filter((e) => e === name).length;
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('a doc thread reaches the boards holding the doc', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -72,11 +76,12 @@ describe('a doc thread reaches the boards holding the doc', () => {
   const get = (path: string) =>
     fetch(`${base}${path}`, { headers: { host: `localhost:${handle.port}` } });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'board-doc-events-'));
     srcDir = mkdtempSync(join(tmpdir(), 'board-doc-src-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterEach(async () => {
@@ -93,6 +98,7 @@ describe('a doc thread reaches the boards holding the doc', () => {
   ): Promise<{ workspaceId: string; heard: ReturnType<typeof listen> }> {
     const w = await post('/workspaces', { name, goal: 'Ship the index.' });
     const { workspace } = (await w.json()) as { workspace: { id: string } };
+    WS = workspace.id;
 
     const att = await post(`/workspaces/${workspace.id}/agents`, {
       agentId,
@@ -111,7 +117,7 @@ describe('a doc thread reaches the boards holding the doc', () => {
   async function makeDoc(docId: string, hubWorkspaceId?: string): Promise<void> {
     const path = join(srcDir, `${docId}.md`);
     writeFileSync(path, `# ${docId}\n\nFirst paragraph.\n`);
-    const res = await post('/api/docs', {
+    const res = await post(`/workspaces/${WS}/docs`, {
       docId,
       sourceUrl: path,
       title: docId,
@@ -126,7 +132,7 @@ describe('a doc thread reaches the boards holding the doc', () => {
   }
 
   const comment = (docId: string, text: string) =>
-    post(`/api/docs/${encodeURIComponent(docId)}/threads`, {
+    post(`/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads`, {
       author: PERSON,
       text,
       anchor: { kind: 'subject' },
@@ -246,7 +252,7 @@ describe('a doc thread reaches the boards holding the doc', () => {
    */
   it('POSITIVE CONTROL: a grouping channel still gets the event exactly once', async () => {
     writeFileSync(join(srcDir, 'README.md'), '# Bound folder\n\nBody.\n');
-    const bound = await post('/workspaces', { folderPath: srcDir });
+    const bound = await post('/workspaces', { folderPath: srcDir, hubWorkspaceId: WS });
     expect(bound.status).toBe(200);
     const boundJson = (await bound.json()) as {
       workspaceId: string;

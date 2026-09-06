@@ -21,6 +21,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type JSONWebKeySet, type JWK, SignJWT, exportJWK, generateKeyPair } from 'jose';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const TEAM_DOMAIN = 'test.cloudflareaccess.com';
 const KID = 'audio-revocation-kid';
@@ -69,6 +70,9 @@ async function closeCodeWithin(socket: Socket, ms = 2000): Promise<number | 'sti
     new Promise<'still-open'>((r) => setTimeout(() => r('still-open'), ms)),
   ]);
 }
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('ending share access closes an open meeting socket', () => {
   let handle: ServerHandle;
@@ -141,21 +145,25 @@ describe('ending share access closes an open meeting socket', () => {
       proxiedTrustedEmails: [OWNER_EMAIL],
     });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
 
     const created = await postLocal('/workspaces', { name: 'Meeting board' });
     expect(created.status).toBe(200);
     board = ((await created.json()) as { workspace: { id: string } }).workspace.id;
+    WS = board;
 
     const path = join(dataDir, 'meeting-notes.md');
     writeFileSync(path, '# Meeting notes\n\nBody.\n');
-    const doc = await postLocal('/api/docs', {
+    const doc = await postLocal(`/workspaces/${WS}/docs`, {
       docId: 'meeting-notes',
       type: 'markdown',
       sourceUrl: path,
     });
     expect(doc.status).toBe(200);
     docId = ((await doc.json()) as { docId: string }).docId;
-    const filed = await postLocal(`/workspaces/${encodeURIComponent(board)}/docs`, { docId });
+    const filed = await postLocal(`/workspaces/${encodeURIComponent(board)}/docs:attach`, {
+      docId,
+    });
     expect(filed.status).toBe(200);
   });
 
@@ -171,7 +179,7 @@ describe('ending share access closes an open meeting socket', () => {
     const stayingHeaders = await admit(staying);
 
     // The route the member's browser opens the microphone on.
-    const url = `ws://localhost:${handle.port}/audio/${encodeURIComponent(docId)}`;
+    const url = `ws://localhost:${handle.port}/workspaces/${WS}/docs/${encodeURIComponent(docId)}/audio`;
     const ejectedMic = open(url, ejectedHeaders);
     const stayingMic = open(url, stayingHeaders);
     // POSITIVE CONTROL: both sockets are genuinely up, so "it closed" cannot
@@ -204,7 +212,7 @@ describe('ending share access closes an open meeting socket', () => {
   it('hangs up every microphone when the sharing master switch goes off', async () => {
     const listener = 'switch-member@partner.example';
     const headers = await admit(listener);
-    const url = `ws://localhost:${handle.port}/audio/${encodeURIComponent(docId)}`;
+    const url = `ws://localhost:${handle.port}/workspaces/${WS}/docs/${encodeURIComponent(docId)}/audio`;
     const mic = open(url, headers);
     await mic.opened;
     expect(mic.closeCode).toBeNull();

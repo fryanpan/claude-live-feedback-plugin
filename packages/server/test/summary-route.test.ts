@@ -31,6 +31,7 @@ import {
 } from '@feedback/core';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { ThreadSummarizer } from '../src/summarize.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const bryan: User = { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' };
 // A NAMED agent: the shared `known-agent` category is refused as an author.
@@ -77,14 +78,17 @@ const stubFetch = (async (_url: string | URL | Request, init?: RequestInit) => {
   });
 }) as unknown as typeof fetch;
 
-describe('POST /api/docs/:docId/threads/:threadId/summary', () => {
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
+describe(`POST /workspaces/${WS}/docs/:docId/threads/:threadId/summary`, () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
   let summarizer: ThreadSummarizer;
   const priorEnv = process.env.CW_SUMMARIES;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'feedback-summary-route-'));
     summarizer = new ThreadSummarizer({
       // A literal, so the constructor never consults Keychain or
@@ -99,6 +103,7 @@ describe('POST /api/docs/:docId/threads/:threadId/summary', () => {
     });
     handle = createServer({ port: 0, dataDir, summarizer });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterAll(async () => {
@@ -131,14 +136,14 @@ describe('POST /api/docs/:docId/threads/:threadId/summary', () => {
     const file = join(dataDir, `${docId}.md`);
     writeFileSync(file, `# Doc\n\n${SNIPPET}\n`);
     await j(
-      await fetch(`${base}/api/docs`, {
+      await fetch(`${base}/workspaces/${WS}/docs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ docId, type: 'markdown', sourceUrl: file }),
       }),
     );
     const { thread } = await j<{ thread: Thread }>(
-      await fetch(`${base}/api/docs/${docId}/threads`, {
+      await fetch(`${base}/workspaces/${WS}/docs/${docId}/threads`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -150,7 +155,7 @@ describe('POST /api/docs/:docId/threads/:threadId/summary', () => {
     );
     for (const text of replies) {
       await j(
-        await fetch(`${base}/api/docs/${docId}/threads/${thread.id}/comments`, {
+        await fetch(`${base}/workspaces/${WS}/docs/${docId}/threads/${thread.id}/comments`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ author: agent, text }),
@@ -163,13 +168,13 @@ describe('POST /api/docs/:docId/threads/:threadId/summary', () => {
   /** Re-read the thread over HTTP. Never trust the mutating call's own echo. */
   async function getThread(docId: string, threadId: string): Promise<Thread> {
     const { thread } = await j<{ thread: Thread }>(
-      await fetch(`${base}/api/docs/${docId}/threads/${threadId}`),
+      await fetch(`${base}/workspaces/${WS}/docs/${docId}/threads/${threadId}`),
     );
     return thread;
   }
 
   function postSummary(docId: string, threadId: string, body?: unknown): Promise<Response> {
-    return fetch(`${base}/api/docs/${docId}/threads/${threadId}/summary`, {
+    return fetch(`${base}/workspaces/${WS}/docs/${docId}/threads/${threadId}/summary`, {
       method: 'POST',
       ...(body === undefined
         ? {}
@@ -323,7 +328,7 @@ describe('POST /api/docs/:docId/threads/:threadId/summary', () => {
     // scheduled to repair it.
     duringCall = async () => {
       await j(
-        await fetch(`${base}/api/docs/${docId}/threads/${threadId}/comments`, {
+        await fetch(`${base}/workspaces/${WS}/docs/${docId}/threads/${threadId}/comments`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ author: agent, text: 'a second reply, mid-flight' }),

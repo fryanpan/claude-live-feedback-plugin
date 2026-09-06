@@ -32,6 +32,7 @@ import {
   TASK_REVIEW_REQUEST_COMMENT,
 } from '../src/huddle.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON: User = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
 const OTHER: User = { id: 'known-sam', name: 'Sam', kind: 'known', color: '#2f9e63' };
@@ -56,6 +57,9 @@ interface DocResponse {
     reviewThreadId?: string;
   };
 }
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('the task panel’s Plan / Review controls press the doc ask routes', () => {
   let handle: ServerHandle;
@@ -91,21 +95,23 @@ describe('the task panel’s Plan / Review controls press the doc ask routes', (
   const threadsOf = async (docId: string): Promise<ThreadRow[]> =>
     (
       await jj<{ threads: ThreadRow[] }>(
-        await local(`/api/docs/${encodeURIComponent(docId)}/threads`),
+        await local(`/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads`),
       )
     ).threads;
   const docOf = async (docId: string): Promise<DocResponse> =>
-    jj<DocResponse>(await local(`/api/docs/${encodeURIComponent(docId)}`));
+    jj<DocResponse>(await local(`/workspaces/${WS}/docs/${encodeURIComponent(docId)}?format=json`));
   const press = (docId: string, kind: 'plan' | 'review', author: User = PERSON) =>
-    post(`/api/docs/${encodeURIComponent(docId)}/${kind}-request`, { author });
+    post(`/workspaces/${WS}/docs/${encodeURIComponent(docId)}/${kind}-request`, { author });
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'task-ask-request-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     workspaceId = (
       await jj<{ workspace: { id: string } }>(await post('/workspaces', { name: 'ask-board' }))
     ).workspace.id;
+    WS = workspaceId;
   });
 
   afterAll(async () => {

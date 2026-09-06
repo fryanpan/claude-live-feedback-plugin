@@ -1287,11 +1287,17 @@ describe('reviewQueue', () => {
   /**
    * ONE spelling of "where does this answer go". The walkthrough's reply
    * handler used to build its two thread routes inline, and a ticket-borne row
-   * reaching it would have posted a comment at `/api/docs/undefined/...` —
+   * reaching it would have posted a comment at `…/docs/undefined/...` —
    * an answer that lands nowhere while the card advances. The routing is a
    * pure function so the test can hold all three doors.
    */
   describe('reviewReplyRequest', () => {
+    /** The board the page is standing on — every route is built under it. */
+    const WS = 'w-1';
+    beforeEach(() => {
+      history.replaceState(null, '', `/workspaces/${WS}/tasks`);
+    });
+
     const base = (): ReviewItem => {
       const q = reviewQueue([], [threadItem({ threadId: 'th-1', taskId: 'tk-1' })], T0);
       return q.items[0];
@@ -1313,12 +1319,12 @@ describe('reviewQueue', () => {
         } as unknown as ReviewThreadItem,
       };
       expect(reviewReplyRequest(item, 'Keep disk', 'o-disk')).toEqual({
-        path: '/api/tasks/tk-1/review-items/r-1/answer',
+        path: `/workspaces/${WS}/tasks/tk-1/review-items/r-1/answer`,
         body: { text: 'Keep disk', answeredWith: 'o-disk' },
       });
       // Typed words carry no candidate id — nothing invents one.
       expect(reviewReplyRequest(item, 'Neither, drop both')).toEqual({
-        path: '/api/tasks/tk-1/review-items/r-1/answer',
+        path: `/workspaces/${WS}/tasks/tk-1/review-items/r-1/answer`,
         body: { text: 'Neither, drop both' },
       });
     });
@@ -1326,7 +1332,7 @@ describe('reviewQueue', () => {
     it('answers a declared thread item against its declaring comment', () => {
       const item = base();
       expect(reviewReplyRequest(item, 'Green', 'g')).toEqual({
-        path: '/api/docs/task%3Atk-1/threads/th-1/answer',
+        path: `/workspaces/${WS}/docs/task%3Atk-1/threads/th-1/answer`,
         body: { text: 'Green', commentId: 'c-1', optionId: 'g' },
       });
     });
@@ -1334,7 +1340,7 @@ describe('reviewQueue', () => {
     it('replies to an undeclared thread item as a plain comment', () => {
       const q = reviewQueue([], [note({ threadId: 'th-1', taskId: 'tk-1' })], T0);
       expect(reviewReplyRequest(q.items[0], 'On it')).toEqual({
-        path: '/api/docs/task%3Atk-1/threads/th-1/comments',
+        path: `/workspaces/${WS}/docs/task%3Atk-1/threads/th-1/comments`,
         body: { text: 'On it' },
       });
     });

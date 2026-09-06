@@ -24,6 +24,7 @@ import type { ReviewJudgeInput, ReviewJudgeVerdict } from '../src/review-judge.t
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { REVIEW_ITEM_HELD_EVENT, STALL_EVENT } from '../src/stall-nudge.ts';
 import { projectTask } from '../src/task-projection.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'person' };
 const LEAD = { id: 'agent-cartographer', name: 'Cartographer', kind: 'agent' };
@@ -137,6 +138,9 @@ interface QueueRow {
   since?: number;
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('the review-item quality gate', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -166,7 +170,7 @@ describe('the review-item quality gate', () => {
     });
   const get = (path: string) => fetch(`${base}${path}`);
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'review-gate-'));
     verdict = { ok: true, reason: 'fine' };
     calls = [];
@@ -186,6 +190,7 @@ describe('the review-item quality gate', () => {
       stallNudgeQuietMs: 60 * 60_000,
     });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterEach(async () => {
@@ -197,6 +202,7 @@ describe('the review-item quality gate', () => {
     const { workspace } = await jj<{ workspace: { id: string } }>(
       await post('/workspaces', { name: 'index-rebuild', leadAgentId: LEAD.id }),
     );
+    WS = workspace.id;
     const { task } = await jj<{ task: { id: string } }>(
       await post(`/workspaces/${workspace.id}/tasks`, {
         title: 'Rebuild the index nightly',
@@ -207,7 +213,7 @@ describe('the review-item quality gate', () => {
       }),
     );
     await jj(
-      await post(`/api/tasks/${task.id}/transition`, {
+      await post(`/workspaces/${workspace.id}/tasks/${task.id}/transition`, {
         to: 'todo',
         author: PERSON,
         workspaceId: workspace.id,
@@ -307,7 +313,12 @@ describe('the review-item quality gate', () => {
 
     it('the changed prompt is what the judge is asked with', async () => {
       const { workspaceId, taskId } = await board();
-      await jj(await post(`/api/tasks/${taskId}/review-items`, { review: GOOD, author: FILER }));
+      await jj(
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
+          review: GOOD,
+          author: FILER,
+        }),
+      );
       expect(calls.at(-1)?.criteria).toBe(DEFAULT_REVIEW_ITEM_CRITERIA);
       await jj(
         await put(`/workspaces/${workspaceId}/settings`, {
@@ -315,7 +326,12 @@ describe('the review-item quality gate', () => {
           author: PERSON,
         }),
       );
-      await jj(await post(`/api/tasks/${taskId}/review-items`, { review: GOOD, author: FILER }));
+      await jj(
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
+          review: GOOD,
+          author: FILER,
+        }),
+      );
       expect(calls.at(-1)?.criteria).toBe('Every headline is a question.');
       expect(calls.at(-1)?.item.headline).toBe(GOOD.headline);
     });
@@ -325,7 +341,10 @@ describe('the review-item quality gate', () => {
     it('a good item passes and is on the queue (positive control)', async () => {
       const { workspaceId, taskId } = await board();
       const res = await jj<{ item: { id: string; judge?: { verdict: string } }; held?: boolean }>(
-        await post(`/api/tasks/${taskId}/review-items`, { review: GOOD, author: FILER }),
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
+          review: GOOD,
+          author: FILER,
+        }),
       );
       expect(res.held).toBeUndefined();
       expect(res.item.judge?.verdict).toBe('ok');
@@ -342,7 +361,12 @@ describe('the review-item quality gate', () => {
         held?: boolean;
         heldReason?: string;
         message?: string;
-      }>(await post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER }));
+      }>(
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
+          review: BAD,
+          author: FILER,
+        }),
+      );
       expect(res.held).toBe(true);
       expect(res.heldReason).toBe('The headline is a ticket id, not a decision.');
       // The filer is pointed at the fix, not just told no.
@@ -404,13 +428,19 @@ describe('the review-item quality gate', () => {
       const { workspaceId, taskId } = await board();
       verdict = null;
       const a = await jj<{ item: { id: string; judge?: { verdict: string } }; held?: boolean }>(
-        await post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER }),
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
+          review: BAD,
+          author: FILER,
+        }),
       );
       expect(a.held).toBeUndefined();
       expect(a.item.judge?.verdict).toBe('unavailable');
       verdict = 'throw';
       const b = await jj<{ item: { id: string; judge?: { verdict: string } }; held?: boolean }>(
-        await post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER }),
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
+          review: BAD,
+          author: FILER,
+        }),
       );
       expect(b.held).toBeUndefined();
       expect(b.item.judge?.verdict).toBe('unavailable');
@@ -441,7 +471,10 @@ describe('the review-item quality gate', () => {
     it('an item is off the queue from the moment it is filed, while the judge is out', async () => {
       verdict = 'defer';
       const { workspaceId, taskId } = await board();
-      const filing = post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER });
+      const filing = post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
+        review: BAD,
+        author: FILER,
+      });
       while (parked.length < 1) await settle(10);
       expect(await queue(workspaceId)).toEqual([]);
       const { tasks } = await jj<{
@@ -463,7 +496,7 @@ describe('the review-item quality gate', () => {
       // `handle.stop()` runs. A `.catch` attached later is attached too late
       // — the rejection is unhandled in the meantime, which fails the test
       // and strands whatever request is in flight when it does.
-      const filing = post(`/api/tasks/${taskId}/review-items`, {
+      const filing = post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
         review: BAD,
         author: FILER,
       }).catch(() => undefined);
@@ -475,6 +508,7 @@ describe('the review-item quality gate', () => {
       await handle.stop();
       handle = createServer({ port: 0, dataDir, heldReviewItemMs: 0 });
       base = `http://localhost:${handle.port}`;
+      WS = await seedBoard(base);
       const { tasks } = await jj<{
         tasks: Array<{ id: string; reviews?: Array<{ id: string; judge?: { verdict: string } }> }>;
       }>(await get(`/workspaces/${workspaceId}/tasks?format=json`));
@@ -493,7 +527,10 @@ describe('the review-item quality gate', () => {
     it('a verdict that outlives the words it judged is dropped; the revision’s own stands', async () => {
       verdict = 'defer';
       const { workspaceId, taskId } = await board();
-      const filing = post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER });
+      const filing = post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
+        review: BAD,
+        author: FILER,
+      });
       // The route is awaiting the judge; the item already exists in the
       // store, so a revision can land on it now.
       while (parked.length < 1) await settle(10);
@@ -502,10 +539,13 @@ describe('the review-item quality gate', () => {
       );
       const itemId = tasks.find((t) => t.id === taskId)?.reviews?.[0]?.id;
       expect(itemId).toBeTruthy();
-      const revising = post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
-        ...GOOD,
-        author: FILER,
-      });
+      const revising = post(
+        `/workspaces/${workspaceId}/tasks/${taskId}/review-items/${itemId}/revise`,
+        {
+          ...GOOD,
+          author: FILER,
+        },
+      );
       while (parked.length < 2) await settle(10);
       // The revision's judge answers first: ok. Then the ORIGINAL filing's
       // judge comes back holding — about words that are gone.
@@ -528,17 +568,23 @@ describe('the review-item quality gate', () => {
     it('a stale verdict does not un-say a hold the newer call just placed', async () => {
       verdict = 'defer';
       const { workspaceId, taskId } = await board();
-      const filing = post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER });
+      const filing = post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
+        review: BAD,
+        author: FILER,
+      });
       while (parked.length < 1) await settle(10);
       const { tasks } = await jj<{ tasks: Array<{ id: string; reviews?: Array<{ id: string }> }> }>(
         await get(`/workspaces/${workspaceId}/tasks?format=json`),
       );
       const itemId = tasks.find((t) => t.id === taskId)?.reviews?.[0]?.id;
-      const revising = post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
-        ...BAD,
-        headline: 'cfg ri-78?',
-        author: FILER,
-      });
+      const revising = post(
+        `/workspaces/${workspaceId}/tasks/${taskId}/review-items/${itemId}/revise`,
+        {
+          ...BAD,
+          headline: 'cfg ri-78?',
+          author: FILER,
+        },
+      );
       while (parked.length < 2) await settle(10);
       parked[1]?.({ ok: false, reason: 'Still a ticket id.' });
       const revised = await jj<{ held?: boolean; heldReason?: string }>(await revising);
@@ -558,25 +604,35 @@ describe('the review-item quality gate', () => {
       verdict = { ok: false, reason: 'No stakes.' };
       const { workspaceId, taskId } = await board();
       const filed = await jj<{ item: { id: string } }>(
-        await post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER }),
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
+          review: BAD,
+          author: FILER,
+        }),
       );
       expect(await queue(workspaceId)).toEqual([]);
       // The same data, a server with no judge: the key was removed.
       await handle.stop();
       handle = createServer({ port: 0, dataDir, heldReviewItemMs: 0 });
       base = `http://localhost:${handle.port}`;
+      WS = await seedBoard(base);
       const revised = await jj<{ held?: boolean; item: { judge?: { verdict: string } } }>(
-        await post(`/api/tasks/${taskId}/review-items/${filed.item.id}/revise`, {
-          ...GOOD,
-          author: FILER,
-        }),
+        await post(
+          `/workspaces/${workspaceId}/tasks/${taskId}/review-items/${filed.item.id}/revise`,
+          {
+            ...GOOD,
+            author: FILER,
+          },
+        ),
       );
       expect(revised.held).toBeUndefined();
       expect(revised.item.judge?.verdict).toBe('unavailable');
       expect((await queue(workspaceId)).map((r) => r.reviewItemId)).toEqual([filed.item.id]);
       // The control: an item never held is left unjudged with the gate off.
       const fresh = await jj<{ item: { judge?: unknown } }>(
-        await post(`/api/tasks/${taskId}/review-items`, { review: GOOD, author: FILER }),
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
+          review: GOOD,
+          author: FILER,
+        }),
       );
       expect(fresh.item.judge).toBeUndefined();
     });
@@ -585,7 +641,10 @@ describe('the review-item quality gate', () => {
       verdict = { ok: false, reason: 'No stakes.' };
       const { workspaceId, taskId } = await board();
       const filed = await jj<{ item: { id: string; createdAt: number } }>(
-        await post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER }),
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
+          review: BAD,
+          author: FILER,
+        }),
       );
       expect(await queue(workspaceId)).toEqual([]);
 
@@ -597,10 +656,13 @@ describe('the review-item quality gate', () => {
         heldReason?: string;
         item: { judge?: { reason: string } };
       }>(
-        await post(`/api/tasks/${taskId}/review-items/${filed.item.id}/revise`, {
-          headline: 'Which cache size for the nightly rebuild?',
-          author: FILER,
-        }),
+        await post(
+          `/workspaces/${workspaceId}/tasks/${taskId}/review-items/${filed.item.id}/revise`,
+          {
+            headline: 'Which cache size for the nightly rebuild?',
+            author: FILER,
+          },
+        ),
       );
       expect(again.held).toBe(true);
       expect(again.heldReason).toBe('Options have no costs.');
@@ -608,10 +670,13 @@ describe('the review-item quality gate', () => {
 
       verdict = { ok: true, reason: 'Clear now.' };
       const cleared = await jj<{ held?: boolean; item: { judge?: { verdict: string } } }>(
-        await post(`/api/tasks/${taskId}/review-items/${filed.item.id}/revise`, {
-          detail: 'A full pass reads the index once; halving the cache adds an hour nightly.',
-          author: FILER,
-        }),
+        await post(
+          `/workspaces/${workspaceId}/tasks/${taskId}/review-items/${filed.item.id}/revise`,
+          {
+            detail: 'A full pass reads the index once; halving the cache adds an hour nightly.',
+            author: FILER,
+          },
+        ),
       );
       expect(cleared.held).toBeUndefined();
       expect(cleared.item.judge?.verdict).toBe('ok');
@@ -638,7 +703,8 @@ describe('the review-item quality gate', () => {
       const { workspace } = await jj<{ workspace: { id: string } }>(
         await post('/workspaces', { name: 'index-rebuild', leadAgentId: LEAD.id }),
       );
-      return workspace.id;
+      WS = workspace.id;
+      return WS;
     }
 
     // Found by codex review, fifth pass: the batch used to await the judge
@@ -701,14 +767,21 @@ describe('the review-item quality gate', () => {
       verdict = { ok: false, reason: 'No stakes.' };
       const { workspaceId, taskId } = await board();
       const { item } = await jj<{ item: { id: string } }>(
-        await post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER }),
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
+          review: BAD,
+          author: FILER,
+        }),
       );
       expect(await queue(workspaceId)).toEqual([]);
 
       const released = await jj<{
         released: boolean;
         item: { judge?: { verdict: string; reason: string } };
-      }>(await post(`/api/tasks/${taskId}/review-items/${item.id}/release`, { author: PERSON }));
+      }>(
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items/${item.id}/release`, {
+          author: PERSON,
+        }),
+      );
       expect(released.released).toBe(true);
       expect(released.item.judge?.verdict).toBe('ok');
       expect(released.item.judge?.reason).toContain(PERSON.name);
@@ -722,7 +795,10 @@ describe('the review-item quality gate', () => {
     it('a release issued while the judge is out survives its late verdict', async () => {
       verdict = 'defer';
       const { workspaceId, taskId } = await board();
-      const filing = post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER });
+      const filing = post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
+        review: BAD,
+        author: FILER,
+      });
       while (parked.length < 1) await settle(10);
       const { tasks } = await jj<{ tasks: Array<{ id: string; reviews?: Array<{ id: string }> }> }>(
         await get(`/workspaces/${workspaceId}/tasks?format=json`),
@@ -733,7 +809,9 @@ describe('the review-item quality gate', () => {
       expect(await queue(workspaceId)).toEqual([]);
 
       const released = await jj<{ released: boolean }>(
-        await post(`/api/tasks/${taskId}/review-items/${itemId}/release`, { author: PERSON }),
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items/${itemId}/release`, {
+          author: PERSON,
+        }),
       );
       expect(released.released).toBe(true);
       expect((await queue(workspaceId)).map((r) => r.reviewItemId)).toEqual([itemId]);
@@ -759,10 +837,15 @@ describe('the review-item quality gate', () => {
       verdict = { ok: true, reason: 'Fine.' };
       const { workspaceId, taskId } = await board();
       const { item } = await jj<{ item: { id: string } }>(
-        await post(`/api/tasks/${taskId}/review-items`, { review: GOOD, author: FILER }),
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
+          review: GOOD,
+          author: FILER,
+        }),
       );
       const res = await jj<{ released: boolean }>(
-        await post(`/api/tasks/${taskId}/review-items/${item.id}/release`, { author: PERSON }),
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items/${item.id}/release`, {
+          author: PERSON,
+        }),
       );
       expect(res.released).toBe(false);
       // The control: it was already answerable, and still is.
@@ -773,31 +856,43 @@ describe('the review-item quality gate', () => {
       verdict = { ok: false, reason: 'No stakes.' };
       const { taskId } = await board();
       expect(
-        (await post(`/api/tasks/${taskId}/review-items/ri-nope/release`, { author: PERSON }))
-          .status,
+        (
+          await post(`/workspaces/${WS}/tasks/${taskId}/review-items/ri-nope/release`, {
+            author: PERSON,
+          })
+        ).status,
       ).toBe(404);
       const { item } = await jj<{ item: { id: string } }>(
-        await post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER }),
+        await post(`/workspaces/${WS}/tasks/${taskId}/review-items`, {
+          review: BAD,
+          author: FILER,
+        }),
       );
-      expect((await post(`/api/tasks/${taskId}/review-items/${item.id}/release`, {})).status).toBe(
-        400,
-      );
+      expect(
+        (await post(`/workspaces/${WS}/tasks/${taskId}/review-items/${item.id}/release`, {}))
+          .status,
+      ).toBe(400);
     });
 
     it('a released item that its filer then revises is judged again', async () => {
       verdict = { ok: false, reason: 'No stakes.' };
       const { workspaceId, taskId } = await board();
       const { item } = await jj<{ item: { id: string } }>(
-        await post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER }),
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
+          review: BAD,
+          author: FILER,
+        }),
       );
       await jj(
-        await post(`/api/tasks/${taskId}/review-items/${item.id}/release`, { author: PERSON }),
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items/${item.id}/release`, {
+          author: PERSON,
+        }),
       );
       expect((await queue(workspaceId)).length).toBe(1);
       // The gate is not disarmed by a release — the next revision goes past
       // the judge like any other, and a still-bad one is held again.
       await jj(
-        await post(`/api/tasks/${taskId}/review-items/${item.id}/revise`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items/${item.id}/revise`, {
           headline: 'ri-77 cfg still?',
           author: FILER,
         }),
@@ -816,7 +911,10 @@ describe('the review-item quality gate', () => {
         const lead = await agentStream(workspaceId, LEAD);
         try {
           const res = await jj<{ item: { id: string } }>(
-            await post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER }),
+            await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
+              review: BAD,
+              author: FILER,
+            }),
           );
           const [frame] = await waitForFrames(filer.frames, REVIEW_ITEM_HELD_EVENT, 1);
           expect(frame?.data).toMatchObject({
@@ -849,7 +947,10 @@ describe('the review-item quality gate', () => {
         const lead = await agentStream(workspaceId, LEAD);
         try {
           const res = await jj<{ item: { id: string; judge?: { at: number } } }>(
-            await post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER }),
+            await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
+              review: BAD,
+              author: FILER,
+            }),
           );
           // The create-time wake, so the counts below start from a known place.
           await waitForFrames(filer.frames, REVIEW_ITEM_HELD_EVENT, 1);
@@ -898,10 +999,13 @@ describe('the review-item quality gate', () => {
           // Revising it away clears the finding; the board falls silent.
           verdict = { ok: true, reason: 'Clear.' };
           await jj(
-            await post(`/api/tasks/${taskId}/review-items/${res.item.id}/revise`, {
-              detail: 'Stakes: the nightly window.',
-              author: FILER,
-            }),
+            await post(
+              `/workspaces/${workspaceId}/tasks/${taskId}/review-items/${res.item.id}/revise`,
+              {
+                detail: 'Stakes: the nightly window.',
+                author: FILER,
+              },
+            ),
           );
           handle.nudgeStalls();
           await settle(200);
@@ -952,7 +1056,7 @@ describe('the review-item quality gate', () => {
       const { workspaceId, taskId } = await board();
       verdict = { ok: false, reason: 'The headline is a ticket id, not a decision.' };
       const weak = await jj<ThreadReply>(
-        await post(`/api/docs/task:${taskId}/threads`, {
+        await post(`/workspaces/${workspaceId}/docs/task:${taskId}/threads`, {
           author: FILER,
           anchor: { kind: 'subject' },
           text: 'Jordan — which one?',
@@ -971,7 +1075,7 @@ describe('the review-item quality gate', () => {
 
       verdict = { ok: true, reason: 'Complete.' };
       const good = await jj<ThreadReply>(
-        await post(`/api/docs/task:${taskId}/threads`, {
+        await post(`/workspaces/${workspaceId}/docs/task:${taskId}/threads`, {
           author: FILER,
           anchor: { kind: 'subject' },
           text: 'Jordan — which cache size?',
@@ -987,7 +1091,7 @@ describe('the review-item quality gate', () => {
     it('post_reply(review) — a weak item is HELD, a good one reaches the queue', async () => {
       const { workspaceId, taskId } = await board();
       const opened = await jj<ThreadReply>(
-        await post(`/api/docs/task:${taskId}/threads`, {
+        await post(`/workspaces/${workspaceId}/docs/task:${taskId}/threads`, {
           author: FILER,
           anchor: { kind: 'subject' },
           text: 'Notes on the rebuild.',
@@ -996,7 +1100,7 @@ describe('the review-item quality gate', () => {
       const threadId = opened.thread.id;
       verdict = { ok: false, reason: 'No stakes.' };
       const weak = await jj<ThreadReply>(
-        await post(`/api/docs/task:${taskId}/threads/${threadId}/comments`, {
+        await post(`/workspaces/${workspaceId}/docs/task:${taskId}/threads/${threadId}/comments`, {
           author: FILER,
           text: 'Jordan — which one?',
           review: BAD,
@@ -1010,7 +1114,7 @@ describe('the review-item quality gate', () => {
 
       verdict = { ok: true, reason: 'Complete.' };
       const good = await jj<ThreadReply>(
-        await post(`/api/docs/task:${taskId}/threads/${threadId}/comments`, {
+        await post(`/workspaces/${workspaceId}/docs/task:${taskId}/threads/${threadId}/comments`, {
           author: FILER,
           text: 'Jordan — which cache size?',
           review: GOOD,
@@ -1026,7 +1130,7 @@ describe('the review-item quality gate', () => {
       writeFileSync(path, '# Launch plan\n\nThe index rebuild runs nightly.\n');
       // The server mints the id; the one we ask for is a hint.
       const { docId } = await jj<{ docId: string }>(
-        await post('/api/docs', {
+        await post(`/workspaces/${workspaceId}/docs`, {
           docId: 'd-launch',
           sourceUrl: path,
           title: 'Launch plan',
@@ -1035,7 +1139,7 @@ describe('the review-item quality gate', () => {
       );
       verdict = { ok: false, reason: 'No stakes.' };
       const weak = await jj<ThreadReply>(
-        await post(`/api/docs/${docId}/threads/by_find`, {
+        await post(`/workspaces/${workspaceId}/docs/${docId}/threads/by_find`, {
           author: FILER,
           text: 'Jordan — which one?',
           find: 'index rebuild',
@@ -1051,7 +1155,7 @@ describe('the review-item quality gate', () => {
       const { workspaceId, taskId } = await board();
       verdict = { ok: false, reason: 'No stakes.' };
       const weak = await jj<ThreadReply>(
-        await post(`/api/docs/task:${taskId}/threads`, {
+        await post(`/workspaces/${workspaceId}/docs/task:${taskId}/threads`, {
           author: FILER,
           anchor: { kind: 'subject' },
           text: 'Jordan — which one?',
@@ -1066,7 +1170,7 @@ describe('the review-item quality gate', () => {
       // words, and the address it hands back is the same one that got here.
       verdict = { ok: false, reason: 'Still a ticket id.' };
       const again = await jj<ThreadReply>(
-        await post(`/api/docs/task:${taskId}/threads/${threadId}/revise`, {
+        await post(`/workspaces/${workspaceId}/docs/task:${taskId}/threads/${threadId}/revise`, {
           author: FILER,
           commentId,
           headline: 'ri-78 cfg?',
@@ -1079,7 +1183,7 @@ describe('the review-item quality gate', () => {
       // And a revision that passes puts it on the queue.
       verdict = { ok: true, reason: 'Complete.' };
       const fixed = await jj<ThreadReply>(
-        await post(`/api/docs/task:${taskId}/threads/${threadId}/revise`, {
+        await post(`/workspaces/${workspaceId}/docs/task:${taskId}/threads/${threadId}/revise`, {
           author: FILER,
           commentId,
           headline: 'Cache size for the nightly rebuild',
@@ -1097,7 +1201,7 @@ describe('the review-item quality gate', () => {
       for (const failure of [null, 'throw'] as const) {
         verdict = failure;
         const res = await jj<ThreadReply>(
-          await post(`/api/docs/task:${taskId}/threads`, {
+          await post(`/workspaces/${workspaceId}/docs/task:${taskId}/threads`, {
             author: FILER,
             anchor: { kind: 'subject' },
             text: 'Jordan — which cache size?',
@@ -1116,7 +1220,7 @@ describe('the review-item quality gate', () => {
       const { workspaceId, taskId } = await board();
       verdict = { ok: false, reason: 'No stakes.' };
       const res = await jj<ThreadReply>(
-        await post(`/api/docs/task:${taskId}/threads`, {
+        await post(`/workspaces/${workspaceId}/docs/task:${taskId}/threads`, {
           author: FILER,
           anchor: { kind: 'subject' },
           text: 'Jordan — which one?',
@@ -1136,7 +1240,7 @@ describe('the review-item quality gate', () => {
         try {
           verdict = { ok: false, reason: 'No stakes.' };
           const weak = await jj<ThreadReply>(
-            await post(`/api/docs/task:${taskId}/threads`, {
+            await post(`/workspaces/${workspaceId}/docs/task:${taskId}/threads`, {
               author: FILER,
               anchor: { kind: 'subject' },
               text: 'Jordan — which one?',
@@ -1192,8 +1296,12 @@ describe('the review-item quality gate', () => {
         requestId: 'rq-1',
       };
       const [first, second] = await Promise.all([
-        post(`/api/docs/task:${taskId}/threads`, body).then((r) => jj<ThreadReply>(r)),
-        post(`/api/docs/task:${taskId}/threads`, body).then((r) => jj<ThreadReply>(r)),
+        post(`/workspaces/${workspaceId}/docs/task:${taskId}/threads`, body).then((r) =>
+          jj<ThreadReply>(r),
+        ),
+        post(`/workspaces/${workspaceId}/docs/task:${taskId}/threads`, body).then((r) =>
+          jj<ThreadReply>(r),
+        ),
       ]);
       // One filing, one judge call, one thread — and BOTH answers say held.
       expect(calls).toHaveLength(1);
@@ -1288,7 +1396,7 @@ describe('the review-item quality gate', () => {
       // id. The route the MCP's bare-taskId form posts to.
       verdict = { ok: true, reason: 'Complete.' };
       const revised = await jj<{ held?: boolean; task: { title: string } }>(
-        await post(`/api/tasks/${taskId}/review-items/r-legacy/revise`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items/r-legacy/revise`, {
           author: FILER,
           headline: 'Which cache size should the nightly rebuild use?',
           detail: DECISION_BODY,
@@ -1320,7 +1428,7 @@ describe('the review-item quality gate', () => {
       // queue with the filer believing it fixed — a hold nothing can lift.
       verdict = { ok: true, reason: 'Complete.' };
       await jj(
-        await post(`/api/tasks/${taskId}/body`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/body`, {
           author: FILER,
           title: 'Which cache size should the nightly rebuild use?',
           markdown: DECISION_BODY,
@@ -1389,13 +1497,21 @@ describe('the review-item quality gate', () => {
       });
       const taskId = good.tasks[0]?.id ?? '';
       await jj(
-        await post(`/api/tasks/${taskId}/answer`, { author: PERSON, text: 'Keep it as it is.' }),
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/answer`, {
+          author: PERSON,
+          text: 'Keep it as it is.',
+        }),
       );
       // A rewrite after the answer must not re-hold it: the answer was given
       // to these words, and a decision nobody can see the answer to is worse
       // than an unjudged one.
       verdict = { ok: false, reason: 'The headline is a ticket id, not a decision.' };
-      await jj(await post(`/api/tasks/${taskId}/title`, { author: FILER, title: 'ri-77 cfg?' }));
+      await jj(
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/title`, {
+          author: FILER,
+          title: 'ri-77 cfg?',
+        }),
+      );
       const { items } = await jj<{ items: QueueRow[] }>(
         await get(`/workspaces/${workspaceId}/review-items`),
       );
@@ -1419,7 +1535,9 @@ describe('the review-item quality gate', () => {
       // reader — it is a ticket on the board — so there is a surface to press
       // it from, and no judge is consulted to honour it.
       const released = await jj<{ released: boolean }>(
-        await post(`/api/tasks/${taskId}/review-items/r-legacy/release`, { author: PERSON }),
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items/r-legacy/release`, {
+          author: PERSON,
+        }),
       );
       expect(released.released).toBe(true);
       expect(calls).toHaveLength(1);
@@ -1440,11 +1558,14 @@ describe('the review-item quality gate', () => {
       // The ticket's own decision has no item thread to answer on. Forwarding
       // the reply would answer 200 and discard the one sentence written for a
       // person to read.
-      const res = await post(`/api/tasks/${taskId}/review-items/r-legacy/revise`, {
-        author: FILER,
-        headline: 'Which cache size should the nightly rebuild use, exactly?',
-        reply: 'Rewrote the question so it names the stakes.',
-      });
+      const res = await post(
+        `/workspaces/${workspaceId}/tasks/${taskId}/review-items/r-legacy/revise`,
+        {
+          author: FILER,
+          headline: 'Which cache size should the nightly rebuild use, exactly?',
+          reply: 'Rewrote the question so it names the stakes.',
+        },
+      );
       expect(res.status).toBe(400);
       expect(((await res.json()) as { error: string }).error).toBe('no-thread');
       // And the words did NOT move — the refusal happens before any write.
@@ -1464,7 +1585,12 @@ describe('the review-item quality gate', () => {
         held?: boolean;
         heldReason?: string;
         message?: string;
-      }>(await post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER }));
+      }>(
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
+          review: BAD,
+          author: FILER,
+        }),
+      );
       expect(weak.held).toBe(true);
       expect(weak.message).toContain(
         `revise_review_item(taskId="${taskId}", reviewItemId="${weak.item.id}")`,
@@ -1473,7 +1599,10 @@ describe('the review-item quality gate', () => {
 
       verdict = { ok: true, reason: 'Complete.' };
       const good = await jj<{ item: { id: string }; held?: boolean }>(
-        await post(`/api/tasks/${taskId}/review-items`, { review: GOOD, author: FILER }),
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
+          review: GOOD,
+          author: FILER,
+        }),
       );
       expect(good.held).toBeUndefined();
       const rows = await queue(workspaceId);

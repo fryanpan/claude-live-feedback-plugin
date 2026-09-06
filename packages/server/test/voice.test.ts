@@ -124,14 +124,14 @@ describe('voice routing (§3.8)', () => {
     // and that is what a voice context and a task link carry.
     const p = join(dataDir, 'expansion-plan.md');
     writeFileSync(p, '# Expansion plan\n\nBody.\n');
-    const madeDoc = await post('/api/docs', {
+    const madeDoc = await post(`/workspaces/${boardId}/docs`, {
       docId: 'expansion-plan',
       type: 'markdown',
       sourceUrl: p,
     });
     expect(madeDoc.status).toBe(200);
     docId = ((await madeDoc.json()) as { docId: string }).docId;
-    expect((await post(`/workspaces/${boardId}/docs`, { docId })).status).toBe(200);
+    expect((await post(`/workspaces/${boardId}/docs:attach`, { docId })).status).toBe(200);
 
     // A task carrying links + an owner, so the resource block has something to
     // render beyond a title.
@@ -181,16 +181,16 @@ describe('voice routing (§3.8)', () => {
 
     const op = join(dataDir, 'invoice-runbook.md');
     writeFileSync(op, '# Invoice runbook\n\nBody.\n');
-    const madeOtherDoc = await post('/api/docs', {
+    const madeOtherDoc = await post(`/workspaces/${otherBoardId}/docs`, {
       docId: 'invoice-runbook',
       type: 'markdown',
       sourceUrl: op,
     });
     expect(madeOtherDoc.status).toBe(200);
     otherDocId = ((await madeOtherDoc.json()) as { docId: string }).docId;
-    expect((await post(`/workspaces/${otherBoardId}/docs`, { docId: otherDocId })).status).toBe(
-      200,
-    );
+    expect(
+      (await post(`/workspaces/${otherBoardId}/docs:attach`, { docId: otherDocId })).status,
+    ).toBe(200);
   });
 
   afterAll(async () => {
@@ -260,7 +260,7 @@ describe('voice routing (§3.8)', () => {
       });
       const body = (await r.json()) as { route: string; navigate?: string };
       expect(body.route).toBe('fast-path');
-      expect(body.navigate).toBe(`/review/${encodeURIComponent(docId)}`);
+      expect(body.navigate).toBe(`/workspaces/${boardId}/docs/${encodeURIComponent(docId)}`);
     });
 
     it('a lookup that resolves nothing on a board with NO lead says what to do, and delivers nothing', async () => {
@@ -586,17 +586,20 @@ describe('voice routing (§3.8)', () => {
       // item (since 2026-08-21 a status note is not). The person opens the
       // thread, which also puts their name on the roster the address rule
       // matches against.
-      const t = await post(`/api/docs/${docId}/threads`, {
+      const t = await post(`/workspaces/${boardId}/docs/${docId}/threads`, {
         author: PERSON,
         text: 'Benchmark question below.',
         anchor: ANCHOR,
       });
       expect(t.status).toBe(200);
       const openedId = ((await t.json()) as { thread: { id: string } }).thread.id;
-      const asked = await post(`/api/docs/${docId}/threads/${openedId}/comments`, {
-        author: AGENT,
-        text: 'Jordan, should the rollout wait for the crawler benchmark?',
-      });
+      const asked = await post(
+        `/workspaces/${boardId}/docs/${docId}/threads/${openedId}/comments`,
+        {
+          author: AGENT,
+          text: 'Jordan, should the rollout wait for the crawler benchmark?',
+        },
+      );
       expect(asked.status).toBe(200);
 
       completeImpl = () => Promise.resolve(JSON.stringify({ kind: 'change' }));
