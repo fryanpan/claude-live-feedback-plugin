@@ -19,43 +19,48 @@ import { attachmentIdOf } from '@feedback/core';
 import type { DocMeta } from '@feedback/core';
 import type { DocStore } from '../doc-store.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
+import { type WorkspaceScope, matchRest } from '../middleware/workspace-scope.ts';
 import {
   redactWorkspaceFilesForVisitor,
   redactWorkspaceGroupedForVisitor,
   redactWorkspaceTreeForVisitor,
 } from '../share/redact-meta.ts';
+import type { BoardWorkspace } from '../tasks.ts';
 
 /**
- * ===== One prefix. The alias arm is gone. =====
+ * ===== A review is addressed under the board that holds it. =====
  *
- * A diff review and a bound folder are REVIEWS, and they were built as a
- * second thing called a "workspace" — so every route here used to answer at
- * `/workspaces/<id>/…` as well as `/api/reviews/<setId>/…`, matching both
- * with one regex. That alias was the repo's precedent for surviving a route
- * move, kept for plugin bundles inside sessions nobody could restart.
+ * These eight used to answer at `/api/reviews/<setId>/…`, and before that at
+ * a `/workspaces/<id>/…` alias meaning something else entirely — the review's
+ * own id in the board's slot, from when a review WAS called a workspace. Both
+ * spellings are gone. What is left is the canonical one:
+ * `/workspaces/<workspaceId>/reviews/<setId>/<sub>`, where the first segment
+ * is the BOARD the review is filed on and the second is the review.
  *
- * It goes with the canonical-routes cutover, which decided against old-path
- * support of any kind — not redirects, not 410s, not this. And it had to go
- * FIRST rather than last: the board's own routes have just dropped their
- * `/api` prefix, so `/workspaces/<id>/threads` no longer names anything a
- * board answers, and leaving the arm in place would have left one dead
- * spelling of eight routes answering for a store the rest of the prefix had
- * stopped serving.
+ * That is the whole of what the cutover buys here. `/api/reviews/<setId>` named
+ * a review and left the server to find its board, so "a review on somebody
+ * else's board" was not a shape a request could have — and every route below
+ * therefore had to be trusted rather than checked. Now the board is in the
+ * path, the shape exists, and `middleware/workspace-scope.ts` refuses it once
+ * for all eight.
  *
- * The bare `DELETE /api/reviews/<id>` is deliberately NOT in here: that one
- * route fronts two stores (a board or a review, dispatched by id) and is
- * handled on its own.
+ * Matched against the SCOPE's remainder rather than the pathname, so a route
+ * here is unreachable until that middleware has run — see `matchRest`.
+ *
+ * The bare `DELETE …/reviews/<setId>` is deliberately NOT in here: it is the
+ * destroy verb and lives with the archive family, next to the soft-delete it
+ * must not be confused with.
  */
-const reviewApi = (sub: string): RegExp => new RegExp(`^/api/reviews/([^/]+)/${sub}$`);
-const REVIEW_API = {
-  refresh: reviewApi('refresh'),
-  groups: reviewApi('groups'),
-  grouped: reviewApi('grouped'),
-  threads: reviewApi('threads'),
-  files: reviewApi('files'),
-  tree: reviewApi('tree'),
-  contextFile: reviewApi('context-file'),
-  editableFile: reviewApi('editable-file'),
+const reviewRest = (sub: string): RegExp => new RegExp(`^reviews/([^/]+)/${sub}$`);
+const REVIEW_REST = {
+  refresh: reviewRest('refresh'),
+  groups: reviewRest('groups'),
+  grouped: reviewRest('grouped'),
+  threads: reviewRest('threads'),
+  files: reviewRest('files'),
+  tree: reviewRest('tree'),
+  contextFile: reviewRest('context-file'),
+  editableFile: reviewRest('editable-file'),
 } as const;
 
 /** The long-lived collaborators these routes need, built once per server. */
@@ -73,6 +78,13 @@ export interface ReviewFileRoutesContext {
 
 /** What only this request knows. */
 export interface ReviewFileRouteRequest {
+  /**
+   * The board this canonical path named, and the remainder under it —
+   * resolved once by `middleware/workspace-scope.ts`. `undefined` when the
+   * path is not under `/workspaces/<id>/…`; a resource route matches through
+   * `matchRest`, so with no scope it has no remainder to match.
+   */
+  scope?: WorkspaceScope<BoardWorkspace>;
   req: Request;
   url: URL;
   pathname: string;
@@ -96,7 +108,7 @@ export async function handleReviewFileRoutes(
   rq: ReviewFileRouteRequest,
 ): Promise<Response | undefined> {
   const { docStore, j, safeJson } = ctx;
-  const { req, url, pathname, visitor, metaFor, withTaskChips } = rq;
+  const { req, url, scope, visitor, metaFor, withTaskChips } = rq;
 
   // File-tree view for a bound workspace: nested directory tree with
   // per-file unresolved-comment counts + folder roll-ups. Files are
@@ -104,7 +116,7 @@ export async function handleReviewFileRoutes(
   // All threads across a workspace (folder bind or diff review) in one
   // call — lets a watching agent poll a single endpoint per review
   // instead of one per member file. ?status=open|resolved filters.
-  const wsThreadsMatch = pathname.match(REVIEW_API.threads);
+  const wsThreadsMatch = matchRest(scope, REVIEW_REST.threads);
   if (wsThreadsMatch && req.method === 'GET') {
     const setId = decodeURIComponent(wsThreadsMatch[1] ?? '');
     if (!docStore.list().some((m) => attachmentIdOf(m) === setId)) {
@@ -121,7 +133,7 @@ export async function handleReviewFileRoutes(
   // Grouped-diff sidebar model: changed files organized into logical
   // groups (agent-supplied or heuristic). The default nav for diff
   // reviews.
-  const wsGroupedMatch = pathname.match(REVIEW_API.grouped);
+  const wsGroupedMatch = matchRest(scope, REVIEW_REST.grouped);
   if (wsGroupedMatch && req.method === 'GET') {
     const setId = decodeURIComponent(wsGroupedMatch[1] ?? '');
     const grouped = docStore.listGroupedDiff(setId);
@@ -139,7 +151,7 @@ export async function handleReviewFileRoutes(
   // Re-reconcile a workspace against disk: pick up files that changed
   // since the bind, flag members whose file is gone. Never re-mints a
   // docId, so every comment thread survives.
-  const wsRefreshMatch = pathname.match(REVIEW_API.refresh);
+  const wsRefreshMatch = matchRest(scope, REVIEW_REST.refresh);
   if (wsRefreshMatch && req.method === 'POST') {
     const setId = decodeURIComponent(wsRefreshMatch[1] ?? '');
     const res = await docStore.refreshWorkspace(setId);
@@ -149,7 +161,7 @@ export async function handleReviewFileRoutes(
   // Re-group a diff review's sidebar in place. An empty `groups` array
   // is meaningful (fall back to the heuristic); a MISSING one is a
   // caller mistake, so it 400s rather than silently regrouping.
-  const wsGroupsMatch = pathname.match(REVIEW_API.groups);
+  const wsGroupsMatch = matchRest(scope, REVIEW_REST.groups);
   if (wsGroupsMatch && req.method === 'POST') {
     const setId = decodeURIComponent(wsGroupsMatch[1] ?? '');
     const body = await safeJson(req);
@@ -164,7 +176,7 @@ export async function handleReviewFileRoutes(
   }
   // Every file in the workspace's repo (changed ones marked) — the
   // "Show All Files" context view.
-  const wsFilesMatch = pathname.match(REVIEW_API.files);
+  const wsFilesMatch = matchRest(scope, REVIEW_REST.files);
   if (wsFilesMatch && req.method === 'GET') {
     const setId = decodeURIComponent(wsFilesMatch[1] ?? '');
     const res = docStore.listRepoFiles(setId);
@@ -175,7 +187,7 @@ export async function handleReviewFileRoutes(
   }
   // Lazily open an unchanged repo file for context (read-only code doc
   // in the same workspace).
-  const wsCtxMatch = pathname.match(REVIEW_API.contextFile);
+  const wsCtxMatch = matchRest(scope, REVIEW_REST.contextFile);
   if (wsCtxMatch && req.method === 'POST') {
     const setId = decodeURIComponent(wsCtxMatch[1] ?? '');
     const body = await safeJson(req);
@@ -193,7 +205,7 @@ export async function handleReviewFileRoutes(
     }
     return j(200, { docId: res.docId, meta: metaFor(res.meta) });
   }
-  const wsEditMatch = pathname.match(REVIEW_API.editableFile);
+  const wsEditMatch = matchRest(scope, REVIEW_REST.editableFile);
   if (wsEditMatch && req.method === 'POST') {
     const setId = decodeURIComponent(wsEditMatch[1] ?? '');
     const body = await safeJson(req);
@@ -213,7 +225,7 @@ export async function handleReviewFileRoutes(
     }
     return j(200, { docId: res.docId, meta: metaFor(res.meta) });
   }
-  const wsTreeMatch = pathname.match(REVIEW_API.tree);
+  const wsTreeMatch = matchRest(scope, REVIEW_REST.tree);
   if (wsTreeMatch && req.method === 'GET') {
     const setId = decodeURIComponent(wsTreeMatch[1] ?? '');
     const tree = docStore.buildWorkspaceTree(setId);

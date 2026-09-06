@@ -59,7 +59,7 @@ describe('effort-estimate scoring', () => {
     });
   const get = (path: string) => fetch(`${base}${path}`);
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'effort-estimate-gate-'));
     verdict = { handsOnSeconds: 900, wallClockSeconds: 86_400 };
     calls = [];
@@ -142,7 +142,7 @@ describe('effort-estimate scoring', () => {
     const callsBefore = calls.length;
     verdict = { handsOnSeconds: 60, wallClockSeconds: 600 };
     await jj(
-      await post(`/api/tasks/${taskId}/title`, {
+      await post(`/workspaces/${workspaceId}/tasks/${taskId}/title`, {
         title: 'Rebuild the index hourly',
         author: PERSON,
       }),
@@ -162,7 +162,7 @@ describe('effort-estimate scoring', () => {
     await until(() => handle.tasks.getTask(taskId)?.effortEstimate);
     verdict = { handsOnSeconds: 1_200, wallClockSeconds: 3_600 };
     await jj(
-      await post(`/api/tasks/${taskId}/body`, {
+      await post(`/workspaces/${workspaceId}/tasks/${taskId}/body`, {
         markdown: 'A much bigger rewrite of the description.',
         author: PERSON,
       }),
@@ -191,7 +191,11 @@ describe('effort-estimate scoring', () => {
     // goal title the scorer weighs did not change.
     const callsBeforeReorder = calls.length;
     await jj(
-      await post(`/api/tasks/${taskId}/goal`, { goal: 'chores', author: PERSON, after: null }),
+      await post(`/workspaces/${workspaceId}/tasks/${taskId}/goal`, {
+        goal: 'chores',
+        author: PERSON,
+        after: null,
+      }),
     );
     await new Promise((r) => setTimeout(r, 150));
     expect(calls.length).toBe(callsBeforeReorder);
@@ -199,7 +203,12 @@ describe('effort-estimate scoring', () => {
     // Moving to a DIFFERENT goal changes the goal title in the scorer's
     // input, so it must re-score.
     verdict = { handsOnSeconds: 42, wallClockSeconds: 4_200 };
-    await jj(await post(`/api/tasks/${taskId}/goal`, { goal: goalId, author: PERSON }));
+    await jj(
+      await post(`/workspaces/${workspaceId}/tasks/${taskId}/goal`, {
+        goal: goalId,
+        author: PERSON,
+      }),
+    );
     const est = await until(() => {
       const e = handle.tasks.getTask(taskId)?.effortEstimate;
       return e && e.status === 'ok' && e.handsOnSeconds === 42 ? e : undefined;
@@ -223,7 +232,12 @@ describe('effort-estimate scoring', () => {
 
     // Re-triage to a different goal before the create's scoring run answers.
     verdict = 'defer';
-    await jj(await post(`/api/tasks/${taskId}/goal`, { goal: goalId, author: PERSON }));
+    await jj(
+      await post(`/workspaces/${workspaceId}/tasks/${taskId}/goal`, {
+        goal: goalId,
+        author: PERSON,
+      }),
+    );
     const regroupCall = await until(() => (parked.length >= 2 ? parked[1] : undefined));
 
     regroupCall?.({ handsOnSeconds: 111, wallClockSeconds: 222 });
@@ -332,7 +346,12 @@ describe('effort-estimate scoring', () => {
 
     // A second edit lands before the create's scoring run has answered.
     verdict = 'defer';
-    await jj(await post(`/api/tasks/${taskId}/title`, { title: 'Renamed title', author: PERSON }));
+    await jj(
+      await post(`/workspaces/${workspaceId}/tasks/${taskId}/title`, {
+        title: 'Renamed title',
+        author: PERSON,
+      }),
+    );
     const renameCall = await until(() => (parked.length >= 2 ? parked[1] : undefined));
 
     // The NEWER run answers first — ordinary, since a network call has no
@@ -381,7 +400,10 @@ describe('effort-estimate scoring', () => {
       createCall = await until(() => (parked.length >= 1 ? parked[0] : undefined));
       verdict = 'defer';
       await jj(
-        await post(`/api/tasks/${taskId}/title`, { title: 'Renamed title', author: PERSON }),
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/title`, {
+          title: 'Renamed title',
+          author: PERSON,
+        }),
       );
       renameCall = await until(() => (parked.length >= 2 ? parked[1] : undefined));
     } finally {

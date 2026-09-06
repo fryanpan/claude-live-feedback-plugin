@@ -34,6 +34,7 @@ import { join } from 'node:path';
 import { type DeployResult, Deployer } from '../src/deploy.ts';
 import { isLoopbackAddress, shareScopeAllows } from '../src/middleware/host-guard.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const DEPLOYED: DeployResult = {
   ok: true,
@@ -47,6 +48,9 @@ const DEPLOYED: DeployResult = {
   ranAt: 1,
   restartRequested: true,
 };
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('a share visitor cannot reach the deploy route', () => {
   // The layer the gate actually lives in. An end-to-end 403 here would be
@@ -65,7 +69,7 @@ describe('a share visitor cannot reach the deploy route', () => {
     // Positive control: these same targets DO reach their own surfaces, so
     // the refusals above are about this path and not about the fixture.
     expect(shareScopeAllows('/workspaces/board-1', 'GET', BOARD, wsOf)).toBe(true);
-    expect(shareScopeAllows('/api/docs/auth-rfc', 'GET', DOC, wsOf)).toBe(true);
+    expect(shareScopeAllows('/workspaces/ws-a/docs/auth-rfc', 'GET', DOC, wsOf)).toBe(true);
   });
 });
 
@@ -118,7 +122,7 @@ describe('POST /api/deploy over a real socket', () => {
   let dataDir: string | null = null;
   const runs = { n: 0 };
 
-  const start = () => {
+  const start = async () => {
     runs.n = 0;
     dataDir = mkdtempSync(join(tmpdir(), 'deploy-reach-'));
     handle = createServer({
@@ -143,6 +147,7 @@ describe('POST /api/deploy over a real socket', () => {
         now: () => 1,
       }),
     });
+    WS = await seedBoard(`http://localhost:${handle.port}`);
     return handle.port;
   };
 
@@ -156,7 +161,7 @@ describe('POST /api/deploy over a real socket', () => {
   it('a loopback caller deploys — the gate does not refuse the one caller it is for', async () => {
     // Positive control for every refusal below. The follow-up `request_deploy`
     // MCP tool resolves `http://localhost:<port>`, so this is the real path.
-    const port = start();
+    const port = await start();
     const res = await fetch(`http://127.0.0.1:${port}/api/deploy`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -176,7 +181,7 @@ describe('POST /api/deploy over a real socket', () => {
       return;
     }
     const from = addrs[0] as string;
-    const port = start();
+    const port = await start();
 
     // Assert the SHAPE before the behaviour: this probe must genuinely be
     // arriving from a non-loopback address, or the 403 proves nothing.
@@ -196,7 +201,7 @@ describe('POST /api/deploy over a real socket', () => {
     // Positive control on the SAME address in the SAME pass: this caller is
     // otherwise a fully trusted local client. Without this the 403 above is
     // indistinguishable from "that address cannot reach the server at all".
-    const ok = await fetch(`http://${from}:${port}/api/docs`, {
+    const ok = await fetch(`http://${from}:${port}/workspaces/${WS}/docs`, {
       headers: { host: `localhost:${port}` },
     });
     expect(ok.status).toBe(200);
@@ -207,7 +212,7 @@ describe('POST /api/deploy over a real socket', () => {
     // deploy state is served over the tailnet, and reporting what already
     // happened cannot restart anything.
     const addrs = nonLoopbackAddresses();
-    const port = start();
+    const port = await start();
     const from = addrs[0] ?? '127.0.0.1';
     const res = await fetch(`http://${from}:${port}/api/deploy`, {
       headers: { host: `localhost:${port}` },

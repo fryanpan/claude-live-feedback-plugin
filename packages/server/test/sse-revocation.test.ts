@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 /** Read an SSE stream until `stop()`, collecting the event names seen. */
 function listen(res: Response): {
@@ -48,6 +49,9 @@ function listen(res: Response): {
 
 const settle = (ms = 300) => new Promise((r) => setTimeout(r, ms));
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('a revoked share loses its event stream', () => {
   let handle: ServerHandle | null = null;
   let access: AccessHarness;
@@ -72,6 +76,7 @@ describe('a revoked share loses its event stream', () => {
     });
     const port = handle.port;
     const base = `http://localhost:${port}`;
+    WS = await seedBoard(base);
     const local = (path: string, init: RequestInit = {}) =>
       fetch(`${base}${path}`, {
         ...init,
@@ -87,7 +92,7 @@ describe('a revoked share loses its event stream', () => {
     // board. `shared` is the grouping's only member, so the stream under test
     // — /events/shared — is still exactly the one this share authorized, which
     // is what revocation has to reach.
-    await local('/api/docs', {
+    await local(`/workspaces/${WS}/docs`, {
       method: 'POST',
       body: JSON.stringify({
         docId: 'shared',
@@ -102,7 +107,8 @@ describe('a revoked share loses its event stream', () => {
     });
     expect(board.status).toBe(200);
     const boardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
-    const filed = await local(`/workspaces/${encodeURIComponent(boardId)}/docs`, {
+    WS = boardId;
+    const filed = await local(`/workspaces/${encodeURIComponent(boardId)}/docs:attach`, {
       method: 'POST',
       body: JSON.stringify({ docId: 'ws-shared' }),
     });
@@ -112,7 +118,7 @@ describe('a revoked share loses its event stream', () => {
 
     /** Post a comment as the owner — every live stream should see it. */
     const comment = (text: string) =>
-      local('/api/docs/shared/threads/by_find', {
+      local(`/workspaces/${WS}/docs/shared/threads/by_find`, {
         method: 'POST',
         body: JSON.stringify({
           find: 'Body text here',
@@ -122,7 +128,7 @@ describe('a revoked share loses its event stream', () => {
       });
 
     const openStream = () =>
-      fetch(`${base}/events/shared`, {
+      fetch(`${base}/workspaces/${WS}/docs/shared/events:stream`, {
         headers: { ...visitorHeaders },
       });
 
@@ -173,7 +179,9 @@ describe('a revoked share loses its event stream', () => {
   it("leaves the owner's own stream alone", async () => {
     const { base, local, comment, shareId } = await setup();
     const ownerStream = listen(
-      await fetch(`${base}/events/shared`, { headers: { host: `localhost:${handle?.port}` } }),
+      await fetch(`${base}/workspaces/${WS}/docs/shared/events:stream`, {
+        headers: { host: `localhost:${handle?.port}` },
+      }),
     );
     await comment('first');
     await settle();

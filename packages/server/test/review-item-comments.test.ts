@@ -20,6 +20,7 @@ import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { projectTask } from '../src/task-projection.ts';
 import type { Task } from '../src/tasks.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
 const AGENT = {
@@ -68,6 +69,9 @@ interface ThreadShape {
   comments: Array<{ text: string; author: { name: string } }>;
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('review-item comments and revisions', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -88,7 +92,8 @@ describe('review-item comments and revisions', () => {
     const { workspace } = await jj<{ workspace: { id: string } }>(
       await post('/workspaces', { name: 'index-rebuild', goal: 'Rebuild the index nightly.' }),
     );
-    return workspace.id;
+    WS = workspace.id;
+    return WS;
   }
   async function seedTask(workspaceId: string): Promise<Task> {
     const { task } = await jj<{ task: Task }>(
@@ -102,7 +107,7 @@ describe('review-item comments and revisions', () => {
   }
   async function seedItem(taskId: string, review: unknown = DECISION): Promise<string> {
     const { item } = await jj<{ item: { id: string } }>(
-      await post(`/api/tasks/${taskId}/review-items`, { review, author: AGENT }),
+      await post(`/workspaces/${WS}/tasks/${taskId}/review-items`, { review, author: AGENT }),
     );
     return item.id;
   }
@@ -122,7 +127,7 @@ describe('review-item comments and revisions', () => {
   }
   async function thread(taskId: string, threadId: string): Promise<ThreadShape> {
     const { thread } = await jj<{ thread: ThreadShape }>(
-      await fetch(`${base}/api/docs/task:${taskId}/threads/${threadId}`),
+      await fetch(`${base}/workspaces/${WS}/docs/task:${taskId}/threads/${threadId}`),
     );
     return thread;
   }
@@ -138,7 +143,7 @@ describe('review-item comments and revisions', () => {
   }
   async function ask(taskId: string, itemId: string, text = 'Twice per what — per night?') {
     const { thread } = await jj<{ thread: { id: string } }>(
-      await post(`/api/docs/task:${taskId}/threads`, {
+      await post(`/workspaces/${WS}/docs/task:${taskId}/threads`, {
         anchor: anchorFor(itemId),
         text,
         author: PERSON,
@@ -147,10 +152,11 @@ describe('review-item comments and revisions', () => {
     return thread.id;
   }
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'review-item-comments-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
   afterAll(async () => {
     await handle.stop();
@@ -195,7 +201,7 @@ describe('review-item comments and revisions', () => {
       const task = await seedTask(ws);
       const itemId = await seedItem(task.id);
       const { thread: created } = await jj<{ thread: { id: string } }>(
-        await post(`/api/docs/task:${task.id}/threads`, {
+        await post(`/workspaces/${WS}/docs/task:${task.id}/threads`, {
           anchor: { kind: 'review-item', reviewItemId: itemId, snippet: { text: PHRASE } },
           text: 'Which twice?',
           author: PERSON,
@@ -211,7 +217,11 @@ describe('review-item comments and revisions', () => {
       const task = await seedTask(ws);
       const itemId = await seedItem(task.id);
       const attempt = async (anchor: unknown) =>
-        post(`/api/docs/task:${task.id}/threads`, { anchor, text: 'Hm?', author: PERSON });
+        post(`/workspaces/${WS}/docs/task:${task.id}/threads`, {
+          anchor,
+          text: 'Hm?',
+          author: PERSON,
+        });
 
       const noItem = await attempt({ kind: 'review-item', snippet: { text: PHRASE } });
       expect(noItem.status).toBe(400);
@@ -242,7 +252,7 @@ describe('review-item comments and revisions', () => {
       const threadId = await ask(task.id, itemId);
       expect(await queueRows(ws, task.id)).toEqual([]);
 
-      const again = await post(`/api/docs/task:${task.id}/threads`, {
+      const again = await post(`/workspaces/${WS}/docs/task:${task.id}/threads`, {
         anchor: anchorFor(itemId),
         text: 'What about a cold cache?',
         author: PERSON,
@@ -270,7 +280,7 @@ describe('review-item comments and revisions', () => {
       const ws = await seedWorkspace();
       const task = await seedTask(ws);
       await seedItem(task.id);
-      const unknown = await post(`/api/docs/task:${task.id}/threads`, {
+      const unknown = await post(`/workspaces/${WS}/docs/task:${task.id}/threads`, {
         anchor: anchorFor('r-nope'),
         text: 'Hm?',
         author: PERSON,
@@ -279,8 +289,8 @@ describe('review-item comments and revisions', () => {
 
       const sourceUrl = join(dataDir, 'notes.md');
       writeFileSync(sourceUrl, `# Notes\n\n${DETAIL}\n`);
-      await jj(await post('/api/docs', { docId: 'notes-abc1', sourceUrl }));
-      const wrongDoc = await post('/api/docs/notes-abc1/threads', {
+      await jj(await post(`/workspaces/${WS}/docs`, { docId: 'notes-abc1', sourceUrl }));
+      const wrongDoc = await post(`/workspaces/${WS}/docs/notes-abc1/threads`, {
         anchor: anchorFor('r-abc1'),
         text: 'Hm?',
         author: PERSON,
@@ -301,7 +311,7 @@ describe('review-item comments and revisions', () => {
 
       const revised = `${DETAIL.slice(0, PHRASE_START)}read twice per nightly run.`;
       const res = await jj<{ item: StoredItem; threadId?: string }>(
-        await post(`/api/tasks/${task.id}/review-items/${itemId}/revise`, {
+        await post(`/workspaces/${WS}/tasks/${task.id}/review-items/${itemId}/revise`, {
           detail: revised,
           reply: 'Per night — clarified in the item.',
           author: AGENT,
@@ -349,7 +359,7 @@ describe('review-item comments and revisions', () => {
       const itemId = await seedItem(task.id);
       await ask(task.id, itemId);
       await jj(
-        await post(`/api/tasks/${task.id}/review-items/${itemId}/revise`, {
+        await post(`/workspaces/${WS}/tasks/${task.id}/review-items/${itemId}/revise`, {
           detail: 'Reads twice per nightly run. A full pass reads the index once.',
           revisedRange: { start: 0, end: 5 },
           author: AGENT,
@@ -364,7 +374,7 @@ describe('review-item comments and revisions', () => {
       const task = await seedTask(ws);
       const itemId = await seedItem(task.id);
       const short = 'Reads twice per nightly run.';
-      const res = await post(`/api/tasks/${task.id}/review-items/${itemId}/revise`, {
+      const res = await post(`/workspaces/${WS}/tasks/${task.id}/review-items/${itemId}/revise`, {
         detail: short,
         revisedRange: { start: 0, end: 999_999 },
         author: AGENT,
@@ -377,7 +387,7 @@ describe('review-item comments and revisions', () => {
       // Positive control on the gate: the same call with a range the new
       // detail can hold goes through and keeps the range verbatim.
       await jj(
-        await post(`/api/tasks/${task.id}/review-items/${itemId}/revise`, {
+        await post(`/workspaces/${WS}/tasks/${task.id}/review-items/${itemId}/revise`, {
           detail: short,
           revisedRange: { start: 0, end: short.length },
           author: AGENT,
@@ -392,13 +402,13 @@ describe('review-item comments and revisions', () => {
       const task = await seedTask(ws);
       const itemId = await seedItem(task.id);
       await jj(
-        await post(`/api/tasks/${task.id}/review-items/${itemId}/revise`, {
+        await post(`/workspaces/${WS}/tasks/${task.id}/review-items/${itemId}/revise`, {
           headline: 'Cache size for the nightly rebuild',
           author: AGENT,
         }),
       );
       await jj(
-        await post(`/api/tasks/${task.id}/review-items/${itemId}/revise`, {
+        await post(`/workspaces/${WS}/tasks/${task.id}/review-items/${itemId}/revise`, {
           options: [
             { id: 'o-7f3a', label: 'Keep it' },
             { id: 'o-4b2e', label: 'Halve it' },
@@ -428,7 +438,7 @@ describe('review-item comments and revisions', () => {
 
       expect(
         (
-          await post('/api/tasks/t-nope/review-items/r-nope/revise', {
+          await post(`/workspaces/${WS}/tasks/t-nope/review-items/r-nope/revise`, {
             headline: 'x',
             author: AGENT,
           })
@@ -437,7 +447,7 @@ describe('review-item comments and revisions', () => {
       // Unknown item: 400, the same answer the sibling answer/more-info doors give.
       expect(
         (
-          await post(`/api/tasks/${task.id}/review-items/r-nope/revise`, {
+          await post(`/workspaces/${WS}/tasks/${task.id}/review-items/r-nope/revise`, {
             headline: 'x',
             author: AGENT,
           })
@@ -445,20 +455,26 @@ describe('review-item comments and revisions', () => {
       ).toBe(400);
       // Nothing to change is not a revision.
       expect(
-        (await post(`/api/tasks/${task.id}/review-items/${itemId}/revise`, { author: AGENT }))
-          .status,
+        (
+          await post(`/workspaces/${WS}/tasks/${task.id}/review-items/${itemId}/revise`, {
+            author: AGENT,
+          })
+        ).status,
       ).toBe(400);
       // A reply with no anchored thread to land on is not silently dropped.
-      const orphanReply = await post(`/api/tasks/${task.id}/review-items/${itemId}/revise`, {
-        detail: 'Reads twice.',
-        reply: 'clarified',
-        author: AGENT,
-      });
+      const orphanReply = await post(
+        `/workspaces/${WS}/tasks/${task.id}/review-items/${itemId}/revise`,
+        {
+          detail: 'Reads twice.',
+          reply: 'clarified',
+          author: AGENT,
+        },
+      );
       expect(orphanReply.status).toBe(400);
       // The payload gate is the shared one: an option nobody could pick is refused.
       expect(
         (
-          await post(`/api/tasks/${task.id}/review-items/${itemId}/revise`, {
+          await post(`/workspaces/${WS}/tasks/${task.id}/review-items/${itemId}/revise`, {
             options: [{ id: 'o-1', label: '' }],
             author: AGENT,
           })
@@ -466,7 +482,7 @@ describe('review-item comments and revisions', () => {
       ).toBe(400);
       expect(
         (
-          await post(`/api/tasks/${task.id}/review-items/${itemId}/revise`, {
+          await post(`/workspaces/${WS}/tasks/${task.id}/review-items/${itemId}/revise`, {
             headline: 'x',
           })
         ).status,
@@ -501,7 +517,7 @@ describe('review-item comments and revisions', () => {
         }),
       );
       const res = await jj<{ task: Task }>(
-        await post(`/api/tasks/${task.id}/review-items/r-legacy/revise`, {
+        await post(`/workspaces/${WS}/tasks/${task.id}/review-items/r-legacy/revise`, {
           headline: 'Pick a retry budget for the poller',
           author: AGENT,
         }),
@@ -515,7 +531,7 @@ describe('review-item comments and revisions', () => {
     it('refuses the derived row on a ticket that is not a decision', async () => {
       const ws = await seedWorkspace();
       const task = await seedTask(ws);
-      const res = await post(`/api/tasks/${task.id}/review-items/r-legacy/revise`, {
+      const res = await post(`/workspaces/${WS}/tasks/${task.id}/review-items/r-legacy/revise`, {
         headline: 'Pick a retry budget for the poller',
         author: AGENT,
       });
@@ -536,9 +552,12 @@ describe('review-item comments and revisions', () => {
         }),
       );
       await jj(
-        await post(`/api/tasks/${task.id}/answer`, { text: 'Three tries.', author: PERSON }),
+        await post(`/workspaces/${WS}/tasks/${task.id}/answer`, {
+          text: 'Three tries.',
+          author: PERSON,
+        }),
       );
-      const res = await post(`/api/tasks/${task.id}/review-items/r-legacy/revise`, {
+      const res = await post(`/workspaces/${WS}/tasks/${task.id}/review-items/r-legacy/revise`, {
         headline: 'Pick a retry budget for the poller',
         author: AGENT,
       });
@@ -553,14 +572,14 @@ describe('review-item comments and revisions', () => {
       await ask(task.id, itemId);
       const revised = `${DETAIL.slice(0, PHRASE_START)}read twice per nightly run.`;
       await jj(
-        await post(`/api/tasks/${task.id}/review-items/${itemId}/revise`, {
+        await post(`/workspaces/${WS}/tasks/${task.id}/review-items/${itemId}/revise`, {
           detail: revised,
           author: AGENT,
         }),
       );
       expect((await queueRows(ws, task.id)).map((r) => r.state)).toEqual(['revised']);
       await jj(
-        await post(`/api/docs/task:${task.id}/threads`, {
+        await post(`/workspaces/${WS}/docs/task:${task.id}/threads`, {
           anchor: {
             kind: 'review-item',
             reviewItemId: itemId,
@@ -628,7 +647,7 @@ describe('review-item comments and revisions', () => {
      *  quoting the title — snippet only, since the title is not in the body. */
     async function askOnDecision(task: Task, text = 'What does a blip cost us?') {
       const { thread } = await jj<{ thread: { id: string } }>(
-        await post(`/api/docs/task:${task.id}/threads`, {
+        await post(`/workspaces/${WS}/docs/task:${task.id}/threads`, {
           anchor: { kind: 'review-item', reviewItemId: 'r-legacy', snippet: { text: task.title } },
           text,
           author: PERSON,
@@ -673,7 +692,7 @@ describe('review-item comments and revisions', () => {
       const ws = await seedWorkspace();
       const task = await seedDecision(ws);
       const first = await askOnDecision(task);
-      const res = await post(`/api/docs/task:${task.id}/threads`, {
+      const res = await post(`/workspaces/${WS}/docs/task:${task.id}/threads`, {
         anchor: { kind: 'review-item', reviewItemId: 'r-legacy', snippet: { text: task.title } },
         text: 'And on a manual run?',
         author: PERSON,
@@ -692,7 +711,7 @@ describe('review-item comments and revisions', () => {
 
       const detail = `${BODY} A blip costs one row.`;
       await jj(
-        await post(`/api/tasks/${task.id}/review-items/r-legacy/revise`, {
+        await post(`/workspaces/${WS}/tasks/${task.id}/review-items/r-legacy/revise`, {
           headline: 'Pick a retry budget for the poller',
           detail,
           author: AGENT,
@@ -736,7 +755,7 @@ describe('review-item comments and revisions', () => {
 
       // Answered after the revision: closed, and the mark clears with it.
       await jj(
-        await post(`/api/tasks/${task.id}/review-items/r-legacy/answer`, {
+        await post(`/workspaces/${WS}/tasks/${task.id}/review-items/r-legacy/answer`, {
           text: 'Three',
           answeredWith: s.options?.[0]?.id,
           author: PERSON,
@@ -752,7 +771,7 @@ describe('review-item comments and revisions', () => {
       const ws = await seedWorkspace();
       const task = await seedDecision(ws);
       const res = await jj<{ asked?: boolean; threadId?: string }>(
-        await post(`/api/tasks/${task.id}/review-items/r-legacy/answer`, {
+        await post(`/workspaces/${WS}/tasks/${task.id}/review-items/r-legacy/answer`, {
           text: 'Why does once lose the row?',
           author: PERSON,
         }),
@@ -776,7 +795,7 @@ describe('review-item comments and revisions', () => {
       const ws = await seedWorkspace();
       const task = await seedDecision(ws);
       await jj(
-        await post(`/api/tasks/${task.id}/review-items/r-legacy/more-info`, {
+        await post(`/workspaces/${WS}/tasks/${task.id}/review-items/r-legacy/more-info`, {
           question: 'Which poller?',
           author: AGENT,
         }),
@@ -799,13 +818,13 @@ describe('review-item comments and revisions', () => {
       const itemId = await seedItem(task.id);
       await ask(task.id, itemId);
       await jj(
-        await post(`/api/tasks/${task.id}/review-items/${itemId}/revise`, {
+        await post(`/workspaces/${WS}/tasks/${task.id}/review-items/${itemId}/revise`, {
           detail: 'Reads twice per nightly run.',
           author: AGENT,
         }),
       );
       await jj(
-        await post(`/api/tasks/${task.id}/review-items/${itemId}/answer`, {
+        await post(`/workspaces/${WS}/tasks/${task.id}/review-items/${itemId}/answer`, {
           text: 'Halve it',
           answeredWith: 'o-4b2e',
           author: PERSON,
@@ -823,13 +842,13 @@ describe('review-item comments and revisions', () => {
       const task = await seedTask(ws);
       const itemId = await seedItem(task.id);
       await jj(
-        await post(`/api/tasks/${task.id}/review-items/${itemId}/answer`, {
+        await post(`/workspaces/${WS}/tasks/${task.id}/review-items/${itemId}/answer`, {
           text: 'Halve it',
           answeredWith: 'o-4b2e',
           author: PERSON,
         }),
       );
-      const res = await post(`/api/tasks/${task.id}/review-items/${itemId}/revise`, {
+      const res = await post(`/workspaces/${WS}/tasks/${task.id}/review-items/${itemId}/revise`, {
         detail: 'Something else entirely.',
         author: AGENT,
       });

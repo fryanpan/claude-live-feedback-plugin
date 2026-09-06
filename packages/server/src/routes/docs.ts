@@ -1,3 +1,8 @@
+import { type Anchor, type DocMeta, type DocType, attachmentIdOf } from '@feedback/core';
+import { classifyActor } from '../actor-identity.ts';
+import { RESERVED_DOC_PREFIXES } from '../doc-ids.ts';
+import { compactDocRow, matchesDocFilters, pageDocs, parseListDocsQuery } from '../doc-listing.ts';
+import { normalizeDocOriginRepo, resolveOriginRepoCheckout } from '../doc-origin-repo.ts';
 /**
  * The doc, thread and bind REST block, in the order it is matched.
  *
@@ -5,8 +10,8 @@
  * the sequence was kept exactly through the move, so the file stays auditable
  * against the pre-split closure. Order is behaviour here in two ways:
  *
- *  - `/api/docs/:id/threads/:threadId/promote` is matched BEFORE the general
- *    `/api/docs/:id/...` resource block, because the resource block's own
+ *  - `…/docs/:docId/threads/:threadId/promote` is matched BEFORE the general
+ *    `…/docs/:docId/...` resource block, because the resource block's own
  *    `threads/<id>` subroute would otherwise answer it;
  *  - inside the resource block, `threads/by_find` sits below `threads` POST
  *    and the exact-`rest` tests sit above every prefix match, so a longer
@@ -30,7 +35,7 @@
  * back out of their own caller.
  *
  * The third entry point, `handleDocResourceRoutes`, is itself a chain of
- * three: this file still owns the `/api/docs/:id/...` match and resolves
+ * three: this file still owns the `/workspaces/:workspaceId/docs/:docId/...` match and resolves
  * `docId` / `doc` / `rest` once (both halves of the alias contract — see
  * the comment inside the function), then delegates to `doc-resource.ts`
  * (the doc's own reads/writes, its task chips, the meeting-float asks, its
@@ -44,11 +49,7 @@
  * strings), so no two of the ~30 subroutes can match the same request and a
  * fixed delegation order cannot make one answer a path meant for another.
  */
-import { type Anchor, type DocMeta, type DocType, attachmentIdOf } from '@feedback/core';
-import { classifyActor } from '../actor-identity.ts';
-import { RESERVED_DOC_PREFIXES } from '../doc-ids.ts';
-import { compactDocRow, matchesDocFilters, pageDocs, parseListDocsQuery } from '../doc-listing.ts';
-import { normalizeDocOriginRepo, resolveOriginRepoCheckout } from '../doc-origin-repo.ts';
+import { matchRest, restIs } from '../middleware/workspace-scope.ts';
 import { browserCannotBindBody, isBrowserRequest } from '../middleware/write-gate.ts';
 import {
   captureMockup,
@@ -114,10 +115,23 @@ export async function handleDocCreateListRoutes(
     homeForDocIndexed,
     fileUnderBoardWorkspace,
   } = ctx;
-  const { req, url, pathname } = rq;
+  const { req, url, scope } = rq;
 
-  // --- REST: docs ---
-  if (pathname === '/api/docs' && req.method === 'POST') {
+  // --- REST: docs — POST /workspaces/<ws>/docs ---
+  //
+  // CREATE, and the collection root is where a create belongs. The board is
+  // the address rather than an optional `workspaceId` in the body, so there
+  // is no longer a version of this call that does not say where the doc goes.
+  //
+  // `POST /workspaces/<ws>/docs` used to mean ATTACH an existing doc. Two
+  // verbs genuinely wanted the same address, and the collision was decided
+  // rather than fudged: create is the collection POST, and attach — which is
+  // a custom method on the collection, not a create — is `docs:attach`, in
+  // the colon spelling this server already uses for `events:stream`. Attach
+  // could not have been the nested one: its whole subject is a doc that is
+  // NOT on this board yet, and a nested address would be refused by the
+  // membership check before the handler ran.
+  if (restIs(scope, 'docs') && req.method === 'POST') {
     // A file bind names a host path. Agents only — see
     // browserCannotBindBody for why a page, on any origin, is refused.
     if (isBrowserRequest(req.headers)) return j(403, browserCannotBindBody());
@@ -131,12 +145,14 @@ export async function handleDocCreateListRoutes(
     // `<dir>/<docId>.md` on the home branch and the doc is pinned
     // there (see docStore.setDocOriginRepo), which is what gets planning notes
     // checked in instead of scattered wherever a session's checkout
-    // happens to sit. Opt-in twice over — the workspace set a
-    // notesHome, and the caller named the workspace.
+    // happens to sit. The board comes from the PATH now, so the opt-in
+    // is the one that was always the real one: the workspace set a
+    // notesHome. It used to also require the caller to repeat the board
+    // in `hubWorkspaceId`, which meant the same request could name two
+    // different boards.
     let derivedHome: { repoRoot: string; branch: string; relPath: string } | null = null;
     if (type === 'markdown' && !sourceUrl) {
-      const wsForNotes = typeof body?.hubWorkspaceId === 'string' ? body.hubWorkspaceId : undefined;
-      const notes = wsForNotes ? taskStore.notesHome(wsForNotes) : undefined;
+      const notes = scope ? taskStore.notesHome(scope.workspaceId) : undefined;
       if (notes) {
         const fileName = `${docId.replace(/[^a-zA-Z0-9._-]/g, '-')}.md`;
         const norm = normalizeDocOriginRepo({
@@ -163,7 +179,7 @@ export async function handleDocCreateListRoutes(
         sourceUrl = placed.absPath;
       }
     }
-    // Every markdown doc is file-backed. POST /api/docs is the sole
+    // Every markdown doc is file-backed. POST /workspaces/:workspaceId/docs is the sole
     // creation path for markdown — sourceUrl is required, and the
     // server attaches the file (loads content + sets up bidirectional
     // disk sync) before returning. Mockup/dev docs are about
@@ -173,8 +189,8 @@ export async function handleDocCreateListRoutes(
     // range and seeds content from git — a bare create can't do that.
     if (type === 'diff') {
       return j(400, {
-        error: 'use /api/diffs',
-        hint: 'Diff attachments are created per changed file by POST /api/diffs {repo, base, target}.',
+        error: 'use POST /workspaces/{workspaceId}/reviews',
+        hint: 'Diff attachments are created per changed file by POST /workspaces/{workspaceId}/reviews {repo, base, target}.',
       });
     }
     if ((type === 'markdown' || type === 'code') && !sourceUrl) {
@@ -250,10 +266,7 @@ export async function handleDocCreateListRoutes(
     // point, and the 409 below returns early — filing afterwards would
     // leave a failed bind as the one doc this route can still strand
     // outside a workspace.
-    const boardWorkspaceId = fileUnderBoardWorkspace(
-      canonicalId,
-      body?.hubWorkspaceId as string | undefined,
-    );
+    const boardWorkspaceId = fileUnderBoardWorkspace(canonicalId, scope?.workspaceId);
     let attached: ReturnType<typeof docStore.attachFile> | undefined;
     if (type === 'markdown' && sourceUrl) {
       attached = await docStore.attachFileAsync(canonicalId, sourceUrl);
@@ -316,7 +329,7 @@ export async function handleDocCreateListRoutes(
       ...(attached ? { attached } : {}),
     });
   }
-  if (pathname === '/api/docs' && req.method === 'GET') {
+  if (restIs(scope, 'docs') && req.method === 'GET') {
     // `?workspaceId=` scopes the listing. Without honouring it here,
     // list_docs accepted the param and silently answered a board-scoped
     // question with every doc on the server. It matches either kind of
@@ -352,12 +365,23 @@ export async function handleDocCreateListRoutes(
     // on Bun's single JS thread a quadratic listing stops the server
     // answering anything else while it runs. See `boardIndexForListing`.
     const boardIndex = boardIndexForListing();
+    // The PATH names the board, so the listing is that board's — always, and
+    // before any query filter. `?workspaceId=` used to be the only scope, and
+    // leaving it that way under `/workspaces/<id>/docs` would let a member of
+    // one board read another board's listing through it. It survives as a
+    // FILTER on top (a review set's tag is spelled the same way), never as a
+    // widening.
+    const onThisBoard = all.filter(
+      (m) =>
+        m.workspaceId === scope.workspaceId ||
+        boardsForDocIndexed(boardIndex, m).has(scope.workspaceId),
+    );
     const byWorkspace = workspaceId
-      ? all.filter(
+      ? onThisBoard.filter(
           (m) =>
             m.workspaceId === workspaceId || boardsForDocIndexed(boardIndex, m).has(workspaceId),
         )
-      : all;
+      : onThisBoard;
     const bySet = setId ? byWorkspace.filter((m) => attachmentIdOf(m) === setId) : byWorkspace;
     const docs = bySet.filter((m) => matchesDocFilters(m, q));
     const decorate = (m: DocMeta) => withReviewUrl(m, homeForDocIndexed(boardIndex, m));
@@ -385,40 +409,36 @@ export async function handleDocPromoteRoute(
   rq: DocRouteRequest,
 ): Promise<Response | undefined> {
   const { docStore, taskStore, j, safeJson, canonicalDocId, workspacesOfDoc } = ctx;
-  const { req, pathname, authorFor, visitor } = rq;
+  const { req, scope, authorFor, visitor } = rq;
   // promote_to_task (§3.10): thread → task. Captures the origin ref,
   // the latest HUMAN comment as the verbatim quote (an agent's closing
   // note must never become the quote), and drafts a title + body the
   // caller didn't supply. classifyActor draws the person/agent line —
   // the same one replies and transitions use.
-  const promoteMatch = pathname.match(/^\/api\/docs\/([^/]+)\/threads\/([^/]+)\/promote$/);
+  const promoteMatch = matchRest(scope, /^docs\/([^/]+)\/threads\/([^/]+)\/promote$/);
   if (promoteMatch && req.method === 'POST') {
     const docId = canonicalDocId(decodeURIComponent(promoteMatch[1] ?? ''));
     const threadId = decodeURIComponent(promoteMatch[2] ?? '');
     const body = await safeJson(req);
-    const workspaceId = body?.workspaceId;
-    if (typeof workspaceId !== 'string' || workspaceId.length === 0) {
-      return j(400, { error: 'workspaceId required' });
-    }
-    // A scoped caller — a share member, a collaborator — may promote onto the
-    // board their scope covers and nowhere else.
-    //
-    // This is the one route on the share surface whose DESTINATION is named in
-    // the body rather than in the path. The host guard read the path, found
-    // the doc in scope and said yes; the body then chose a different board,
-    // and the row landed there. So the destination is asked the same question
-    // the path was, and the answer comes from the scope this request already
-    // resolved rather than from a second membership rule that could drift.
-    //
-    // Fail closed: a scope with no workspace at all promotes nowhere. And
-    // this sits ABOVE the existence check on purpose — 404 for a real id and
-    // 403 for a made-up one would tell a member which board ids exist.
-    if (visitor && workspaceId !== visitor.workspaceId) {
-      return j(403, { error: 'out_of_share_scope' });
-    }
-    if (!taskStore.getWorkspace(workspaceId)) {
-      return j(404, { error: 'workspace not found' });
-    }
+    /**
+     * THE PATH NAMES THE DESTINATION, and this is the clearest thing the
+     * cutover fixes on the whole share surface.
+     *
+     * This was the one route whose destination lived in the BODY: the guard
+     * read the path, found the doc in scope and said yes, and then
+     * `body.workspaceId` chose a different board and the row landed there.
+     * It needed two extra checks to be safe — a `visitor.workspaceId`
+     * comparison and a board-existence lookup — and both existed only because
+     * the address and the effect were allowed to disagree.
+     *
+     * Under the canonical shape they cannot. The board is the first segment
+     * of the path the guard judged, and the middleware has already refused an
+     * unknown one, so there is nothing left here to re-ask. A body
+     * `workspaceId` is ignored rather than validated — accepting a second
+     * spelling of an argument the path already carries is how they get to
+     * disagree again.
+     */
+    const workspaceId = scope?.workspaceId ?? '';
     const thread = docStore.getThread(docId, threadId);
     if (!thread) return j(404, { error: 'thread not found' });
     const humanComment = [...thread.comments]
@@ -526,7 +546,7 @@ export async function handleDocPromoteRoute(
 }
 
 /**
- * Everything under `/api/docs/:id/...` — the doc itself, its threads, its
+ * Everything under `/workspaces/:workspaceId/docs/:docId/...` — the doc, its threads, its
  * content and the edit tools. Runs far below the pair above, under the
  * meeting and calendar routes.
  */
@@ -535,8 +555,8 @@ export async function handleDocResourceRoutes(
   rq: DocRouteRequest,
 ): Promise<Response | undefined> {
   const { docStore, j, isValidDocId } = ctx;
-  const { pathname } = rq;
-  const docMatch = pathname.match(/^\/api\/docs\/([^/]+)(?:\/(.*))?$/);
+  const { scope } = rq;
+  const docMatch = matchRest(scope, /^docs\/([^/]+)(?:\/(.*))?$/);
   if (!docMatch) return undefined;
   const addressed = decodeURIComponent(docMatch[1] ?? '');
   const rest = docMatch[2] ?? '';

@@ -17,6 +17,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 interface DocMetaOut {
   docId: string;
@@ -24,7 +25,10 @@ interface DocMetaOut {
   workspaceId?: string;
 }
 
-describe('GET /api/docs honours its setId filter', () => {
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
+describe(`GET /workspaces/${WS}/docs honours its setId filter`, () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
@@ -47,7 +51,7 @@ describe('GET /api/docs honours its setId filter', () => {
       body: JSON.stringify(body),
     });
   const listDocs = async (qs = ''): Promise<DocMetaOut[]> => {
-    const r = await local(`/api/docs${qs}`);
+    const r = await local(`/workspaces/${WS}/docs${qs}`);
     expect(r.status).toBe(200);
     return ((await r.json()) as { docs: DocMetaOut[] }).docs;
   };
@@ -61,13 +65,14 @@ describe('GET /api/docs honours its setId filter', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'list-docs-set-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
 
     for (const [docId, setId] of [
       ['doc-set-a-1', 'set-a'],
       ['doc-set-a-2', 'set-a'],
       ['doc-set-b-1', 'set-b'],
     ] as const) {
-      const r = await post('/api/docs', {
+      const r = await post(`/workspaces/${WS}/docs`, {
         docId,
         type: 'markdown',
         sourceUrl: mdFile(`${docId}.md`),
@@ -77,7 +82,7 @@ describe('GET /api/docs honours its setId filter', () => {
       mintedId[docId] = ((await r.json()) as { docId: string }).docId;
     }
     // A doc in no set at all — the 99.8% the sidebar throws away today.
-    const loose = await post('/api/docs', {
+    const loose = await post(`/workspaces/${WS}/docs`, {
       docId: 'doc-loose',
       type: 'markdown',
       sourceUrl: mdFile('loose.md'),
@@ -109,7 +114,7 @@ describe('GET /api/docs honours its setId filter', () => {
     expect(scoped.sort()).toEqual([mintedId['doc-set-a-1'], mintedId['doc-set-a-2']].sort());
 
     // The readable name is still an address: it resolves to the doc it named.
-    const byName = await local('/api/docs/doc-set-a-1');
+    const byName = await local(`/workspaces/${WS}/docs/doc-set-a-1?format=json`);
     expect(byName.status).toBe(200);
     expect(((await byName.json()) as { meta: DocMetaOut }).meta.docId).toBe(
       mintedId['doc-set-a-1'],
@@ -120,7 +125,7 @@ describe('GET /api/docs honours its setId filter', () => {
     // `attachmentIdOf` reads setId first and falls back to workspaceId, for a doc
     // restored from an archive written before the rename. The filter must not
     // be the one place that forgets the fallback.
-    const r = await post('/api/docs', {
+    const r = await post(`/workspaces/${WS}/docs`, {
       docId: 'doc-old-spelling',
       type: 'markdown',
       sourceUrl: mdFile('old-spelling.md'),

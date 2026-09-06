@@ -22,6 +22,10 @@ import { DocStore } from '../src/doc-store.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
+import { seedBoard } from './workspace-seed.ts';
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('a scan does not activate the docs it enumerates', () => {
   let dataDir: string;
@@ -90,9 +94,10 @@ describe('a scan does not activate the docs it enumerates', () => {
     let handle: ServerHandle;
     let base: string;
 
-    beforeEach(() => {
+    beforeEach(async () => {
       handle = createServer({ port: 0, dataDir });
       base = `http://localhost:${handle.port}`;
+      WS = await seedBoard(base);
     });
     afterEach(async () => {
       await handle.stop();
@@ -117,12 +122,15 @@ describe('a scan does not activate the docs it enumerates', () => {
         const docId = `scan-http-${i}`;
         const path = join(srcDir, `${docId}.md`);
         writeFileSync(path, `# Doc ${i}\n\nbody\n`);
-        expect((await post('/api/docs', { docId, type: 'markdown', sourceUrl: path })).status).toBe(
-          200,
-        );
+        expect(
+          (await post(`/workspaces/${WS}/docs`, { docId, type: 'markdown', sourceUrl: path }))
+            .status,
+        ).toBe(200);
         // On the board, which is what makes it part of the listing the
         // review-items builder walks.
-        expect((await post(`/workspaces/${ws.workspace.id}/docs`, { docId })).status).toBe(200);
+        expect((await post(`/workspaces/${ws.workspace.id}/docs:attach`, { docId })).status).toBe(
+          200,
+        );
         docIds.push(docId);
       }
 
@@ -131,7 +139,7 @@ describe('a scan does not activate the docs it enumerates', () => {
       // binds the whole corpus at boot and warming it there was the storm
       // this change exists to remove — so the control has to be a read.
       handle.docStore.resetDerivedCaches();
-      expect((await local(`/api/docs/${docIds[0]}`)).status).toBe(200);
+      expect((await local(`/workspaces/${WS}/docs/${docIds[0]}?format=json`)).status).toBe(200);
       const opened = (await (await local('/api/metrics')).json()) as { activeBindings: number };
       expect(opened.activeBindings).toBe(1);
 

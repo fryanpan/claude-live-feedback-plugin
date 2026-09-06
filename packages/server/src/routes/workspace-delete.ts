@@ -1,8 +1,26 @@
 /**
- * The one DELETE that fronts two stores, dispatching on whether the id names a board.
+ * `DELETE /workspaces/<id>` — the board, and ONLY the board.
  *
- * Lifted verbatim out of `createServer`'s request closure; the handlers
- * read their collaborators off `WorkspaceRoutesContext` instead of the scope.
+ * It used to front two stores, dispatching on whether the id named a board and
+ * falling through to the review destroy when it did not. That fall-through
+ * was compatibility: `delete_workspace(reviewId)` was what every shipped
+ * plugin bundle and skill called, from sessions nobody could restart.
+ *
+ * It is gone with the canonical cutover (owner's call), and the reason is the
+ * cutover's own shape rather than tidiness. A review is not a board and never
+ * was; it is a resource a board holds, so it is addressed under the board that
+ * holds it — `DELETE /workspaces/<ws>/reviews/<setId>`, which the archive
+ * family serves and which the scope middleware checks the pair of ids on. One
+ * id in the board's slot could only ever mean one of the two things, and the
+ * store that happened to know it was what decided which: an id that both
+ * stores knew would have been destroyed by whichever was asked first.
+ *
+ * WHAT THIS COSTS, stated rather than discovered: a session still holding a
+ * pre-cutover bundle that calls `delete_workspace(reviewId)` now gets a 404
+ * instead of a destroyed review. That is the intended direction of the
+ * failure — the whole cutover ships as one version bump with a session
+ * restart behind it, and a stale caller failing to delete is the safe half of
+ * "no old-path support".
  */
 import type { WorkspaceDeleteRequest, WorkspaceRoutesContext } from './workspace-routes-context.ts';
 
@@ -12,20 +30,13 @@ export async function handleWorkspaceDelete(
   rq: WorkspaceDeleteRequest,
 ): Promise<Response | undefined> {
   const { taskStore, taskProjection, j } = ctx;
-  const { req, pathname, url, deleteReview } = rq;
+  const { req, pathname, url } = rq;
   const wsDeleteMatch = pathname.match(/^\/workspaces\/([^/]+)$/);
   if (wsDeleteMatch && req.method === 'DELETE') {
     const workspaceId = decodeURIComponent(wsDeleteMatch[1] ?? '');
     const force = url.searchParams.get('force') === 'true';
-    // COMPAT — this ONE route fronts two stores, dispatching by id, and
-    // it is the last place that does. A board is what it deletes now;
-    // a review id still resolves because `delete_workspace(reviewId)` is
-    // what every shipped plugin bundle and skill has always called, from
-    // sessions nobody can restart. New callers use DELETE
-    // /api/reviews/<setId> above, which cannot touch a board at all.
-    // Ask the task store first: `docStore.deleteWorkspace` enumerates DOC
-    // members, so a board — which has none — always came back not-found,
-    // and a board created for a five-minute experiment was permanent.
+    // A board, or nothing. An id this store does not know answers not-found
+    // rather than being handed to the review store — see the header.
     if (taskStore.getWorkspace(workspaceId)) {
       const openTasks = taskStore.openTaskCount(workspaceId) ?? 0;
       if (openTasks > 0 && !force) {
@@ -65,7 +76,7 @@ export async function handleWorkspaceDelete(
       taskProjection.dropWorkspaceDocs(workspaceId, board.taskIds);
       return j(200, { ok: true, deletedTasks: board.deletedTasks });
     }
-    return deleteReview(workspaceId, force, url.searchParams.get('purge') === 'true');
+    return j(404, { ok: false, error: 'not-found' });
   }
   return undefined;
 }

@@ -137,7 +137,7 @@ describe('board docs defend everything the server owns', () => {
     return ((await r.json()) as { task: { id: string } }).task.id;
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'board-guard-'));
     secretPath = join(dataDir, 'private-notes.md');
     writeFileSync(secretPath, CANARY);
@@ -154,7 +154,7 @@ describe('board docs defend everything the server owns', () => {
   it('a peer cannot bind the board doc to a file by writing meta.sourceUrl', async () => {
     const wsId = await makeWorkspace('meta-injection');
     const boardDocId = workspaceDocId(wsId);
-    const client = connectDoc(`${wsBase}/y/${boardDocId}`);
+    const client = connectDoc(`${wsBase}/workspaces/${wsId}/docs/${boardDocId}/y`);
     try {
       await waitForOpen(client.ws);
       await client.ready;
@@ -193,7 +193,13 @@ describe('board docs defend everything the server owns', () => {
     const bound = join(dataDir, 'bound.md');
     writeFileSync(bound, `${CANARY}`);
     expect(
-      (await post('/api/docs', { docId: 'bound', type: 'markdown', sourceUrl: bound })).status,
+      (
+        await post(`/workspaces/${wsId}/docs`, {
+          docId: 'bound',
+          type: 'markdown',
+          sourceUrl: bound,
+        })
+      ).status,
     ).toBe(200);
     await restart();
     const boundDoc = handle.docStore.get('bound');
@@ -207,7 +213,7 @@ describe('board docs defend everything the server owns', () => {
     const wsId = await makeWorkspace('body-injection');
     const taskId = await makeTask(wsId, { title: 'Write the rollout note' });
     const docId = taskBodyDocId(taskId);
-    const client = connectDoc(`${wsBase}/y/${docId}`);
+    const client = connectDoc(`${wsBase}/workspaces/${wsId}/docs/${docId}/y`);
     try {
       await waitForOpen(client.ws);
       await client.ready;
@@ -240,7 +246,9 @@ describe('board docs defend everything the server owns', () => {
     await makeTask(wsId, { title: 'Real task' });
 
     const forge = async (id: string): Promise<unknown> => {
-      const client = connectDoc(`${wsBase}/y/${boardDocId}`);
+      // Addressed under ITS OWN board: a `ws:<id>` doc names its workspace in
+      // the id, and the middleware refuses an address that names another.
+      const client = connectDoc(`${wsBase}/workspaces/${wsId}/docs/${boardDocId}/y`);
       try {
         await waitForOpen(client.ws);
         await client.ready;
@@ -258,7 +266,10 @@ describe('board docs defend everything the server owns', () => {
     // POSITIVE CONTROL: the guard is armed on the freshly created doc.
     expect(await forge('t-forged-1')).toBeUndefined();
 
-    const del = await local(`/api/docs/${encodeURIComponent(boardDocId)}`, { method: 'DELETE' });
+    const del = await local(
+      `/workspaces/${wsId}/docs/${encodeURIComponent(boardDocId)}?format=json`,
+      { method: 'DELETE' },
+    );
     expect(del.status).toBe(200);
     // Any store mutation re-creates the board doc — with a NEW Y.Doc.
     await makeTask(wsId, { title: 'Task after the delete' });

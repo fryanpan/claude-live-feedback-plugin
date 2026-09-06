@@ -18,8 +18,12 @@ import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { taskBodyDocId } from '../src/task-projection.ts';
 import { TaskStore, type TaskStoreEvent } from '../src/tasks.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('TaskStore.recordReadingTime', () => {
   let dataDir: string;
@@ -135,10 +139,11 @@ describe('server wiring: a read_session on a task body doc updates Task.readingT
   let dataDir: string;
   let base: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'reading-time-wire-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterAll(async () => {
@@ -168,6 +173,7 @@ describe('server wiring: a read_session on a task body doc updates Task.readingT
         body: JSON.stringify({ name: 'launch-board' }),
       }),
     );
+    WS = workspace.id;
     const { task } = await j<{ task: { id: string } }>(
       await fetch(`${base}/workspaces/${workspace.id}/tasks`, {
         method: 'POST',
@@ -186,7 +192,7 @@ describe('server wiring: a read_session on a task body doc updates Task.readingT
     type: 'read_session' | 'doc_open',
     payload: Record<string, unknown>,
   ): Promise<Response> {
-    return fetch(`${base}/api/docs/${docId}/activity`, {
+    return fetch(`${base}/workspaces/${WS}/docs/${docId}/activity`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ type, author: PERSON, payload }),
@@ -249,7 +255,7 @@ describe('server wiring: a read_session on a task body doc updates Task.readingT
     const file = join(dataDir, 'plain.md');
     await Bun.write(file, '# Plain\n\nSome prose.\n');
     const { docId } = await j<{ docId: string }>(
-      await fetch(`${base}/api/docs`, {
+      await fetch(`${base}/workspaces/${WS}/docs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ docId: 'plain-doc', type: 'markdown', sourceUrl: file }),

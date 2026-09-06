@@ -16,6 +16,7 @@ import { type ServerHandle, createServer } from '../src/server.ts';
 import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
 import { pastWriteBack, waitFor, waitForFile, waitForFileToBe } from './wait-for.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 /**
  * Flat (code / working-tree diff) docs gain doc→disk write-back so the File
@@ -66,6 +67,9 @@ function writeExternal(path: string, content: string): void {
 }
 
 const SRC = 'fun main() {\n    println("one")\n    println("two")\n}\n';
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('flat write-back', () => {
   let dataDir: string;
@@ -167,7 +171,7 @@ describe('flat write-back through bindDiff', () => {
   let docStore: DocStore;
   let base: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     repo = mkdtempSync(join(tmpdir(), 'cw-flatrepo-'));
     dataDir = mkdtempSync(join(tmpdir(), 'cw-flatdata-'));
     git(repo, 'init', '-q');
@@ -408,11 +412,12 @@ describe('flat write-back through bindDiff', () => {
     await waitForFileToBe(file, downtimeEdit);
   });
 
-  it('POST /api/reviews/:id/editable-file routes the whole flow (route-layer test per learnings)', async () => {
+  it(`POST /workspaces/${WS}/reviews/:id/editable-file routes the whole flow (route-layer test per learnings)`, async () => {
     const handle: ServerHandle = createServer({ port: 0, dataDir });
     try {
       const httpBase = `http://localhost:${handle.port}`;
-      const bind = await fetch(`${httpBase}/api/diffs`, {
+      WS = await seedBoard(httpBase);
+      const bind = await fetch(`${httpBase}/workspaces/${WS}/reviews`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ repo, base }),
@@ -420,7 +425,7 @@ describe('flat write-back through bindDiff', () => {
       expect(bind.ok).toBe(true);
       const bound = (await bind.json()) as { reviewId: string };
       const open = await fetch(
-        `${httpBase}/api/reviews/${encodeURIComponent(bound.reviewId)}/editable-file`,
+        `${httpBase}/workspaces/${WS}/reviews/${encodeURIComponent(bound.reviewId)}/editable-file`,
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -432,7 +437,9 @@ describe('flat write-back through bindDiff', () => {
       expect(opened.meta.type).toBe('markdown');
       // Verify the server-side EFFECT, not just the 200: the doc serves the
       // parsed markdown.
-      const read = await fetch(`${httpBase}/api/docs/${encodeURIComponent(opened.docId)}/content`);
+      const read = await fetch(
+        `${httpBase}/workspaces/${WS}/docs/${encodeURIComponent(opened.docId)}/content`,
+      );
       expect(await read.text()).toContain('Body changed.');
     } finally {
       await handle.stop();

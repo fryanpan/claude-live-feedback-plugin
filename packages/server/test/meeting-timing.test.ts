@@ -25,6 +25,7 @@ import {
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { audioEndMsFromTurn } from '../src/transcribe-assemblyai.ts';
 import type { TranscriptionEngine } from '../src/transcribe.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 /** 100ms of 16 kHz mono PCM16. */
 const FRAME_BYTES = (MEETING_SAMPLE_RATE / 10) * 2;
@@ -74,7 +75,7 @@ class AudioClient {
   private constructor(readonly ws: WebSocket) {}
 
   static async open(base: string, docId: string): Promise<AudioClient> {
-    const ws = new WebSocket(`${base}${meetingSocketPath(docId)}`);
+    const ws = new WebSocket(`${base}${meetingSocketPath(WS, docId)}`);
     ws.binaryType = 'arraybuffer';
     const client = new AudioClient(ws);
     ws.addEventListener('message', (ev) => {
@@ -141,6 +142,7 @@ async function makeServer(engine: TranscriptionEngine): Promise<{
   const dataDir = mkdtempSync(join(tmpdir(), 'cw-meeting-timing-'));
   const handle = createServer({ port: 0, dataDir, transcription: engine });
   const base = `http://localhost:${handle.port}`;
+  WS = await seedBoard(base);
   return {
     handle,
     dataDir,
@@ -148,7 +150,7 @@ async function makeServer(engine: TranscriptionEngine): Promise<{
     createDoc: async (docId) => {
       const path = join(dataDir, `${docId}.md`);
       writeFileSync(path, `# ${docId}\n\nNotes go here.\n`);
-      const res = await fetch(`${base}/api/docs`, {
+      const res = await fetch(`${base}/workspaces/${WS}/docs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ docId, sourceUrl: path, title: docId }),
@@ -157,6 +159,9 @@ async function makeServer(engine: TranscriptionEngine): Promise<{
     },
   };
 }
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('the relay measures only when it is asked', () => {
   let env: Awaited<ReturnType<typeof makeServer>>;

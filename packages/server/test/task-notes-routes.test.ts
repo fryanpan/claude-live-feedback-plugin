@@ -40,7 +40,7 @@ describe('task status notes route', () => {
     return res.json() as Promise<T>;
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'task-notes-routes-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
@@ -85,7 +85,7 @@ describe('task status notes route', () => {
     const before = handle.tasks.getTask(taskId)?.updatedAt ?? 0;
     await settle(5);
 
-    const r = await post(`/api/tasks/${taskId}/notes`, {
+    const r = await post(`/workspaces/${wsId}/tasks/${taskId}/notes`, {
       agent: AGENT.name,
       kind: 'status',
       text: 'PR open, waiting on CI.\n\n- typecheck green\n- lint green',
@@ -121,7 +121,7 @@ describe('task status notes route', () => {
     const wsId = await board();
     const taskId = await todoRow(wsId, 'Index the archive');
 
-    const missing = await post('/api/tasks/t-nope/notes', {
+    const missing = await post(`/workspaces/${wsId}/tasks/t-nope/notes`, {
       agent: AGENT.name,
       kind: 'status',
       text: 'x',
@@ -137,10 +137,10 @@ describe('task status notes route', () => {
       ['empty text', { agent: AGENT.name, kind: 'status', text: '  ' }],
     ];
     for (const [label, body] of bad) {
-      const r = await post(`/api/tasks/${taskId}/notes`, body);
+      const r = await post(`/workspaces/${wsId}/tasks/${taskId}/notes`, body);
       expect(r.status, label).toBe(400);
     }
-    expect((await fetch(`${base}/api/tasks/${taskId}/notes`)).status).toBe(405);
+    expect((await fetch(`${base}/workspaces/${wsId}/tasks/${taskId}/notes`)).status).toBe(405);
     // Nothing above landed on the row.
     expect(handle.tasks.getTask(taskId)?.notes ?? []).toHaveLength(0);
   });
@@ -155,7 +155,7 @@ describe('task status notes route', () => {
       }),
     );
     await jj(
-      await post(`/api/tasks/${taskId}/transition`, {
+      await post(`/workspaces/${wsId}/tasks/${taskId}/transition`, {
         to: 'in-progress',
         author: AGENT,
         workspaceId: wsId,
@@ -175,7 +175,7 @@ describe('task status notes route', () => {
     const wsId = await board();
     const taskId = await todoRow(wsId, 'Index the archive');
     for (let i = 0; i < TASK_NOTES_READ_CAP + 3; i++) {
-      const r = await post(`/api/tasks/${taskId}/notes`, {
+      const r = await post(`/workspaces/${wsId}/tasks/${taskId}/notes`, {
         agent: AGENT.name,
         kind: 'status',
         text: `update ${i}`,
@@ -193,7 +193,7 @@ describe('task status notes route', () => {
     const wsId = await board();
     const target = await todoRow(wsId, 'Wire the index');
     const other = await todoRow(wsId, 'Another row');
-    const r = await post(`/api/tasks/${target}/notes`, {
+    const r = await post(`/workspaces/${wsId}/tasks/${target}/notes`, {
       agent: AGENT.name,
       kind: 'status',
       text: 'On the URL row',

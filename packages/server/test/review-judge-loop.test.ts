@@ -23,6 +23,8 @@ import {
   startJudgeHarness,
 } from './review-judge-harness.ts';
 
+/** The board this file's docs, tasks and reviews are filed under. */
+
 describe('the review-item hold loop', () => {
   let h: JudgeHarness;
   let calls: JudgeHarness['calls'];
@@ -40,9 +42,9 @@ describe('the review-item hold loop', () => {
 
   describe('costs stated only in the options', () => {
     it('is not held for missing costs — the option details reach the judge', async () => {
-      const { taskId } = await board();
+      const { workspaceId, taskId } = await board();
       const out = await jj<Held>(
-        await post(`/api/tasks/${taskId}/review-items`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
           author: FILER,
           review: COSTS_IN_OPTIONS,
         }),
@@ -55,9 +57,9 @@ describe('the review-item hold loop', () => {
     });
 
     it('the control still holds when the options genuinely state no cost', async () => {
-      const { taskId } = await board();
+      const { workspaceId, taskId } = await board();
       const out = await jj<Held>(
-        await post(`/api/tasks/${taskId}/review-items`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
           author: FILER,
           review: {
             ...COSTS_IN_OPTIONS,
@@ -73,16 +75,16 @@ describe('the review-item hold loop', () => {
     });
 
     it('keeps the costs in front of the judge across a revision that leaves the options alone', async () => {
-      const { taskId } = await board();
+      const { workspaceId, taskId } = await board();
       const filed = await jj<Held>(
-        await post(`/api/tasks/${taskId}/review-items`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
           author: FILER,
           review: COSTS_IN_OPTIONS,
         }),
       );
       const itemId = filed.item?.id as string;
       const out = await jj<Held>(
-        await post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items/${itemId}/revise`, {
           author: FILER,
           headline: 'Which cache size the nightly rebuild should use',
           detail: 'The rollout waits on this: nothing ships until the size is picked.',
@@ -98,21 +100,24 @@ describe('the review-item hold loop', () => {
 
   describe('what a hold can and cannot be spent on', () => {
     it('refuses a revision that changes nothing, so a no-op cannot burn a round', async () => {
-      const { taskId } = await board();
+      const { workspaceId, taskId } = await board();
       h.judge = contradictoryJudge();
       const filed = await jj<Held>(
-        await post(`/api/tasks/${taskId}/review-items`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
           author: FILER,
           review: COSTS_IN_OPTIONS,
         }),
       );
       const itemId = filed.item?.id as string;
       const before = calls.length;
-      const res = await post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
-        author: FILER,
-        headline: COSTS_IN_OPTIONS.headline,
-        detail: COSTS_IN_OPTIONS.detail,
-      });
+      const res = await post(
+        `/workspaces/${workspaceId}/tasks/${taskId}/review-items/${itemId}/revise`,
+        {
+          author: FILER,
+          headline: COSTS_IN_OPTIONS.headline,
+          detail: COSTS_IN_OPTIONS.detail,
+        },
+      );
       expect(res.status).toBe(400);
       expect(((await res.json()) as { error: string }).error).toBe('no-change');
       // The judge was never asked, so the round was never spent.
@@ -120,32 +125,39 @@ describe('the review-item hold loop', () => {
     });
 
     it('resets the count when the filer withdraws the item and puts it back', async () => {
-      const { taskId } = await board();
+      const { workspaceId, taskId } = await board();
       h.judge = contradictoryJudge();
       const filed = await jj<Held>(
-        await post(`/api/tasks/${taskId}/review-items`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
           author: FILER,
           review: COSTS_IN_OPTIONS,
         }),
       );
       const itemId = filed.item?.id as string;
       await jj(
-        await post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items/${itemId}/revise`, {
           author: FILER,
           detail: 'A second blurb.',
         }),
       );
       await jj(
-        await post(`/api/tasks/${taskId}/review-items/${itemId}/withdraw`, { author: FILER }),
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items/${itemId}/withdraw`, {
+          author: FILER,
+        }),
       );
       const back = await jj<Held>(
-        await post(`/api/tasks/${taskId}/review-items/${itemId}/withdraw/undo`, { author: FILER }),
+        await post(
+          `/workspaces/${workspaceId}/tasks/${taskId}/review-items/${itemId}/withdraw/undo`,
+          {
+            author: FILER,
+          },
+        ),
       );
       expect(back.item?.judge?.heldFor ?? []).toHaveLength(0);
       // A re-filed ask gets its two rounds back rather than being admitted
       // on the next hold.
       const next = await jj<Held>(
-        await post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items/${itemId}/revise`, {
           author: FILER,
           detail: 'A third blurb, filed afresh.',
         }),
@@ -155,10 +167,10 @@ describe('the review-item hold loop', () => {
     });
 
     it('judges a post-admission change once more, and admits it if held again', async () => {
-      const { taskId } = await board();
+      const { workspaceId, taskId } = await board();
       h.judge = contradictoryJudge();
       const filed = await jj<Held>(
-        await post(`/api/tasks/${taskId}/review-items`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
           author: FILER,
           review: COSTS_IN_OPTIONS,
         }),
@@ -167,7 +179,7 @@ describe('the review-item hold loop', () => {
       const first = filed.heldReason as string;
       for (const detail of ['A second blurb.', 'A third blurb.']) {
         await jj(
-          await post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
+          await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items/${itemId}/revise`, {
             author: FILER,
             detail,
           }),
@@ -175,7 +187,7 @@ describe('the review-item hold loop', () => {
       }
       const before = calls.length;
       const after = await jj<Held>(
-        await post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items/${itemId}/revise`, {
           author: FILER,
           detail: 'A fourth blurb, written after the item was admitted.',
         }),
@@ -194,14 +206,14 @@ describe('the review-item hold loop', () => {
     const ADD = 'Nothing ships until the cache size is picked.';
 
     it('quotes that sentence in the message the filer is handed', async () => {
-      const { taskId } = await board();
+      const { workspaceId, taskId } = await board();
       h.judge = async () => ({
         ok: false,
         reason: 'The detail never says what waits on this.',
         add: ADD,
       });
       const filed = await jj<Held>(
-        await post(`/api/tasks/${taskId}/review-items`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
           author: FILER,
           review: COSTS_IN_OPTIONS,
         }),
@@ -214,14 +226,14 @@ describe('the review-item hold loop', () => {
     });
 
     it('keeps it on the item, so the ticket and the wake say the same thing', async () => {
-      const { taskId } = await board();
+      const { workspaceId, taskId } = await board();
       h.judge = async () => ({
         ok: false,
         reason: 'The detail never says what waits on this.',
         add: ADD,
       });
       const filed = await jj<Held>(
-        await post(`/api/tasks/${taskId}/review-items`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
           author: FILER,
           review: COSTS_IN_OPTIONS,
         }),
@@ -230,10 +242,10 @@ describe('the review-item hold loop', () => {
     });
 
     it('says nothing extra when the judge offered no sentence — the control', async () => {
-      const { taskId } = await board();
+      const { workspaceId, taskId } = await board();
       h.judge = async () => ({ ok: false, reason: 'The detail never says what waits on this.' });
       const filed = await jj<Held>(
-        await post(`/api/tasks/${taskId}/review-items`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
           author: FILER,
           review: COSTS_IN_OPTIONS,
         }),
@@ -255,7 +267,7 @@ describe('the review-item hold loop', () => {
       const { workspaceId, taskId } = await board();
       h.judge = contradictoryJudge();
       const filed = await jj<Held>(
-        await post(`/api/tasks/${taskId}/review-items`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
           author: FILER,
           review: COSTS_IN_OPTIONS,
         }),
@@ -264,7 +276,7 @@ describe('the review-item hold loop', () => {
       const itemId = filed.item?.id as string;
       const first = filed.heldReason as string;
       const second = await jj<Held>(
-        await post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items/${itemId}/revise`, {
           author: FILER,
           detail: 'The rollout waits on this: nothing ships until the size is picked.',
         }),
@@ -283,10 +295,10 @@ describe('the review-item hold loop', () => {
     });
 
     it('does not say that on the first hold — the control', async () => {
-      const { taskId } = await board();
+      const { workspaceId, taskId } = await board();
       h.judge = contradictoryJudge();
       const filed = await jj<Held>(
-        await post(`/api/tasks/${taskId}/review-items`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
           author: FILER,
           review: COSTS_IN_OPTIONS,
         }),
@@ -296,9 +308,9 @@ describe('the review-item hold loop', () => {
     });
 
     it('accepts the third revision instead of holding it a third time', async () => {
-      const { taskId, itemId } = await heldTwice();
+      const { workspaceId, taskId, itemId } = await heldTwice();
       const third = await jj<Held>(
-        await post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items/${itemId}/revise`, {
           author: FILER,
           detail: 'Picking a size unblocks the rollout, which is otherwise stopped.',
         }),
@@ -310,7 +322,7 @@ describe('the review-item hold loop', () => {
     it('puts the item on the reader’s queue rather than leaving it in limbo', async () => {
       const { workspaceId, taskId, itemId } = await heldTwice();
       await jj(
-        await post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items/${itemId}/revise`, {
           author: FILER,
           detail: 'Picking a size unblocks the rollout, which is otherwise stopped.',
         }),
@@ -322,9 +334,9 @@ describe('the review-item hold loop', () => {
     });
 
     it('tells the reader why in ONE sentence, and it is the standing concern rather than a fresh one', async () => {
-      const { taskId, itemId, first } = await heldTwice();
+      const { workspaceId, taskId, itemId, first } = await heldTwice();
       const third = await jj<Held>(
-        await post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items/${itemId}/revise`, {
           author: FILER,
           detail: 'Picking a size unblocks the rollout, which is otherwise stopped.',
         }),
@@ -348,11 +360,11 @@ describe('the review-item hold loop', () => {
     });
 
     it('shows the judge every reason it has already held this item for', async () => {
-      const { taskId, itemId } = await heldTwice();
+      const { workspaceId, taskId, itemId } = await heldTwice();
       expect(calls[0]?.item.priorHolds ?? []).toEqual([]);
       expect(calls[1]?.item.priorHolds).toEqual([CONTRADICTORY_REASONS[0]]);
       await jj(
-        await post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items/${itemId}/revise`, {
           author: FILER,
           detail: 'Picking a size unblocks the rollout, which is otherwise stopped.',
         }),

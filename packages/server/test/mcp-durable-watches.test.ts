@@ -27,6 +27,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { waitFor } from './wait-for.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const BUNDLE = resolve(import.meta.dir, '../../plugin/mcp/index.js');
 
@@ -166,6 +167,9 @@ class McpChild {
   }
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('watches survive an MCP child respawn (through the real bundle)', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -204,13 +208,14 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
     dataDir = mkdtempSync(join(tmpdir(), 'mcp-durable-watches-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     // Created under readable names; every assertion below speaks the ids the
     // server minted back.
     const mintedFor: Record<string, string> = {};
     for (const name of ['dw-one', 'dw-two']) {
       const path = join(dataDir, `${name}.md`);
       writeFileSync(path, `# ${name}\n\nA paragraph to anchor a thread on.\n`);
-      const res = await rest('/api/docs', 'POST', { docId: name, sourceUrl: path });
+      const res = await rest(`/workspaces/${WS}/docs`, 'POST', { docId: name, sourceUrl: path });
       expect(res.status).toBe(200);
       mintedFor[name] = ((await res.json()) as { docId: string }).docId;
     }
@@ -255,7 +260,7 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
     };
     expect(ws.workspaceId).toBeTruthy();
     // And a doc touched through an ordinary tool (the auto-watch path).
-    await first.tool('list_threads', { docId: dwTwo });
+    await first.tool('list_threads', { workspaceId: WS, docId: dwTwo });
 
     // Server-side effect, not the tool's own account of itself.
     const stored = handle.agentWatches.list(AGENT_ID, () => true).watches.map((x) => x.key);
@@ -285,7 +290,7 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
     // A restored watch that delivers nothing is the empty-list failure with
     // extra steps — so post a real thread on the restored doc and require it
     // to arrive in the NEW child as a channel message.
-    const thread = await rest(`/api/docs/${dwOne}/threads/by_find`, 'POST', {
+    const thread = await rest(`/workspaces/${WS}/docs/${dwOne}/threads/by_find`, 'POST', {
       find: 'paragraph to anchor',
       text: 'Does the restored watch hear this?',
       author: { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' },
@@ -383,11 +388,12 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
       workspace: { id: string };
     };
     const workspaceId = ws.workspace.id;
+    WS = workspaceId;
     const path = join(dataDir, `${docName}.md`);
     writeFileSync(path, `# ${docName}\n\nA paragraph to anchor a thread on.\n`);
     // The board records the MINTED id, which is the key coverage matches a
     // watch against — so the fixture hands that back, not the name.
-    const created = await rest('/api/docs', 'POST', {
+    const created = await rest(`/workspaces/${workspaceId}/docs`, 'POST', {
       docId: docName,
       sourceUrl: path,
       hubWorkspaceId: workspaceId,
@@ -523,10 +529,11 @@ describe('a declared lead comes back live after a respawn', () => {
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'mcp-declared-lead-'));
     handle = createServer({ port: 0, dataDir, heartbeatFreshMs: 1_000 });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterAll(async () => {
@@ -552,6 +559,7 @@ describe('a declared lead comes back live after a respawn', () => {
   it('is re-ATTACHED, not merely re-subscribed, and its lead-addressed asks arrive', async () => {
     const w = await rest('/workspaces', 'POST', { name: 'declared-board' });
     const workspaceId = ((await w.json()) as { workspace: { id: string } }).workspace.id;
+    WS = workspaceId;
     /** A spoken change is the lead-addressed ask that goes live or queues. */
     const speak = async (transcript: string): Promise<string> => {
       const res = await rest(`/workspaces/${workspaceId}/voice`, 'POST', {
@@ -604,9 +612,10 @@ describe('a declared lead comes back live after a respawn', () => {
     const OTHER_ID = 'agent-bystander-tester';
     const w = await rest('/workspaces', 'POST', { name: 'someone-elses-board' });
     const workspaceId = ((await w.json()) as { workspace: { id: string } }).workspace.id;
+    WS = workspaceId;
     const path = join(dataDir, 'bystander-doc.md');
     writeFileSync(path, '# bystander-doc\n\nBody.\n');
-    await rest('/api/docs', 'POST', {
+    await rest(`/workspaces/${workspaceId}/docs`, 'POST', {
       docId: 'bystander-doc',
       sourceUrl: path,
       title: 'bystander-doc',
@@ -724,7 +733,7 @@ describe('a restore that could not reach the server fails loudly, then recovers'
     return c;
   };
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'mcp-restore-failure-'));
     // Bind on 0 to be handed a free port, then keep that NUMBER: the second
     // half needs the same origin to come back, because the child reads
@@ -733,7 +742,9 @@ describe('a restore that could not reach the server fails loudly, then recovers'
     handle = createServer({ port: 0, dataDir });
     port = handle.port;
     base = `http://localhost:${port}`;
+    WS = await seedBoard(base);
     freshBase = `http://127.0.0.1:${port}`;
+    WS = await seedBoard(freshBase);
   });
 
   afterAll(async () => {
@@ -745,7 +756,10 @@ describe('a restore that could not reach the server fails loudly, then recovers'
   it('reports the unreachable server, holds off, then re-wires the set on a later call', async () => {
     const path = join(dataDir, `${DOC_ID}.md`);
     writeFileSync(path, `# ${DOC_ID}\n\nA paragraph to anchor a thread on.\n`);
-    const createRes = await rest(base, '/api/docs', 'POST', { docId: DOC_ID, sourceUrl: path });
+    const createRes = await rest(base, `/workspaces/${WS}/docs`, 'POST', {
+      docId: DOC_ID,
+      sourceUrl: path,
+    });
     expect(createRes.status).toBe(200);
     // `DOC_ID` is the READABLE name from here on; the doc's own id is what a
     // watch is stored and restored under, so the two are kept apart
@@ -845,11 +859,16 @@ describe('a restore that could not reach the server fails loudly, then recovers'
 
     // A listed watch that delivers nothing is the failure this whole area
     // exists to prevent, so require a real event on the RE-WIRED stream.
-    const thread = await rest(freshBase, `/api/docs/${DOC_ID}/threads/by_find`, 'POST', {
-      find: 'paragraph to anchor',
-      text: 'Does the retried watch hear this?',
-      author: { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' },
-    });
+    const thread = await rest(
+      freshBase,
+      `/workspaces/${WS}/docs/${DOC_ID}/threads/by_find`,
+      'POST',
+      {
+        find: 'paragraph to anchor',
+        text: 'Does the retried watch hear this?',
+        author: { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' },
+      },
+    );
     expect(thread.status).toBe(200);
     const delivered = await second.waitForChannel(
       (n) =>

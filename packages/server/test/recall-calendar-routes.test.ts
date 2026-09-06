@@ -19,6 +19,7 @@ import type { GoogleOauthApp, RefreshTokenVault } from '../src/google-oauth.ts';
 import type { RecallCalendarClient, RecallCalendarEvent } from '../src/recall-calendar.ts';
 import type { CreateBotArgs, RecallClient } from '../src/recall.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const REDIRECT = 'https://ops.example.com/api/calendar/google/callback';
 
@@ -175,13 +176,16 @@ const syncWebhook = async (base: string): Promise<Response> => {
   });
 };
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('calendar routes', () => {
   let dataDir: string;
   let handle: ServerHandle;
   let base: string;
   let fakes: Fakes;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'calendar-routes-'));
     fakes = makeFakes();
     handle = createServer({
@@ -192,6 +196,7 @@ describe('calendar routes', () => {
       calendarBot: { client: fakes.client, google: fakes.google, vault: fakes.vault },
     });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
   afterAll(async () => {
     await handle.stop();
@@ -333,7 +338,7 @@ describe('calendar routes', () => {
     const joinRes = await fetch(`${base}/api/calendar/events/evt-meet/join`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ join: true }),
+      body: JSON.stringify({ join: true, workspaceId: WS }),
     });
     expect(joinRes.status).toBe(200);
     const joined = (await joinRes.json()) as {
@@ -355,12 +360,16 @@ describe('calendar routes', () => {
     // ...and a discussion doc, real enough to fetch, titled by the event.
     expect(joined.docId).toBeTruthy();
     expect(joined.docUrl).toContain(encodeURIComponent(joined.docId));
-    const doc = (await (await fetch(`${base}/api/docs/${joined.docId}`)).json()) as {
+    const doc = (await (
+      await fetch(`${base}/workspaces/${WS}/docs/${joined.docId}?format=json`)
+    ).json()) as {
       meta: { title?: string };
     };
     expect(doc.meta.title).toBe('Design sync');
     // The doc's bot row shows the invite this join made.
-    const bot = (await (await fetch(`${base}/api/docs/${joined.docId}/meeting-bot`)).json()) as {
+    const bot = (await (
+      await fetch(`${base}/workspaces/${WS}/docs/${joined.docId}/meeting-bot`)
+    ).json()) as {
       bot: { state: string } | null;
     };
     expect(bot.bot).not.toBeNull();
@@ -377,7 +386,7 @@ describe('calendar routes', () => {
       await fetch(`${base}/api/calendar/events/evt-meet/join`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ join: true }),
+        body: JSON.stringify({ join: true, workspaceId: WS }),
       })
     ).json()) as { docId: string };
     expect(again.docId).toBe(joined.docId);
@@ -396,12 +405,18 @@ describe('calendar routes', () => {
       events: { id: string; joined: boolean }[];
     };
     expect(after.events.find((e) => e.id === 'evt-meet')?.joined).toBe(false);
-    expect((await fetch(`${base}/api/docs/${joined.docId}`)).status).toBe(200);
+    expect((await fetch(`${base}/workspaces/${WS}/docs/${joined.docId}?format=json`)).status).toBe(
+      200,
+    );
   });
 
   it("a joined meeting's cancellation sends the bot home through the sync", async () => {
     const rejoin = (await (
-      await fetch(`${base}/api/calendar/events/evt-meet/join`, { method: 'POST' })
+      await fetch(`${base}/api/calendar/events/evt-meet/join`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId: WS }),
+      })
     ).json()) as { docId: string };
     expect(fakes.calls.botsCreated).toHaveLength(2);
     const meetEvent = fakes.events.find((e) => e.id === 'evt-meet');
@@ -414,7 +429,9 @@ describe('calendar routes', () => {
     };
     expect(listed.events.some((e) => e.id === 'evt-meet')).toBe(false);
     // The doc outlives the meeting that cancelled — it is user content.
-    expect((await fetch(`${base}/api/docs/${rejoin.docId}`)).status).toBe(200);
+    expect((await fetch(`${base}/workspaces/${WS}/docs/${rejoin.docId}?format=json`)).status).toBe(
+      200,
+    );
   });
 
   it('a join on an unknown or linkless event grants nothing', async () => {
@@ -451,6 +468,7 @@ describe('calendar routes without the feature', () => {
     const handle = createServer({ port: 0, dataDir });
     try {
       const base = `http://localhost:${handle.port}`;
+      WS = await seedBoard(base);
       const status = (await (await fetch(`${base}/api/calendar`)).json()) as {
         configured: boolean;
       };
@@ -458,7 +476,11 @@ describe('calendar routes without the feature', () => {
       expect((await fetch(`${base}/api/calendar/google/connect`)).status).toBe(503);
       expect((await fetch(`${base}/api/calendar/events`)).status).toBe(503);
       expect(
-        (await fetch(`${base}/api/calendar/events/evt-1/join`, { method: 'POST' })).status,
+        (
+          await fetch(`${base}/api/calendar/events/evt-1/join`, {
+            method: 'POST',
+          })
+        ).status,
       ).toBe(503);
       expect((await fetch(`${base}/api/calendar/google`, { method: 'DELETE' })).status).toBe(503);
     } finally {

@@ -17,6 +17,7 @@ import { activityLogPath } from '../src/activity.ts';
 import { resetOwnerIdentities } from '../src/actor-identity.ts';
 import { SESSION_COOKIE } from '../src/auth/session.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 // The log sender masks the code unless this is set — see
 // `auth/code-sender.ts`. This suite drives a real sign-in, so it needs the
@@ -64,16 +65,17 @@ afterEach(async () => {
   resetOwnerIdentities();
 });
 
-function boot(options: { requireEmailAuth?: boolean; ownerEmail?: string } = {}): {
+async function boot(options: { requireEmailAuth?: boolean; ownerEmail?: string } = {}): Promise<{
   base: string;
   dataDir: string;
   handle: ServerHandle;
-} {
+}> {
   const dataDir = mkdtempSync(join(tmpdir(), 'auth-authorship-'));
   // emailCodeSignIn: the server's own emailed-code sign-in is off by default now
   // that every browser-facing hostname sits behind Cloudflare Access. These tests
   // are about that flow, so they ask for it explicitly.
   const handle = createServer({ port: 0, dataDir, emailCodeSignIn: true, ...options });
+  WS = await seedBoard(`http://localhost:${handle.port}`);
   cleanups.push(async () => {
     await handle.stop();
     rmSync(dataDir, { recursive: true, force: true });
@@ -82,7 +84,7 @@ function boot(options: { requireEmailAuth?: boolean; ownerEmail?: string } = {})
 }
 
 /** Sign in and return the cookie pair to send back. */
-async function signIn(base: string, email: string): Promise<string> {
+async function signIn(base: string, email: string): Promise<Promise<string>> {
   const before = codes.length;
   const started = await fetch(`${base}/api/auth/start`, {
     method: 'POST',
@@ -111,13 +113,13 @@ async function commentAsBryan(
 ): Promise<void> {
   const file = join(dataDir, `${docId}.md`);
   writeFileSync(file, '# Heading\n\nSome prose to comment on.\n');
-  const created = await fetch(`${base}/api/docs`, {
+  const created = await fetch(`${base}/workspaces/${WS}/docs`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ docId, type: 'markdown', sourceUrl: file }),
   });
   expect(created.status).toBe(200);
-  const res = await fetch(`${base}/api/docs/${docId}/threads`, {
+  const res = await fetch(`${base}/workspaces/${WS}/docs/${docId}/threads`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) },
     body: JSON.stringify({ author: bryan, text: 'this needs more detail', anchor: fakeAnchor }),
@@ -133,9 +135,12 @@ function rowsFor(dataDir: string, type: string): ActivityRow[] {
     .filter((r) => r.type === type);
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('with CW_REQUIRE_EMAIL_AUTH on', () => {
   it('records the verified identity, not the identity the body claimed', async () => {
-    const { base, dataDir } = boot({ requireEmailAuth: true });
+    const { base, dataDir } = await boot({ requireEmailAuth: true });
     const cookie = await signIn(base, 'reviewer@example.com');
     await commentAsBryan(base, dataDir, 'owned-doc', cookie);
     const [row] = rowsFor(dataDir, 'comment');
@@ -146,7 +151,7 @@ describe('with CW_REQUIRE_EMAIL_AUTH on', () => {
   });
 
   it('still trusts the body when there is no session at all', async () => {
-    const { base, dataDir } = boot({ requireEmailAuth: true });
+    const { base, dataDir } = await boot({ requireEmailAuth: true });
     await commentAsBryan(base, dataDir, 'unauthed-doc');
     // The compatibility guarantee: every agent and every MCP call in the
     // fleet lands here, and the flag must not change what happens to them.
@@ -154,7 +159,7 @@ describe('with CW_REQUIRE_EMAIL_AUTH on', () => {
   });
 
   it('ignores a session cookie that does not verify', async () => {
-    const { base, dataDir } = boot({ requireEmailAuth: true });
+    const { base, dataDir } = await boot({ requireEmailAuth: true });
     const forged = `${SESSION_COOKIE}=v1.${emailIdentityId('mallory@example.com')}.1.99999999999999.nope`;
     await commentAsBryan(base, dataDir, 'forged-doc', forged);
     expect(rowsFor(dataDir, 'comment')[0]?.actorId).toBe('known-bryan');
@@ -167,14 +172,14 @@ describe('with the flag off (the default)', () => {
     // Signing in without the requirement on used to change nothing about
     // who a comment was attributed to, so the browser kept minting anon-*
     // for a person the server had just verified.
-    const { base, dataDir } = boot();
+    const { base, dataDir } = await boot();
     const cookie = await signIn(base, 'reviewer@example.com');
     await commentAsBryan(base, dataDir, 'flagoff-doc', cookie);
     const [row] = rowsFor(dataDir, 'comment');
     expect(row?.actorId).toBe(emailIdentityId('reviewer@example.com'));
     expect(row?.actorName).toBe('Reviewer');
     // On the thread too, not only in the activity stream.
-    const listed = await fetch(`${base}/api/docs/flagoff-doc/threads`);
+    const listed = await fetch(`${base}/workspaces/${WS}/docs/flagoff-doc/threads`);
     const { threads } = (await listed.json()) as {
       threads: Array<{ comments: Array<{ author: { id: string; name: string } }> }>;
     };
@@ -185,7 +190,7 @@ describe('with the flag off (the default)', () => {
   });
 
   it('POSITIVE CONTROL: with no cookie the body is trusted, flag off', async () => {
-    const { base, dataDir } = boot();
+    const { base, dataDir } = await boot();
     await commentAsBryan(base, dataDir, 'flagoff-nocookie-doc');
     expect(rowsFor(dataDir, 'comment')[0]?.actorId).toBe('known-bryan');
   });
@@ -193,7 +198,7 @@ describe('with the flag off (the default)', () => {
 
 describe('owner recognition survives the rename', () => {
   it('counts the owner email identity as the owner', async () => {
-    const { base, dataDir } = boot({
+    const { base, dataDir } = await boot({
       requireEmailAuth: true,
       ownerEmail: 'owner@example.com',
     });
@@ -207,7 +212,7 @@ describe('owner recognition survives the rename', () => {
   });
 
   it('negative control: another signed-in person is not the owner', async () => {
-    const { base, dataDir } = boot({
+    const { base, dataDir } = await boot({
       requireEmailAuth: true,
       ownerEmail: 'owner@example.com',
     });
@@ -231,7 +236,7 @@ describe('comment routes refuse the shared "agent" identity', () => {
   async function bindDoc(base: string, dataDir: string, docId: string): Promise<void> {
     const file = join(dataDir, `${docId}.md`);
     writeFileSync(file, '# Heading\n\nSome prose to comment on.\n');
-    const created = await fetch(`${base}/api/docs`, {
+    const created = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId, type: 'markdown', sourceUrl: file }),
@@ -246,9 +251,9 @@ describe('comment routes refuse the shared "agent" identity', () => {
     });
 
   it('refuses a thread, a reply, and a resolve signed by the category, naming CW_AGENT_NAME', async () => {
-    const { base, dataDir } = boot();
+    const { base, dataDir } = await boot();
     await bindDoc(base, dataDir, 'refused-doc');
-    const refused = await post(base, '/api/docs/refused-doc/threads', {
+    const refused = await post(base, `/workspaces/${WS}/docs/refused-doc/threads`, {
       author: unnamed,
       text: 'anonymous words',
       anchor: fakeAnchor,
@@ -259,7 +264,7 @@ describe('comment routes refuse the shared "agent" identity', () => {
     expect(body.message).toContain('CW_AGENT_NAME');
 
     // POSITIVE CONTROL: the named agent posts the same thread.
-    const okRes = await post(base, '/api/docs/refused-doc/threads', {
+    const okRes = await post(base, `/workspaces/${WS}/docs/refused-doc/threads`, {
       author: named,
       text: 'named words',
       anchor: fakeAnchor,
@@ -267,25 +272,37 @@ describe('comment routes refuse the shared "agent" identity', () => {
     expect(okRes.status).toBe(200);
     const { thread } = (await okRes.json()) as { thread: { id: string } };
 
-    const reply = await post(base, `/api/docs/refused-doc/threads/${thread.id}/comments`, {
-      author: unnamed,
-      text: 'anonymous reply',
-    });
+    const reply = await post(
+      base,
+      `/workspaces/${WS}/docs/refused-doc/threads/${thread.id}/comments`,
+      {
+        author: unnamed,
+        text: 'anonymous reply',
+      },
+    );
     expect(reply.status).toBe(400);
     expect(((await reply.json()) as { error: string }).error).toBe('author-required');
 
-    const resolve = await post(base, `/api/docs/refused-doc/threads/${thread.id}/resolve`, {
-      author: unnamed,
-    });
+    const resolve = await post(
+      base,
+      `/workspaces/${WS}/docs/refused-doc/threads/${thread.id}/resolve`,
+      {
+        author: unnamed,
+      },
+    );
     expect(resolve.status).toBe(400);
 
     // Nothing from the category landed; the named reply does.
-    const namedReply = await post(base, `/api/docs/refused-doc/threads/${thread.id}/comments`, {
-      author: named,
-      text: 'named reply',
-    });
+    const namedReply = await post(
+      base,
+      `/workspaces/${WS}/docs/refused-doc/threads/${thread.id}/comments`,
+      {
+        author: named,
+        text: 'named reply',
+      },
+    );
     expect(namedReply.status).toBe(200);
-    const listed = await fetch(`${base}/api/docs/refused-doc/threads`);
+    const listed = await fetch(`${base}/workspaces/${WS}/docs/refused-doc/threads`);
     const { threads } = (await listed.json()) as {
       threads: Array<{ comments: Array<{ author: { id: string }; text: string }> }>;
     };
@@ -295,9 +312,9 @@ describe('comment routes refuse the shared "agent" identity', () => {
   });
 
   it('also refuses the bare NAME "agent" under any id — the word is the category', async () => {
-    const { base, dataDir } = boot();
+    const { base, dataDir } = await boot();
     await bindDoc(base, dataDir, 'bare-name-doc');
-    const refused = await post(base, '/api/docs/bare-name-doc/threads', {
+    const refused = await post(base, `/workspaces/${WS}/docs/bare-name-doc/threads`, {
       author: { id: 'agent-x1', name: 'agent', kind: 'known' },
       text: 'words',
       anchor: fakeAnchor,

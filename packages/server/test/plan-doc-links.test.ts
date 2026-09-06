@@ -24,9 +24,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import type { Task } from '../src/tasks.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'person' };
 const AGENT = { id: 'agent-quill', name: 'Quill', kind: 'agent' };
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('plan-doc linkage (routes)', () => {
   let handle: ServerHandle;
@@ -73,11 +77,13 @@ describe('plan-doc linkage (routes)', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'plan-links-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     const r = await post('/workspaces', { name: 'plan-links-ws', goal: 'Ship the plan flow.' });
     wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+    WS = wsId;
     const mdPath = join(dataDir, 'sprint-plan.md');
     writeFileSync(mdPath, '# Sprint plan\n\nThe plan.\n');
-    const doc = await post('/api/docs', {
+    const doc = await post(`/workspaces/${WS}/docs`, {
       docId: 'sprint-plan',
       type: 'markdown',
       sourceUrl: mdPath,
@@ -89,6 +95,16 @@ describe('plan-doc linkage (routes)', () => {
     await handle.stop();
     rmSync(dataDir, { recursive: true, force: true });
   });
+
+  /** A markdown doc on THIS board, backed by a file the way the route asks.
+   *  Returns the id the server MINTED — the name passed in is the alias. */
+  const fileMarkdownDoc = async (docId: string): Promise<string> => {
+    const path = join(dataDir, `${docId}.md`);
+    writeFileSync(path, `# ${docId}\n\nBody.\n`);
+    const r = await post(`/workspaces/${WS}/docs`, { docId, type: 'markdown', sourceUrl: path });
+    expect(r.status).toBe(200);
+    return ((await r.json()) as { docId: string }).docId;
+  };
 
   describe('sourceDoc on the batch route', () => {
     let heldId: string;
@@ -125,7 +141,9 @@ describe('plan-doc linkage (routes)', () => {
         expect(v.note).toContain('plan');
       }
       heldId = body.tasks[0]?.id ?? '';
-      const meta = (await (await local('/api/docs/sprint-plan')).json()) as {
+      const meta = (await (
+        await local(`/workspaces/${WS}/docs/sprint-plan?format=json`)
+      ).json()) as {
         meta: { planState?: string };
       };
       expect(meta.meta.planState).toBe('pending');
@@ -148,13 +166,16 @@ describe('plan-doc linkage (routes)', () => {
     });
 
     it('the transition gate refuses to move a held draft, as a 409 the caller can read', async () => {
-      const r = await post(`/api/tasks/${heldId}/transition`, { author: PERSON, to: 'todo' });
+      const r = await post(`/workspaces/${WS}/tasks/${heldId}/transition`, {
+        author: PERSON,
+        to: 'todo',
+      });
       expect(r.status).toBe(409);
       const body = (await r.json()) as { error: string; message?: string };
       expect(body.error).toBe('plan-unapproved');
       expect(body.message).toContain(planId);
       // Control: the same call on an unheld row works.
-      const ok = await post(`/api/tasks/${freeId}/transition`, {
+      const ok = await post(`/workspaces/${WS}/tasks/${freeId}/transition`, {
         author: PERSON,
         to: 'in-progress',
       });
@@ -162,7 +183,10 @@ describe('plan-doc linkage (routes)', () => {
     });
 
     it('approving the plan releases the drafts to todo, attributed to the approver', async () => {
-      const r = await post('/api/docs/sprint-plan/plan', { state: 'approved', author: PERSON });
+      const r = await post(`/workspaces/${WS}/docs/sprint-plan/plan`, {
+        state: 'approved',
+        author: PERSON,
+      });
       expect(r.status).toBe(200);
       const body = (await r.json()) as { planState: string; released: string[] };
       expect(body.planState).toBe('approved');
@@ -173,12 +197,14 @@ describe('plan-doc linkage (routes)', () => {
       const lastMove = t.transitions[t.transitions.length - 1];
       expect(lastMove?.by.name).toBe('Jordan');
       // The gate opens: the released row transitions normally now.
-      const moved = await post(`/api/tasks/${heldId}/transition`, {
+      const moved = await post(`/workspaces/${WS}/tasks/${heldId}/transition`, {
         author: PERSON,
         to: 'in-progress',
       });
       expect(moved.status).toBe(200);
-      const meta = (await (await local('/api/docs/sprint-plan')).json()) as {
+      const meta = (await (
+        await local(`/workspaces/${WS}/docs/sprint-plan?format=json`)
+      ).json()) as {
         meta: { planState?: string; planApprovedBy?: string };
       };
       expect(meta.meta.planState).toBe('approved');
@@ -246,8 +272,8 @@ describe('plan-doc linkage (routes)', () => {
       const body = (await r.json()) as { tasks: Task[] };
       derivedId = body.tasks[0]?.id ?? '';
       doneId = body.tasks[1]?.id ?? '';
-      await post(`/api/tasks/${doneId}/transition`, { author: PERSON, to: 'todo' });
-      await post(`/api/tasks/${doneId}/transition`, { author: PERSON, to: 'done' });
+      await post(`/workspaces/${WS}/tasks/${doneId}/transition`, { author: PERSON, to: 'todo' });
+      await post(`/workspaces/${WS}/tasks/${doneId}/transition`, { author: PERSON, to: 'done' });
     });
 
     it('a settled authoring edit flags open derived rows and leaves done ones alone', () => {
@@ -299,38 +325,41 @@ describe('plan-doc linkage (routes)', () => {
 
   describe('promote_to_task under a pending plan', () => {
     it('a thread promoted off a pending plan doc is held like a batch draft', async () => {
-      handle.docStore.getOrCreate('promote-plan', { type: 'markdown' });
+      // Filed on the board through the route, not minted straight into the
+      // store: a doc that is on no board has no address under the canonical
+      // shape, so a store-created one would 404 on its own threads.
+      const promoteId = await fileMarkdownDoc('promote-plan');
       // Declare it a plan by filing one draft from it.
       await post(`/workspaces/${wsId}/tasks/batch`, {
         author: AGENT,
         sourceDoc: { docId: 'promote-plan' },
         tasks: [{ title: 'Agent can seed the plan so that the gate is pending' }],
       });
-      const th = await post('/api/docs/promote-plan/threads', {
+      const th = await post(`/workspaces/${WS}/docs/promote-plan/threads`, {
         author: PERSON,
         text: 'Split the migration into its own row.',
         anchor: { kind: 'subject' },
       });
       expect(th.status).toBe(200);
       const threadId = ((await th.json()) as { thread: { id: string } }).thread.id;
-      const r = await post(`/api/docs/promote-plan/threads/${threadId}/promote`, {
+      const r = await post(`/workspaces/${WS}/docs/promote-plan/threads/${threadId}/promote`, {
         author: AGENT,
         workspaceId: wsId,
       });
       expect(r.status).toBe(200);
       const body = (await r.json()) as { task: Task; visibility?: string };
-      expect(body.task.planHold).toEqual({ docId: 'promote-plan' });
+      expect(body.task.planHold).toEqual({ docId: promoteId });
       expect(body.task.status).toBe('triage');
       expect(body.visibility).toContain('plan');
       // Control: promoting off a doc with NO plan gate carries no hold.
-      handle.docStore.getOrCreate('free-doc', { type: 'markdown' });
-      const th2 = await post('/api/docs/free-doc/threads', {
+      await fileMarkdownDoc('free-doc');
+      const th2 = await post(`/workspaces/${WS}/docs/free-doc/threads`, {
         author: PERSON,
         text: 'Just do it.',
         anchor: { kind: 'subject' },
       });
       const t2 = ((await th2.json()) as { thread: { id: string } }).thread.id;
-      const r2 = await post(`/api/docs/free-doc/threads/${t2}/promote`, {
+      const r2 = await post(`/workspaces/${WS}/docs/free-doc/threads/${t2}/promote`, {
         author: AGENT,
         workspaceId: wsId,
       });
@@ -355,13 +384,16 @@ describe('plan-doc linkage (routes)', () => {
           '',
         ].join('\n'),
       );
-      const doc = await post('/api/docs', {
+      const doc = await post(`/workspaces/${WS}/docs`, {
         docId: 'tracker-plan',
         type: 'markdown',
         sourceUrl: trackerPath,
       });
       const trackerDocId = ((await doc.json()) as { docId: string }).docId;
-      const pend = await post('/api/docs/tracker-plan/plan', { state: 'pending', author: PERSON });
+      const pend = await post(`/workspaces/${WS}/docs/tracker-plan/plan`, {
+        state: 'pending',
+        author: PERSON,
+      });
       expect(pend.status).toBe(200);
       const r = await post(`/workspaces/${wsId}/import-tasks`, {
         author: PERSON,
@@ -412,7 +444,9 @@ describe('plan-doc linkage (routes)', () => {
 
   describe('doc payload surfacing', () => {
     it('a member sees derived rows with workspaceId + plan marks; the chip base shape is intact', async () => {
-      const body = (await (await local('/api/docs/sprint-plan')).json()) as {
+      const body = (await (
+        await local(`/workspaces/${WS}/docs/sprint-plan?format=json`)
+      ).json()) as {
         tasks?: Array<{
           id: string;
           title: string;
@@ -429,7 +463,7 @@ describe('plan-doc linkage (routes)', () => {
         expect(chip.workspaceId).toBe(wsId);
       }
       // Same entries from the dedicated subroute.
-      const sub = (await (await local('/api/docs/sprint-plan/tasks')).json()) as {
+      const sub = (await (await local(`/workspaces/${WS}/docs/sprint-plan/tasks`)).json()) as {
         tasks: Array<{ workspaceId?: string }>;
       };
       expect(sub.tasks.length).toBe(body.tasks?.length ?? -1);
@@ -437,12 +471,12 @@ describe('plan-doc linkage (routes)', () => {
     });
 
     it('a held draft shows planHeld on the doc surface, and a released row does not', async () => {
-      const sub = (await (await local('/api/docs/promote-plan/tasks')).json()) as {
+      const sub = (await (await local(`/workspaces/${WS}/docs/promote-plan/tasks`)).json()) as {
         tasks: Array<{ id: string; planHeld?: boolean }>;
       };
       const held = sub.tasks.filter((t) => t.planHeld === true);
       expect(held.length).toBeGreaterThan(0); // control for the absence below
-      const released = (await (await local('/api/docs/sprint-plan/tasks')).json()) as {
+      const released = (await (await local(`/workspaces/${WS}/docs/sprint-plan/tasks`)).json()) as {
         tasks: Array<{ planHeld?: boolean }>;
       };
       expect(released.tasks.every((t) => t.planHeld === undefined)).toBe(true);

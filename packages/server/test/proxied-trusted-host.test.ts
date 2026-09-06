@@ -37,6 +37,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type JSONWebKeySet, type JWK, SignJWT, exportJWK, generateKeyPair } from 'jose';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoardOnHandle } from './workspace-seed.ts';
 
 const TEAM_DOMAIN = 'test.cloudflareaccess.com';
 const KID = 'proxied-trusted-kid';
@@ -82,16 +83,26 @@ beforeAll(async () => {
 });
 
 const dirs: string[] = [];
+const boards = new WeakMap<ServerHandle, string>();
 const handles: ServerHandle[] = [];
-const spinUp = (
+const spinUp = async (
   opts: Omit<Parameters<typeof createServer>[0], 'port' | 'dataDir'>,
-): ServerHandle => {
+): Promise<ServerHandle> => {
   const dataDir = mkdtempSync(join(tmpdir(), 'proxied-trusted-'));
   dirs.push(dataDir);
   const h = createServer({ port: 0, dataDir, ...opts });
+  // Seeded THROUGH THE HANDLE, not over HTTP: half the servers here are the
+  // auth-gated ones, and an unauthenticated POST /workspaces is exactly what
+  // they exist to refuse. Kept per handle because each server is its own
+  // store — one module-level board id is stale the moment a second server
+  // boots, and this file boots eight.
+  boards.set(h, seedBoardOnHandle(h));
   handles.push(h);
   return h;
 };
+
+/** The seeded board of a given server, as the path prefix its docs live under. */
+const docsOf = (h: ServerHandle) => `/workspaces/${boards.get(h) ?? ''}/docs`;
 afterAll(async () => {
   for (const h of handles) await h.stop();
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
@@ -100,12 +111,14 @@ afterAll(async () => {
 const get = (h: ServerHandle, path: string, headers: Record<string, string>) =>
   fetch(`http://localhost:${h.port}${path}`, { headers });
 
+/** The board this file's docs, tasks and reviews are filed under. */
+
 describe('a proxied trusted host, with Access in front of it', () => {
   let h: ServerHandle;
   let jwt: string;
 
   beforeAll(async () => {
-    h = spinUp({
+    h = await spinUp({
       cfAccess: { teamDomain: TEAM_DOMAIN, audience: OPERATOR_AUD, jwks },
       // Link sharing wired TOO, on purpose: with `shares` present the main
       // verifier resolves its AUD per share hostname and answers null for any
@@ -130,7 +143,7 @@ describe('a proxied trusted host, with Access in front of it', () => {
 
   describe('A. what a token holder reaches, and what the door refuses', () => {
     it('reaches the PRODUCT — the doc list a collaborator is refused', async () => {
-      const r = await get(h, '/api/docs', {
+      const r = await get(h, docsOf(h), {
         host: PROXIED_HOST,
         ...CF_RAY,
         'cf-access-jwt-assertion': jwt,
@@ -159,14 +172,14 @@ describe('a proxied trusted host, with Access in front of it', () => {
     });
 
     it('demands a token — reaching the hostname is not reaching the product', async () => {
-      const r = await get(h, '/api/docs', { host: PROXIED_HOST, ...CF_RAY });
+      const r = await get(h, docsOf(h), { host: PROXIED_HOST, ...CF_RAY });
       expect(r.status).toBe(401);
       expect(await r.json()).toEqual({ error: 'missing_jwt' });
     });
 
     it('rejects a token minted for a different Access application', async () => {
       const wrong = await signJwt('aud-for-some-other-app');
-      const r = await get(h, '/api/docs', {
+      const r = await get(h, docsOf(h), {
         host: PROXIED_HOST,
         ...CF_RAY,
         'cf-access-jwt-assertion': wrong,
@@ -178,7 +191,10 @@ describe('a proxied trusted host, with Access in front of it', () => {
       // A LAN client can send any Host it likes. Without the proxy hop there
       // is no Access application in front of the request, so the list must
       // not recognise it — even holding a valid token.
-      const r = await get(h, '/api/docs', { host: PROXIED_HOST, 'cf-access-jwt-assertion': jwt });
+      const r = await get(h, docsOf(h), {
+        host: PROXIED_HOST,
+        'cf-access-jwt-assertion': jwt,
+      });
       expect(r.status).toBe(403);
       expect(await r.json()).toEqual({ error: 'unknown_host' });
     });
@@ -194,7 +210,7 @@ describe('a proxied trusted host, with Access in front of it', () => {
         ...CF_RAY,
         'cf-access-jwt-assertion': await signJwt(OPERATOR_AUD, COLLABORATOR_EMAIL),
       };
-      const list = await get(h, '/api/docs', asCollaborator);
+      const list = await get(h, docsOf(h), asCollaborator);
       expect(list.status).toBe(403);
       expect(await list.json()).toEqual({ error: 'forbidden' });
       const create = await fetch(`http://localhost:${h.port}/workspaces`, {
@@ -213,7 +229,7 @@ describe('a proxied trusted host, with Access in front of it', () => {
     });
 
     it('a token with NO email claim names nobody, and nobody is not the operator', async () => {
-      const r = await get(h, '/api/docs', {
+      const r = await get(h, docsOf(h), {
         host: PROXIED_HOST,
         ...CF_RAY,
         'cf-access-jwt-assertion': await signJwt(OPERATOR_AUD, null),
@@ -235,7 +251,11 @@ describe('a proxied trusted host, with Access in front of it', () => {
 
     it('still refuses a proxied host that is NOT on the list — token or no token', async () => {
       for (const host of ['unlisted.example.com', `attacker.${PROXIED_HOST}`, 'localhost']) {
-        const r = await get(h, '/api/docs', { host, ...CF_RAY, 'cf-access-jwt-assertion': jwt });
+        const r = await get(h, docsOf(h), {
+          host,
+          ...CF_RAY,
+          'cf-access-jwt-assertion': jwt,
+        });
         expect(r.status, host).toBe(403);
         expect(await r.json(), host).toEqual({ error: 'unknown_host' });
       }
@@ -246,7 +266,7 @@ describe('a proxied trusted host, with Access in front of it', () => {
     it('a TRUSTED_HOSTS entry does NOT gain proxied access', async () => {
       // The negative control for "a second list, not a widening". A LAN alias
       // reached through the tunnel is refused whatever token it carries…
-      const viaProxy = await get(h, '/api/docs', {
+      const viaProxy = await get(h, docsOf(h), {
         host: LAN_ALIAS,
         ...CF_RAY,
         'cf-access-jwt-assertion': jwt,
@@ -256,13 +276,13 @@ describe('a proxied trusted host, with Access in front of it', () => {
       // …and reached DIRECTLY it is refused too, because access-only closed
       // the LAN grant: a trusted-host declaration no longer stands in for a
       // sign-in.
-      expect((await get(h, '/api/docs', { host: LAN_ALIAS })).status).toBe(403);
+      expect((await get(h, docsOf(h), { host: LAN_ALIAS })).status).toBe(403);
 
       // POSITIVE CONTROL, on a server with the rule turned off: the same
       // alias is still a declared trusted host, so the refusals above are
       // the access-only rule rather than a declaration that stopped working.
-      const legacy = spinUp({ trustedHosts: [LAN_ALIAS], accessOnlyBrowserHosts: false });
-      expect((await get(legacy, '/api/docs', { host: LAN_ALIAS })).status).toBe(200);
+      const legacy = await spinUp({ trustedHosts: [LAN_ALIAS], accessOnlyBrowserHosts: false });
+      expect((await get(legacy, docsOf(legacy), { host: LAN_ALIAS })).status).toBe(200);
     });
 
     it('a collab-listed host still CANNOT reach an operator verb — same token, same server', async () => {
@@ -271,7 +291,7 @@ describe('a proxied trusted host, with Access in front of it', () => {
       // verbs on the collaboration host. The list, not the token, is the
       // grant.
       const collab = { host: COLLAB_HOST, ...CF_RAY, 'cf-access-jwt-assertion': jwt };
-      const list = await get(h, '/api/docs', collab);
+      const list = await get(h, docsOf(h), collab);
       expect(list.status).toBe(403);
       expect(await list.json()).toEqual({ error: 'out_of_share_scope' });
       const create = await fetch(`http://localhost:${h.port}/workspaces`, {
@@ -287,11 +307,11 @@ describe('a proxied trusted host, with Access in front of it', () => {
     });
 
     it('leaves loopback alone, and the retired link hostname reaches nothing', async () => {
-      expect((await get(h, '/api/docs', { host: `localhost:${h.port}` })).status).toBe(200);
+      expect((await get(h, docsOf(h), { host: `localhost:${h.port}` })).status).toBe(200);
       // The link hostname used to answer 401 no_share_session — an invitation
       // to redeem. Link mode is retired, so the name resolves to no share at
       // all and is indistinguishable from one this server never served.
-      const link = await get(h, '/api/docs', { host: LINK_HOST, ...CF_RAY });
+      const link = await get(h, docsOf(h), { host: LINK_HOST, ...CF_RAY });
       expect(link.status).toBe(403);
       expect(await link.json()).toEqual({ error: 'unknown_host' });
     });
@@ -308,10 +328,16 @@ describe('a proxied trusted host, with Access in front of it', () => {
     it('reflects its own origin and a configured one', async () => {
       // No x-forwarded-proto in the fixture, so the request origin is plain
       // http on the host — the browser's Origin for a same-origin page.
-      const own = await get(h, '/api/docs', { ...auth(), origin: `http://${PROXIED_HOST}` });
+      const own = await get(h, docsOf(h), {
+        ...auth(),
+        origin: `http://${PROXIED_HOST}`,
+      });
       expect(own.status).toBe(200);
       expect(own.headers.get('access-control-allow-origin')).toBe(`http://${PROXIED_HOST}`);
-      const configured = await get(h, '/api/docs', { ...auth(), origin: ALLOWED_ORIGIN });
+      const configured = await get(h, docsOf(h), {
+        ...auth(),
+        origin: ALLOWED_ORIGIN,
+      });
       expect(configured.headers.get('access-control-allow-origin')).toBe(ALLOWED_ORIGIN);
     });
 
@@ -323,7 +349,7 @@ describe('a proxied trusted host, with Access in front of it', () => {
         `http://${PROXIED_HOST}:5173`,
         'http://evil.example.com',
       ]) {
-        const r = await get(h, '/api/docs', { ...auth(), origin });
+        const r = await get(h, docsOf(h), { ...auth(), origin });
         expect(r.headers.get('access-control-allow-origin'), origin).toBeNull();
       }
     });
@@ -358,29 +384,29 @@ describe('B. the opt-in fails closed', () => {
     // hostname — the exact hole the cf-ray veto was added to close. Asserted
     // with and without a token: with no team domain there is nothing to
     // verify one against, so a token must count for nothing.
-    const h = spinUp({ proxiedTrustedHosts: [PROXIED_HOST] });
+    const h = await spinUp({ proxiedTrustedHosts: [PROXIED_HOST] });
     const jwt = await signJwt(OPERATOR_AUD);
     const extras: Record<string, string>[] = [{}, { 'cf-access-jwt-assertion': jwt }];
     for (const extra of extras) {
-      const r = await get(h, '/api/docs', { host: PROXIED_HOST, ...CF_RAY, ...extra });
+      const r = await get(h, docsOf(h), { host: PROXIED_HOST, ...CF_RAY, ...extra });
       expect(r.status).toBe(403);
       expect(await r.json()).toEqual({ error: 'unknown_host' });
     }
     // POSITIVE CONTROL: that server is alive and serving its local caller, so
     // the 403 is the gate rather than a server that answers nothing.
-    expect((await get(h, '/api/docs', { host: `localhost:${h.port}` })).status).toBe(200);
+    expect((await get(h, docsOf(h), { host: `localhost:${h.port}` })).status).toBe(200);
   });
 
   it('with a team domain but NO static AUD, the list is still ignored', async () => {
     // A per-share resolver is what `cfAccess.audience` becomes when Access
     // sharing is wired. It cannot answer for the operator hostname (it is not
     // a share), so there is nothing to verify a token against — refuse.
-    const h = spinUp({
+    const h = await spinUp({
       cfAccess: { teamDomain: TEAM_DOMAIN, audience: () => OPERATOR_AUD, jwks },
       proxiedTrustedHosts: [PROXIED_HOST],
     });
     const jwt = await signJwt(OPERATOR_AUD);
-    const r = await get(h, '/api/docs', {
+    const r = await get(h, docsOf(h), {
       host: PROXIED_HOST,
       ...CF_RAY,
       'cf-access-jwt-assertion': jwt,
@@ -393,7 +419,7 @@ describe('B. the opt-in fails closed', () => {
     // was skipped.
     expect(
       (
-        await get(h, '/api/docs', {
+        await get(h, docsOf(h), {
           host: `localhost:${h.port}`,
           'cf-access-jwt-assertion': jwt,
         })
@@ -406,19 +432,19 @@ describe('B. the opt-in fails closed', () => {
     // named as the operator there is no way to tell the operator from anyone
     // else that policy admits, so the door does not open at all: 403
     // unknown_host, exactly as if the host had never been listed.
-    const h = spinUp({
+    const h = await spinUp({
       cfAccess: { teamDomain: TEAM_DOMAIN, audience: OPERATOR_AUD, jwks },
       share: { config: { publicHostname: LINK_HOST } },
       proxiedTrustedHosts: [PROXIED_HOST],
     });
-    const r = await get(h, '/api/docs', {
+    const r = await get(h, docsOf(h), {
       host: PROXIED_HOST,
       ...CF_RAY,
       'cf-access-jwt-assertion': await signJwt(OPERATOR_AUD),
     });
     expect(r.status).toBe(403);
     expect(await r.json()).toEqual({ error: 'unknown_host' });
-    expect((await get(h, '/api/docs', { host: `localhost:${h.port}` })).status).toBe(200);
+    expect((await get(h, docsOf(h), { host: `localhost:${h.port}` })).status).toBe(200);
   });
 
   it('with a team domain but NO audience at all, the list is ignored', async () => {
@@ -426,7 +452,7 @@ describe('B. the opt-in fails closed', () => {
     // CF_ACCESS_AUD is not. It used to be a placeholder STRING, which made
     // the static verifier look configured; the refusal must not depend on
     // bin.ts remembering to empty the host lists.
-    const h = spinUp({
+    const h = await spinUp({
       cfAccess: { teamDomain: TEAM_DOMAIN, jwks },
       proxiedTrustedHosts: [PROXIED_HOST],
       proxiedTrustedEmails: [OPERATOR_EMAIL],
@@ -434,16 +460,20 @@ describe('B. the opt-in fails closed', () => {
     });
     const token = await signJwt(OPERATOR_AUD);
     for (const host of [PROXIED_HOST, COLLAB_HOST]) {
-      const r = await get(h, '/api/docs', { host, ...CF_RAY, 'cf-access-jwt-assertion': token });
+      const r = await get(h, docsOf(h), {
+        host,
+        ...CF_RAY,
+        'cf-access-jwt-assertion': token,
+      });
       expect(r.status, host).toBe(403);
       expect(await r.json(), host).toEqual({ error: 'unknown_host' });
     }
   });
 
   it('WITHOUT the opt-in, the hostname answers exactly what it always did', async () => {
-    const h = spinUp({ cfAccess: { teamDomain: TEAM_DOMAIN, audience: OPERATOR_AUD, jwks } });
+    const h = await spinUp({ cfAccess: { teamDomain: TEAM_DOMAIN, audience: OPERATOR_AUD, jwks } });
     const jwt = await signJwt(OPERATOR_AUD);
-    const r = await get(h, '/api/docs', {
+    const r = await get(h, docsOf(h), {
       host: PROXIED_HOST,
       ...CF_RAY,
       'cf-access-jwt-assertion': jwt,
@@ -456,14 +486,14 @@ describe('B. the opt-in fails closed', () => {
     // Listing a hostname as a collaboration address AND as the operator's
     // address is a contradiction; resolved toward the grant that reaches
     // less. The doc list is the tell: a collaborator is refused it.
-    const h = spinUp({
+    const h = await spinUp({
       cfAccess: { teamDomain: TEAM_DOMAIN, audience: OPERATOR_AUD, jwks },
       accessTunnelHosts: [COLLAB_HOST],
       proxiedTrustedHosts: [COLLAB_HOST],
       proxiedTrustedEmails: [OPERATOR_EMAIL],
     });
     const jwt = await signJwt(OPERATOR_AUD);
-    const r = await get(h, '/api/docs', {
+    const r = await get(h, docsOf(h), {
       host: COLLAB_HOST,
       ...CF_RAY,
       'cf-access-jwt-assertion': jwt,
@@ -501,7 +531,7 @@ describe('E. sharing off closes the operator hostname too', () => {
     });
 
   beforeAll(async () => {
-    h = spinUp({
+    h = await spinUp({
       cfAccess: { teamDomain: TEAM_DOMAIN, audience: OPERATOR_AUD, jwks },
       share: { config: { publicHostname: LINK_HOST } },
       proxiedTrustedHosts: [PROXIED_HOST],
@@ -511,7 +541,7 @@ describe('E. sharing off closes the operator hostname too', () => {
   });
 
   it('CONTROL: the operator reaches the product while sharing is on', async () => {
-    const r = await get(h, '/api/docs', {
+    const r = await get(h, docsOf(h), {
       host: PROXIED_HOST,
       ...CF_RAY,
       'cf-access-jwt-assertion': jwt,
@@ -521,7 +551,7 @@ describe('E. sharing off closes the operator hostname too', () => {
 
   it('refuses the same token once sharing is off', async () => {
     expect((await setSharing(false)).status).toBe(200);
-    const r = await get(h, '/api/docs', {
+    const r = await get(h, docsOf(h), {
       host: PROXIED_HOST,
       ...CF_RAY,
       'cf-access-jwt-assertion': jwt,
@@ -533,7 +563,7 @@ describe('E. sharing off closes the operator hostname too', () => {
   it('gates BEFORE auth — no token looks the same as a good one', async () => {
     // Otherwise the shape of the refusal tells an outsider whether this
     // hostname is a real Access application.
-    const r = await get(h, '/api/docs', { host: PROXIED_HOST, ...CF_RAY });
+    const r = await get(h, docsOf(h), { host: PROXIED_HOST, ...CF_RAY });
     expect(r.status).toBe(403);
     expect(await r.json()).toEqual({ error: 'sharing_disabled' });
   });
@@ -541,12 +571,12 @@ describe('E. sharing off closes the operator hostname too', () => {
   it('leaves the LOCAL surface working, so the switch can be flipped back', async () => {
     // The way out is the way in: local, tailnet and LAN are untouched, which
     // is what stops this from being a lockout.
-    const local = await fetch(`http://localhost:${h.port}/api/docs`, {
+    const local = await fetch(`http://localhost:${h.port}${docsOf(h)}`, {
       headers: { host: `localhost:${h.port}` },
     });
     expect(local.status).toBe(200);
     expect((await setSharing(true)).status).toBe(200);
-    const back = await get(h, '/api/docs', {
+    const back = await get(h, docsOf(h), {
       host: PROXIED_HOST,
       ...CF_RAY,
       'cf-access-jwt-assertion': jwt,

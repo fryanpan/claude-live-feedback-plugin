@@ -59,7 +59,7 @@ describe('the served shells carry the Sentry DSN and page type only when configu
     const mk = await post(base, '/workspaces', { name: 'monitoring board' });
     const wsId = ((await mk.json()) as { workspace: { id: string } }).workspace.id;
     writeFileSync(join(srcDir, `${base.split(':').pop()}.md`), '# Doc\n\nBody.\n');
-    await post(base, '/api/docs', {
+    await post(base, `/workspaces/${wsId}/docs`, {
       docId: 'a-doc',
       type: 'markdown',
       sourceUrl: join(srcDir, `${base.split(':').pop()}.md`),
@@ -70,7 +70,7 @@ describe('the served shells carry the Sentry DSN and page type only when configu
       mockPath,
       '<!doctype html><html><head><title>Mock</title></head><body>hi</body></html>',
     );
-    await post(base, '/api/docs', {
+    await post(base, `/workspaces/${wsId}/docs`, {
       docId: 'a-mock',
       type: 'mockup',
       sourceUrl: mockPath,

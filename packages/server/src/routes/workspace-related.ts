@@ -75,13 +75,19 @@ export async function handleWorkspaceRelated(
   rq: WorkspaceRouteRequest,
 ): Promise<Response | undefined> {
   const { taskStore, docStore, j } = ctx;
-  const { req, pathname, url } = rq;
+  const { req, pathname, scope, url } = rq;
   const match = pathname.match(/^\/workspaces\/([^/]+)\/related-work$/);
-  if (!match || req.method !== 'GET') return undefined;
+  if (!match || !scope || req.method !== 'GET') return undefined;
 
-  const workspaceId = decodeURIComponent(match[1] ?? '');
-  const workspace = taskStore.getWorkspace(workspaceId);
-  if (!workspace) return j(404, { error: 'workspace not found' });
+  // The board itself comes off the scope. `middleware/workspace-scope.ts`
+
+  // resolved it once, above every handler, so the lookup and the 404 that
+
+  // used to open this block are DELETED rather than left dormant — there
+
+  // is no second copy of "does this board exist" here to drift.
+
+  const { workspaceId, board: workspace } = scope;
 
   const rawQuery = url.searchParams.get('q') ?? '';
   const query = rawQuery.slice(0, MAX_RELATED_QUERY_LENGTH).trim();
@@ -178,7 +184,7 @@ export async function handleWorkspaceRelated(
             linkNote: `filed under "${sibling.title}" alongside the doc the request came from`,
           }
         : {}),
-      url: `/review/${docId}`,
+      url: `/workspaces/${workspaceId}/docs/${docId}`,
     });
   }
 

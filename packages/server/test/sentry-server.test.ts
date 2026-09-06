@@ -57,11 +57,16 @@ function startCaptureServer(): {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+/** A board id, in a file that only ever asks how a path is REDACTED. */
+const WS = 'w-abc123';
+
 describe('routePatternForSpan: default-deny redaction', () => {
   it('keeps known literal route keywords', () => {
     expect(routePatternForSpan('/workspaces/w-abc123/tasks')).toBe('/workspaces/:id/tasks');
-    expect(routePatternForSpan('/api/tasks/t-xyz/transition')).toBe('/api/tasks/:id/transition');
-    expect(routePatternForSpan('/y/w-abc123')).toBe('/y/:id');
+    expect(routePatternForSpan(`/workspaces/${WS}/tasks/t-xyz/transition`)).toBe(
+      '/workspaces/:id/tasks/:id/transition',
+    );
+    expect(routePatternForSpan(`/workspaces/${WS}/y`)).toBe('/workspaces/:id/y');
     expect(routePatternForSpan('/')).toBe('/');
   });
 
@@ -79,13 +84,15 @@ describe('routePatternForSpan: default-deny redaction', () => {
     // docIds are caller-chosen and can embed a bound file's relative path
     // (binds.ts: `${groupId}:${relPath.replaceAll('/', '~')}`) or a
     // `task:<taskId>` alias (see workspace-board.md). Both must vanish.
-    const withFilePath = routePatternForSpan('/api/docs/g1:secret~internal~roadmap.md/content');
-    expect(withFilePath).toBe('/api/docs/:id/content');
+    const withFilePath = routePatternForSpan(
+      `/workspaces/${WS}/docs/g1:secret~internal~roadmap.md/content`,
+    );
+    expect(withFilePath).toBe('/workspaces/:id/docs/:id/content');
     expect(withFilePath).not.toContain('secret');
     expect(withFilePath).not.toContain('roadmap');
 
-    const withTaskAlias = routePatternForSpan('/api/docs/task:t-hidden1/threads');
-    expect(withTaskAlias).toBe('/api/docs/:id/threads');
+    const withTaskAlias = routePatternForSpan(`/workspaces/${WS}/docs/task:t-hidden1/threads`);
+    expect(withTaskAlias).toBe('/workspaces/:id/docs/:id/threads');
     expect(withTaskAlias).not.toContain('hidden1');
   });
 
@@ -102,12 +109,18 @@ describe('routePatternForSpan: default-deny redaction', () => {
     // was wrongly preserved. `content` is both a real docId here (position
     // 2, the id slot of /api/docs/:id/...) and a real subroute keyword
     // (position 3) — this is exactly the shape codex's example described.
-    expect(routePatternForSpan('/api/docs/content/content')).toBe('/api/docs/:id/content');
+    expect(routePatternForSpan(`/workspaces/${WS}/docs/content/content`)).toBe(
+      '/workspaces/:id/docs/:id/content',
+    );
     // Same collision against other real keywords, elsewhere in the route
     // table — a docId literally named "home", or a taskId literally named
     // "archive", must redact just as any other id would.
-    expect(routePatternForSpan('/api/docs/home/status')).toBe('/api/docs/:id/status');
-    expect(routePatternForSpan('/api/tasks/archive/transition')).toBe('/api/tasks/:id/transition');
+    expect(routePatternForSpan(`/workspaces/${WS}/docs/home/status`)).toBe(
+      '/workspaces/:id/docs/:id/status',
+    );
+    expect(routePatternForSpan(`/workspaces/${WS}/tasks/archive/transition`)).toBe(
+      '/workspaces/:id/tasks/:id/transition',
+    );
   });
 
   it('names the reviewApi subroutes at the one prefix they answer on', () => {
@@ -132,14 +145,16 @@ describe('routePatternForSpan: default-deny redaction', () => {
       'context-file',
       'editable-file',
     ]) {
-      expect(routePatternForSpan(`/api/reviews/r-abc123/${sub}`)).toBe(`/api/reviews/:id/${sub}`);
+      expect(routePatternForSpan(`/workspaces/${WS}/reviews/r-abc123/${sub}`)).toBe(
+        `/workspaces/:id/reviews/:id/${sub}`,
+      );
       expect(routePatternForSpan(`/workspaces/w-abc123/${sub}`)).toBe('/:id/:id/:id');
     }
   });
 
   it('names the board’s own collections at the prefix that lost its /api', () => {
     // The other half of the same move: every `/api/workspaces/:id/…` route
-    // became `/workspaces/:id/…`, and the board page it now shares an address
+    // became '/workspaces/:id/…', and the board page it now shares an address
     // with is the same template — `?format=json` is a query string, and a
     // route pattern has none. So ONE entry covers both, and the old spelling
     // names nothing.
@@ -159,17 +174,17 @@ describe('routePatternForSpan: default-deny redaction', () => {
     // templated), a bare threads/:id/withdraw (only its /undo sibling was),
     // and suggestions/:id/(accept|reject) (only the bulk resolve_all and
     // the plain listing were).
-    expect(routePatternForSpan('/api/docs/w-abc123/agent_anchors')).toBe(
-      '/api/docs/:id/agent_anchors',
+    expect(routePatternForSpan(`/workspaces/${WS}/docs/w-abc123/agent_anchors`)).toBe(
+      '/workspaces/:id/docs/:id/agent_anchors',
     );
-    expect(routePatternForSpan('/api/docs/w-abc123/threads/t-xyz789/withdraw')).toBe(
-      '/api/docs/:id/threads/:id/withdraw',
+    expect(routePatternForSpan(`/workspaces/${WS}/docs/w-abc123/threads/t-xyz789/withdraw`)).toBe(
+      '/workspaces/:id/docs/:id/threads/:id/withdraw',
     );
-    expect(routePatternForSpan('/api/docs/w-abc123/suggestions/s-1/accept')).toBe(
-      '/api/docs/:id/suggestions/:id/accept',
+    expect(routePatternForSpan(`/workspaces/${WS}/docs/w-abc123/suggestions/s-1/accept`)).toBe(
+      '/workspaces/:id/docs/:id/suggestions/:id/accept',
     );
-    expect(routePatternForSpan('/api/docs/w-abc123/suggestions/s-1/reject')).toBe(
-      '/api/docs/:id/suggestions/:id/reject',
+    expect(routePatternForSpan(`/workspaces/${WS}/docs/w-abc123/suggestions/s-1/reject`)).toBe(
+      '/workspaces/:id/docs/:id/suggestions/:id/reject',
     );
   });
 });
@@ -187,7 +202,10 @@ describe('scrubEventForPrivacy: a floor beneath withRouteSpan, proven with a neg
   it('the raw fixture actually contains the secret — the check has something to catch', () => {
     const secret = crypto.randomUUID();
     const raw = {
-      request: { url: `http://localhost/api/docs/${secret}/content`, cookies: { session: secret } },
+      request: {
+        url: `http://localhost/workspaces/${WS}/docs/${secret}/content`,
+        cookies: { session: secret },
+      },
       contexts: {
         trace: {
           data: { 'url.full': `http://localhost/${secret}`, 'http.url': `http://x/${secret}` },
@@ -205,7 +223,10 @@ describe('scrubEventForPrivacy: a floor beneath withRouteSpan, proven with a neg
   it('scrubEventForPrivacy removes the secret from every url/cookie/referrer-shaped key', () => {
     const secret = crypto.randomUUID();
     const raw = {
-      request: { url: `http://localhost/api/docs/${secret}/content`, cookies: { session: secret } },
+      request: {
+        url: `http://localhost/workspaces/${WS}/docs/${secret}/content`,
+        cookies: { session: secret },
+      },
       contexts: {
         trace: {
           data: { 'url.full': `http://localhost/${secret}`, 'http.url': `http://x/${secret}` },
@@ -385,7 +406,7 @@ describe('server Sentry: configured — reaches Sentry end to end', () => {
     // that has nothing to do with request data actually escaping. A random
     // id can only appear in the payload if it genuinely flowed through.
     const docId = `w-${crypto.randomUUID()}`;
-    const pathname = `/api/docs/${docId}/content`;
+    const pathname = `/workspaces/${WS}/docs/${docId}/content`;
     const req = new Request(`http://localhost${pathname}`, { method: 'GET' });
     const response = await withRouteSpan(req, pathname, async () => {
       await sleep(60); // the "deliberately slow" request
@@ -397,7 +418,7 @@ describe('server Sentry: configured — reaches Sentry end to end', () => {
 
     const bodies = capture.hits().map((h) => h.text);
     const joined = bodies.join('\n');
-    expect(joined).toContain('GET /api/docs/:id/content');
+    expect(joined).toContain('GET /workspaces/:id/docs/:id/content');
     expect(joined).toContain(release);
     // The whole point: the raw docId never left the process.
     expect(joined).not.toContain(docId);
@@ -406,7 +427,7 @@ describe('server Sentry: configured — reaches Sentry end to end', () => {
   it('a deliberately thrown error is captured with the release stamp and the route pattern', async () => {
     capture.hits().length = 0; // isolate this assertion from the transaction above
     const taskId = `t-${crypto.randomUUID()}`; // see note above: random, not a literal
-    const pathname = `/api/tasks/${taskId}/transition`;
+    const pathname = `/workspaces/${WS}/tasks/${taskId}/transition`;
     const req = new Request(`http://localhost${pathname}`, { method: 'POST' });
     const thrown = new Error('deliberate test failure — sentry-server.test.ts');
     try {
@@ -425,7 +446,7 @@ describe('server Sentry: configured — reaches Sentry end to end', () => {
     const joined = bodies.join('\n');
     expect(joined).toContain('deliberate test failure');
     expect(joined).toContain(release);
-    expect(joined).toContain('/api/tasks/:id/transition');
+    expect(joined).toContain('/workspaces/:id/tasks/:id/transition');
     expect(joined).not.toContain(taskId);
   });
 
@@ -448,7 +469,9 @@ describe('server Sentry: configured — reaches Sentry end to end', () => {
       },
     });
     try {
-      const res = await fetch(`http://127.0.0.1:${testServer.port}/api/docs/${docId}/content`);
+      const res = await fetch(
+        `http://127.0.0.1:${testServer.port}/workspaces/${WS}/docs/${docId}/content`,
+      );
       expect(res.status).toBe(200);
     } finally {
       testServer.stop(true);
@@ -466,7 +489,7 @@ describe('server Sentry: configured — reaches Sentry end to end', () => {
     // duplicate from BunServer".
     const transactionCount = (joined.match(/\{"type":"transaction"\}/g) ?? []).length;
     expect(transactionCount).toBe(1); // not 2 — no duplicate from BunServer
-    expect(joined).toContain('GET /api/docs/:id/content');
+    expect(joined).toContain('GET /workspaces/:id/docs/:id/content');
     expect(joined).not.toContain(docId);
     expect(joined).not.toContain('url.full');
     expect(joined).not.toContain('"url.path"');
@@ -487,17 +510,20 @@ describe('server Sentry: configured — reaches Sentry end to end', () => {
     // A raw URL attached to an active span's attributes — the same shape a
     // third-party OTel instrumentation (e.g. an outgoing-fetch integration)
     // would add on its own, with no code in this repo asking for it.
-    await Sentry.startSpan({ name: 'GET /api/docs/:id/content', op: 'http.server' }, async () => {
-      Sentry.getActiveSpan()?.setAttribute(
-        'url.full',
-        `http://localhost/api/docs/${secret}/content?user=x`,
-      );
-    });
+    await Sentry.startSpan(
+      { name: 'GET /workspaces/:id/docs/:id/content', op: 'http.server' },
+      async () => {
+        Sentry.getActiveSpan()?.setAttribute(
+          'url.full',
+          `http://localhost/workspaces/${WS}/docs/${secret}/content?user=x`,
+        );
+      },
+    );
 
     // A raw URL passed as `extra` — the mistake a future call site could
     // make instead of `routePatternForSpan(pathname)`.
     captureServerError(new Error('scrub floor probe'), {
-      url: `http://localhost/api/docs/${secret}/content?user=x`,
+      url: `http://localhost/workspaces/${WS}/docs/${secret}/content?user=x`,
     });
 
     await flushServerSentry(5000);
@@ -524,7 +550,7 @@ describe('server Sentry: configured — reaches Sentry end to end', () => {
     // way a future direct `Sentry.startSpan({ name: rawPath })` call
     // elsewhere in the codebase could.
     await Sentry.startSpan(
-      { name: `GET /api/docs/${secretDocId}/content`, op: 'http.server' },
+      { name: `GET /workspaces/${WS}/docs/${secretDocId}/content`, op: 'http.server' },
       async () => {},
     );
 

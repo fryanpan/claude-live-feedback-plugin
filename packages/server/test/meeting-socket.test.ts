@@ -24,6 +24,7 @@ import { listMeetings, meetingTranscriptPath } from '../src/meetings.ts';
 import { type ShareTarget, shareScopeAllows } from '../src/middleware/host-guard.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { createMockTranscriptionEngine } from '../src/transcribe.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 // bun's per-test timeout defaults to 5000ms, and a wait budget above the
 // runner's cap can never produce its own diagnostic: the test dies as a bare
@@ -46,7 +47,7 @@ class AudioClient {
   private constructor(readonly ws: WebSocket) {}
 
   static async open(base: string, docId: string): Promise<AudioClient> {
-    const ws = new WebSocket(`${base}${meetingSocketPath(docId)}`);
+    const ws = new WebSocket(`${base}${meetingSocketPath(WS, docId)}`);
     ws.binaryType = 'arraybuffer';
     const client = new AudioClient(ws);
     ws.addEventListener('message', (ev) => {
@@ -108,6 +109,9 @@ class AudioClient {
   }
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('meeting audio socket', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -124,7 +128,7 @@ describe('meeting audio socket', () => {
   const createDoc = async (docId: string): Promise<string> => {
     const path = join(dataDir, `${docId}.md`);
     writeFileSync(path, `# ${docId}\n\nNotes go here.\n`);
-    const res = await fetch(`${base}/api/docs`, {
+    const res = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId, sourceUrl: path, title: docId }),
@@ -141,6 +145,7 @@ describe('meeting audio socket', () => {
       transcription: createMockTranscriptionEngine(),
     });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     wsBase = `ws://localhost:${handle.port}`;
   });
 
@@ -201,7 +206,9 @@ describe('meeting audio socket', () => {
   });
 
   it('serves the finished meeting back over REST for a later notes agent', async () => {
-    const list = (await (await fetch(`${base}/api/docs/standup-notes/meetings`)).json()) as {
+    const list = (await (
+      await fetch(`${base}/workspaces/${WS}/docs/standup-notes/meetings`)
+    ).json()) as {
       docId: string;
       meetings: Array<{ meetingId: string; turns?: number; endedAt: number | null }>;
       recording?: string;
@@ -216,12 +223,12 @@ describe('meeting audio socket', () => {
     expect(meeting?.turns).toBe(1);
 
     const detail = (await (
-      await fetch(`${base}/api/docs/standup-notes/meetings/${meeting?.meetingId}`)
+      await fetch(`${base}/workspaces/${WS}/docs/standup-notes/meetings/${meeting?.meetingId}`)
     ).json()) as { transcript: Array<{ turn: number; text: string }>; turns?: number };
     expect(detail.turns).toBe(1);
     expect(detail.transcript.map((t) => t.text)).toEqual(['So the sync is the bottleneck.']);
 
-    const missing = await fetch(`${base}/api/docs/standup-notes/meetings/m-nope-1`);
+    const missing = await fetch(`${base}/workspaces/${WS}/docs/standup-notes/meetings/m-nope-1`);
     expect(missing.status).toBe(404);
   });
 
@@ -255,7 +262,9 @@ describe('meeting audio socket', () => {
     const deadline = Date.now() + 2_000;
     let meetings: Array<{ endedAt: number | null; turns?: number }> = [];
     while (Date.now() < deadline) {
-      const body = (await (await fetch(`${base}/api/docs/tab-closed/meetings`)).json()) as {
+      const body = (await (
+        await fetch(`${base}/workspaces/${WS}/docs/tab-closed/meetings`)
+      ).json()) as {
         meetings: Array<{ endedAt: number | null; turns?: number }>;
       };
       meetings = body.meetings;
@@ -292,7 +301,7 @@ describe('meeting audio socket', () => {
     await createDoc('sse-watcher');
     const events: Array<{ event: string }> = [];
     const controller = new AbortController();
-    const stream = await fetch(`${base}/events/sse-watcher`, {
+    const stream = await fetch(`${base}/workspaces/${WS}/docs/sse-watcher/events:stream`, {
       headers: { accept: 'text/event-stream' },
       signal: controller.signal,
     });
@@ -376,7 +385,7 @@ describe('meeting audio socket', () => {
 
   it('refuses the upgrade for a foreign origin and for a doc that does not exist', async () => {
     await createDoc('guarded');
-    const foreign = await fetch(`${base}${meetingSocketPath('guarded')}`, {
+    const foreign = await fetch(`${base}${meetingSocketPath(WS, 'guarded')}`, {
       headers: {
         origin: 'https://evil.example.com',
         upgrade: 'websocket',
@@ -387,7 +396,7 @@ describe('meeting audio socket', () => {
     });
     expect(foreign.status).toBe(403);
 
-    const missing = await fetch(`${base}${meetingSocketPath('never-created')}`, {
+    const missing = await fetch(`${base}${meetingSocketPath(WS, 'never-created')}`, {
       headers: {
         upgrade: 'websocket',
         connection: 'upgrade',
@@ -411,6 +420,7 @@ describe('meeting audio socket with no engine configured', () => {
     // and the reason none of them can open a billed streaming session.
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     wsBase = `ws://localhost:${handle.port}`;
   });
 
@@ -422,7 +432,7 @@ describe('meeting audio socket with no engine configured', () => {
   it('says not_configured and keeps the socket open', async () => {
     const path = join(dataDir, 'quiet.md');
     writeFileSync(path, '# quiet\n');
-    await fetch(`${base}/api/docs`, {
+    await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'quiet', sourceUrl: path, title: 'quiet' }),
@@ -441,7 +451,7 @@ describe('meeting audio socket with no engine configured', () => {
     expect(client.of('ready')).toHaveLength(0);
 
     // And nothing was recorded.
-    const list = (await (await fetch(`${base}/api/docs/quiet/meetings`)).json()) as {
+    const list = (await (await fetch(`${base}/workspaces/${WS}/docs/quiet/meetings`)).json()) as {
       meetings: unknown[];
     };
     expect(list.meetings).toEqual([]);
@@ -470,24 +480,62 @@ describe('a member opens the audio socket on their board, and on no other', () =
   const workspaceOf = (d: string): string[] =>
     d === 'standup-notes' ? ['ws-a'] : d.startsWith('board-1:') ? ['board-1'] : [];
 
-  it('opens /audio/ for a doc on the shared board, however it is addressed', () => {
-    expect(shareScopeAllows('/audio/standup-notes', 'GET', OTHER, workspaceOf)).toBe(true);
-    expect(shareScopeAllows('/audio/board-1%3Aplan.md', 'GET', BOARD, workspaceOf)).toBe(true);
+  it('opens the audio socket for a doc on the shared board, however it is addressed', () => {
+    expect(
+      shareScopeAllows('/workspaces/ws-a/docs/standup-notes/audio', 'GET', OTHER, workspaceOf),
+    ).toBe(true);
+    expect(
+      shareScopeAllows(
+        '/workspaces/board-1/docs/board-1%3Aplan.md/audio',
+        'GET',
+        BOARD,
+        workspaceOf,
+      ),
+    ).toBe(true);
   });
 
-  it('refuses /audio/ for a doc on a board this share does not cover', () => {
-    // Same two paths, the other target each time — so a `false` here is the
-    // board boundary and not a fixture that refuses everything.
-    expect(shareScopeAllows('/audio/standup-notes', 'GET', BOARD, workspaceOf)).toBe(false);
-    expect(shareScopeAllows('/audio/board-1%3Aplan.md', 'GET', OTHER, workspaceOf)).toBe(false);
+  it('refuses the audio socket for a doc on a board this share does not cover', () => {
+    // TWO ways to be on the wrong board now that the board is in the path,
+    // and both have to be refused or the other one is the way in.
+    //
+    // (1) The path names the doc's real board, and the share covers a
+    // different one. Refused by the workspace SEGMENT.
+    expect(
+      shareScopeAllows('/workspaces/ws-a/docs/standup-notes/audio', 'GET', BOARD, workspaceOf),
+    ).toBe(false);
+    expect(
+      shareScopeAllows(
+        '/workspaces/board-1/docs/board-1%3Aplan.md/audio',
+        'GET',
+        OTHER,
+        workspaceOf,
+      ),
+    ).toBe(false);
+    // (2) The path names the SHARED board — so the segment check passes —
+    // and the doc under it belongs to the other one. Refused by membership.
+    // This is the half a segment-only rule would let through: spell your own
+    // board id in front of anybody's doc id and read it.
+    expect(
+      shareScopeAllows('/workspaces/board-1/docs/standup-notes/audio', 'GET', BOARD, workspaceOf),
+    ).toBe(false);
+    expect(
+      shareScopeAllows('/workspaces/ws-a/docs/board-1%3Aplan.md/audio', 'GET', OTHER, workspaceOf),
+    ).toBe(false);
     // A doc on no board at all is refused by both.
-    for (const target of [BOARD, OTHER]) {
-      expect(shareScopeAllows('/audio/unfiled-doc', 'GET', target, workspaceOf)).toBe(false);
+    for (const [ws, target] of [
+      ['board-1', BOARD],
+      ['ws-a', OTHER],
+    ] as Array<[string, ShareTarget]>) {
+      expect(
+        shareScopeAllows(`/workspaces/${ws}/docs/unfiled-doc/audio`, 'GET', target, workspaceOf),
+      ).toBe(false);
     }
   });
 
   it('positive control: the same doc IS reachable over the editing socket', () => {
-    expect(shareScopeAllows('/y/standup-notes', 'GET', OTHER, workspaceOf)).toBe(true);
+    expect(
+      shareScopeAllows('/workspaces/ws-a/docs/standup-notes/y', 'GET', OTHER, workspaceOf),
+    ).toBe(true);
   });
 });
 
@@ -508,10 +556,11 @@ describe('meeting audio socket with two voices', () => {
       ]),
     });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     wsBase = `ws://localhost:${handle.port}`;
     const path = join(dataDir, 'pairing.md');
     writeFileSync(path, '# pairing\n');
-    const res = await fetch(`${base}/api/docs`, {
+    const res = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'pairing', sourceUrl: path, title: 'pairing' }),
@@ -555,14 +604,14 @@ describe('meeting audio socket with two voices', () => {
     client.stop();
     await client.waitFor('stopped');
 
-    const list = (await (await fetch(`${base}/api/docs/pairing/meetings`)).json()) as {
+    const list = (await (await fetch(`${base}/workspaces/${WS}/docs/pairing/meetings`)).json()) as {
       meetings: Array<{ meetingId: string; speakers?: Record<string, string> }>;
     };
     expect(list.meetings.find((m) => m.meetingId === ready.meetingId)?.speakers).toEqual({
       A: 'Jordan',
     });
     const one = (await (
-      await fetch(`${base}/api/docs/pairing/meetings/${String(ready.meetingId)}`)
+      await fetch(`${base}/workspaces/${WS}/docs/pairing/meetings/${String(ready.meetingId)}`)
     ).json()) as { transcript: Array<{ text: string; speaker?: string }> };
     expect(one.transcript.map((t) => t.speaker)).toEqual(['A', 'B']);
     client.ws.close();
@@ -585,7 +634,7 @@ describe('the announcement frame no longer reaches the record', () => {
   const createDoc = async (docId: string): Promise<string> => {
     const path = join(dataDir, `${docId}.md`);
     writeFileSync(path, `# ${docId}\n\nNotes.\n`);
-    const res = await fetch(`${base}/api/docs`, {
+    const res = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId, sourceUrl: path, title: docId }),
@@ -598,6 +647,7 @@ describe('the announcement frame no longer reaches the record', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-meeting-no-consent-'));
     handle = createServer({ port: 0, dataDir, transcription: createMockTranscriptionEngine() });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     wsBase = `ws://localhost:${handle.port}`;
   });
 
@@ -635,7 +685,7 @@ describe('meeting engine choice', () => {
   const createDoc = async (docId: string): Promise<string> => {
     const path = join(dataDir, `${docId}.md`);
     writeFileSync(path, `# ${docId}\n`);
-    const res = await fetch(`${base}/api/docs`, {
+    const res = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId, sourceUrl: path, title: docId }),
@@ -659,6 +709,7 @@ describe('meeting engine choice', () => {
       ],
     });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     wsBase = `ws://localhost:${handle.port}`;
   });
 
@@ -728,6 +779,7 @@ describe('meeting engine choice on a server without that engine', () => {
       transcription: { ...createMockTranscriptionEngine(), name: 'assemblyai' },
     });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     wsBase = `ws://localhost:${handle.port}`;
   });
 
@@ -747,7 +799,7 @@ describe('meeting engine choice on a server without that engine', () => {
     // A person who picked an engine must not be silently billed on another.
     const path = join(dataDir, 'wants-soniox.md');
     writeFileSync(path, '# wants-soniox\n');
-    await fetch(`${base}/api/docs`, {
+    await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'wants-soniox', sourceUrl: path, title: 'wants-soniox' }),

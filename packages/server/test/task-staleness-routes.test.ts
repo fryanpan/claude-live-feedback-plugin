@@ -20,6 +20,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('premise drift over the work-queue route', () => {
   let handle: ServerHandle;
@@ -47,7 +51,7 @@ describe('premise drift over the work-queue route', () => {
 
   const comment = async (taskId: string, find: string, text: string) => {
     await tick();
-    const r = await post(`/api/docs/task:${taskId}/threads/by_find`, {
+    const r = await post(`/workspaces/${WS}/docs/task:${taskId}/threads/by_find`, {
       find,
       text,
       author: { id: 'known-reviewer', name: 'Reviewer' },
@@ -104,8 +108,10 @@ describe('premise drift over the work-queue route', () => {
     // here the subject is the plumbing, and a real 24h gap is unwaitable.
     handle = createServer({ port: 0, dataDir, premiseStaleAfterMs: 0 });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     const w = await post('/workspaces', { name: 'queue', goal: 'Ship it.' });
     workspaceId = ((await w.json()) as { workspace: { id: string } }).workspace.id;
+    WS = workspaceId;
   });
 
   afterAll(async () => {
@@ -184,7 +190,7 @@ describe('premise drift over the work-queue route', () => {
     expect((await nextRows(workspaceId)).find((r) => r.id === id)?.premise).toBeDefined();
 
     await tick();
-    const rewrite = await post(`/api/tasks/${id}/body`, {
+    const rewrite = await post(`/workspaces/${WS}/tasks/${id}/body`, {
       markdown:
         'The live triage payload renders a count where it holds the whole request. Fix the renderer.',
       author: { id: 'known-reviewer', name: 'Reviewer' },

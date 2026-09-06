@@ -248,7 +248,7 @@ describe('the cap through the server', () => {
     return res.json() as Promise<T>;
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'parallelism-cap-'));
     // A zero-length quiet window, as stall-nudge-routes.test.ts uses: every
     // open row is quiet the moment it is read, so what the wake names is
@@ -316,11 +316,15 @@ describe('the cap through the server', () => {
       }),
     );
     await jj(
-      await post(`/api/tasks/${task.id}/transition`, { to: 'todo', author: PERSON, workspaceId }),
+      await post(`/workspaces/${workspaceId}/tasks/${task.id}/transition`, {
+        to: 'todo',
+        author: PERSON,
+        workspaceId,
+      }),
     );
     if (to === 'in-progress') {
       await jj(
-        await post(`/api/tasks/${task.id}/transition`, {
+        await post(`/workspaces/${workspaceId}/tasks/${task.id}/transition`, {
           to: 'in-progress',
           author: LEAD,
           workspaceId,
@@ -352,7 +356,7 @@ describe('the cap through the server', () => {
       const worktree = mkdtempSync(join(tmpdir(), 'wt-cap-'));
       try {
         await jj(
-          await post('/api/dispatches', {
+          await post(`/workspaces/${workspaceId}/dispatches`, {
             taskId: busy,
             worktreePath: worktree,
             agentName: 'Builder A',
@@ -508,7 +512,12 @@ describe('the cap through the server', () => {
       await jj(await put(`/workspaces/${workspaceId}/parallelism-cap`, { cap: 1, author: LEAD }));
       const worktree = mkdtempSync(join(tmpdir(), 'wt-cap-'));
       try {
-        await jj(await post('/api/dispatches', { taskId: busy, worktreePath: worktree }));
+        await jj(
+          await post(`/workspaces/${workspaceId}/dispatches`, {
+            taskId: busy,
+            worktreePath: worktree,
+          }),
+        );
         const next = await jj<NextView>(await get(`/workspaces/${workspaceId}/next`));
         expect(next.tasks.map((t) => t.id)).toEqual([busy]);
         expect(next.capacity).toEqual({ cap: 1, inUse: 1, free: 0, heldForCapacity: 1 });
@@ -516,7 +525,9 @@ describe('the cap through the server', () => {
         // Closing the dispatch frees the slot; the very next read offers the
         // row it was withholding.
         await jj(
-          await fetch(`${base}/api/dispatches/${encodeURIComponent(busy)}`, { method: 'DELETE' }),
+          await fetch(`${base}/workspaces/${workspaceId}/dispatches/${encodeURIComponent(busy)}`, {
+            method: 'DELETE',
+          }),
         );
         const after = await jj<NextView>(await get(`/workspaces/${workspaceId}/next`));
         expect(after.tasks).toHaveLength(2);

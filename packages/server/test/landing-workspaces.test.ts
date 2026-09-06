@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { Thread, User } from '@feedback/core';
 import { ACTIVE_WINDOW_MS } from '../src/landing.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 /**
  * The landing page through the real route: `/` is a list of active
@@ -27,11 +28,12 @@ let dataDir: string;
 let srcDir: string;
 let base: string;
 
-beforeAll(() => {
+beforeAll(async () => {
   dataDir = mkdtempSync(join(tmpdir(), 'landing-ws-data-'));
   srcDir = mkdtempSync(join(tmpdir(), 'landing-ws-src-'));
   handle = createServer({ port: 0, dataDir });
   base = `http://localhost:${handle.port}`;
+  WS = await seedBoard(base);
 });
 
 afterAll(async () => {
@@ -53,7 +55,8 @@ async function makeWorkspace(name: string): Promise<string> {
       body: JSON.stringify({ name, goal: 'Ship it.' }),
     }),
   );
-  return workspace.id;
+  WS = workspace.id;
+  return WS;
 }
 
 async function makeTask(wsId: string, title: string): Promise<string> {
@@ -74,6 +77,9 @@ const landing = async (): Promise<string> => (await fetch(`${base}/`)).text();
  *  assertion that needs "strictly newer" earns its gap explicitly instead of
  *  hoping the round-trip took long enough. */
 const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 15));
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('the landing page is a list of active workspaces', () => {
   let alphaId: string;
@@ -117,7 +123,7 @@ describe('the landing page is a list of active workspaces', () => {
     // than Alpha's task, so it alone decides the order below.
     await tick();
     await j<{ thread: Thread }>(
-      await fetch(`${base}/api/docs/${encodeURIComponent(`task:${taskId}`)}/threads`, {
+      await fetch(`${base}/workspaces/${WS}/docs/${encodeURIComponent(`task:${taskId}`)}/threads`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ author: AGENT, text: 'which option?', anchor: { kind: 'subject' } }),
@@ -159,7 +165,7 @@ describe('attachments stay reachable without leaking back onto /', () => {
     const file = join(srcDir, 'NOTES-UNIQUE.md');
     writeFileSync(file, '# Notes\n\nthe unique line\n');
     await j(
-      await fetch(`${base}/api/docs`, {
+      await fetch(`${base}/workspaces/${WS}/docs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({

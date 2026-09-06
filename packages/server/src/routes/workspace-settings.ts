@@ -34,7 +34,7 @@ export async function handleWorkspaceSettings(
   rq: WorkspaceRouteRequest,
 ): Promise<Response | undefined> {
   const { taskStore, taskProjection, voiceRouter, j, safeJson, parallelismCapView } = ctx;
-  const { req, pathname, authorFor, visitor } = rq;
+  const { req, pathname, scope, authorFor, visitor } = rq;
   // The workspace-level TEXT goal is GONE — the ordered goal LIST is
   // the one goal system now. This route stays because it is on the
   // SHARED server: plugin bundles built before the removal still call
@@ -101,11 +101,11 @@ export async function handleWorkspaceSettings(
   // manage cross-project capacity, and a one-field verb is the shape
   // that call wants; `/settings` still carries the field for the panel.
   const wsCapMatch = pathname.match(/^\/workspaces\/([^/]+)\/parallelism-cap$/);
-  if (wsCapMatch && (req.method === 'GET' || req.method === 'PUT')) {
-    const workspaceId = decodeURIComponent(wsCapMatch[1] ?? '');
-    if (!taskStore.getWorkspace(workspaceId)) {
-      return j(404, { error: 'workspace not found' });
-    }
+  if (wsCapMatch && scope && (req.method === 'GET' || req.method === 'PUT')) {
+    // The board comes off the scope — `middleware/workspace-scope.ts`
+    // resolved it once above every handler, so the lookup and the 404 that
+    // stood here are DELETED rather than left dormant.
+    const { workspaceId } = scope;
     if (req.method === 'PUT') {
       const body = await safeJson(req);
       if (!body || !Object.hasOwn(body, 'cap')) {

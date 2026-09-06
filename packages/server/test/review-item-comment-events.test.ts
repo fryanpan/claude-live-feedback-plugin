@@ -119,21 +119,26 @@ describe('the owner hears a comment on their review item', () => {
       }),
     );
     const { item } = await jj<{ item: { id: string } }>(
-      await post(`/api/tasks/${task.id}/review-items`, { review: REVIEW, author: AGENT }),
+      await post(`/workspaces/${workspace.id}/tasks/${task.id}/review-items`, {
+        review: REVIEW,
+        author: AGENT,
+      }),
     );
     return { workspaceId: workspace.id, taskId: task.id, itemId: item.id };
   }
 
-  const askOnItem = async (taskId: string, itemId: string, text: string) =>
+  // The board is an ARGUMENT: a task body doc is addressed under the board its
+  // task is on, and this file seeds two boards in a single test.
+  const askOnItem = async (ws: string, taskId: string, itemId: string, text: string) =>
     jj<{ thread: { id: string } }>(
-      await post(`/api/docs/${encodeURIComponent(taskBodyDocId(taskId))}/threads`, {
+      await post(`/workspaces/${ws}/docs/${encodeURIComponent(taskBodyDocId(taskId))}/threads`, {
         anchor: { kind: 'review-item', reviewItemId: itemId, snippet: { text: PHRASE } },
         text,
         author: PERSON,
       }),
     );
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'review-item-comment-events-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
@@ -146,15 +151,20 @@ describe('the owner hears a comment on their review item', () => {
 
   it('POSITIVE CONTROL: a plain task-thread comment still reaches both streams, naming no item', async () => {
     const { workspaceId, taskId } = await seed('index-rebuild');
-    const onDoc = await stream(`/events/${encodeURIComponent(taskBodyDocId(taskId))}`);
+    const onDoc = await stream(
+      `/workspaces/${workspaceId}/docs/${encodeURIComponent(taskBodyDocId(taskId))}/events:stream`,
+    );
     const onBoard = await stream(`/workspaces/${encodeURIComponent(workspaceId)}/events:stream`);
 
     await jj(
-      await post(`/api/docs/${encodeURIComponent(taskBodyDocId(taskId))}/threads`, {
-        anchor: { kind: 'subject' },
-        text: 'Is this still the plan?',
-        author: PERSON,
-      }),
+      await post(
+        `/workspaces/${workspaceId}/docs/${encodeURIComponent(taskBodyDocId(taskId))}/threads`,
+        {
+          anchor: { kind: 'subject' },
+          text: 'Is this still the plan?',
+          author: PERSON,
+        },
+      ),
     );
     await settle();
     onDoc.stop();
@@ -170,10 +180,12 @@ describe('the owner hears a comment on their review item', () => {
 
   it('a comment anchored to a review item names the item on the frame — on the doc stream and the workspace stream', async () => {
     const { workspaceId, taskId, itemId } = await seed('index-rebuild');
-    const onDoc = await stream(`/events/${encodeURIComponent(taskBodyDocId(taskId))}`);
+    const onDoc = await stream(
+      `/workspaces/${workspaceId}/docs/${encodeURIComponent(taskBodyDocId(taskId))}/events:stream`,
+    );
     const onBoard = await stream(`/workspaces/${encodeURIComponent(workspaceId)}/events:stream`);
 
-    const { thread } = await askOnItem(taskId, itemId, 'Twice per what — per night?');
+    const { thread } = await askOnItem(workspaceId, taskId, itemId, 'Twice per what — per night?');
     await settle();
 
     for (const heard of [onDoc, onBoard]) {
@@ -191,7 +203,7 @@ describe('the owner hears a comment on their review item', () => {
     // keep naming the item — the thread does not stop being about it.
     await jj(
       await post(
-        `/api/docs/${encodeURIComponent(taskBodyDocId(taskId))}/threads/${thread.id}/comments`,
+        `/workspaces/${workspaceId}/docs/${encodeURIComponent(taskBodyDocId(taskId))}/threads/${thread.id}/comments`,
         { text: 'Per night — one pass per rebuild.', author: AGENT },
       ),
     );
@@ -211,12 +223,14 @@ describe('the owner hears a comment on their review item', () => {
   it("NEGATIVE CONTROL: a comment on an unrelated task's item reaches neither of this task's streams", async () => {
     const mine = await seed('index-rebuild');
     const theirs = await seed('search-revamp');
-    const onDoc = await stream(`/events/${encodeURIComponent(taskBodyDocId(mine.taskId))}`);
+    const onDoc = await stream(
+      `/workspaces/${mine.workspaceId}/docs/${encodeURIComponent(taskBodyDocId(mine.taskId))}/events:stream`,
+    );
     const onBoard = await stream(
       `/workspaces/${encodeURIComponent(mine.workspaceId)}/events:stream`,
     );
 
-    await askOnItem(theirs.taskId, theirs.itemId, 'Which cache?');
+    await askOnItem(theirs.workspaceId, theirs.taskId, theirs.itemId, 'Which cache?');
     await settle();
     onDoc.stop();
     onBoard.stop();
@@ -241,14 +255,19 @@ describe('the owner hears a comment on their review item', () => {
       }),
     );
     const { item: siblingItem } = await jj<{ item: { id: string } }>(
-      await post(`/api/tasks/${sibling.id}/review-items`, { review: REVIEW, author: AGENT }),
+      await post(`/workspaces/${mine.workspaceId}/tasks/${sibling.id}/review-items`, {
+        review: REVIEW,
+        author: AGENT,
+      }),
     );
-    const onDoc = await stream(`/events/${encodeURIComponent(taskBodyDocId(mine.taskId))}`);
+    const onDoc = await stream(
+      `/workspaces/${mine.workspaceId}/docs/${encodeURIComponent(taskBodyDocId(mine.taskId))}/events:stream`,
+    );
     const onBoard = await stream(
       `/workspaces/${encodeURIComponent(mine.workspaceId)}/events:stream`,
     );
 
-    await askOnItem(sibling.id, siblingItem.id, 'Warm it how?');
+    await askOnItem(mine.workspaceId, sibling.id, siblingItem.id, 'Warm it how?');
     await settle();
     onDoc.stop();
     onBoard.stop();

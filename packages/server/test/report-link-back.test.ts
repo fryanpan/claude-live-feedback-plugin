@@ -33,6 +33,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PUBLIC_BASE = 'https://feedback.example.com';
 
@@ -43,6 +44,9 @@ interface ThreadResponse {
   threadUrl?: string;
   error?: string;
 }
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('a report comes back with the link to hand over', () => {
   let handle: ServerHandle;
@@ -68,7 +72,7 @@ describe('a report comes back with the link to hand over', () => {
 
   /** Open a subject thread the way `create_thread(docId="task:…")` does. */
   const postSubjectThread = async (docId: string, text: string): Promise<ThreadResponse> => {
-    const r = await post(`/api/docs/${encodeURIComponent(docId)}/threads`, {
+    const r = await post(`/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads`, {
       author: AGENT,
       text,
       anchor: { kind: 'subject' },
@@ -84,6 +88,7 @@ describe('a report comes back with the link to hand over', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'report-link-'));
     handle = createServer({ port: 0, dataDir, publicBaseUrl: PUBLIC_BASE });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
 
     const ws = await post('/workspaces', {
       name: 'search-revamp',
@@ -91,6 +96,7 @@ describe('a report comes back with the link to hand over', () => {
     });
     expect(ws.status).toBe(200);
     wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
+    WS = wsId;
 
     const t = await post(`/workspaces/${wsId}/tasks`, {
       title: 'Wire the results page',
@@ -119,7 +125,7 @@ describe('a report comes back with the link to hand over', () => {
     expect(threadId).not.toBe('');
 
     const r = await post(
-      `/api/docs/${encodeURIComponent(`task:${taskId}`)}/threads/${encodeURIComponent(threadId)}/comments`,
+      `/workspaces/${WS}/docs/${encodeURIComponent(`task:${taskId}`)}/threads/${encodeURIComponent(threadId)}/comments`,
       { author: AGENT, text: 'Gates green, PR open.' },
     );
     expect(r.status).toBe(200);
@@ -133,12 +139,12 @@ describe('a report comes back with the link to hand over', () => {
     // had no coverage at all until this case existed.
     // This route anchors to text, so the task body needs some first.
     const docId = `task:${taskId}`;
-    const seeded = await post(`/api/docs/${encodeURIComponent(docId)}/content`, {
+    const seeded = await post(`/workspaces/${WS}/docs/${encodeURIComponent(docId)}/content`, {
       markdown: '# Results page\n\nAnchor me here.\n',
     });
     expect(seeded.status).toBe(200);
 
-    const r = await post(`/api/docs/${encodeURIComponent(docId)}/threads/by_find`, {
+    const r = await post(`/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads/by_find`, {
       author: AGENT,
       text: 'Filed from the by_find route.',
       find: 'Anchor me here.',
@@ -173,7 +179,11 @@ describe('a report comes back with the link to hand over', () => {
     const name = 'plain-notes';
     const p = join(dataDir, `${name}.md`);
     writeFileSync(p, '# Notes\n\nSome body text to anchor to.\n');
-    const created = await post('/api/docs', { docId: name, type: 'markdown', sourceUrl: p });
+    const created = await post(`/workspaces/${WS}/docs`, {
+      docId: name,
+      type: 'markdown',
+      sourceUrl: p,
+    });
     expect(created.status).toBe(200);
     // `plain-notes` was the NAME; the link the server hands back addresses the
     // doc by the id it minted, which is the address that never moves.
@@ -181,7 +191,7 @@ describe('a report comes back with the link to hand over', () => {
 
     // Addressed by the readable name, so the link is also proof the alias
     // resolves to the same doc the URL points at.
-    const r = await post(`/api/docs/${encodeURIComponent(name)}/threads`, {
+    const r = await post(`/workspaces/${WS}/docs/${encodeURIComponent(name)}/threads`, {
       author: AGENT,
       text: 'A note on the doc itself.',
       anchor: { kind: 'subject' },
@@ -194,7 +204,7 @@ describe('a report comes back with the link to hand over', () => {
   it('a doc nobody has heard of gets no link rather than a broken one', async () => {
     // The spread is conditional so an unresolvable doc simply omits the
     // field. A link built anyway would point at a 404 and read as authoritative.
-    const r = await post(`/api/docs/${encodeURIComponent('task:t-nothing')}/threads`, {
+    const r = await post(`/workspaces/${WS}/docs/${encodeURIComponent('task:t-nothing')}/threads`, {
       author: AGENT,
       text: 'Into the void.',
       anchor: { kind: 'subject' },
@@ -248,9 +258,11 @@ describe('the handoff link is owner-only', () => {
       ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
 
     const ws = await post('/workspaces', { name: 'shared-board', goal: 'Ship it.' });
     boardId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
+    WS = boardId;
     const t = await post(`/workspaces/${boardId}/tasks`, {
       title: 'Something to discuss',
       author: AGENT,
@@ -278,7 +290,7 @@ describe('the handoff link is owner-only', () => {
     // `undefined` below is equally consistent with a resolver that never
     // resolves anything for anyone, and the test would pass against a
     // feature that is simply broken.
-    const ownerRes = await post(`/api/docs/${encodeURIComponent(docId)}/threads`, {
+    const ownerRes = await post(`/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads`, {
       author: AGENT,
       text: 'Owner-side report.',
       anchor: { kind: 'subject' },
@@ -287,7 +299,7 @@ describe('the handoff link is owner-only', () => {
     const owner = (await ownerRes.json()) as ThreadResponse;
     expect(owner.threadUrl).toContain(encodeURIComponent(boardId));
 
-    const seen = await pubPost(`/api/docs/${encodeURIComponent(docId)}/threads`, {
+    const seen = await pubPost(`/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads`, {
       author: { id: 'visitor-1', name: 'Visitor', kind: 'anon', color: '#999999' },
       text: 'Visitor-side comment.',
       anchor: { kind: 'subject' },

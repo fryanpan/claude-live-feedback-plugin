@@ -25,6 +25,7 @@ import { type ServerHandle, createServer } from '../src/server.ts';
 import { workspaceDocId } from '../src/task-projection.ts';
 import type { Task, TaskStoreEvent } from '../src/tasks.ts';
 import { type GoalIds, seedGoalsOverHttp } from './goal-seed.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON: User = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
 const AGENT: User = {
@@ -51,6 +52,9 @@ const anchor: ElementAnchor = {
   },
   snippet: { text: 'the ranking clause' },
 };
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('task tool routes (plan §3.12 commit 6)', () => {
   let handle: ServerHandle;
@@ -84,6 +88,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
     const { workspace } = await jj<{ workspace: { id: string } }>(
       await post('/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
     );
+    WS = workspace.id;
     const G = await seedGoalsOverHttp(
       base,
       workspace.id,
@@ -128,10 +133,10 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
     const file = join(dataDir, `${name}.md`);
     writeFileSync(file, '# Doc\n\nthe ranking clause\n');
     const { docId } = await jj<{ docId: string }>(
-      await post('/api/docs', { docId: name, type: 'markdown', sourceUrl: file }),
+      await post(`/workspaces/${WS}/docs`, { docId: name, type: 'markdown', sourceUrl: file }),
     );
     const { thread } = await jj<{ thread: Thread }>(
-      await post(`/api/docs/${docId}/threads`, {
+      await post(`/workspaces/${WS}/docs/${docId}/threads`, {
         author: PERSON,
         text: 'This ranking clause reads backwards — flip the priority order.',
         anchor,
@@ -140,10 +145,11 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
     return { docId, threadId: thread.id };
   }
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'task-tools-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterAll(async () => {
@@ -158,6 +164,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       const { workspace } = await jj<{ workspace: { id: string } }>(
         await post('/workspaces', { name: 'goals-fwd', goal: 'North star.' }),
       );
+      WS = workspace.id;
       const goals = [
         { title: 'First', dueAt: 1765000000000 },
         { title: 'Second', dueAt: 1766000000000 },
@@ -190,6 +197,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       const { workspace } = await jj<{ workspace: { id: string } }>(
         await post('/workspaces', { name: 'goals-legacy', goal: 'North star.' }),
       );
+      WS = workspace.id;
       const res = await jj<{ created: Array<{ id: string; title: string }> }>(
         await put(`/workspaces/${workspace.id}/goals`, {
           goals: [{ title: 'First', subgoals: [{ title: 'Sub one' }] }, { title: 'Second' }],
@@ -212,6 +220,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       const { workspace } = await jj<{ workspace: { id: string } }>(
         await post('/workspaces', { name: 'goals-author', goal: 'North star.' }),
       );
+      WS = workspace.id;
       const events: TaskStoreEvent[] = [];
       const off = handle.tasks.onEvent((e) => events.push(e));
       try {
@@ -309,7 +318,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
 
   // ── POST /api/tasks/:id/goal ──────────────────────────────────────────────
 
-  describe('POST /api/tasks/:id/goal', () => {
+  describe(`POST /workspaces/${WS}/tasks/:id/goal`, () => {
     it('forwards goal + position + author; emits task.regrouped', async () => {
       const { wsId, G } = await seedWorkspace();
       const task = await seedTask(wsId, G.g1);
@@ -317,7 +326,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       const off = handle.tasks.onEvent((e) => events.push(e));
       try {
         const res = await jj<{ task: Task; changed: boolean }>(
-          await post(`/api/tasks/${task.id}/goal`, {
+          await post(`/workspaces/${wsId}/tasks/${task.id}/goal`, {
             goal: G.g2,
             position: 1.5,
             // Still sent, because a peer on an older bundle still sends it.
@@ -365,14 +374,22 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
 
       // Dropped between the two g1 rows: the midpoint of their orders.
       const between = await jj<{ task: Task; changed: boolean }>(
-        await post(`/api/tasks/${mover.id}/goal`, { goal: G.g1, position: 1.5, author: PERSON }),
+        await post(`/workspaces/${wsId}/tasks/${mover.id}/goal`, {
+          goal: G.g1,
+          position: 1.5,
+          author: PERSON,
+        }),
       );
       expect(between.changed).toBe(true);
       expect(between.task.order).toBe(1.5);
 
       // …and dragged again to the very top, which is below the first order.
       const above = await jj<{ task: Task }>(
-        await post(`/api/tasks/${mover.id}/goal`, { goal: G.g1, position: 0, author: PERSON }),
+        await post(`/workspaces/${wsId}/tasks/${mover.id}/goal`, {
+          goal: G.g1,
+          position: 0,
+          author: PERSON,
+        }),
       );
       expect(above.task.order).toBe(0);
 
@@ -386,7 +403,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       // Backlog is a section on the board like any other; dropping into it is
       // the same call with the reserved id.
       const chores = await jj<{ task: Task; changed: boolean }>(
-        await post(`/api/tasks/${mover.id}/goal`, {
+        await post(`/workspaces/${WS}/tasks/${mover.id}/goal`, {
           goal: 'chores',
           position: 0.5,
           author: PERSON,
@@ -401,7 +418,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       const { wsId, G } = await seedWorkspace();
       const task = await seedTask(wsId, G.g1);
       const res = await jj<{ task: Task }>(
-        await post(`/api/tasks/${task.id}/goal`, { goal: G.g1a, author: AGENT }),
+        await post(`/workspaces/${wsId}/tasks/${task.id}/goal`, { goal: G.g1a, author: AGENT }),
       );
       expect(res.task.goal).toBe(G.g1a);
     });
@@ -411,7 +428,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       const existing = await seedTask(wsId, G.g2, { order: 7 });
       const task = await seedTask(wsId, G.g1);
       const res = await jj<{ task: Task }>(
-        await post(`/api/tasks/${task.id}/goal`, { goal: G.g2, author: AGENT }),
+        await post(`/workspaces/${wsId}/tasks/${task.id}/goal`, { goal: G.g2, author: AGENT }),
       );
       expect(res.task.order).toBeGreaterThan(existing.order);
     });
@@ -429,7 +446,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       expect(task.triagedAgainst).toBeUndefined();
 
       const res = await jj<{ task: Task }>(
-        await post(`/api/tasks/${task.id}/goal`, { goal: G.g1, author: AGENT }),
+        await post(`/workspaces/${wsId}/tasks/${task.id}/goal`, { goal: G.g1, author: AGENT }),
       );
       expect(res.task.unplacedSince).toBeUndefined();
       expect(res.task.triagedAgainst).toMatchObject({ goalId: G.g1 });
@@ -444,11 +461,13 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       const off = handle.tasks.onEvent((e) => events.push(e));
       try {
         // Positive control: a real move DOES reach this listener.
-        await jj(await post(`/api/tasks/${task.id}/goal`, { goal: G.g2, author: AGENT }));
+        await jj(
+          await post(`/workspaces/${wsId}/tasks/${task.id}/goal`, { goal: G.g2, author: AGENT }),
+        );
         expect(events.filter((e) => e.type === 'task.regrouped').length).toBe(1);
         // The no-op confirm: same goal, no position.
         const res = await jj<{ task: Task; changed: boolean }>(
-          await post(`/api/tasks/${task.id}/goal`, { goal: G.g2, author: AGENT }),
+          await post(`/workspaces/${wsId}/tasks/${task.id}/goal`, { goal: G.g2, author: AGENT }),
         );
         expect(res.changed).toBe(false);
         expect(res.task.triagedAgainst?.goalId).toBe(G.g2);
@@ -462,13 +481,19 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       const { wsId, G } = await seedWorkspace();
       const task = await seedTask(wsId, G.g1);
       expect(
-        (await post(`/api/tasks/${task.id}/goal`, { goal: 'nope', author: AGENT })).status,
+        (await post(`/workspaces/${wsId}/tasks/${task.id}/goal`, { goal: 'nope', author: AGENT }))
+          .status,
       ).toBe(400);
-      expect((await post('/api/tasks/t-missing/goal', { goal: G.g1, author: AGENT })).status).toBe(
-        404,
+      expect(
+        (await post(`/workspaces/${wsId}/tasks/t-missing/goal`, { goal: G.g1, author: AGENT }))
+          .status,
+      ).toBe(404);
+      expect(
+        (await post(`/workspaces/${wsId}/tasks/${task.id}/goal`, { author: AGENT })).status,
+      ).toBe(400);
+      expect((await post(`/workspaces/${wsId}/tasks/${task.id}/goal`, { goal: G.g1 })).status).toBe(
+        400,
       );
-      expect((await post(`/api/tasks/${task.id}/goal`, { author: AGENT })).status).toBe(400);
-      expect((await post(`/api/tasks/${task.id}/goal`, { goal: G.g1 })).status).toBe(400);
       // NOT in this list any more, and the omission is the point: a bad
       // `riskTier` used to be a 400 here. The field is ignored now, so
       // refusing it would break the older peers still sending it — asserted
@@ -484,7 +509,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
   // whose whole premise is that both work it — was unrepresentable. "The
   // store has it" was not even true here; there was no way in.
 
-  describe('POST /api/tasks/:id/assignee', () => {
+  describe(`POST /workspaces/${WS}/tasks/:id/assignee`, () => {
     it('forwards the assignee + author, emits task.assigned, and the projection follows', async () => {
       const { wsId, G } = await seedWorkspace();
       // Created BY the agent, so it starts owned by the agent — the route
@@ -495,7 +520,10 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       const off = handle.tasks.onEvent((e) => events.push(e));
       try {
         const res = await jj<{ ok: true; task: Task; changed: boolean }>(
-          await post(`/api/tasks/${task.id}/assignee`, { assignee: 'human', author: PERSON }),
+          await post(`/workspaces/${wsId}/tasks/${task.id}/assignee`, {
+            assignee: 'human',
+            author: PERSON,
+          }),
         );
         expect(res.changed).toBe(true);
         expect(res.task.assignee).toBe('human');
@@ -532,13 +560,19 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       try {
         // Positive control: a real change on this task DOES emit…
         const moved = await jj<{ changed: boolean }>(
-          await post(`/api/tasks/${task.id}/assignee`, { assignee: AGENT.name, author: AGENT }),
+          await post(`/workspaces/${wsId}/tasks/${task.id}/assignee`, {
+            assignee: AGENT.name,
+            author: AGENT,
+          }),
         );
         expect(moved.changed).toBe(true);
         expect(events.filter((e) => e.type === 'task.assigned').length).toBe(1);
         // …and the no-op that follows does not.
         const same = await jj<{ changed: boolean }>(
-          await post(`/api/tasks/${task.id}/assignee`, { assignee: AGENT.name, author: AGENT }),
+          await post(`/workspaces/${wsId}/tasks/${task.id}/assignee`, {
+            assignee: AGENT.name,
+            author: AGENT,
+          }),
         );
         expect(same.changed).toBe(false);
         expect(events.filter((e) => e.type === 'task.assigned').length).toBe(1);
@@ -551,14 +585,26 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       const { wsId, G } = await seedWorkspace();
       const task = await seedTask(wsId, G.g1);
       expect(
-        (await post('/api/tasks/t-missing/assignee', { assignee: 'human', author: PERSON })).status,
+        (
+          await post(`/workspaces/${wsId}/tasks/t-missing/assignee`, {
+            assignee: 'human',
+            author: PERSON,
+          })
+        ).status,
       ).toBe(404);
-      expect((await post(`/api/tasks/${task.id}/assignee`, { author: PERSON })).status).toBe(400);
-      expect((await post(`/api/tasks/${task.id}/assignee`, { assignee: 'human' })).status).toBe(
-        400,
-      );
       expect(
-        (await post(`/api/tasks/${task.id}/assignee`, { assignee: '  ', author: PERSON })).status,
+        (await post(`/workspaces/${wsId}/tasks/${task.id}/assignee`, { author: PERSON })).status,
+      ).toBe(400);
+      expect(
+        (await post(`/workspaces/${wsId}/tasks/${task.id}/assignee`, { assignee: 'human' })).status,
+      ).toBe(400);
+      expect(
+        (
+          await post(`/workspaces/${wsId}/tasks/${task.id}/assignee`, {
+            assignee: '  ',
+            author: PERSON,
+          })
+        ).status,
       ).toBe(400);
     });
   });
@@ -570,7 +616,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
   // Bryan, 2026-08-18: *"All fields must be human editable. But I expect
   // they'll be mostly set by agents going forward."*
 
-  describe('POST /api/tasks/:id/due', () => {
+  describe(`POST /workspaces/${WS}/tasks/:id/due`, () => {
     const DUE = Date.UTC(2026, 8, 2, 19, 0, 0);
 
     it('sets, moves and clears the date, emits task.due_set, and the board follows', async () => {
@@ -581,7 +627,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       const off = handle.tasks.onEvent((e) => events.push(e));
       try {
         const set = await jj<{ task: Task; changed: boolean }>(
-          await post(`/api/tasks/${task.id}/due`, { dueAt: DUE, author: PERSON }),
+          await post(`/workspaces/${wsId}/tasks/${task.id}/due`, { dueAt: DUE, author: PERSON }),
         );
         expect(set.changed).toBe(true);
         expect(set.task.dueAt).toBe(DUE);
@@ -600,14 +646,17 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
         expect(projected?.dueAt).toBe(DUE);
 
         const moved = await jj<{ task: Task }>(
-          await post(`/api/tasks/${task.id}/due`, { dueAt: DUE + 86_400_000, author: PERSON }),
+          await post(`/workspaces/${wsId}/tasks/${task.id}/due`, {
+            dueAt: DUE + 86_400_000,
+            author: PERSON,
+          }),
         );
         expect(moved.task.dueAt).toBe(DUE + 86_400_000);
 
         // `null` CLEARS. Asserted as an absence on the stored row, because a
         // response body echoing `undefined` would read the same either way.
         const cleared = await jj<{ changed: boolean }>(
-          await post(`/api/tasks/${task.id}/due`, { dueAt: null, author: PERSON }),
+          await post(`/workspaces/${wsId}/tasks/${task.id}/due`, { dueAt: null, author: PERSON }),
         );
         expect(cleared.changed).toBe(true);
         expect((await getTasks(wsId)).find((t) => t.id === task.id)?.dueAt).toBeUndefined();
@@ -632,21 +681,27 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       try {
         // Control: a real move DOES emit…
         const moved = await jj<{ changed: boolean }>(
-          await post(`/api/tasks/${task.id}/due`, { dueAt: DUE + 3_600_000, author: PERSON }),
+          await post(`/workspaces/${wsId}/tasks/${task.id}/due`, {
+            dueAt: DUE + 3_600_000,
+            author: PERSON,
+          }),
         );
         expect(moved.changed).toBe(true);
         expect(events.filter((e) => e.type === 'task.due_set').length).toBe(1);
         // …and the repaint that re-sends the same date does not. An audit row
         // per repaint is noise in every feed that reads this log.
         const same = await jj<{ changed: boolean }>(
-          await post(`/api/tasks/${task.id}/due`, { dueAt: DUE + 3_600_000, author: PERSON }),
+          await post(`/workspaces/${wsId}/tasks/${task.id}/due`, {
+            dueAt: DUE + 3_600_000,
+            author: PERSON,
+          }),
         );
         expect(same.changed).toBe(false);
         expect(events.filter((e) => e.type === 'task.due_set').length).toBe(1);
         // Clearing a date that was never set is the same no-op.
         const fresh = await seedTask(wsId, G.g1);
         const noop = await jj<{ changed: boolean }>(
-          await post(`/api/tasks/${fresh.id}/due`, { dueAt: null, author: PERSON }),
+          await post(`/workspaces/${wsId}/tasks/${fresh.id}/due`, { dueAt: null, author: PERSON }),
         );
         expect(noop.changed).toBe(false);
       } finally {
@@ -662,16 +717,22 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       // actually testing the clear path — which answers 200 and would have
       // wiped the date this case then asserts is untouched.
       for (const bad of ['2026-09-02', {}, true, []]) {
-        const r = await post(`/api/tasks/${task.id}/due`, { dueAt: bad, author: PERSON });
+        const r = await post(`/workspaces/${wsId}/tasks/${task.id}/due`, {
+          dueAt: bad,
+          author: PERSON,
+        });
         expect(r.status, `dueAt: ${JSON.stringify(bad)}`).toBe(400);
       }
       // The date it already had is untouched — a 400 that had already written
       // would be worse than the coercion it refuses.
       expect((await getTasks(wsId)).find((t) => t.id === task.id)?.dueAt).toBe(DUE);
-      expect((await post(`/api/tasks/${task.id}/due`, { dueAt: DUE })).status).toBe(400);
-      expect((await post('/api/tasks/t-missing/due', { dueAt: DUE, author: PERSON })).status).toBe(
-        404,
+      expect((await post(`/workspaces/${wsId}/tasks/${task.id}/due`, { dueAt: DUE })).status).toBe(
+        400,
       );
+      expect(
+        (await post(`/workspaces/${wsId}/tasks/t-missing/due`, { dueAt: DUE, author: PERSON }))
+          .status,
+      ).toBe(404);
     });
   });
 
@@ -684,7 +745,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
 
   // ── POST /api/tasks/:id/answer ────────────────────────────────────────────
 
-  describe('POST /api/tasks/:id/answer', () => {
+  describe(`POST /workspaces/${WS}/tasks/:id/answer`, () => {
     it('forwards the verbatim text + author; the event carries the links checklist', async () => {
       const { wsId, G } = await seedWorkspace();
       const decision = await seedTask(wsId, G.g1, {
@@ -698,7 +759,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       const off = handle.tasks.onEvent((e) => events.push(e));
       try {
         const res = await jj<{ task: Task }>(
-          await post(`/api/tasks/${decision.id}/answer`, {
+          await post(`/workspaces/${wsId}/tasks/${decision.id}/answer`, {
             text: 'Ship now — the rebuild can trail.',
             author: PERSON,
           }),
@@ -726,7 +787,10 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
     it('refuses a non-decision task (positive control above proves the happy path)', async () => {
       const { wsId, G } = await seedWorkspace();
       const plain = await seedTask(wsId, G.g1);
-      const r = await post(`/api/tasks/${plain.id}/answer`, { text: 'nope', author: PERSON });
+      const r = await post(`/workspaces/${wsId}/tasks/${plain.id}/answer`, {
+        text: 'nope',
+        author: PERSON,
+      });
       expect(r.status).toBe(400);
       expect(((await r.json()) as { error: string }).error).toBe('not-a-decision');
     });
@@ -739,29 +803,34 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
         body: DECISION_BODY,
       });
       expect(
-        (await post('/api/tasks/t-missing/answer', { text: 'x', author: PERSON })).status,
+        (await post(`/workspaces/${wsId}/tasks/t-missing/answer`, { text: 'x', author: PERSON }))
+          .status,
       ).toBe(404);
-      expect((await post(`/api/tasks/${decision.id}/answer`, { author: PERSON })).status).toBe(400);
-      expect((await post(`/api/tasks/${decision.id}/answer`, { text: 'x' })).status).toBe(400);
+      expect(
+        (await post(`/workspaces/${wsId}/tasks/${decision.id}/answer`, { author: PERSON })).status,
+      ).toBe(400);
+      expect(
+        (await post(`/workspaces/${wsId}/tasks/${decision.id}/answer`, { text: 'x' })).status,
+      ).toBe(400);
     });
   });
 
   // ── POST /api/docs/:docId/threads/:threadId/promote ───────────────────────
 
-  describe('POST /api/docs/:docId/threads/:threadId/promote', () => {
+  describe(`POST /workspaces/${WS}/docs/:docId/threads/:threadId/promote`, () => {
     it('captures origin, quotes the latest HUMAN comment, drafts title+body, and backlinks the thread', async () => {
       const { wsId } = await seedWorkspace();
       const { docId, threadId } = await seedThread();
       // An agent reply lands AFTER the person's comment — the quote must
       // still be the person's words, not the most recent comment.
       await jj(
-        await post(`/api/docs/${docId}/threads/${threadId}/comments`, {
+        await post(`/workspaces/${wsId}/docs/${docId}/threads/${threadId}/comments`, {
           author: AGENT,
           text: 'On it — flipping the order now.',
         }),
       );
       const res = await jj<{ task: Task }>(
-        await post(`/api/docs/${docId}/threads/${threadId}/promote`, {
+        await post(`/workspaces/${wsId}/docs/${docId}/threads/${threadId}/promote`, {
           workspaceId: wsId,
           author: AGENT,
         }),
@@ -775,7 +844,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       );
       // The origin ref is what the thread payload's chips resolve through.
       const got = await jj<{ thread: { tasks?: Array<{ id: string }> } }>(
-        await fetch(`${base}/api/docs/${docId}/threads/${threadId}`),
+        await fetch(`${base}/workspaces/${wsId}/docs/${docId}/threads/${threadId}`),
       );
       expect(got.thread.tasks?.map((c) => c.id)).toEqual([res.task.id]);
     });
@@ -784,7 +853,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       const { wsId, G } = await seedWorkspace();
       const { docId, threadId } = await seedThread();
       const res = await jj<{ task: Task }>(
-        await post(`/api/docs/${docId}/threads/${threadId}/promote`, {
+        await post(`/workspaces/${wsId}/docs/${docId}/threads/${threadId}/promote`, {
           workspaceId: wsId,
           title: 'Flip the ranking clause',
           assignee: 'human',
@@ -814,10 +883,13 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       const unplaced = await jj<{
         placement: { placed: boolean; goals?: Array<{ id: string }> };
       }>(
-        await post(`/api/docs/${unplacedSeed.docId}/threads/${unplacedSeed.threadId}/promote`, {
-          workspaceId: wsId,
-          author: AGENT,
-        }),
+        await post(
+          `/workspaces/${wsId}/docs/${unplacedSeed.docId}/threads/${unplacedSeed.threadId}/promote`,
+          {
+            workspaceId: wsId,
+            author: AGENT,
+          },
+        ),
       );
       expect(unplaced.placement.placed).toBe(false);
       expect((unplaced.placement.goals ?? []).length).toBeGreaterThan(0);
@@ -826,11 +898,14 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       // drops the band list, so the assertions above measure something.
       const placedSeed = await seedThread();
       const placed = await jj<{ placement: { placed: boolean; goals?: unknown[] } }>(
-        await post(`/api/docs/${placedSeed.docId}/threads/${placedSeed.threadId}/promote`, {
-          workspaceId: wsId,
-          author: AGENT,
-          goal: G.g1,
-        }),
+        await post(
+          `/workspaces/${wsId}/docs/${placedSeed.docId}/threads/${placedSeed.threadId}/promote`,
+          {
+            workspaceId: wsId,
+            author: AGENT,
+            goal: G.g1,
+          },
+        ),
       );
       expect(placed.placement.placed).toBe(true);
       expect(placed.placement.goals).toBeUndefined();
@@ -840,7 +915,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       const { wsId, G } = await seedWorkspace();
       const a = await seedThread();
       const unplaced = await jj<{ task: Task }>(
-        await post(`/api/docs/${a.docId}/threads/${a.threadId}/promote`, {
+        await post(`/workspaces/${wsId}/docs/${a.docId}/threads/${a.threadId}/promote`, {
           workspaceId: wsId,
           author: AGENT,
         }),
@@ -850,7 +925,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
 
       const b = await seedThread();
       const placed = await jj<{ task: Task }>(
-        await post(`/api/docs/${b.docId}/threads/${b.threadId}/promote`, {
+        await post(`/workspaces/${wsId}/docs/${b.docId}/threads/${b.threadId}/promote`, {
           workspaceId: wsId,
           goal: G.g1,
           author: AGENT,
@@ -859,12 +934,12 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       expect(placed.task.unplacedSince).toBeUndefined();
     });
 
-    it('404s an unknown thread, doc, or workspace; 400s a missing workspaceId', async () => {
+    it('404s an unknown thread, doc, or board — and ignores a body workspaceId', async () => {
       const { wsId } = await seedWorkspace();
       const { docId, threadId } = await seedThread();
       expect(
         (
-          await post(`/api/docs/${docId}/threads/th-missing/promote`, {
+          await post(`/workspaces/${wsId}/docs/${docId}/threads/th-missing/promote`, {
             workspaceId: wsId,
             author: AGENT,
           })
@@ -872,17 +947,33 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       ).toBe(404);
       expect(
         (
-          await post(`/api/docs/doc-missing/threads/${threadId}/promote`, {
+          await post(`/workspaces/${wsId}/docs/doc-missing/threads/${threadId}/promote`, {
             workspaceId: wsId,
             author: AGENT,
           })
         ).status,
       ).toBe(404);
+      // The BOARD is the path's first segment, so an unknown one is refused
+      // by the middleware before this route runs.
       expect(
-        (await post(`/api/docs/${docId}/threads/${threadId}/promote`, { workspaceId: 'w-missing' }))
-          .status,
+        (
+          await post(`/workspaces/w-missing/docs/${docId}/threads/${threadId}/promote`, {
+            author: AGENT,
+          })
+        ).status,
       ).toBe(404);
-      expect((await post(`/api/docs/${docId}/threads/${threadId}/promote`, {})).status).toBe(400);
+      // A body `workspaceId` is IGNORED, not validated — it was the one
+      // argument that could disagree with the address that had already been
+      // judged, and a second spelling is how they get to disagree again. The
+      // row lands on the path's board whatever the body says.
+      const promoted = await post(`/workspaces/${wsId}/docs/${docId}/threads/${threadId}/promote`, {
+        workspaceId: 'w-missing',
+        author: AGENT,
+      });
+      expect(promoted.status).toBe(200);
+      expect(((await promoted.json()) as { task: { workspaceId: string } }).task.workspaceId).toBe(
+        wsId,
+      );
     });
   });
 

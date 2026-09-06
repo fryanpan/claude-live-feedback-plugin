@@ -35,6 +35,7 @@ import { type ServerHandle, createServer } from '../src/server.ts';
 import { TaskStore } from '../src/tasks.ts';
 import { VOICE_STATUS_MAX_WORDS, countWords } from '../src/voice-status.ts';
 import { CHOICE_WINDOW_MS, VoiceRouter } from '../src/voice.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
 const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known', color: '#888888' };
@@ -47,6 +48,9 @@ const AKASH_TWIN = 'Review: Akash — billing flow';
 const DECOY = 'Review: billing export';
 
 // ── Route: through the real server ─────────────────────────────────────────
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('voice, smoothly (route)', () => {
   let handle: ServerHandle;
@@ -113,15 +117,20 @@ describe('voice, smoothly (route)', () => {
   const newDoc = async (name: string, title: string): Promise<string> => {
     const file = join(dataDir, `${name}.md`);
     writeFileSync(file, `# ${title}\n\nBody.\n`);
-    const made = await post('/api/docs', { docId: name, type: 'markdown', sourceUrl: file, title });
+    const made = await post(`/workspaces/${WS}/docs`, {
+      docId: name,
+      type: 'markdown',
+      sourceUrl: file,
+      title,
+    });
     expect(made.status).toBe(200);
     const id = ((await made.json()) as { docId: string }).docId;
-    expect((await post(`/workspaces/${boardId}/docs`, { docId: id })).status).toBe(200);
+    expect((await post(`/workspaces/${boardId}/docs:attach`, { docId: id })).status).toBe(200);
     return id;
   };
 
   const declare = async (docId: string, review: Record<string, unknown>): Promise<string> => {
-    const r = await post(`/api/docs/${docId}/threads`, {
+    const r = await post(`/workspaces/${WS}/docs/${docId}/threads`, {
       author: AGENT,
       text: `${review.headline} — context here.`,
       anchor: { kind: 'subject' },
@@ -138,7 +147,7 @@ describe('voice, smoothly (route)', () => {
     review?: { answeredWith?: string; answerText?: string; answeredBy?: string };
   }
   const commentsOf = async (docId: string, threadId: string): Promise<StoredComment[]> => {
-    const r = await local(`/api/docs/${docId}/threads`);
+    const r = await local(`/workspaces/${WS}/docs/${docId}/threads`);
     expect(r.status).toBe(200);
     const { threads } = (await r.json()) as {
       threads: Array<{ id: string; comments: StoredComment[] }>;
@@ -167,10 +176,12 @@ describe('voice, smoothly (route)', () => {
       },
     });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
 
     const ws = await post('/workspaces', { name: 'QB', goal: 'Ship onboarding.' });
     expect(ws.status).toBe(200);
     boardId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
+    WS = boardId;
 
     akashDocId = await newDoc('akash-onboarding', AKASH);
     decoyDocId = await newDoc('billing-export', DECOY);
@@ -178,7 +189,7 @@ describe('voice, smoothly (route)', () => {
     progressTaskId = await newTask({ title: 'Wire the onboarding checklist', assignee: 'Jordan' });
     expect(
       (
-        await post(`/api/tasks/${progressTaskId}/transition`, {
+        await post(`/workspaces/${WS}/tasks/${progressTaskId}/transition`, {
           to: 'in-progress',
           author: PERSON,
         })
@@ -186,7 +197,8 @@ describe('voice, smoothly (route)', () => {
     ).toBe(200);
     const doneId = await newTask({ title: 'Land the invite email' });
     expect(
-      (await post(`/api/tasks/${doneId}/transition`, { to: 'done', author: PERSON })).status,
+      (await post(`/workspaces/${WS}/tasks/${doneId}/transition`, { to: 'done', author: PERSON }))
+        .status,
     ).toBe(200);
 
     decisionDocId = await newDoc('decision-one', 'Empty board decision');
@@ -211,7 +223,7 @@ describe('voice, smoothly (route)', () => {
     ];
 
     ticketTaskId = await newTask({ title: 'Seed the empty board' });
-    const added = await post(`/api/tasks/${ticketTaskId}/review-items`, {
+    const added = await post(`/workspaces/${WS}/tasks/${ticketTaskId}/review-items`, {
       author: AGENT,
       review: DECISION,
     });
@@ -231,7 +243,7 @@ describe('voice, smoothly (route)', () => {
     calls.n = 0;
     const body = await say("I want to go to the 'Akash review doc' in QB", { surface: 'board' });
     expect(body.route).toBe('fast-path');
-    expect(body.navigate).toBe(`/review/${encodeURIComponent(akashDocId)}`);
+    expect(body.navigate).toBe(`/workspaces/${WS}/docs/${encodeURIComponent(akashDocId)}`);
     expect(body.ack).toContain(AKASH);
     expect(body.navigate).not.toContain(decoyDocId);
     expect(calls.n).toBe(0);
@@ -261,7 +273,7 @@ describe('voice, smoothly (route)', () => {
     const picked = await say('the second one', { surface: 'board' });
     expect(picked.route).toBe('fast-path');
     expect(picked.navigate).toBe(
-      `/review/${encodeURIComponent(secondIsTwin ? twinId : akashDocId)}`,
+      `/workspaces/${WS}/docs/${encodeURIComponent(secondIsTwin ? twinId : akashDocId)}`,
     );
     expect(calls.n).toBe(0);
   });
@@ -271,7 +283,7 @@ describe('voice, smoothly (route)', () => {
     expect(asked.navigate).toBeUndefined();
     const picked = await say('the billing one', { surface: 'board' });
     expect(picked.route).toBe('fast-path');
-    expect(picked.navigate).toBe(`/review/${encodeURIComponent(twinDocId)}`);
+    expect(picked.navigate).toBe(`/workspaces/${WS}/docs/${encodeURIComponent(twinDocId)}`);
     expect(picked.ack).toContain(AKASH_TWIN);
   });
 
@@ -299,7 +311,7 @@ describe('voice, smoothly (route)', () => {
     expect(picked.route).toBe('fast-path-action');
     expect(picked.ack).toContain('Drop placeholders');
     expect(calls.n).toBe(0);
-    const r = await local(`/api/docs/${decisionDocId3}/threads`);
+    const r = await local(`/workspaces/${WS}/docs/${decisionDocId3}/threads`);
     const { threads } = (await r.json()) as {
       threads: Array<{ id: string; comments: StoredComment[] }>;
     };
@@ -366,7 +378,7 @@ describe('voice, smoothly (route)', () => {
     expect(body.ack).toContain('Drop placeholders');
     expect(body.ack).toContain(DECISION.headline);
     expect(calls.n).toBe(0);
-    const r = await local(`/api/docs/${decisionDocId}/threads`);
+    const r = await local(`/workspaces/${WS}/docs/${decisionDocId}/threads`);
     const { threads } = (await r.json()) as {
       threads: Array<{ id: string; comments: StoredComment[] }>;
     };
@@ -379,7 +391,7 @@ describe('voice, smoothly (route)', () => {
     const body = await say('choose keep placeholders', { surface: 'doc', docId: decisionDocId2 });
     expect(body.route).toBe('fast-path-action');
     expect(body.ack).toContain('Keep placeholders');
-    const r = await local(`/api/docs/${decisionDocId2}/threads`);
+    const r = await local(`/workspaces/${WS}/docs/${decisionDocId2}/threads`);
     const { threads } = (await r.json()) as {
       threads: Array<{ id: string; comments: StoredComment[] }>;
     };
@@ -437,7 +449,7 @@ describe('voice, smoothly (route)', () => {
     const body = await say('answer: the second one', { surface: 'doc', docId: decisionDocId4 });
     expect(body.route).toBe('fast-path-action');
     expect(body.ack).toContain('Answered "Drop placeholders" on');
-    const r = await local(`/api/docs/${decisionDocId4}/threads`);
+    const r = await local(`/workspaces/${WS}/docs/${decisionDocId4}/threads`);
     const { threads } = (await r.json()) as {
       threads: Array<{ id: string; comments: StoredComment[] }>;
     };
@@ -451,7 +463,7 @@ describe('voice, smoothly (route)', () => {
     });
     expect(body.route).toBe('fast-path-action');
     expect(body.ack).toContain(`Answered "don't drop the placeholders" on`);
-    const r = await local(`/api/docs/${decisionDocId5}/threads`);
+    const r = await local(`/workspaces/${WS}/docs/${decisionDocId5}/threads`);
     const { threads } = (await r.json()) as {
       threads: Array<{ id: string; comments: StoredComment[] }>;
     };

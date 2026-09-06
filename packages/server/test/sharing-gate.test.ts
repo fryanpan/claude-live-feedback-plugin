@@ -22,6 +22,8 @@ import { type ServerHandle, createServer } from '../src/server.ts';
 import { SharingGate } from '../src/share/sharing-gate.ts';
 import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
 
+/** The board this file's docs, tasks and reviews are filed under. */
+
 describe('SharingGate (unit)', () => {
   let dir: string;
   beforeAll(() => {
@@ -155,7 +157,7 @@ describe('sharing gate over HTTP', () => {
   });
 
   it('CONTROL: a visitor reaches the doc while sharing is on', async () => {
-    const r = await pub(`/api/docs/${docSeg}`);
+    const r = await pub(`/workspaces/${boardId}/docs/${docSeg}?format=json`);
     expect(r.status).toBe(200);
     expect((await r.json()).meta.docId).toBe(docId);
   });
@@ -170,7 +172,7 @@ describe('sharing gate over HTTP', () => {
 
   it('refuses a valid session once sharing is off', async () => {
     expect((await setSharing(false)).status).toBe(200);
-    const r = await pub(`/api/docs/${docSeg}`);
+    const r = await pub(`/workspaces/${boardId}/docs/${docSeg}?format=json`);
     expect(r.status).toBe(403);
     expect((await r.json()).error).toBe('sharing_disabled');
   });
@@ -181,7 +183,7 @@ describe('sharing gate over HTTP', () => {
     // the moment they reopen it. What the switch owes is that the fresh
     // share buys nothing while it is off, which is the second half here.
     const minted = await mintAccessShare(base, access, boardId);
-    const r = await fetch(`${base}/api/docs/${docSeg}`, {
+    const r = await fetch(`${base}/workspaces/${boardId}/docs/${docSeg}?format=json`, {
       redirect: 'manual',
       headers: { ...minted.headers, 'x-forwarded-proto': 'https' },
     });
@@ -190,7 +192,7 @@ describe('sharing gate over HTTP', () => {
   });
 
   it('refuses the websocket upgrade once sharing is off', async () => {
-    const r = await fetch(`${base}/y/${docSeg}`, {
+    const r = await fetch(`${base}/workspaces/${boardId}/docs/${docSeg}/y`, {
       headers: {
         ...visitorHeaders,
         'x-forwarded-proto': 'https',
@@ -201,20 +203,20 @@ describe('sharing gate over HTTP', () => {
   });
 
   it('refuses the SSE stream once sharing is off', async () => {
-    const r = await pub(`/events/${docSeg}`);
+    const r = await pub(`/workspaces/${boardId}/docs/${docSeg}/events:stream`);
     expect(r.status).toBe(403);
   });
 
   it('gates BEFORE auth — no token looks the same as a good one', async () => {
-    const withOut = await pub(`/api/docs/${docSeg}`, false);
+    const withOut = await pub(`/workspaces/${boardId}/docs/${docSeg}?format=json`, false);
     expect(withOut.status).toBe(403);
     expect((await withOut.json()).error).toBe('sharing_disabled');
   });
 
   it('leaves the LOCAL surface working while sharing is off', async () => {
-    const r = await local(`/api/docs/${docSeg}`);
+    const r = await local(`/workspaces/${boardId}/docs/${docSeg}?format=json`);
     expect(r.status).toBe(200);
-    const list = await local('/api/docs');
+    const list = await local(`/workspaces/${boardId}/docs`);
     expect(list.status).toBe(200);
   });
 
@@ -225,7 +227,7 @@ describe('sharing gate over HTTP', () => {
 
   it('restores access when switched back on', async () => {
     expect((await setSharing(true)).status).toBe(200);
-    const r = await pub(`/api/docs/${docSeg}`);
+    const r = await pub(`/workspaces/${boardId}/docs/${docSeg}?format=json`);
     expect(r.status).toBe(200);
   });
 });

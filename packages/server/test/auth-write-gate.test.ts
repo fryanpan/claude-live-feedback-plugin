@@ -27,6 +27,7 @@ import * as Y from 'yjs';
 import { SESSION_COOKIE } from '../src/auth/session.ts';
 import { SIGN_IN_REQUIRED_ERROR, signInToWriteFromEnv } from '../src/middleware/write-gate.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 // The log sender masks the code unless this is set — see
 // `auth/code-sender.ts`. This suite drives a real sign-in, so it needs the
@@ -78,9 +79,12 @@ interface Booted {
   wsBase: string;
   dataDir: string;
   handle: ServerHandle;
+  /** This server's own board. Several tests boot two servers at once, and a
+   *  board id is only an address on the server that minted it. */
+  ws: string;
 }
 
-function boot(requireSignInToWrite?: boolean): Booted {
+async function boot(requireSignInToWrite?: boolean): Promise<Booted> {
   const dataDir = mkdtempSync(join(tmpdir(), 'write-gate-'));
   // emailCodeSignIn: the server's own emailed-code sign-in is off by default now
   // that every browser-facing hostname sits behind Cloudflare Access. These tests
@@ -91,6 +95,7 @@ function boot(requireSignInToWrite?: boolean): Booted {
     emailCodeSignIn: true,
     ...(requireSignInToWrite === undefined ? {} : { requireSignInToWrite }),
   });
+  const ws = await seedBoard(`http://localhost:${handle.port}`);
   cleanups.push(async () => {
     await handle.stop();
     rmSync(dataDir, { recursive: true, force: true });
@@ -100,6 +105,7 @@ function boot(requireSignInToWrite?: boolean): Booted {
     wsBase: `ws://localhost:${handle.port}`,
     dataDir,
     handle,
+    ws,
   };
 }
 
@@ -142,7 +148,7 @@ async function signIn(base: string, email: string): Promise<string> {
 async function bindDoc(b: Booted, docId: string): Promise<string> {
   const file = join(b.dataDir, `${docId}.md`);
   writeFileSync(file, '# Heading\n\nSome prose to comment on.\n');
-  const created = await fetch(`${b.base}/api/docs`, {
+  const created = await fetch(`${b.base}/workspaces/${b.ws}/docs`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ docId, type: 'markdown', sourceUrl: file }),
@@ -154,7 +160,7 @@ async function bindDoc(b: Booted, docId: string): Promise<string> {
 /** The ordinary writes a person makes, each as a browser would send it. */
 const writes = {
   comment: (b: Booted, docId: string, cookie?: string) =>
-    fetch(`${b.base}/api/docs/${docId}/threads`, {
+    fetch(`${b.base}/workspaces/${b.ws}/docs/${docId}/threads`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -180,7 +186,7 @@ const writes = {
   bindDocFromBrowser: (b: Booted, docId: string, cookie?: string) => {
     const file = join(b.dataDir, `${docId}.md`);
     writeFileSync(file, '# Another\n');
-    return fetch(`${b.base}/api/docs`, {
+    return fetch(`${b.base}/workspaces/${b.ws}/docs`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -204,7 +210,7 @@ describe('the gate is ON unless the environment says otherwise', () => {
   it('a server booted with no flag at all refuses the unsigned browser comment', async () => {
     // Owner decision on the security row, 2026-09-02. The control is the
     // same request against a server told `false`, below.
-    const b = boot();
+    const b = await boot();
     await bindDoc(b, 'default-doc');
     const refused = await writes.comment(b, 'default-doc');
     expect(refused.status).toBe(401);
@@ -214,15 +220,15 @@ describe('the gate is ON unless the environment says otherwise', () => {
   it('…and still takes the agent write — no Origin, no session, landed', async () => {
     // Every MCP tool and hook writes exactly like this. A default that
     // refused it would take the fleet offline the day this merged.
-    const b = boot();
+    const b = await boot();
     await bindDoc(b, 'default-agent-doc');
-    const res = await fetch(`${b.base}/api/docs/default-agent-doc/threads`, {
+    const res = await fetch(`${b.base}/workspaces/${b.ws}/docs/default-agent-doc/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ author: reviewer, text: 'from an agent', anchor: fakeAnchor }),
     });
     expect(res.status).toBe(200);
-    const listed = await fetch(`${b.base}/api/docs/default-agent-doc/threads`);
+    const listed = await fetch(`${b.base}/workspaces/${b.ws}/docs/default-agent-doc/threads`);
     const { threads } = (await listed.json()) as { threads: unknown[] };
     expect(threads.length).toBe(1);
   });
@@ -243,11 +249,11 @@ describe('the gate is ON unless the environment says otherwise', () => {
     // What a box with `CW_REQUIRE_SIGNIN_TO_WRITE=0` boots into, end to end:
     // the parsed value, handed to the server, and the write that was refused
     // above now lands.
-    const b = boot(signInToWriteFromEnv('0'));
+    const b = await boot(signInToWriteFromEnv('0'));
     await bindDoc(b, 'override-doc');
     const accepted = await writes.comment(b, 'override-doc');
     expect(accepted.status).toBe(200);
-    const listed = await fetch(`${b.base}/api/docs/override-doc/threads`);
+    const listed = await fetch(`${b.base}/workspaces/${b.ws}/docs/override-doc/threads`);
     const { threads } = (await listed.json()) as { threads: unknown[] };
     expect(threads.length).toBe(1);
   });
@@ -262,11 +268,11 @@ describe('the gate can refuse, and the probe can see a success', () => {
     // Same request, same body, same headers, same doc id. The ONLY difference
     // between the two servers is the flag. Anything that made this request
     // fail for its own reasons would fail on both.
-    const on = boot(true);
+    const on = await boot(true);
     await bindDoc(on, 'control-doc');
     const refused = await writes.comment(on, 'control-doc');
 
-    const off = boot(false);
+    const off = await boot(false);
     await bindDoc(off, 'control-doc');
     const accepted = await writes.comment(off, 'control-doc');
 
@@ -278,8 +284,8 @@ describe('the gate can refuse, and the probe can see a success', () => {
   });
 
   it('refuses an unsigned browser board create with the flag ON and accepts it with it OFF', async () => {
-    const on = boot(true);
-    const off = boot(false);
+    const on = await boot(true);
+    const off = await boot(false);
     const refused = await writes.createWorkspace(on);
     const accepted = await writes.createWorkspace(off);
     expect(refused.status).toBe(401);
@@ -294,8 +300,8 @@ describe('the gate can refuse, and the probe can see a success', () => {
     // gate answered. Flag on: the sign-in gate runs first and says 401. Flag
     // off: the binding gate says 403 — a different error, so a server that
     // refused everything with one code would fail here.
-    const on = boot(true);
-    const off = boot(false);
+    const on = await boot(true);
+    const off = await boot(false);
     const refused = await writes.bindDocFromBrowser(on, 'bound-by-browser');
     const refusedOff = await writes.bindDocFromBrowser(off, 'bound-by-browser');
     expect(refused.status).toBe(401);
@@ -311,7 +317,7 @@ describe('the gate can refuse, and the probe can see a success', () => {
 
 describe('with the gate ON', () => {
   it('accepts the same write once the browser has signed in', async () => {
-    const b = boot(true);
+    const b = await boot(true);
     await bindDoc(b, 'signed-doc');
     const cookie = await signIn(b.base, 'reviewer@example.com');
     const res = await writes.comment(b, 'signed-doc', cookie);
@@ -321,7 +327,7 @@ describe('with the gate ON', () => {
   it('refuses a browser whose session cookie does not verify', async () => {
     // A forged value is "no session", not "some session". The fixture is a
     // structurally-valid shape with a deliberately wrong signature.
-    const b = boot(true);
+    const b = await boot(true);
     await bindDoc(b, 'forged-doc');
     const res = await writes.comment(b, 'forged-doc', `${SESSION_COOKIE}=v2.user-x.sid.1.nope`);
     expect(res.status).toBe(401);
@@ -332,9 +338,9 @@ describe('with the gate ON', () => {
     // The regression that would take the whole fleet offline the moment the
     // flag was switched on. Every MCP tool and every webhook writes exactly
     // like this and has no way to sign in.
-    const b = boot(true);
+    const b = await boot(true);
     await bindDoc(b, 'agent-doc');
-    const res = await fetch(`${b.base}/api/docs/agent-doc/threads`, {
+    const res = await fetch(`${b.base}/workspaces/${b.ws}/docs/agent-doc/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -345,7 +351,7 @@ describe('with the gate ON', () => {
     });
     expect(res.status).toBe(200);
     // And it really landed, rather than merely not being refused.
-    const listed = await fetch(`${b.base}/api/docs/agent-doc/threads`);
+    const listed = await fetch(`${b.base}/workspaces/${b.ws}/docs/agent-doc/threads`);
     const { threads } = (await listed.json()) as { threads: unknown[] };
     expect(threads.length).toBe(1);
   });
@@ -353,7 +359,7 @@ describe('with the gate ON', () => {
   it('leaves an agent PUT and DELETE alone, and refuses the browser ones', async () => {
     // Not only POST. The gate is method-keyed, so every mutating verb runs
     // the same risk of taking agents offline — and has to refuse a browser.
-    const b = boot(true);
+    const b = await boot(true);
     const created = await fetch(`${b.base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -396,9 +402,12 @@ describe('with the gate ON', () => {
   });
 
   it('leaves READS open to an unsigned browser', async () => {
-    const b = boot(true);
+    const b = await boot(true);
     await bindDoc(b, 'readable-doc');
-    for (const path of ['/api/docs', '/api/docs/readable-doc/threads']) {
+    for (const path of [
+      `/workspaces/${b.ws}/docs`,
+      `/workspaces/${b.ws}/docs/readable-doc/threads`,
+    ]) {
       const res = await fetch(`${b.base}${path}`, { headers: browserHeaders(b.base) });
       expect(res.status).toBe(200);
     }
@@ -409,7 +418,7 @@ describe('with the gate ON', () => {
     // does not fit in a query string — and a read in its effect. Gated, an
     // unsigned reader's link chips silently never resolved while the refusal
     // told them "Reading needs no account".
-    const b = boot(true);
+    const b = await boot(true);
     const res = await fetch(`${b.base}/api/links/titles`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...browserHeaders(b.base) },
@@ -437,7 +446,7 @@ describe('with the gate ON', () => {
     // into being. Gated, a signed-out reader's redline companion never
     // opened, so the comment threads anchored to it silently vanished and
     // the fallback showed a DIFFERENT thread set with no error anywhere.
-    const b = boot(true);
+    const b = await boot(true);
     const folder = mkdtempSync(join(tmpdir(), 'review-src-'));
     cleanups.push(() => rmSync(folder, { recursive: true, force: true }));
     writeFileSync(join(folder, 'note.md'), '# Note\n\nProse a reader can comment on.\n');
@@ -446,17 +455,20 @@ describe('with the gate ON', () => {
     const bound = await fetch(`${b.base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ folderPath: folder, title: 'A folder review' }),
+      body: JSON.stringify({ folderPath: folder, title: 'A folder review', hubWorkspaceId: b.ws }),
     });
     expect(bound.status).toBe(200);
     const setId = ((await bound.json()) as { workspaceId?: string }).workspaceId ?? '';
     expect(setId).not.toBe('');
 
-    const opened = await fetch(`${b.base}/api/reviews/${encodeURIComponent(setId)}/editable-file`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...browserHeaders(b.base) },
-      body: JSON.stringify({ relPath: 'note.md' }),
-    });
+    const opened = await fetch(
+      `${b.base}/workspaces/${b.ws}/reviews/${encodeURIComponent(setId)}/editable-file`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...browserHeaders(b.base) },
+        body: JSON.stringify({ relPath: 'note.md' }),
+      },
+    );
     // A real 200 with a real docId, not merely "not a 401" — a route that
     // 404s is equally not-a-401 and would prove nothing about the exemption.
     expect(opened.status).toBe(200);
@@ -467,11 +479,14 @@ describe('with the gate ON', () => {
     // still refused. Without it the 200 above is equally consistent with a
     // gate that had stopped working, or with an exemption written wide enough
     // to open the whole prefix.
-    const gated = await fetch(`${b.base}/api/reviews/${encodeURIComponent(setId)}/refresh`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...browserHeaders(b.base) },
-      body: '{}',
-    });
+    const gated = await fetch(
+      `${b.base}/workspaces/${b.ws}/reviews/${encodeURIComponent(setId)}/refresh`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...browserHeaders(b.base) },
+        body: '{}',
+      },
+    );
     expect(gated.status).toBe(401);
     expect(await errorOf(gated)).toBe(SIGN_IN_REQUIRED_ERROR);
   });
@@ -480,13 +495,13 @@ describe('with the gate ON', () => {
     // `signIn` is itself the assertion: it POSTs /api/auth/start and
     // /api/auth/verify as a browser with no session, and expects 200 from
     // both. If the gate caught them, nobody could ever satisfy it.
-    const b = boot(true);
+    const b = await boot(true);
     const cookie = await signIn(b.base, 'firsttimer@example.com');
     expect(cookie.startsWith(`${SESSION_COOKIE}=`)).toBe(true);
   });
 
   it('tells the client it must sign in, before the client offers a surface', async () => {
-    const b = boot(true);
+    const b = await boot(true);
     const anon = await fetch(`${b.base}/api/auth/session`, { headers: browserHeaders(b.base) });
     expect(await anon.json()).toMatchObject({ signInToWrite: true, canWrite: false });
 
@@ -498,13 +513,13 @@ describe('with the gate ON', () => {
   });
 
   it('says canWrite with the flag OFF, whoever is asking', async () => {
-    const b = boot(false);
+    const b = await boot(false);
     const res = await fetch(`${b.base}/api/auth/session`, { headers: browserHeaders(b.base) });
     expect(await res.json()).toMatchObject({ signInToWrite: false, canWrite: true });
   });
 
   it('carries the URL that fixes the refusal', async () => {
-    const b = boot(true);
+    const b = await boot(true);
     const res = await writes.createWorkspace(b);
     const body = (await res.json()) as { message?: string; signInUrl?: string };
     expect(body.signInUrl).toBe('/signin');
@@ -596,13 +611,17 @@ function typeParagraph(ydoc: Y.Doc, text: string): void {
 
 describe('the doc-editing socket with the gate ON', () => {
   it('lets an unsigned browser READ the doc and declines its edits — with the positive control', async () => {
-    const on = boot(true);
+    const on = await boot(true);
     const onFile = await bindDoc(on, 'ws-doc');
-    const off = boot(false);
+    const off = await boot(false);
     const offFile = await bindDoc(off, 'ws-doc');
 
-    const gated = connectDoc(`${on.wsBase}/y/ws-doc`, { asBrowser: on.base });
-    const ungated = connectDoc(`${off.wsBase}/y/ws-doc`, { asBrowser: off.base });
+    const gated = connectDoc(`${on.wsBase}/workspaces/${on.ws}/docs/ws-doc/y`, {
+      asBrowser: on.base,
+    });
+    const ungated = connectDoc(`${off.wsBase}/workspaces/${off.ws}/docs/ws-doc/y`, {
+      asBrowser: off.base,
+    });
     await Promise.all([gated.ready, ungated.ready]);
 
     // READING IS UNCHANGED. The gated socket completed the handshake and the
@@ -634,10 +653,13 @@ describe('the doc-editing socket with the gate ON', () => {
   });
 
   it("accepts a signed browser's edits", async () => {
-    const b = boot(true);
+    const b = await boot(true);
     const file = await bindDoc(b, 'signed-ws-doc');
     const cookie = await signIn(b.base, 'editor@example.com');
-    const c = connectDoc(`${b.wsBase}/y/signed-ws-doc`, { asBrowser: b.base, cookie });
+    const c = connectDoc(`${b.wsBase}/workspaces/${b.ws}/docs/signed-ws-doc/y`, {
+      asBrowser: b.base,
+      cookie,
+    });
     await c.ready;
     for (let i = 0; i < 50 && prose.getProseFragment(c.ydoc).length < 2; i++) await Bun.sleep(20);
     typeParagraph(c.ydoc, SIGNED_NEEDLE);
@@ -647,9 +669,9 @@ describe('the doc-editing socket with the gate ON', () => {
   });
 
   it("accepts an agent's edits — no Origin, no session", async () => {
-    const b = boot(true);
+    const b = await boot(true);
     const file = await bindDoc(b, 'agent-ws-doc');
-    const c = connectDoc(`${b.wsBase}/y/agent-ws-doc`, { asBrowser: null });
+    const c = connectDoc(`${b.wsBase}/workspaces/${b.ws}/docs/agent-ws-doc/y`, { asBrowser: null });
     await c.ready;
     for (let i = 0; i < 50 && prose.getProseFragment(c.ydoc).length < 2; i++) await Bun.sleep(20);
     typeParagraph(c.ydoc, AGENT_NEEDLE);

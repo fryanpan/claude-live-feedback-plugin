@@ -69,7 +69,7 @@ async function main(): Promise<number> {
   const base = args.base.replace(/\/$/, '');
 
   const rows = await fetchQueueRows(base, args.workspace);
-  const plan: MigrationPlan = triageThreads(await fetchQueueThreads(base, rows));
+  const plan: MigrationPlan = triageThreads(await fetchQueueThreads(base, args.workspace, rows));
   const targets = resolvable(plan);
 
   if (args.json) {
@@ -90,7 +90,12 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  const { resolved, failed } = await resolveReceipts(base, args.author.trim(), targets);
+  const { resolved, failed } = await resolveReceipts(
+    base,
+    args.workspace,
+    args.author.trim(),
+    targets,
+  );
   console.log('');
   console.log(
     `Resolved ${resolved.length} of ${targets.length} receipt row(s) as ${args.author.trim()}.`,

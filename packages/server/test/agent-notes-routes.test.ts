@@ -25,6 +25,7 @@ import {
 } from '../src/agent-notes.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { workspaceDocId } from '../src/task-projection.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'person' };
 const LEAD = { id: 'agent-cartographer', name: 'Cartographer', kind: 'agent' };
@@ -34,6 +35,9 @@ type ProjectedTask = { id: string; notes?: ProjectedNote[] };
 type RingNote = ProjectedNote & { taskId?: string; sessionId?: string; needsFiling?: boolean };
 
 const settle = (ms = 150) => new Promise((r) => setTimeout(r, ms));
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('agent notes routes', () => {
   let handle: ServerHandle;
@@ -53,10 +57,11 @@ describe('agent notes routes', () => {
   const note = (agent: string, text: string, extra: Record<string, unknown> = {}) =>
     post('/api/agent-notes', { agent, kind: 'turn', text, at: Date.now(), ...extra });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'agent-notes-routes-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterEach(async () => {
@@ -68,13 +73,15 @@ describe('agent notes routes', () => {
     const { workspace } = await jj<{ workspace: { id: string } }>(
       await post('/workspaces', { name, leadAgentId: LEAD.id }),
     );
+    WS = workspace.id;
     await jj(
       await post(`/workspaces/${workspace.id}/agents`, {
         agentId: LEAD.id,
         runtime: 'claude-code-local',
       }),
     );
-    return workspace.id;
+    WS = workspace.id;
+    return WS;
   }
 
   async function inProgressRow(workspaceId: string, title: string): Promise<string> {
@@ -88,10 +95,14 @@ describe('agent notes routes', () => {
       }),
     );
     await jj(
-      await post(`/api/tasks/${task.id}/transition`, { to: 'todo', author: PERSON, workspaceId }),
+      await post(`/workspaces/${workspaceId}/tasks/${task.id}/transition`, {
+        to: 'todo',
+        author: PERSON,
+        workspaceId,
+      }),
     );
     await jj(
-      await post(`/api/tasks/${task.id}/transition`, {
+      await post(`/workspaces/${workspaceId}/tasks/${task.id}/transition`, {
         to: 'in-progress',
         author: LEAD,
         workspaceId,
@@ -253,14 +264,14 @@ describe('agent notes routes', () => {
     // Assigned to the lead, but Nomad is the one who took it in-progress.
     const handed = await inProgressRow(wsId, 'Handed over');
     await jj(
-      await post(`/api/tasks/${handed}/transition`, {
+      await post(`/workspaces/${wsId}/tasks/${handed}/transition`, {
         to: 'todo',
         author: PERSON,
         workspaceId: wsId,
       }),
     );
     await jj(
-      await post(`/api/tasks/${handed}/transition`, {
+      await post(`/workspaces/${wsId}/tasks/${handed}/transition`, {
         to: 'in-progress',
         author: OTHER,
         workspaceId: wsId,
@@ -289,7 +300,7 @@ describe('agent notes routes', () => {
     );
     // A person-filed row is already `todo`; the person moves it in-progress.
     await jj(
-      await post(`/api/tasks/${task.id}/transition`, {
+      await post(`/workspaces/${wsId}/tasks/${task.id}/transition`, {
         to: 'in-progress',
         author: PERSON,
         workspaceId: wsId,
@@ -404,7 +415,7 @@ describe('agent notes routes', () => {
     expect((await note(LEAD.name, 'Quiet on the wire')).status).toBe(202);
     // Positive control on the same stream: a row moving IS broadcast.
     await jj(
-      await post(`/api/tasks/${taskId}/transition`, {
+      await post(`/workspaces/${WS}/tasks/${taskId}/transition`, {
         to: 'done',
         author: LEAD,
         workspaceId: wsId,
@@ -429,6 +440,7 @@ describe('agent notes routes', () => {
 
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     expect(handle.tasks.getTask(taskId)?.notes?.map((n) => n.text)).toEqual(['Before the restart']);
     expect(projected(wsId, taskId).notes?.map((n) => n.text)).toEqual(['Before the restart']);
     expect((await ring('Nomad')).notes).toEqual([]);

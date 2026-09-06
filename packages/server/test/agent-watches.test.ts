@@ -22,6 +22,10 @@ import {
   isValidWatchKey,
 } from '../src/agent-watches.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('AgentWatches store', () => {
   let dir: string;
@@ -120,10 +124,14 @@ describe('/api/agents/:agentId/watches', () => {
   let handle: ServerHandle | null = null;
   let dataDir: string | null = null;
 
-  const start = () => {
+  const start = async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'agent-watches-route-'));
     handle = createServer({ port: 0, dataDir });
-    return `http://localhost:${handle.port}`;
+    const base = `http://localhost:${handle.port}`;
+    // Each server is its own store, so the board a doc is filed on has to be
+    // this server's — a board id left over from the previous one 404s.
+    WS = await seedBoard(base);
+    return base;
   };
 
   afterEach(async () => {
@@ -148,7 +156,7 @@ describe('/api/agents/:agentId/watches', () => {
   const createDoc = async (base: string, docId: string) => {
     const path = join(dataDir as string, `${docId}.md`);
     writeFileSync(path, `# ${docId}\n\nBody.\n`);
-    const res = await fetch(`${base}/api/docs`, {
+    const res = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { host: `localhost:${handle?.port ?? 0}`, 'content-type': 'application/json' },
       body: JSON.stringify({ docId, sourceUrl: path }),
@@ -160,7 +168,7 @@ describe('/api/agents/:agentId/watches', () => {
   };
 
   it('remembers what one identity watched, and hands a different identity nothing', async () => {
-    const base = start();
+    const base = await start();
     const oneId = await createDoc(base, 'doc-one');
     const twoId = await createDoc(base, 'doc-two');
 
@@ -193,7 +201,7 @@ describe('/api/agents/:agentId/watches', () => {
   });
 
   it('unions a second writer for the same identity instead of replacing', async () => {
-    const base = start();
+    const base = await start();
     const oneId = await createDoc(base, 'doc-one');
     const twoId = await createDoc(base, 'doc-two');
     await call(base, 'agent-alpha', 'POST', { add: ['doc-one'] });
@@ -209,7 +217,7 @@ describe('/api/agents/:agentId/watches', () => {
   });
 
   it('prunes a watch whose doc is gone on read — and keeps the live one beside it', async () => {
-    const base = start();
+    const base = await start();
     const liveId = await createDoc(base, 'doc-live');
     // `doc-ghost` was watched before it existed (the auto-watch fires ahead
     // of the creating tool) and the tool then failed, so it never appeared.
@@ -227,7 +235,7 @@ describe('/api/agents/:agentId/watches', () => {
   });
 
   it('treats `ws:<id>` as live for a board workspace, and dead for a workspace nobody made', async () => {
-    const base = start();
+    const base = await start();
     const ws = await fetch(`${base}/workspaces`, {
       method: 'POST',
       headers: { host: `localhost:${handle?.port ?? 0}`, 'content-type': 'application/json' },
@@ -244,7 +252,7 @@ describe('/api/agents/:agentId/watches', () => {
   });
 
   it('refuses the shared identity with a message that says how to fix it — and reports no coverage for it', async () => {
-    const base = start();
+    const base = await start();
     await createDoc(base, 'doc-one');
     for (const shared of ['known-agent', 'agent']) {
       const res = await call(base, shared, 'POST', { add: ['doc-one'] });
@@ -271,7 +279,7 @@ describe('/api/agents/:agentId/watches', () => {
   });
 
   it('refuses a malformed key rather than storing it', async () => {
-    const base = start();
+    const base = await start();
     const res = await call(base, 'agent-alpha', 'POST', { add: ['ok-key', 'has space'] });
     expect(res.status).toBe(400);
     expect(res.json.key).toBe('has space');
@@ -300,6 +308,7 @@ describe('POST /api/agents/:id/merge re-keys watches so delivery follows the new
     dataDir = mkdtempSync(join(tmpdir(), 'agent-merge-'));
     handle = createServer({ port: 0, dataDir });
     const base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     const post = async (path: string, body: unknown) => {
       const res = await fetch(`${base}${path}`, {
         method: 'POST',
@@ -325,8 +334,10 @@ describe('POST /api/agents/:id/merge re-keys watches so delivery follows the new
     const wsId = (created.json.workspace as { id: string }).id;
     const file = join(dataDir, 'watched.md');
     writeFileSync(file, '# Watched\n\nBody.\n');
-    expect((await post('/api/docs', { docId: 'watched', sourceUrl: file })).status).toBe(200);
-    expect((await post(`/workspaces/${wsId}/docs`, { docId: 'watched' })).status).toBe(200);
+    expect(
+      (await post(`/workspaces/${wsId}/docs`, { docId: 'watched', sourceUrl: file })).status,
+    ).toBe(200);
+    expect((await post(`/workspaces/${wsId}/docs:attach`, { docId: 'watched' })).status).toBe(200);
 
     // The old identity attaches (a bystander) and persists its board watch.
     expect(
@@ -341,7 +352,7 @@ describe('POST /api/agents/:id/merge re-keys watches so delivery follows the new
     expect((await post('/api/agents/agent-old/watches', { add: [`ws:${wsId}`] })).status).toBe(200);
 
     const comment = (text: string) =>
-      post('/api/docs/watched/threads', {
+      post(`/workspaces/${wsId}/docs/watched/threads`, {
         author: { id: 'known-jordan', name: 'Jordan', kind: 'person' },
         text,
         anchor: { kind: 'subject' },
@@ -403,6 +414,7 @@ describe('POST /api/agents/:id/merge re-keys watches so delivery follows the new
     dataDir = mkdtempSync(join(tmpdir(), 'agent-merge-refuse-'));
     handle = createServer({ port: 0, dataDir });
     const base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     const merge = async (from: string, body: unknown) => {
       const res = await fetch(`${base}/api/agents/${from}/merge`, {
         method: 'POST',
@@ -457,12 +469,13 @@ describe('POST /api/agents/:id/merge — review findings', () => {
     const wsId = (created.json.workspace as { id: string }).id;
     const file = join(dataDir as string, 'watched.md');
     writeFileSync(file, '# Watched\n\nBody.\n');
-    expect((await req('/api/docs', { body: { docId: 'watched', sourceUrl: file } })).status).toBe(
-      200,
-    );
-    expect((await req(`/workspaces/${wsId}/docs`, { body: { docId: 'watched' } })).status).toBe(
-      200,
-    );
+    expect(
+      (await req(`/workspaces/${wsId}/docs`, { body: { docId: 'watched', sourceUrl: file } }))
+        .status,
+    ).toBe(200);
+    expect(
+      (await req(`/workspaces/${wsId}/docs:attach`, { body: { docId: 'watched' } })).status,
+    ).toBe(200);
     expect(
       (
         await req(`/workspaces/${wsId}/agents`, {
@@ -485,7 +498,7 @@ describe('POST /api/agents/:id/merge — review findings', () => {
     // agent-old, and NOT acked — the case the e2e test cannot reach.
     expect(
       (
-        await req('/api/docs/watched/threads', {
+        await req(`/workspaces/${wsId}/docs/watched/threads`, {
           body: {
             author: { id: 'known-jordan', name: 'Jordan', kind: 'person' },
             text: 'posted before the merge, never acked',
@@ -526,7 +539,7 @@ describe('POST /api/agents/:id/merge — review findings', () => {
     const wsId = await seed();
     expect(
       (
-        await req('/api/docs/watched/threads', {
+        await req(`/workspaces/${wsId}/docs/watched/threads`, {
           body: {
             author: { id: 'known-jordan', name: 'Jordan', kind: 'person' },
             text: 'still here after the dry run',
@@ -595,7 +608,7 @@ describe('POST /api/agents/:id/merge — review findings', () => {
     // The refusal happened before the work: nothing moved.
     expect(handle.tasks.listAttachments(wsId).map((a) => a.agentId)).toEqual(['agent-old']);
     // POSITIVE CONTROL on the same address: an ordinary trusted-local read works.
-    const ok = await fetch(`http://${from}:${port}/api/docs`, {
+    const ok = await fetch(`http://${from}:${port}/workspaces/${wsId}/docs`, {
       headers: { host: `localhost:${port}` },
     });
     expect(ok.status).toBe(200);

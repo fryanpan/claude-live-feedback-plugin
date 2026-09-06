@@ -29,9 +29,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { TaskStore, tasksSidecarPath } from '../src/tasks.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-reviewer', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
 const AGENT = { id: 'agent-scout', name: 'Scout', kind: 'agent', color: '#7d2ed7' };
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('the legacy text goal is removed', () => {
   let handle: ServerHandle;
@@ -64,13 +68,15 @@ describe('the legacy text goal is removed', () => {
   const newWorkspace = async (extra: Record<string, unknown> = {}): Promise<string> => {
     const r = await post('/workspaces', { name: 'intake', author: AGENT, ...extra });
     const { workspace } = (await r.json()) as { workspace: { id: string } };
-    return workspace.id;
+    WS = workspace.id;
+    return WS;
   };
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'textgoal-data-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterAll(async () => {
@@ -194,7 +200,10 @@ describe('the legacy text goal is removed', () => {
         author: AGENT,
       });
       const { task } = (await created.json()) as { task: { id: string } };
-      const placed = await post(`/api/tasks/${task.id}/goal`, { goal: bandId, author: PERSON });
+      const placed = await post(`/workspaces/${WS}/tasks/${task.id}/goal`, {
+        goal: bandId,
+        author: PERSON,
+      });
       expect(placed.status).toBe(200);
       const res = (await placed.json()) as {
         task: { triagedAgainst?: Record<string, unknown> };

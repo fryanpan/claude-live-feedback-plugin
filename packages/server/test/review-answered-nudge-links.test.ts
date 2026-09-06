@@ -23,6 +23,7 @@ import { join } from 'node:path';
 import { type NudgePayload, reviewAnsweredLine } from '../../mcp/src/nudge-line.ts';
 import { REVIEW_ANSWERED_EVENT } from '../src/ready-nudge.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'person' };
 const LEAD = { id: 'agent-cartographer', name: 'Cartographer', kind: 'agent' };
@@ -78,6 +79,9 @@ function listenFrames(res: Response): { frames: Frame[]; stop: () => Promise<voi
 
 const settle = (ms = 80) => new Promise((r) => setTimeout(r, ms));
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('the review_answered wake only sends its reader to links that exist', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -104,9 +108,11 @@ describe('the review_answered wake only sends its reader to links that exist', (
     dataDir = mkdtempSync(join(tmpdir(), 'review-answered-links-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     const { workspace } = await jj<{ workspace: { id: string; leadAgentId?: string } }>(
       await post('/workspaces', { name: 'index-rebuild', leadAgentId: LEAD.id }),
     );
+    WS = workspace.id;
     workspaceId = workspace.id;
     expect(workspace.leadAgentId).toBe(LEAD.id);
     await jj(
@@ -145,7 +151,10 @@ describe('the review_answered wake only sends its reader to links that exist', (
     );
     // Jordan answers, so the lead is a different party and does get woken.
     await jj(
-      await post(`/api/tasks/${task.id}/answer`, { text: 'After the freeze.', author: PERSON }),
+      await post(`/workspaces/${WS}/tasks/${task.id}/answer`, {
+        text: 'After the freeze.',
+        author: PERSON,
+      }),
     );
     await settle();
     const got = lead.frames.filter((f) => f.event === REVIEW_ANSWERED_EVENT);

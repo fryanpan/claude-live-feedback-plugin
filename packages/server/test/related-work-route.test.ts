@@ -130,7 +130,7 @@ describe('GET /workspaces/:id/related-work', () => {
     board: string = wsId,
   ): Promise<string> {
     writeFileSync(path, markdown);
-    const res = await fetch(`${base}/api/docs`, {
+    const res = await fetch(`${base}/workspaces/${board}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -138,7 +138,6 @@ describe('GET /workspaces/:id/related-work', () => {
         type: 'markdown',
         title,
         sourceUrl: path,
-        hubWorkspaceId: board,
       }),
     });
     expect(res.status, `creating ${alias}: ${await res.clone().text()}`).toBe(200);
@@ -179,7 +178,7 @@ describe('GET /workspaces/:id/related-work', () => {
     const ids = body.matches.map((m) => m.id);
     expect(ids[0]).toBe(planDocId);
     expect(ids).toContain(notesGoal);
-    expect(body.matches[0]?.url).toBe(`/review/${planDocId}`);
+    expect(body.matches[0]?.url).toBe(`/workspaces/${wsId}/docs/${planDocId}`);
   });
 
   it('leaves out the goal and the plan doc that are about other work', async () => {

@@ -189,16 +189,13 @@ describe('the board collections that moved under /workspaces/<id>', () => {
     expect((await post(`/workspaces/${ws}/attachments/agent-ghost/heartbeat`, {})).status).toBe(
       404,
     );
-    // The per-DOC stream still owns the `/events/` prefix, so the board's old
-    // address is read as a doc id now — `workspace/<id>` is not one, and the
-    // refusal is that rather than a 404. Asserted as it actually answers: the
-    // claim under test is that nothing opens a stream there, and a test that
-    // demanded a tidier status would be describing a route that no longer
-    // exists to produce it.
+    // The `/events/` prefix is gone with the rest of the pre-cutover paths —
+    // a doc's stream is `/workspaces/<ws>/docs/<id>/events:stream` — so the
+    // board's old address reaches nothing at all now rather than reaching the
+    // per-doc stream and being refused by it.
     const oldStream = await local(`/events/workspace/${ws}`, {
       headers: { accept: 'text/event-stream' },
     });
-    expect(oldStream.status).toBe(400);
-    expect(await oldStream.json()).toEqual({ error: 'bad docId' });
+    expect(oldStream.status).toBe(404);
   });
 });

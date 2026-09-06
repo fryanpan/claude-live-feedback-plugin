@@ -34,6 +34,7 @@ import { listMeetings, readTranscript } from '../src/meetings.ts';
 import { LEGACY_TRANSCRIPT_HEADING } from '../src/notes-section.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { type MockScriptTurn, createMockTranscriptionEngine } from '../src/transcribe.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 /** Advanced by hand: `fire()` is the speaker going quiet. */
 class ManualScheduler implements TickScheduler {
@@ -83,7 +84,7 @@ class AudioClient {
   private constructor(readonly ws: WebSocket) {}
 
   static async open(wsBase: string, docId: string): Promise<AudioClient> {
-    const ws = new WebSocket(`${wsBase}${meetingSocketPath(docId)}`);
+    const ws = new WebSocket(`${wsBase}${meetingSocketPath(WS, docId)}`);
     ws.binaryType = 'arraybuffer';
     const client = new AudioClient(ws);
     ws.addEventListener('message', (ev) => {
@@ -129,6 +130,9 @@ const waitFor = async (pred: () => boolean, what: string): Promise<void> => {
   }
 };
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('a meeting end to end: pauses become notes, stop/start stays consistent', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -162,7 +166,7 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
       turns?: number;
     }>;
     recording?: string;
-  }> => (await (await fetch(`${base}/api/docs/${docId}/meetings`)).json()) as never;
+  }> => (await (await fetch(`${base}/workspaces/${WS}/docs/${docId}/meetings`)).json()) as never;
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-meeting-e2e-'));
@@ -178,10 +182,11 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
       },
     });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     wsBase = `ws://localhost:${handle.port}`;
     const path = join(dataDir, 'plan-review.md');
     writeFileSync(path, '# Plan review\n\nThe agenda paragraph.\n');
-    const res = await fetch(`${base}/api/docs`, {
+    const res = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'plan-review', sourceUrl: path, title: 'Plan review' }),
@@ -406,7 +411,7 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     // changes every assertion below reads.
     const path = join(dataDir, 'speaker-carry.md');
     writeFileSync(path, '# Speaker carry\n\nAgenda.\n');
-    const created = await fetch(`${base}/api/docs`, {
+    const created = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'speaker-carry', sourceUrl: path, title: 'Speaker carry' }),
@@ -509,7 +514,7 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     // has to do what the socket did: index line, and the backwards rewrite.
     const path = join(dataDir, 'late-rename.md');
     writeFileSync(path, '# Late rename\n\nBody about Speaker B stays.\n');
-    const created = await fetch(`${base}/api/docs`, {
+    const created = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'late-rename', sourceUrl: path, title: 'Late rename' }),
@@ -541,7 +546,7 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     client.ws.close();
 
     // The rename, over HTTP — no socket exists any more.
-    const renameUrl = `${base}/api/docs/${lateDocId}/meetings/${meetingId}/speakers`;
+    const renameUrl = `${base}/workspaces/${WS}/docs/${lateDocId}/meetings/${meetingId}/speakers`;
     const renamed = await fetch(renameUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -576,11 +581,14 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     });
     expect(nobody.status).toBe(400);
     // …a meeting the doc never held…
-    const missing = await fetch(`${base}/api/docs/${lateDocId}/meetings/never/speakers`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ speaker: 'B', name: 'Jordan' }),
-    });
+    const missing = await fetch(
+      `${base}/workspaces/${WS}/docs/${lateDocId}/meetings/never/speakers`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ speaker: 'B', name: 'Jordan' }),
+      },
+    );
     expect(missing.status).toBe(404);
     // …a name too long for the record (same cap the socket enforces)…
     const oversize = await fetch(renameUrl, {
@@ -594,11 +602,14 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     second.start('conversation');
     await waitFor(() => second.frames.some((f) => f.type === 'ready'), 'the second ready');
     const liveId = String(second.frames.filter((f) => f.type === 'ready').at(-1)?.meetingId);
-    const live = await fetch(`${base}/api/docs/${lateDocId}/meetings/${liveId}/speakers`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ speaker: 'A', name: 'Jordan' }),
-    });
+    const live = await fetch(
+      `${base}/workspaces/${WS}/docs/${lateDocId}/meetings/${liveId}/speakers`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ speaker: 'A', name: 'Jordan' }),
+      },
+    );
     expect(live.status).toBe(409);
     second.stop();
     await waitFor(() => second.frames.some((f) => f.type === 'stopped'), 'the second stopped');

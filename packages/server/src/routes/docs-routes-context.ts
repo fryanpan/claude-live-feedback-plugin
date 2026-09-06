@@ -18,11 +18,12 @@ import type { DocMeta, DocType, ReviewPayload, Thread, User, suggestOps } from '
 import type { DocStore, LiveDoc } from '../doc-store.ts';
 import type { createLeadPresenceMonitor } from '../lead-presence.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
+import type { WorkspaceScope } from '../middleware/workspace-scope.ts';
 import type { ReadyWorkNudger } from '../ready-nudge.ts';
 import type { ThreadReviewGate } from '../review-gate-types.ts';
 import type { ThreadSummarizer } from '../summarize.ts';
 import type { TaskProjection } from '../task-projection.ts';
-import type { Task, TaskStore } from '../tasks.ts';
+import type { BoardWorkspace, Task, TaskStore } from '../tasks.ts';
 import type { ThreadRequestDedup } from '../thread-request-dedup.ts';
 import type { createWebhookDispatcher } from '../webhooks.ts';
 
@@ -118,7 +119,11 @@ export interface DocRoutesContext {
   /** An alias or an id → the doc's own id. */
   canonicalDocId: (addressed: string) => string;
   /** Where a doc's back arrow goes — the board or review that holds it. */
-  backTargetFor: (docId: string, attachmentId?: string) => { id: string; name: string } | null;
+  backTargetFor: (
+    docId: string,
+    attachmentId?: string,
+    prefer?: string,
+  ) => { id: string; name: string } | null;
   /** The board a doc belongs to, or null. */
   resolveWorkspaceForDoc: (docId: string) => string | null;
   /** Decorate a doc's meta with its review URL. `precomputedHome` is the
@@ -203,6 +208,19 @@ export interface DocRoutesContext {
 
 /** What only this request knows. */
 export interface DocRouteRequest {
+  /**
+   * The board this canonical path named, and the remainder under it —
+   * resolved once by `middleware/workspace-scope.ts`, which has already
+   * refused an unknown board and a member filed on a different one.
+   *
+   * `undefined` when the path is not under `/workspaces/<id>/…` at all, and
+   * that is what makes the resolution structural rather than remembered: a
+   * resource route matches through `matchRest`, so with no scope it has no
+   * remainder to match and cannot answer. Read `scope.workspaceId` for the
+   * board rather than a body field — the path is the argument now.
+   */
+  scope?: WorkspaceScope<BoardWorkspace>;
+
   req: Request;
   url: URL;
   pathname: string;

@@ -47,7 +47,7 @@ describe('the registry drops a dispatch the board is done with', () => {
     return d;
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dataDir = dir('dispatch-stale-reg-');
   });
   afterEach(() => {
@@ -171,7 +171,7 @@ describe('the cap through the server never counts finished work', () => {
     return res.json() as Promise<T>;
   };
 
-  const start = () => {
+  const start = async () => {
     handle = createServer({
       port: 0,
       dataDir,
@@ -180,9 +180,9 @@ describe('the cap through the server never counts finished work', () => {
     base = `http://localhost:${handle.port}`;
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dataDir = dir('dispatch-stale-srv-');
-    start();
+    await start();
   });
 
   afterEach(async () => {
@@ -209,7 +209,7 @@ describe('the cap through the server never counts finished work', () => {
     );
     for (const to of ['todo', 'in-progress'] as const) {
       await jj(
-        await post(`/api/tasks/${task.id}/transition`, {
+        await post(`/workspaces/${workspaceId}/tasks/${task.id}/transition`, {
           to,
           author: to === 'todo' ? PERSON : LEAD,
           workspaceId,
@@ -229,13 +229,27 @@ describe('the cap through the server never counts finished work', () => {
     const wtA = dir('wt-a-');
     const wtB = dir('wt-b-');
     await jj(
-      await post('/api/dispatches', { taskId: finishing, worktreePath: wtA, agentName: 'A' }),
+      await post(`/workspaces/${workspaceId}/dispatches`, {
+        taskId: finishing,
+        worktreePath: wtA,
+        agentName: 'A',
+      }),
     );
-    await jj(await post('/api/dispatches', { taskId: staying, worktreePath: wtB, agentName: 'B' }));
+    await jj(
+      await post(`/workspaces/${workspaceId}/dispatches`, {
+        taskId: staying,
+        worktreePath: wtB,
+        agentName: 'B',
+      }),
+    );
     expect(await capView(workspaceId)).toMatchObject({ inUse: 2, free: 2 });
 
     await jj(
-      await post(`/api/tasks/${finishing}/transition`, { to: 'done', author: LEAD, workspaceId }),
+      await post(`/workspaces/${workspaceId}/tasks/${finishing}/transition`, {
+        to: 'done',
+        author: LEAD,
+        workspaceId,
+      }),
     );
     // The directory is still there; only the board's verdict changed.
     expect(existsSync(wtA)).toBe(true);
@@ -243,7 +257,7 @@ describe('the cap through the server never counts finished work', () => {
     expect(view).toMatchObject({ inUse: 1, free: 3 });
     expect(view.holders.map((h) => h.taskId)).toEqual([staying]);
     const { dispatches } = await jj<{ dispatches: Array<{ taskId: string }> }>(
-      await get('/api/dispatches'),
+      await get(`/workspaces/${workspaceId}/dispatches`),
     );
     expect(dispatches.map((d) => d.taskId)).toEqual([staying]);
   });
@@ -252,10 +266,19 @@ describe('the cap through the server never counts finished work', () => {
     const workspaceId = await board();
     const archived = await addRow(workspaceId, 'Migrate the search index');
     const wt = dir('wt-arch-');
-    await jj(await post('/api/dispatches', { taskId: archived, worktreePath: wt, agentName: 'A' }));
+    await jj(
+      await post(`/workspaces/${workspaceId}/dispatches`, {
+        taskId: archived,
+        worktreePath: wt,
+        agentName: 'A',
+      }),
+    );
     expect(await capView(workspaceId)).toMatchObject({ inUse: 1 });
     await jj(
-      await post(`/api/tasks/${archived}/archive`, { author: PERSON, reason: 'superseded' }),
+      await post(`/workspaces/${workspaceId}/tasks/${archived}/archive`, {
+        author: PERSON,
+        reason: 'superseded',
+      }),
     );
     const view = await capView(workspaceId);
     expect(view).toMatchObject({ inUse: 0, free: 4, holders: [] });
@@ -271,7 +294,11 @@ describe('the cap through the server never counts finished work', () => {
     // directory still on disk, `close_dispatch` never sent.
     for (const id of ids) {
       await jj(
-        await post(`/api/tasks/${id}/transition`, { to: 'done', author: LEAD, workspaceId }),
+        await post(`/workspaces/${workspaceId}/tasks/${id}/transition`, {
+          to: 'done',
+          author: LEAD,
+          workspaceId,
+        }),
       );
     }
     await settle(80);
@@ -282,14 +309,18 @@ describe('the cap through the server never counts finished work', () => {
     dispatches[live] = { worktreePath: wt, registeredAt: 2 };
     writeFileSync(join(dataDir, 'dispatches.json'), JSON.stringify({ version: 1, dispatches }));
 
-    start();
+    await start();
     const view = await capView(workspaceId);
     expect(view).toMatchObject({ cap: 4, inUse: 1, free: 3 });
     expect(view.holders.map((h) => h.taskId)).toEqual([live]);
     // And a fresh spawn is not refused for slots nobody holds.
     const next = await addRow(workspaceId, 'Ship the new ranker');
     const wt2 = dir('wt-next-');
-    const res = await post('/api/dispatches', { taskId: next, worktreePath: wt2, agentName: 'B' });
+    const res = await post(`/workspaces/${workspaceId}/dispatches`, {
+      taskId: next,
+      worktreePath: wt2,
+      agentName: 'B',
+    });
     expect(res.status, await res.clone().text()).toBe(200);
     expect(await capView(workspaceId)).toMatchObject({ inUse: 2, free: 2 });
   });

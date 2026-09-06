@@ -22,6 +22,7 @@ import { type TickScheduler, createStubNotesComposer } from '../src/meeting-note
 import type { CapturedItem, TaskCaptureInput } from '../src/meeting-task-capture.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { type MockScriptTurn, createMockTranscriptionEngine } from '../src/transcribe.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 class ManualScheduler implements TickScheduler {
   private fns = new Map<number, () => void>();
@@ -94,6 +95,9 @@ const waitFor = async (pred: () => boolean, what: string): Promise<void> => {
   }
 };
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('spoken asks on a huddle doc', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -133,11 +137,13 @@ describe('spoken asks on a huddle doc', () => {
       },
     });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     workspaceId = (
       (await (await post('/workspaces', { name: 'spoken-asks-board' })).json()) as {
         workspace: { id: string };
       }
     ).workspace.id;
+    WS = workspaceId;
     // A lead in the seat, so a research ask has somebody to address.
     const attached = handle.tasks.attachAgent(workspaceId, {
       agentId: 'agent-lead',
@@ -158,7 +164,7 @@ describe('spoken asks on a huddle doc', () => {
   });
 
   it('files the task, the research row with its placeholder, and the review thread', async () => {
-    const ws = new WebSocket(`ws://localhost:${handle.port}${meetingSocketPath(docId)}`);
+    const ws = new WebSocket(`ws://localhost:${handle.port}${meetingSocketPath(WS, docId)}`);
     ws.binaryType = 'arraybuffer';
     const frames: Array<{ type: string; final?: boolean; text?: string }> = [];
     ws.addEventListener('message', (ev) => frames.push(JSON.parse(ev.data as string)));
@@ -219,7 +225,7 @@ describe('spoken asks on a huddle doc', () => {
     await waitFor(() => ticks === 3, 'tick 3');
     const threadsOf = async () =>
       (
-        (await (await fetch(`${base}/api/docs/${docId}/threads`)).json()) as {
+        (await (await fetch(`${base}/workspaces/${WS}/docs/${docId}/threads`)).json()) as {
           threads: Array<{
             id: string;
             anchor?: { kind?: string };
@@ -241,7 +247,9 @@ describe('spoken asks on a huddle doc', () => {
     expect(thread.createdBy?.name).toBe('Meeting Assistant');
     expect(thread.comments?.[0]?.text).toContain('Speaker A asked in the meeting');
     expect(thread.comments?.[0]?.text).toContain('whether we still need the tunnel');
-    const doc = (await (await fetch(`${base}/api/docs/${docId}`)).json()) as {
+    const doc = (await (
+      await fetch(`${base}/workspaces/${WS}/docs/${docId}?format=json`)
+    ).json()) as {
       meta: { reviewRequestedBy?: string; reviewThreadId?: string };
     };
     expect(doc.meta.reviewRequestedBy).toBe('Meeting Assistant');

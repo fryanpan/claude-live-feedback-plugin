@@ -5,6 +5,7 @@
  * read their collaborators off `WorkspaceRoutesContext` instead of the scope.
  */
 import { classifyActor } from '../actor-identity.ts';
+import { restIs } from '../middleware/workspace-scope.ts';
 import { browserCannotBindBody, isBrowserRequest } from '../middleware/write-gate.ts';
 import {
   redactBoardWorkspaceForVisitor,
@@ -31,7 +32,7 @@ export async function handleWorkspaceCreateRead(
     parallelismCapView,
     fileUnderBoardWorkspace,
   } = ctx;
-  const { req, pathname, url, visitor, authorFor } = rq;
+  const { req, pathname, url, scope, visitor, authorFor } = rq;
   // --- REST: workspaces (board create OR folder bind) ---
   // One resource, two shapes: `folderPath` binds a folder of files
   // (the review), `name` creates a board Workspace —
@@ -125,13 +126,20 @@ export async function handleWorkspaceCreateRead(
       })),
     });
   }
-  // --- REST: diff reviews ---
-  // One doc per changed file, grouped as a workspace (= the review id).
+  // --- REST: diff reviews — POST /workspaces/<ws>/reviews ---
+  // One doc per changed file, grouped as a review (= the review id), FILED ON
+  // THE BOARD IN THE PATH. It was `POST /api/diffs` with an optional
+  // `hubWorkspaceId` in the body, which meant the board a review landed on
+  // was a field a caller could forget — and a forgotten one filed the review
+  // under a default nobody chose. Under the canonical shape the board is the
+  // address, so there is no version of this call that does not say where the
+  // review goes.
+  //
   // Default mode diffs base → the WORKING TREE (live: docs bind to the
   // files on disk and re-render as the agent edits); pass `target` for a
   // review pinned to a commit. Returns per-file reviewUrls plus an
   // entryUrl (first changed file) the agent can hand to a human.
-  if (pathname === '/api/diffs' && req.method === 'POST') {
+  if (restIs(scope, 'reviews') && req.method === 'POST') {
     // `repo` is a host path this server will read and serve — the same
     // class as the folder bind above, and refused on the same terms.
     // See browserCannotBindBody. Omitting `base` scans the WHOLE folder
@@ -198,10 +206,10 @@ export async function handleWorkspaceCreateRead(
     // members are reachable through the review's own tree. Idempotent, so
     // a re-run that omits `hubWorkspaceId` cannot sweep a live review out
     // of the board a reviewer already filed it on.
-    const boardWorkspaceId = fileUnderBoardWorkspace(
-      res.reviewId,
-      body?.hubWorkspaceId as string | undefined,
-    );
+    // The board comes from the PATH now — `hubWorkspaceId` in the body is
+    // gone with the old address, and is not read as a fallback: two ways to
+    // say where a review is filed is one way for them to disagree.
+    const boardWorkspaceId = fileUnderBoardWorkspace(res.reviewId, scope?.workspaceId);
     // `setId` is the same value as `reviewId`, under the name the CRDT
     // stores it as — both stay, and neither changes meaning.
     return j(200, {

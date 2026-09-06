@@ -20,6 +20,7 @@ import { join } from 'node:path';
 import type { ElementAnchor, User } from '@feedback/core';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { type Ref, type Task, TaskStore, taskChip } from '../src/tasks.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON: User = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
 
@@ -35,6 +36,9 @@ const fakeAnchor: ElementAnchor = {
   },
   snippet: { text: 'Go' },
 };
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('TaskStore cross-references (unit)', () => {
   let dataDir: string;
@@ -220,11 +224,13 @@ describe('cross-reference routes + payload surfacing', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'xref-routes-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     const r = await post('/workspaces', { name: 'xref-route-ws', goal: 'Ship.' });
     wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+    WS = wsId;
     const mdPath = join(dataDir, 'notes.md');
     writeFileSync(mdPath, '# Notes\n\nBody.\n');
-    const doc = await post('/api/docs', {
+    const doc = await post(`/workspaces/${WS}/docs`, {
       docId: 'xref-notes',
       type: 'markdown',
       sourceUrl: mdPath,
@@ -237,10 +243,10 @@ describe('cross-reference routes + payload surfacing', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  describe('POST/DELETE/GET /api/tasks/:id/links', () => {
+  describe(`POST/DELETE/GET /workspaces/${WS}/tasks/:id/links`, () => {
     it('forwards the ref through the route and the stored effect is readable back', async () => {
       const t = await mkTask({ title: 'route linker' });
-      const r = await post(`/api/tasks/${t.id}/links`, {
+      const r = await post(`/workspaces/${WS}/tasks/${t.id}/links`, {
         ref: { kind: 'doc', docId: 'xref-notes' },
       });
       expect(r.status).toBe(200);
@@ -263,7 +269,7 @@ describe('cross-reference routes + payload surfacing', () => {
         links: [{ kind: 'task', taskId: target.id }],
       });
 
-      const r = await local(`/api/tasks/${target.id}/links`);
+      const r = await local(`/workspaces/${WS}/tasks/${target.id}/links`);
       expect(r.status).toBe(200);
       const body = (await r.json()) as {
         taskId: string;
@@ -278,28 +284,39 @@ describe('cross-reference routes + payload surfacing', () => {
 
     it('DELETE unlinks (positive control: the link was there first)', async () => {
       const t = await mkTask({ title: 'route unlinker', links: [{ kind: 'doc', docId: 'a' }] });
-      const before = (await (await local(`/api/tasks/${t.id}/links`)).json()) as { links: Ref[] };
+      const before = (await (await local(`/workspaces/${WS}/tasks/${t.id}/links`)).json()) as {
+        links: Ref[];
+      };
       expect(before.links).toHaveLength(1); // positive control
 
-      const r = await del(`/api/tasks/${t.id}/links`, { ref: { kind: 'doc', docId: 'a' } });
+      const r = await del(`/workspaces/${WS}/tasks/${t.id}/links`, {
+        ref: { kind: 'doc', docId: 'a' },
+      });
       expect(r.status).toBe(200);
-      const after = (await (await local(`/api/tasks/${t.id}/links`)).json()) as { links: Ref[] };
+      const after = (await (await local(`/workspaces/${WS}/tasks/${t.id}/links`)).json()) as {
+        links: Ref[];
+      };
       expect(after.links).toHaveLength(0);
     });
 
     it('400s a missing ref, 400s a bad ref, 404s an unknown task', async () => {
       const t = await mkTask({ title: 'route errors' });
-      expect((await post(`/api/tasks/${t.id}/links`, {})).status).toBe(400);
-      expect((await post(`/api/tasks/${t.id}/links`, { ref: { kind: 'doc' } })).status).toBe(400);
+      expect((await post(`/workspaces/${WS}/tasks/${t.id}/links`, {})).status).toBe(400);
       expect(
-        (await post('/api/tasks/t-ghost/links', { ref: { kind: 'doc', docId: 'x' } })).status,
+        (await post(`/workspaces/${WS}/tasks/${t.id}/links`, { ref: { kind: 'doc' } })).status,
+      ).toBe(400);
+      expect(
+        (await post(`/workspaces/${WS}/tasks/t-ghost/links`, { ref: { kind: 'doc', docId: 'x' } }))
+          .status,
       ).toBe(404);
-      expect((await local('/api/tasks/t-ghost/links')).status).toBe(404);
+      expect((await local(`/workspaces/${WS}/tasks/t-ghost/links`)).status).toBe(404);
     });
 
     it('a link change lands in the ws board doc projection (no store event exists for it)', async () => {
       const t = await mkTask({ title: 'projected links' });
-      await post(`/api/tasks/${t.id}/links`, { ref: { kind: 'doc', docId: 'xref-notes' } });
+      await post(`/workspaces/${WS}/tasks/${t.id}/links`, {
+        ref: { kind: 'doc', docId: 'xref-notes' },
+      });
 
       const doc = handle.docStore.get(`ws:${wsId}`);
       if (!doc) throw new Error('ws doc missing');
@@ -309,7 +326,7 @@ describe('cross-reference routes + payload surfacing', () => {
   });
 
   describe('doc→task surfacing in the doc payload', () => {
-    it('GET /api/docs/:id carries chips for referencing tasks; an unreferenced doc has none', async () => {
+    it(`GET /workspaces/${WS}/docs/:id carries chips for referencing tasks; an unreferenced doc has none?format=json`, async () => {
       const t = await mkTask({
         title: 'about the notes doc',
         links: [{ kind: 'doc', docId: notesId }],
@@ -317,7 +334,7 @@ describe('cross-reference routes + payload surfacing', () => {
 
       // Fetched through the readable ALIAS; the payload answers under the
       // minted id, and the chip surfaces because the two are one doc.
-      const r = await local('/api/docs/xref-notes');
+      const r = await local(`/workspaces/${WS}/docs/xref-notes?format=json`);
       expect(r.status).toBe(200);
       const body = (await r.json()) as {
         meta: { docId: string };
@@ -332,8 +349,14 @@ describe('cross-reference routes + payload surfacing', () => {
       // …so the untouched doc's missing field is a real absence.
       const otherPath = join(dataDir, 'other.md');
       writeFileSync(otherPath, '# Other\n');
-      await post('/api/docs', { docId: 'xref-other', type: 'markdown', sourceUrl: otherPath });
-      const clean = (await (await local('/api/docs/xref-other')).json()) as {
+      await post(`/workspaces/${WS}/docs`, {
+        docId: 'xref-other',
+        type: 'markdown',
+        sourceUrl: otherPath,
+      });
+      const clean = (await (
+        await local(`/workspaces/${WS}/docs/xref-other?format=json`)
+      ).json()) as {
         tasks?: unknown;
       };
       expect(clean.tasks).toBeUndefined();
@@ -347,7 +370,7 @@ describe('cross-reference routes + payload surfacing', () => {
 
     beforeAll(async () => {
       const mk = async (text: string) => {
-        const r = await post('/api/docs/xref-notes/threads', {
+        const r = await post(`/workspaces/${WS}/docs/xref-notes/threads`, {
           author: PERSON,
           text,
           anchor: fakeAnchor,
@@ -365,7 +388,7 @@ describe('cross-reference routes + payload surfacing', () => {
     });
 
     it('the threads list decorates the referenced thread — and ONLY it', async () => {
-      const r = await local('/api/docs/xref-notes/threads');
+      const r = await local(`/workspaces/${WS}/docs/xref-notes/threads`);
       const { threads } = (await r.json()) as {
         threads: Array<{ id: string; tasks?: Array<{ id: string }> }>;
       };
@@ -378,7 +401,9 @@ describe('cross-reference routes + payload surfacing', () => {
     });
 
     it('the single-thread payload carries the same chips', async () => {
-      const r = await local(`/api/docs/xref-notes/threads/${encodeURIComponent(threadId)}`);
+      const r = await local(
+        `/workspaces/${WS}/docs/xref-notes/threads/${encodeURIComponent(threadId)}`,
+      );
       const { thread } = (await r.json()) as {
         thread: { tasks?: Array<{ id: string; status: string }> };
       };

@@ -20,6 +20,7 @@ import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { STALL_EVENT } from '../src/stall-nudge.ts';
 import { seedGoalsOverHttp } from './goal-seed.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'person' };
 const LEAD = { id: 'agent-cartographer', name: 'Cartographer', kind: 'agent' };
@@ -101,6 +102,9 @@ interface StalledRowFrame {
   quietMs: number;
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('the board tells its lead which rows have stopped', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -120,7 +124,7 @@ describe('the board tells its lead which rows have stopped', () => {
     return res.json() as Promise<T>;
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'stall-nudge-'));
     // A zero-length quiet window: every open row is quiet the moment it is
     // read. The wall-clock gap is the one input a test cannot wait out, and
@@ -129,6 +133,7 @@ describe('the board tells its lead which rows have stopped', () => {
     // below builds its own server to prove the window is real.
     handle = createServer({ port: 0, dataDir, stallNudgeQuietMs: 0 });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterEach(async () => {
@@ -146,6 +151,7 @@ describe('the board tells its lead which rows have stopped', () => {
     const { workspace } = await jj<{ workspace: { id: string; leadAgentId?: string } }>(
       await post('/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id }),
     );
+    WS = workspace.id;
     const workspaceId = workspace.id;
     expect(workspace.leadAgentId).toBe(LEAD.id);
     await jj(
@@ -190,11 +196,15 @@ describe('the board tells its lead which rows have stopped', () => {
       }),
     );
     await jj(
-      await post(`/api/tasks/${task.id}/transition`, { to: 'todo', author: PERSON, workspaceId }),
+      await post(`/workspaces/${workspaceId}/tasks/${task.id}/transition`, {
+        to: 'todo',
+        author: PERSON,
+        workspaceId,
+      }),
     );
     if (to === 'in-progress') {
       await jj(
-        await post(`/api/tasks/${task.id}/transition`, {
+        await post(`/workspaces/${workspaceId}/tasks/${task.id}/transition`, {
           to: 'in-progress',
           author: LEAD,
           workspaceId,
@@ -262,7 +272,7 @@ describe('the board tells its lead which rows have stopped', () => {
     // POSITIVE CONTROL, and the release: the same row, the same silence, the
     // band agreed to — the wake names it.
     await jj(
-      await post(`/api/tasks/${goalId}/transition`, {
+      await post(`/workspaces/${WS}/tasks/${goalId}/transition`, {
         to: 'todo',
         author: PERSON,
         workspaceId: ctx.workspaceId,
@@ -285,6 +295,7 @@ describe('the board tells its lead which rows have stopped', () => {
     const dir = mkdtempSync(join(tmpdir(), 'stall-window-'));
     const own = createServer({ port: 0, dataDir: dir, stallNudgeQuietMs: 60 * 60_000 });
     const ownBase = `http://localhost:${own.port}`;
+    WS = await seedBoard(ownBase);
     try {
       const { workspace } = await jj<{ workspace: { id: string } }>(
         await fetch(`${ownBase}/workspaces`, {
@@ -293,6 +304,7 @@ describe('the board tells its lead which rows have stopped', () => {
           body: JSON.stringify({ name: 'quiet-window', leadAgentId: LEAD.id }),
         }),
       );
+      WS = workspace.id;
       await fetch(`${ownBase}/workspaces/${workspace.id}/agents`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -316,7 +328,7 @@ describe('the board tells its lead which rows have stopped', () => {
           }),
         }),
       );
-      await fetch(`${ownBase}/api/tasks/${task.id}/transition`, {
+      await fetch(`${ownBase}/workspaces/${workspace.id}/tasks/${task.id}/transition`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ to: 'todo', author: PERSON, workspaceId: workspace.id }),
@@ -338,7 +350,7 @@ describe('the board tells its lead which rows have stopped', () => {
     const ctx = await boardWithLead();
     const askedId = await addRow(ctx.workspaceId, 'Pick a retention window');
     await jj(
-      await post(`/api/tasks/${askedId}/review-items`, {
+      await post(`/workspaces/${WS}/tasks/${askedId}/review-items`, {
         author: LEAD,
         workspaceId: ctx.workspaceId,
         review: {
@@ -394,7 +406,7 @@ describe('the board tells its lead which rows have stopped', () => {
     const ctx = await boardWithLead();
     const askedId = await addRow(ctx.workspaceId, 'Pick a retention window');
     const filed = await jj<{ item: { id: string } }>(
-      await post(`/api/tasks/${askedId}/review-items`, {
+      await post(`/workspaces/${WS}/tasks/${askedId}/review-items`, {
         author: LEAD,
         workspaceId: ctx.workspaceId,
         review: {
@@ -417,7 +429,7 @@ describe('the board tells its lead which rows have stopped', () => {
     expect(stalls(ctx.lead.frames)).toHaveLength(0);
 
     await jj(
-      await post(`/api/tasks/${askedId}/review-items/${filed.item.id}/withdraw`, {
+      await post(`/workspaces/${WS}/tasks/${askedId}/review-items/${filed.item.id}/withdraw`, {
         author: LEAD,
         reason: 'the retention window came down from legal, so nobody needs to choose',
       }),
@@ -445,7 +457,7 @@ describe('the board tells its lead which rows have stopped', () => {
     const ctx = await boardWithLead();
     const askedId = await addRow(ctx.workspaceId, 'Pick a retention window');
     await jj(
-      await post(`/api/docs/${encodeURIComponent(`task:${askedId}`)}/threads`, {
+      await post(`/workspaces/${WS}/docs/${encodeURIComponent(`task:${askedId}`)}/threads`, {
         text: 'How long should search history be kept?',
         author: LEAD,
         anchor: { kind: 'subject' },
@@ -493,7 +505,7 @@ describe('the board tells its lead which rows have stopped', () => {
     const answeredId = await addRow(ctx.workspaceId, 'Pick a retention window');
     const answeredDoc = encodeURIComponent(`task:${answeredId}`);
     const { thread } = await jj<{ thread: { id: string; comments: Array<{ id: string }> } }>(
-      await post(`/api/docs/${answeredDoc}/threads`, {
+      await post(`/workspaces/${WS}/docs/${answeredDoc}/threads`, {
         text: 'How long should search history be kept?',
         author: LEAD,
         anchor: { kind: 'subject' },
@@ -508,7 +520,7 @@ describe('the board tells its lead which rows have stopped', () => {
       }),
     );
     await jj(
-      await post(`/api/docs/${answeredDoc}/threads/${thread.id}/answer`, {
+      await post(`/workspaces/${WS}/docs/${answeredDoc}/threads/${thread.id}/answer`, {
         author: PERSON,
         text: '30 days',
         commentId: thread.comments[0]?.id,
@@ -519,7 +531,7 @@ describe('the board tells its lead which rows have stopped', () => {
     const resolvedId = await addRow(ctx.workspaceId, 'Rank results by recency');
     const resolvedDoc = encodeURIComponent(`task:${resolvedId}`);
     const { thread: retired } = await jj<{ thread: { id: string } }>(
-      await post(`/api/docs/${resolvedDoc}/threads`, {
+      await post(`/workspaces/${WS}/docs/${resolvedDoc}/threads`, {
         text: 'Should stop words be stripped before ranking?',
         author: LEAD,
         anchor: { kind: 'subject' },
@@ -527,7 +539,9 @@ describe('the board tells its lead which rows have stopped', () => {
       }),
     );
     await jj(
-      await post(`/api/docs/${resolvedDoc}/threads/${retired.id}/resolve`, { author: PERSON }),
+      await post(`/workspaces/${WS}/docs/${resolvedDoc}/threads/${retired.id}/resolve`, {
+        author: PERSON,
+      }),
     );
     await settle();
 
@@ -554,7 +568,7 @@ describe('the board tells its lead which rows have stopped', () => {
     const ctx = await boardWithLead();
     const parkedId = await addRow(ctx.workspaceId, 'Redesign the empty state');
     await jj(
-      await post(`/api/tasks/${parkedId}/park`, {
+      await post(`/workspaces/${WS}/tasks/${parkedId}/park`, {
         parkedUntil: Date.now() + 60 * 60_000,
         reason: 'waiting on the illustration pass',
         author: PERSON,
@@ -602,7 +616,7 @@ describe('the board tells its lead which rows have stopped', () => {
       { leaveInTriage: true },
     );
     await jj(
-      await post(`/api/tasks/${G.agreed}/transition`, {
+      await post(`/workspaces/${WS}/tasks/${G.agreed}/transition`, {
         to: 'todo',
         author: PERSON,
         workspaceId: ctx.workspaceId,
@@ -610,9 +624,13 @@ describe('the board tells its lead which rows have stopped', () => {
     );
 
     const pendingId = await addRow(ctx.workspaceId, 'Rank results by recency');
-    await jj(await post(`/api/tasks/${pendingId}/goal`, { goal: G.pending, author: PERSON }));
+    await jj(
+      await post(`/workspaces/${WS}/tasks/${pendingId}/goal`, { goal: G.pending, author: PERSON }),
+    );
     const freeId = await addRow(ctx.workspaceId, 'Cache the facet counts');
-    await jj(await post(`/api/tasks/${freeId}/goal`, { goal: G.agreed, author: PERSON }));
+    await jj(
+      await post(`/workspaces/${WS}/tasks/${freeId}/goal`, { goal: G.agreed, author: PERSON }),
+    );
     await settle();
 
     handle.nudgeStalls();
@@ -643,7 +661,7 @@ describe('the board tells its lead which rows have stopped', () => {
     // the row, so this is the one activity source the snapshot has to go and
     // look for — and the only place that lookup can be proven is here.
     await jj(
-      await post(`/api/docs/${encodeURIComponent(`task:${taskId}`)}/threads`, {
+      await post(`/workspaces/${WS}/docs/${encodeURIComponent(`task:${taskId}`)}/threads`, {
         text: 'Holding this until the ranking spike lands.',
         author: LEAD,
         anchor: { kind: 'subject' },
@@ -695,6 +713,7 @@ describe('the board tells its lead which rows have stopped', () => {
       stallNudgeRepeatMs: 1,
     });
     const ownBase = `http://localhost:${own.port}`;
+    WS = await seedBoard(ownBase);
     try {
       const { workspace } = await jj<{ workspace: { id: string } }>(
         await fetch(`${ownBase}/workspaces`, {
@@ -703,6 +722,7 @@ describe('the board tells its lead which rows have stopped', () => {
           body: JSON.stringify({ name: 'repeat-window', leadAgentId: LEAD.id }),
         }),
       );
+      WS = workspace.id;
       await fetch(`${ownBase}/workspaces/${workspace.id}/agents`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -726,7 +746,7 @@ describe('the board tells its lead which rows have stopped', () => {
           }),
         }),
       );
-      await fetch(`${ownBase}/api/tasks/${task.id}/transition`, {
+      await fetch(`${ownBase}/workspaces/${workspace.id}/tasks/${task.id}/transition`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ to: 'in-progress', author: PERSON, workspaceId: workspace.id }),

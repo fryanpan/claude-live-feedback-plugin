@@ -22,6 +22,7 @@ import { readPrivateMeta } from '../src/private-meta.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
 import { waitForFile } from './wait-for.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const MSG_SYNC = 0;
 const CANARY = 'CanaryBodyText';
@@ -65,10 +66,11 @@ function connectDoc(url: string, headers: Record<string, string>) {
 
 async function syncAs(
   port: number,
+  workspaceId: string,
   docId: string,
   headers: Record<string, string>,
 ): Promise<{ text: string; meta: Record<string, unknown>; close: () => void }> {
-  const c = connectDoc(`ws://localhost:${port}/y/${docId}`, headers);
+  const c = connectDoc(`ws://localhost:${port}/workspaces/${workspaceId}/docs/${docId}/y`, headers);
   const timedOut = await Promise.race([
     c.ready.then(() => false),
     new Promise<boolean>((r) => setTimeout(() => r(true), 5000)),
@@ -80,6 +82,9 @@ async function syncAs(
     close: c.close,
   };
 }
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('the sync channel leaks no host metadata', () => {
   let handle: ServerHandle;
@@ -97,6 +102,7 @@ describe('the sync channel leaks no host metadata', () => {
    * name on the REST reads below.
    */
   let leakyId: string;
+  let boardId: string;
 
   const local = (path: string, init: RequestInit = {}) =>
     fetch(`${base}${path}`, {
@@ -119,6 +125,7 @@ describe('the sync channel leaks no host metadata', () => {
       ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
 
     // A BOARD is the unit of sharing, so `leaky` is filed on one and the
     // share below covers that board. `ws-leaky` is the doc's GROUPING tag —
@@ -129,10 +136,10 @@ describe('the sync channel leaks no host metadata', () => {
       method: 'POST',
       body: JSON.stringify({ name: 'Leak board' }),
     }).then((r) => r.json());
-    const boardId = board.workspace.id as string;
+    boardId = board.workspace.id as string;
     expect(boardId).toBeTruthy();
 
-    const created = await local('/api/docs', {
+    const created = await local(`/workspaces/${boardId}/docs`, {
       method: 'POST',
       body: JSON.stringify({
         docId: 'leaky',
@@ -157,7 +164,7 @@ describe('the sync channel leaks no host metadata', () => {
   });
 
   it('gives a share visitor the document and none of the machine', async () => {
-    const { text, meta, close } = await syncAs(handle.port, leakyId, {
+    const { text, meta, close } = await syncAs(handle.port, boardId, leakyId, {
       ...visitorHeaders,
     });
     // POSITIVE CONTROL — without this every assertion below is vacuous.
@@ -179,7 +186,7 @@ describe('the sync channel leaks no host metadata', () => {
     // Not a per-connection filter: there is nothing to filter. Asserting on
     // the owner's own connection is what keeps a future "just re-add it for
     // the local UI" change from quietly reopening the share hole.
-    const { text, meta, close } = await syncAs(handle.port, leakyId, {
+    const { text, meta, close } = await syncAs(handle.port, boardId, leakyId, {
       host: `localhost:${handle.port}`,
     });
     expect(text).toContain(CANARY);
@@ -192,7 +199,7 @@ describe('the sync channel leaks no host metadata', () => {
     // The values didn't get dropped, they moved. The doc has to stay bound —
     // a doc that silently stops writing back to disk is the worse bug.
     await new Promise((r) => setTimeout(r, 400)); // saveToDisk is debounced
-    const doc = await (await local('/api/docs/leaky')).json();
+    const doc = await (await local(`/workspaces/${boardId}/docs/leaky?format=json`)).json();
     expect(doc.meta.sourceUrl).toBe(docPath);
     expect(doc.meta.owner).toBe(OWNER);
     expect(doc.meta.producedBy).toEqual({ agentId: 'secret-agent', sessionId: 'sess-1' });
@@ -200,7 +207,7 @@ describe('the sync channel leaks no host metadata', () => {
   });
 
   it('keeps the write-back binding alive across the move', async () => {
-    await local('/api/docs/leaky/find_and_replace', {
+    await local(`/workspaces/${boardId}/docs/leaky/find_and_replace`, {
       method: 'POST',
       body: JSON.stringify({ find: CANARY, replace: 'RewrittenBody' }),
     });
@@ -226,7 +233,7 @@ describe('legacy docs are migrated, not grandfathered', () => {
     // Hand-build the OLD on-disk shape: private keys inside the CRDT.
     const seed = new Y.Doc();
     const m = getMeta(seed);
-    seed.transact(() => {
+    seed.transact(async () => {
       m.set('docId', 'legacy');
       m.set('type', 'markdown');
       m.set('createdAt', 1);
@@ -239,15 +246,25 @@ describe('legacy docs are migrated, not grandfathered', () => {
 
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
+    // A hydrated .ydoc is filed nowhere, and a doc no board holds has no
+    // address at all now — so a board claims it before it can be read.
+    await fetch(`${base}/workspaces/${WS}/docs:attach`, {
+      method: 'POST',
+      headers: { host: `localhost:${handle.port}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'legacy' }),
+    });
 
     // Loading the doc is what triggers the migration.
     const doc = await (
-      await fetch(`${base}/api/docs/legacy`, { headers: { host: `localhost:${handle.port}` } })
+      await fetch(`${base}/workspaces/${WS}/docs/legacy?format=json`, {
+        headers: { host: `localhost:${handle.port}` },
+      })
     ).json();
     expect(doc.meta.owner).toBe(OWNER);
     expect(doc.meta.producedBy).toEqual({ agentId: 'secret-agent', sessionId: 'sess-1' });
 
-    const { text, meta, close } = await syncAs(handle.port, 'legacy', {
+    const { text, meta, close } = await syncAs(handle.port, WS, 'legacy', {
       host: `localhost:${handle.port}`,
     });
     expect(text).toContain(CANARY);

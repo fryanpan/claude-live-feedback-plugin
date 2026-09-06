@@ -51,6 +51,9 @@ const stubFetch = (async (_url: string | URL | Request, init?: RequestInit) => {
   });
 }) as unknown as typeof fetch;
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let BOARD = '';
+
 describe('share visitors never spend the summary API key', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -107,11 +110,6 @@ describe('share visitors never spend the summary API key', () => {
     // board. The visitor's reach is unchanged — `gate-doc` is the grouping's
     // only member — so every route exercised below is still one a real visitor
     // can call, which is the premise the whole suite rests on.
-    await local('/api/docs', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ docId: DOC, type: 'markdown', sourceUrl: file, workspaceId: WS }),
-    });
     const board = await local('/workspaces', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -119,7 +117,15 @@ describe('share visitors never spend the summary API key', () => {
     });
     expect(board.status).toBe(200);
     const boardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
-    const filed = await local(`/workspaces/${encodeURIComponent(boardId)}/docs`, {
+    // The shared board IS the doc's address now, so the doc is created under
+    // it rather than under a second board nobody shared.
+    BOARD = boardId;
+    await local(`/workspaces/${BOARD}/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: DOC, type: 'markdown', sourceUrl: file, workspaceId: WS }),
+    });
+    const filed = await local(`/workspaces/${encodeURIComponent(boardId)}/docs:attach`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: WS }),
@@ -147,7 +153,7 @@ describe('share visitors never spend the summary API key', () => {
    *  from "no summary stored, no call spent". */
   async function seedThread(text: string): Promise<string> {
     process.env.CW_SUMMARIES = '0';
-    const r = await local(`/api/docs/${DOC}/threads`, {
+    const r = await local(`/workspaces/${BOARD}/docs/${DOC}/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ author: bryan, text, anchor }),
@@ -161,7 +167,7 @@ describe('share visitors never spend the summary API key', () => {
 
   it('POST /resolve — a visitor click does not, a local click does', async () => {
     const visitorThread = await seedThread('visitor will resolve this one');
-    const vr = await visitor(`/api/docs/${DOC}/threads/${visitorThread}/resolve`, {
+    const vr = await visitor(`/workspaces/${BOARD}/docs/${DOC}/threads/${visitorThread}/resolve`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{}',
@@ -174,7 +180,7 @@ describe('share visitors never spend the summary API key', () => {
 
     // POSITIVE CONTROL: the identical route, requested locally, DOES generate.
     const localThread = await seedThread('local user will resolve this one');
-    const lr = await local(`/api/docs/${DOC}/threads/${localThread}/resolve`, {
+    const lr = await local(`/workspaces/${BOARD}/docs/${DOC}/threads/${localThread}/resolve`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{}',
@@ -192,7 +198,7 @@ describe('share visitors never spend the summary API key', () => {
     // gate. That is exactly how a vacuous version of this test passes.)
     const threadId = await seedThread('visitor will reopen this one');
     process.env.CW_SUMMARIES = '0';
-    await local(`/api/docs/${DOC}/threads/${threadId}/resolve`, {
+    await local(`/workspaces/${BOARD}/docs/${DOC}/threads/${threadId}/resolve`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{}',
@@ -201,7 +207,7 @@ describe('share visitors never spend the summary API key', () => {
     process.env.CW_SUMMARIES = '1';
     calls = [];
 
-    const vr = await visitor(`/api/docs/${DOC}/threads/${threadId}/reopen`, {
+    const vr = await visitor(`/workspaces/${BOARD}/docs/${DOC}/threads/${threadId}/reopen`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{}',
@@ -213,7 +219,7 @@ describe('share visitors never spend the summary API key', () => {
     // POSITIVE CONTROL: the same route locally, from the same state, calls.
     const other = await seedThread('local user will reopen this one');
     process.env.CW_SUMMARIES = '0';
-    await local(`/api/docs/${DOC}/threads/${other}/resolve`, {
+    await local(`/workspaces/${BOARD}/docs/${DOC}/threads/${other}/resolve`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{}',
@@ -221,7 +227,7 @@ describe('share visitors never spend the summary API key', () => {
     await settle();
     process.env.CW_SUMMARIES = '1';
     calls = [];
-    const lr = await local(`/api/docs/${DOC}/threads/${other}/reopen`, {
+    const lr = await local(`/workspaces/${BOARD}/docs/${DOC}/threads/${other}/reopen`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{}',
@@ -232,7 +238,7 @@ describe('share visitors never spend the summary API key', () => {
   });
 
   it('POST /threads/by_find — the visitor cannot make their own text the prompt', async () => {
-    const vr = await visitor(`/api/docs/${DOC}/threads/by_find`, {
+    const vr = await visitor(`/workspaces/${BOARD}/docs/${DOC}/threads/by_find`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -247,7 +253,7 @@ describe('share visitors never spend the summary API key', () => {
 
     // POSITIVE CONTROL: locally, the same call generates — and the body that
     // would have gone out is exactly the caller's text.
-    const lr = await local(`/api/docs/${DOC}/threads/by_find`, {
+    const lr = await local(`/workspaces/${BOARD}/docs/${DOC}/threads/by_find`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -264,7 +270,7 @@ describe('share visitors never spend the summary API key', () => {
 
   it('POST /comments — the gate that was already there still holds', async () => {
     const threadId = await seedThread('visitor will reply to this one');
-    const vr = await visitor(`/api/docs/${DOC}/threads/${threadId}/comments`, {
+    const vr = await visitor(`/workspaces/${BOARD}/docs/${DOC}/threads/${threadId}/comments`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ author: bryan, text: 'a visitor reply' }),

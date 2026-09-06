@@ -26,8 +26,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { MAX_QUEUED_COMMENTS, TaskStore, commentQueuePath } from '../src/tasks.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-reviewer', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('a comment for an agent is written down, addressed, and cleared only on receipt', () => {
   const dirs: string[] = [];
@@ -329,11 +333,12 @@ describe('a comment posted while the subscriber is disconnected is delivered aft
   const get = (path: string) =>
     fetch(`${base}${path}`, { headers: { host: `localhost:${handle.port}` } });
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'comment-durable-live-'));
     srcDir = mkdtempSync(join(tmpdir(), 'comment-durable-src-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterEach(() => {
@@ -349,25 +354,32 @@ describe('a comment posted while the subscriber is disconnected is delivered aft
   async function board(name: string, agentId: string): Promise<string> {
     const w = await post('/workspaces', { name, goal: 'Ship it.' });
     const { workspace } = (await w.json()) as { workspace: { id: string } };
+    WS = workspace.id;
     const att = await post(`/workspaces/${workspace.id}/agents`, {
       agentId,
       runtime: 'claude-code-local',
     });
     expect(att.status).toBe(200);
     expect(((await att.json()) as { lead?: boolean }).lead).toBe(true);
-    return workspace.id;
+    WS = workspace.id;
+    return WS;
   }
 
   async function makeDoc(docId: string, hubWorkspaceId: string): Promise<void> {
     const path = join(srcDir, `${docId}.md`);
     const { writeFileSync } = await import('node:fs');
     writeFileSync(path, `# ${docId}\n\nFirst paragraph.\n`);
-    const res = await post('/api/docs', { docId, sourceUrl: path, title: docId, hubWorkspaceId });
+    const res = await post(`/workspaces/${WS}/docs`, {
+      docId,
+      sourceUrl: path,
+      title: docId,
+      hubWorkspaceId,
+    });
     expect(res.status).toBe(200);
   }
 
   const comment = (docId: string, text: string, author: Record<string, unknown> = PERSON) =>
-    post(`/api/docs/${encodeURIComponent(docId)}/threads`, {
+    post(`/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads`, {
       author,
       text,
       anchor: { kind: 'subject' },

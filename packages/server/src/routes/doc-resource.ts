@@ -54,6 +54,7 @@ export async function handleDocResourceCore(
     doc,
     rest,
     visitor,
+    scope,
     authorFor,
     refuseCategoryAuthor,
     metaFor,
@@ -109,7 +110,28 @@ export async function handleDocResourceCore(
     // can route voice utterances (§3.8: voice is not board-only).
     // OWNER ONLY: a workspace id is an unguessable URL capability, and
     // a doc-scoped visitor must not learn it from a member doc.
-    const boardWs = visitor ? null : taskStore.workspaceOfDoc(docId);
+    //
+    // THE BOARD IS IN THE PATH NOW, so a doc filed on the board in the path
+    // answers with that one. `workspaceOfDoc` answers with the FIRST board
+    // that links the doc, which was the only available answer while a doc had
+    // one address — but a doc filed on two boards has two addresses, and
+    // under that derivation reading it through board B handed the surface
+    // board A's id, pointing the voice dock at a board the reader did not
+    // ask for.
+    //
+    // Still "the board this doc is FILED on", though — not "the board in the
+    // path". A review MEMBER is reachable under the board holding its review
+    // and is filed on no board itself, and this field is where that
+    // distinction lives: it stays absent, and `backTo` below resolves the
+    // `←` through the grouping instead.
+    const filedHere =
+      scope !== undefined &&
+      (taskStore.getWorkspace(scope.workspaceId)?.docIds ?? []).includes(docId);
+    const boardWs = visitor
+      ? null
+      : filedHere && scope
+        ? scope.workspaceId
+        : (taskStore.workspaceOfDoc(docId) ?? null);
     // Where the review app's `←` should go: the board that links this
     // doc, rather than the machine-wide landing page. OWNER ONLY for
     // the same reason `hubWorkspaceId` is — a board id is an
@@ -117,7 +139,7 @@ export async function handleDocResourceCore(
     // one from a member doc. Resolved through the review when the
     // doc is a member of a review, which is where `hubWorkspaceId`
     // deliberately stops.
-    const backTo = visitor ? null : backTargetFor(docId, doc.meta.workspaceId);
+    const backTo = visitor ? null : backTargetFor(docId, doc.meta.workspaceId, scope?.workspaceId);
     // Who the Make Plan float names ("Ask <lead> to create a plan").
     // Owner-only like the board id it comes from; a lead id is
     // already a display name everywhere the board shows one.

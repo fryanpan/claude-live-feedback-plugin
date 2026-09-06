@@ -54,6 +54,19 @@ describe('the group-bind MCP tools file the review on a board, through the real 
     });
   };
 
+  /** The raw result, so a REFUSAL can be read rather than parsed as JSON. */
+  const callToolRaw = async (
+    name: string,
+    args: unknown,
+  ): Promise<{ isError?: boolean; content?: Array<{ text?: string }> }> => {
+    const reply = (await call('tools/call', { name, arguments: args })) as {
+      result?: { isError?: boolean; content?: Array<{ text?: string }> };
+      error?: unknown;
+    };
+    expect(reply.error).toBeUndefined();
+    return reply.result ?? {};
+  };
+
   const callTool = async (name: string, args: unknown): Promise<Record<string, unknown>> => {
     const reply = (await call('tools/call', { name, arguments: args })) as {
       result?: { content?: Array<{ text?: string }> };
@@ -137,7 +150,7 @@ describe('the group-bind MCP tools file the review on a board, through the real 
       repo,
       base: repoBase,
       reviewId: 'mcp-rev-named',
-      hubWorkspaceId: boardId,
+      workspaceId: boardId,
       subscribe: false,
     })) as { hubWorkspaceId?: string };
 
@@ -145,18 +158,19 @@ describe('the group-bind MCP tools file the review on a board, through the real 
     expect(handle.tasks.workspaceOfDoc('mcp-rev-named')).toBe(boardId);
   });
 
-  it('create_diff_review with no board still lands the review on one, in a single call', async () => {
-    const res = (await callTool('create_diff_review', {
+  it('create_diff_review with NO board is refused, and says which argument', async () => {
+    // It used to land on a default board. The review is CREATED at
+    // `POST /workspaces/<ws>/reviews` now, so a call naming no board names
+    // no place to create it, and the refusal says so before any git ran.
+    const refused = await callToolRaw('create_diff_review', {
       repo,
       base: repoBase,
       reviewId: 'mcp-rev-unfiled',
       subscribe: false,
-    })) as { hubWorkspaceId?: string; entryUrl?: string };
-
-    // One call: the URL a human gets AND the board it landed on.
-    expect(res.entryUrl).toBeTruthy();
-    expect(res.hubWorkspaceId).toBeTruthy();
-    expect(handle.tasks.workspaceOfDoc('mcp-rev-unfiled')).toBe(res.hubWorkspaceId as string);
+    });
+    expect(refused.isError).toBe(true);
+    expect(refused.content?.[0]?.text ?? '').toContain('workspaceId');
+    expect(handle.tasks.workspaceOfDoc('mcp-rev-unfiled')).toBeFalsy();
   });
 
   it('bind_folder forwards it too — a second tool reaches a second route', async () => {
@@ -168,13 +182,15 @@ describe('the group-bind MCP tools file the review on a board, through the real 
 
     const res = (await callTool('bind_folder', {
       folderPath: folder,
-      workspaceId: 'mcp-folder-grouping',
-      hubWorkspaceId: boardId,
+      setId: 'mcp-folder-grouping',
+      workspaceId: boardId,
       subscribe: false,
     })) as { hubWorkspaceId?: string; workspaceId?: string };
 
-    // `workspaceId` here is the GROUPING the bind created; `hubWorkspaceId` is
-    // the board it was filed on. Both in one payload, kept apart by name.
+    // The RESULT still spells them the way the route answers: `workspaceId`
+    // is the set the bind created, `hubWorkspaceId` the board it was filed
+    // on. On the way IN they are `setId` and `workspaceId`, because
+    // `workspaceId` means the board on every other tool.
     expect(res.workspaceId).toBe('mcp-folder-grouping');
     expect(res.hubWorkspaceId).toBe(boardId);
     expect(handle.tasks.workspaceOfDoc('mcp-folder-grouping')).toBe(boardId);

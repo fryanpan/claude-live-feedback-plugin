@@ -28,6 +28,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const LEAD = { id: 'agent-cartographer', name: 'Cartographer', kind: 'agent' };
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'person' };
@@ -36,6 +37,9 @@ const STALE_DETAIL =
   'At 430px the call to action falls below the fold. Worth moving it above the gallery so it stays visible?';
 const LIVE_DETAIL =
   'The gallery scrolls the whole page sideways at 430px. Cap it at the viewport width, or let it scroll inside its own box?';
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('withdrawing a review item raised on a doc thread', () => {
   let handle: ServerHandle;
@@ -65,17 +69,23 @@ describe('withdrawing a review item raised on a doc thread', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'doc-withdraw-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     const file = join(dataDir, 'mockup-notes.md');
     writeFileSync(file, '# Mockup notes\n\nThe phone layout holds together.\n');
     const created = await jj<{ docId: string }>(
-      await post('/api/docs', { docId: 'mockup-notes', type: 'markdown', sourceUrl: file }),
+      await post(`/workspaces/${WS}/docs`, {
+        docId: 'mockup-notes',
+        type: 'markdown',
+        sourceUrl: file,
+      }),
     );
     docId = created.docId;
     const ws = await jj<{ workspace: { id: string } }>(
       await post('/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id }),
     );
     workspaceId = ws.workspace.id;
-    await jj(await post(`/workspaces/${workspaceId}/docs`, { docId }));
+    WS = workspaceId;
+    await jj(await post(`/workspaces/${workspaceId}/docs:attach`, { docId }));
   });
 
   afterEach(async () => {
@@ -91,7 +101,7 @@ describe('withdrawing a review item raised on a doc thread', () => {
     liveId: string;
   }> {
     const opened = await jj<{ thread: ThreadPayload }>(
-      await post(`/api/docs/${docId}/threads/by_find`, {
+      await post(`/workspaces/${WS}/docs/${docId}/threads/by_find`, {
         find: 'The phone layout holds together.',
         text: 'Checked this at 430px.',
         author: LEAD,
@@ -106,7 +116,7 @@ describe('withdrawing a review item raised on a doc thread', () => {
     const threadId = opened.thread.id;
     const staleId = (opened.thread.comments[0] as { id: string }).id;
     const replied = await jj<{ thread: ThreadPayload }>(
-      await post(`/api/docs/${docId}/threads/${threadId}/comments`, {
+      await post(`/workspaces/${WS}/docs/${docId}/threads/${threadId}/comments`, {
         text: 'Re-measured — the first question was wrong.',
         author: LEAD,
         review: {
@@ -124,7 +134,7 @@ describe('withdrawing a review item raised on a doc thread', () => {
   }
 
   const withdraw = (threadId: string, body: Record<string, unknown>): Promise<Response> =>
-    post(`/api/docs/${docId}/threads/${threadId}/withdraw`, { author: LEAD, ...body });
+    post(`/workspaces/${WS}/docs/${docId}/threads/${threadId}/withdraw`, { author: LEAD, ...body });
 
   const queueAsks = async (): Promise<string[]> => {
     const q = await jj<{ items: Array<{ kind: string; ask?: string }> }>(
@@ -135,7 +145,7 @@ describe('withdrawing a review item raised on a doc thread', () => {
 
   const threadNow = async (threadId: string): Promise<ThreadPayload> => {
     const all = await jj<{ threads: ThreadPayload[] }>(
-      await fetch(`${base}/api/docs/${docId}/threads`),
+      await fetch(`${base}/workspaces/${WS}/docs/${docId}/threads`),
     );
     const t = all.threads.find((x) => x.id === threadId);
     expect(t, 'the thread should still be there').toBeTruthy();
@@ -153,7 +163,7 @@ describe('withdrawing a review item raised on a doc thread', () => {
     expect(t.status).toBe('open');
     // The live ask is still the one on the queue, and still answerable.
     expect(await queueAsks()).toEqual(['Should the gallery scroll inside its own box?']);
-    const answered = await post(`/api/docs/${docId}/threads/${threadId}/answer`, {
+    const answered = await post(`/workspaces/${WS}/docs/${docId}/threads/${threadId}/answer`, {
       commentId: liveId,
       author: PERSON,
       text: 'Inside its own box.',
@@ -189,7 +199,7 @@ describe('withdrawing a review item raised on a doc thread', () => {
     await jj(await withdraw(threadId, { commentId: staleId }));
     expect(await queueAsks()).toEqual([]);
     await jj(
-      await post(`/api/docs/${docId}/threads/${threadId}/withdraw/undo`, {
+      await post(`/workspaces/${WS}/docs/${docId}/threads/${threadId}/withdraw/undo`, {
         author: LEAD,
         commentId: liveId,
       }),
@@ -203,7 +213,7 @@ describe('withdrawing a review item raised on a doc thread', () => {
   it('refuses to withdraw an ANSWERED item — that would retract somebody’s answer', async () => {
     const { threadId, liveId } = await twoAsksOnOneThread();
     await jj(
-      await post(`/api/docs/${docId}/threads/${threadId}/answer`, {
+      await post(`/workspaces/${WS}/docs/${docId}/threads/${threadId}/answer`, {
         commentId: liveId,
         author: PERSON,
         text: 'Inside its own box.',
@@ -232,7 +242,7 @@ describe('withdrawing a review item raised on a doc thread', () => {
     await jj(await withdraw(threadId, { commentId: liveId }));
     await jj(await withdraw(threadId, { commentId: staleId }));
     expect(await queueAsks()).toEqual([]);
-    const late = await post(`/api/docs/${docId}/threads/${threadId}/answer`, {
+    const late = await post(`/workspaces/${WS}/docs/${docId}/threads/${threadId}/answer`, {
       commentId: liveId,
       author: PERSON,
       text: 'Inside its own box.',
@@ -249,7 +259,7 @@ describe('withdrawing a review item raised on a doc thread', () => {
   it('refuses a comment that carries no review item, and an unknown doc', async () => {
     const { threadId } = await twoAsksOnOneThread();
     const plain = await jj<{ thread: ThreadPayload }>(
-      await post(`/api/docs/${docId}/threads/${threadId}/comments`, {
+      await post(`/workspaces/${WS}/docs/${docId}/threads/${threadId}/comments`, {
         text: 'Just a remark.',
         author: LEAD,
       }),
@@ -258,7 +268,7 @@ describe('withdrawing a review item raised on a doc thread', () => {
     const res = await withdraw(threadId, { commentId: remark.id });
     expect(res.status).toBe(404);
     expect((await res.json()).error).toBe('not-a-review-item');
-    const nowhere = await post(`/api/docs/no-such-doc/threads/${threadId}/withdraw`, {
+    const nowhere = await post(`/workspaces/${WS}/docs/no-such-doc/threads/${threadId}/withdraw`, {
       author: LEAD,
       commentId: remark.id,
     });
@@ -268,7 +278,7 @@ describe('withdrawing a review item raised on a doc thread', () => {
   it('needs an author and a commentId', async () => {
     const { threadId, staleId } = await twoAsksOnOneThread();
     expect((await withdraw(threadId, {})).status).toBe(400);
-    const noAuthor = await post(`/api/docs/${docId}/threads/${threadId}/withdraw`, {
+    const noAuthor = await post(`/workspaces/${WS}/docs/${docId}/threads/${threadId}/withdraw`, {
       commentId: staleId,
     });
     expect(noAuthor.status).toBe(400);
