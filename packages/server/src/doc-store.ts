@@ -2678,6 +2678,23 @@ export class DocStore {
     return this.bindings.getSyncError(docId);
   }
 
+  /**
+   * Does the doc now hold markdown syntax as literal characters?
+   *
+   * Read after a write, on the response the writer actually reads. The
+   * corruptions in this family all return ok and serialize back to a correct
+   * file, so nothing else in the system ever tells the writing agent that
+   * the live doc is broken. Only inspects a resident room — a doc nobody has
+   * open was not just written to.
+   */
+  literalMarkdownSyncError(docId: string): { message: string; at: number } | undefined {
+    const room = this.peek(docId);
+    if (!room || contentKind(room.meta.type) !== 'prose') return undefined;
+    const finding = prose.detectLiteralMarkdown(prose.getProseFragment(room.ydoc));
+    if (!finding) return undefined;
+    return { message: prose.literalMarkdownMessage(finding), at: Date.now() };
+  }
+
   /** Bound documents whose write-back has been scheduled and has not fired —
    *  what a deploy asks before it fast-forwards a checkout. */
   pendingFileWrites(root?: string): { docId: string; path: string }[] {

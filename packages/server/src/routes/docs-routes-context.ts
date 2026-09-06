@@ -35,7 +35,21 @@ export type { ThreadReviewGate };
  *  stays here rather than moving with either. */
 export function withSyncError(docStore: DocStore, docId: string, body: object): object {
   const syncError = docStore.getSyncError(docId);
-  return syncError ? { ...body, syncError } : body;
+  // The write just landed: ask whether it left markdown syntax sitting in the
+  // doc as literal characters. This is the only signal for that family of
+  // corruption — the verb returns ok and the file on disk serializes back
+  // correctly, so a reader of the rendered page is otherwise the first to
+  // know. A disk conflict is the more urgent of the two, so it leads and the
+  // integrity note is appended rather than replacing it.
+  const literal = docStore.literalMarkdownSyncError(docId);
+  if (syncError && literal) {
+    return {
+      ...body,
+      syncError: { ...syncError, message: `${syncError.message}; ${literal.message}` },
+    };
+  }
+  const combined = syncError ?? literal;
+  return combined ? { ...body, syncError: combined } : body;
 }
 
 /** Sentinel for a `placement` body value that is present but not one of the
