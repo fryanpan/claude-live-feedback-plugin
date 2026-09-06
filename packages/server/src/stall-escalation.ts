@@ -112,7 +112,14 @@ export interface EscalatedRow {
   id: string;
   title: string;
   bucket: string;
-  /** How long the row has been quiet, as the gate measured it. */
+  /**
+   * How long the row has been STUCK, on the clock its own bucket is judged by
+   * (`StalledRow.stuckMs`, falling back to `quietMs`). For every bucket but
+   * one those are the same number. The exception is an unfiled ask that lives
+   * in a row's notes: the agent restating it touches the row every turn, so
+   * its silence is seconds while the ask nobody filed is hours old, and the
+   * hours are what this item is about.
+   */
   quietMs: number;
   /** How long ago the lead was told about it — or, when nobody could be
    *  reached, how long the board has been unable to tell anybody
@@ -383,11 +390,27 @@ export class StallEscalations {
     for (const row of [...board.unfiled, ...board.stalled]) {
       const stamp = told.get(row.id);
       if (stamp === undefined || now - stamp.at < this.escalateMs) continue;
+      // …and STUCK for that long as well. The told clock alone was the whole
+      // test, and it is only half the sentence the item goes on to write.
+      // `ToldRow.toldAt` is stamped once and never refreshed while the row is
+      // remembered, so a row the lead was told about yesterday, and has
+      // commented on and moved through statuses all day since, qualified
+      // again the moment it went quiet for the GATE's twenty minutes. The
+      // premise "the lead was told and nothing moved" was never checked
+      // against the row.
+      //
+      // Measured 2026-09-06: an item whose own body read "Quiet 1h; the lead
+      // was told 33h ago" — thirty-two of those hours are the lead answering.
+      // A row whose newest write is its own lead's comment or transition is
+      // the lead being reachable on that row, which is the one thing this
+      // module escalates for the absence of.
+      const stuckMs = row.stuckMs ?? row.quietMs;
+      if (stuckMs < this.escalateMs) continue;
       rows.push({
         id: row.id,
         title: row.title,
         bucket: row.bucket,
-        quietMs: row.quietMs,
+        quietMs: stuckMs,
         toldMs: now - stamp.at,
         delivered: stamp.delivered,
       });

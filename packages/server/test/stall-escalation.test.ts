@@ -199,6 +199,42 @@ describe('a told row that has not moved escalates to the reader', () => {
     expect(escalations.filedCount()).toBe(0);
   });
 
+  it('does not escalate a row its own lead has been working since it was told', () => {
+    const a = make('Re-point the digest at the new bucket');
+    // The shape the field produced: the lead was told about this row a day and
+    // a half ago and has been on it since — it commented, then moved it to
+    // in-progress twenty-five minutes back. `ToldRow.toldAt` is stamped once
+    // and never refreshed, so the told clock still reads 33h while the row's
+    // own clock reads 25m.
+    const told = toldMap([[a.id, now - 33 * 60 * 60_000]]);
+    escalations.onBoard(board(wsId, { stalled: [row(a, 'in-progress', 25 * 60_000)] }), told, now);
+
+    // Nothing filed: a row whose newest write is its own lead's is the lead
+    // being reachable on it, which is the absence this module escalates for.
+    expect(items(a.id)).toHaveLength(0);
+    expect(queued()).toHaveLength(0);
+    expect(escalations.filedCount()).toBe(0);
+  });
+
+  it('escalates an unfiled ask its row keeps restating, whose silence is seconds', () => {
+    const a = make('Decide which of the two writers stays');
+    const told = toldMap([[a.id, now - ESCALATE_MS - 60_000]]);
+    // What the gate hands over for a `blocked-on-owner-unfiled` row whose ask
+    // lives in its notes: the agent restated it this minute, so `quietMs` is
+    // seconds, while the ask nobody filed is hours old. The hours are the
+    // finding, and `stuckMs` is where the gate puts them.
+    escalations.onBoard(
+      board(wsId, {
+        unfiled: [{ ...row(a, 'blocked-on-owner-unfiled', 30_000), stuckMs: 3 * 60 * 60_000 }],
+      }),
+      told,
+      now,
+    );
+
+    expect(openItems(a.id)).toHaveLength(1);
+    expect(openItems(a.id)[0]?.review.detail ?? '').toContain('Quiet 3h');
+  });
+
   it('keeps the item open while the anchor is masked by the item itself', () => {
     const a = make('Take the lock off the writer');
     const told = toldMap([[a.id, now - ESCALATE_MS - 60_000]]);
