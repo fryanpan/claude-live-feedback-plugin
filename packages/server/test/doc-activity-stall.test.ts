@@ -34,6 +34,10 @@ import {
   settle,
   waitForFrames,
 } from './doc-activity-stall-harness.ts';
+import { seedBoard } from './workspace-seed.ts';
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe("a task's linked doc counts as the task moving", () => {
   let handle: ServerHandle;
@@ -51,10 +55,11 @@ describe("a task's linked doc counts as the task moving", () => {
     return res.json() as Promise<T>;
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'doc-activity-'));
     handle = createServer({ port: 0, dataDir, stallNudgeQuietMs: QUIET_MS });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterEach(async () => {
@@ -69,6 +74,7 @@ describe("a task's linked doc counts as the task moving", () => {
     const { workspace } = await jj<{ workspace: { id: string } }>(
       await post('/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id }),
     );
+    WS = workspace.id;
     await jj(
       await post(`/workspaces/${workspace.id}/agents`, {
         agentId: LEAD.id,
@@ -93,10 +99,14 @@ describe("a task's linked doc counts as the task moving", () => {
       }),
     );
     await jj(
-      await post(`/api/tasks/${task.id}/transition`, { to: 'todo', author: PERSON, workspaceId }),
+      await post(`/workspaces/${workspaceId}/tasks/${task.id}/transition`, {
+        to: 'todo',
+        author: PERSON,
+        workspaceId,
+      }),
     );
     await jj(
-      await post(`/api/tasks/${task.id}/transition`, {
+      await post(`/workspaces/${workspaceId}/tasks/${task.id}/transition`, {
         to: 'in-progress',
         author: LEAD,
         workspaceId,
@@ -109,8 +119,10 @@ describe("a task's linked doc counts as the task moving", () => {
   async function linkedDoc(taskId: string, docId: string): Promise<string> {
     const file = join(dataDir, `${docId}.md`);
     writeFileSync(file, '# Design\n\nFirst pass.\n');
-    await jj(await post('/api/docs', { docId, type: 'markdown', sourceUrl: file }));
-    await jj(await post(`/api/tasks/${taskId}/links`, { ref: { kind: 'doc', docId } }));
+    await jj(await post(`/workspaces/${WS}/docs`, { docId, type: 'markdown', sourceUrl: file }));
+    await jj(
+      await post(`/workspaces/${WS}/tasks/${taskId}/links`, { ref: { kind: 'doc', docId } }),
+    );
     return docId;
   }
 
@@ -142,7 +154,7 @@ describe("a task's linked doc counts as the task moving", () => {
     // was an agent rewriting its doc woke the lead three times in one hour.
     await settle(QUIET_MS + 100);
     await jj(
-      await post(`/api/docs/${docId}/content`, {
+      await post(`/workspaces/${WS}/docs/${docId}/content`, {
         markdown: '# Design\n\nSecond pass, written by the agent holding the row.\n',
         author: LEAD,
       }),
@@ -164,7 +176,10 @@ describe("a task's linked doc counts as the task moving", () => {
     const docId = await linkedDoc(busy, 'design-shared');
     await settle(QUIET_MS + 100);
     await jj(
-      await post(`/api/docs/${docId}/content`, { markdown: '# Design\n\nEdited.\n', author: LEAD }),
+      await post(`/workspaces/${WS}/docs/${docId}/content`, {
+        markdown: '# Design\n\nEdited.\n',
+        author: LEAD,
+      }),
     );
 
     handle.nudgeStalls();
@@ -180,7 +195,7 @@ describe("a task's linked doc counts as the task moving", () => {
     async function freshDoc(docId: string): Promise<Y.Doc> {
       const file = join(dataDir, `${docId}.md`);
       writeFileSync(file, '# Design\n');
-      await jj(await post('/api/docs', { docId, type: 'markdown', sourceUrl: file }));
+      await jj(await post(`/workspaces/${WS}/docs`, { docId, type: 'markdown', sourceUrl: file }));
       const doc = handle.docStore.peek(docId);
       expect(doc, `doc ${docId} should exist`).toBeTruthy();
       return (doc as { ydoc: Y.Doc }).ydoc;

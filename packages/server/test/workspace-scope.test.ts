@@ -22,10 +22,10 @@
  * All fixtures are synthetic.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { resolveWorkspaceScope } from '../src/middleware/workspace-scope.ts';
+import { SCOPED_COLLECTIONS, resolveWorkspaceScope } from '../src/middleware/workspace-scope.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'person' };
@@ -34,16 +34,16 @@ describe('resolveWorkspaceScope', () => {
   const j = (status: number, body: unknown) =>
     new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
   const deps = {
-    workspaceExists: (id: string) => id === 'w-here',
-    workspaceOfRow: (rowId: string) =>
-      rowId === 'g-here' ? 'w-here' : rowId === 'g-elsewhere' ? 'w-other' : undefined,
+    workspaceRecord: (id: string) => (id === 'w-here' ? { id } : undefined),
+    workspacesOfMember: (_collection: string, memberId: string) =>
+      memberId === 'g-here' ? ['w-here'] : memberId === 'g-elsewhere' ? ['w-other'] : [],
     j,
   };
   const ask = (pathname: string, method = 'GET') =>
     resolveWorkspaceScope(deps, { pathname, method, url: new URL(`http://x${pathname}`) });
 
   it('passes a path that is not a board’s at all', () => {
-    for (const p of ['/api/docs/d-1', '/', '/signin', '/workspaces']) {
+    for (const p of ['/', '/signin', '/workspaces']) {
       expect(ask(p).kind, p).toBe('pass');
     }
   });
@@ -56,12 +56,36 @@ describe('resolveWorkspaceScope', () => {
     expect(ask('/workspaces/w-nope', 'DELETE').kind).toBe('pass');
   });
 
-  it('passes the board’s HTML pages, unknown board included', () => {
-    // A browser gets the shell's own not-found, not a JSON body. The list is
-    // shared with the thing that serves them — see workspace-path.ts.
-    for (const p of ['', '/home', '/tasks', '/mine', '/activity', '/docs/d-1', '/reviews/r-1']) {
-      expect(ask(`/workspaces/w-nope${p}`).kind, p).toBe('pass');
+  it('passes the board’s HTML pages once the board is real', () => {
+    // The list is shared with the thing that serves them — see
+    // workspace-path.ts. `/docs/d-1` is not here: a member address is checked
+    // for a page too, and `d-1` is on no board (the case below).
+    for (const p of ['', '/home', '/tasks', '/mine', '/activity']) {
+      expect(ask(`/workspaces/w-here${p}`).kind, p).toBe('pass');
     }
+  });
+
+  it('CHECKS an HTML page rather than passing it, and refuses it as a page', () => {
+    // The page surface used to skip this resolver, so any board id in front
+    // of anybody's doc id served the shell with a 200. It is checked now; what
+    // stays page-shaped is the ANSWER — a browser gets HTML, not a JSON body.
+    const pageDeps = { ...deps, notFoundPage: () => new Response('<!doctype html>not found') };
+    const askPage = (pathname: string) =>
+      resolveWorkspaceScope(pageDeps, {
+        pathname,
+        method: 'GET',
+        url: new URL(`http://x${pathname}`),
+      });
+    for (const p of ['/home', '/tasks', '/docs/d-1', '/reviews/r-1']) {
+      const r = askPage(`/workspaces/w-nope${p}`);
+      expect(r.kind, p).toBe('refused');
+      if (r.kind !== 'refused') throw new Error('unreachable');
+      expect(r.response.headers.get('content-type') ?? '', p).not.toContain('application/json');
+    }
+    // A member of a board that DOES exist, filed somewhere else, is refused
+    // the same way — the board being real is not the question.
+    const foreign = askPage('/workspaces/w-here/docs/d-1');
+    expect(foreign.kind).toBe('refused');
   });
 
   it('claims the same addresses once ?format=json asks for data', async () => {
@@ -80,7 +104,7 @@ describe('resolveWorkspaceScope', () => {
     const ok = ask('/workspaces/w-here/settings');
     expect(ok.kind).toBe('scope');
     if (ok.kind !== 'scope') throw new Error('unreachable');
-    expect(ok.scope).toEqual({ workspaceId: 'w-here', rest: 'settings' });
+    expect(ok.scope).toEqual({ workspaceId: 'w-here', rest: 'settings', board: { id: 'w-here' } });
   });
 
   it('refuses a goal band filed on ANOTHER board', () => {
@@ -153,6 +177,16 @@ describe('the canonical routes, over HTTP', () => {
     await handle.stop();
     rmSync(dataDir, { recursive: true, force: true });
   });
+
+  /** One task on the named board. */
+  const mkTask = async (workspaceId: string): Promise<string> => {
+    const r = await post(`/workspaces/${workspaceId}/tasks`, {
+      title: 'Agent can file a row so that the probe has a member',
+      author: PERSON,
+    });
+    expect(r.status).toBe(200);
+    return ((await r.json()) as { task: { id: string } }).task.id;
+  };
 
   /**
    * Every collection a board owns, as `<method> <sub>` — with a body where
@@ -271,6 +305,165 @@ describe('the canonical routes, over HTTP', () => {
     const ok = await local(`/workspaces/${board}/goals/${bandId}/cascade`);
     expect(ok.status).toBe(200);
     expect(await ok.json()).toEqual({ taskIds: [] });
+  });
+
+  /**
+   * CRITERION 3, and the reason it is a table rather than a handful of cases.
+   *
+   * One row per key of `SCOPED_COLLECTIONS` — the same map the middleware
+   * reads — so this cannot be a SAMPLE of the collections. Each row mints a
+   * real member on the FAR board and then names it under the near one, which
+   * is the shape the old `/api/<collection>/<id>` paths could not express at
+   * all; the assertion is that every one of them is refused, with the
+   * indistinguishable 404 the header describes.
+   *
+   * Each row carries its own positive control, called on the member's OWN
+   * board. Without it "404 everywhere" is also what a route that no longer
+   * exists looks like, and that is precisely the failure a cutover can ship.
+   *
+   * The completeness check below is the load-bearing half: it compares the
+   * table's keys against the map's, so a collection added to the middleware
+   * without a row here fails rather than passing unexercised.
+   */
+  interface ForeignProbe {
+    /** Mint one member on the given board and answer its id. */
+    mint: (workspaceId: string) => Promise<string>;
+    /** The address, as `<method> <sub>` — `{id}` is replaced by the member. */
+    method: string;
+    sub: string;
+    body?: unknown;
+  }
+
+  const mockupHtml = (dir: string): string => {
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, 'mock.html');
+    writeFileSync(file, '<!doctype html><title>Mock</title><p>Hi.</p>');
+    return file;
+  };
+
+  const FOREIGN_PROBES: Readonly<Record<string, ForeignProbe>> = {
+    goals: {
+      mint: async (ws) => {
+        const r = await post(`/workspaces/${ws}/goals/add`, { title: 'A band', author: PERSON });
+        expect(r.status).toBe(200);
+        return ((await r.json()) as { goal: { id: string } }).goal.id;
+      },
+      method: 'GET',
+      sub: 'goals/{id}/cascade',
+    },
+    tasks: {
+      mint: async (ws) => mkTask(ws),
+      method: 'POST',
+      sub: 'tasks/{id}/title',
+      body: { title: 'A retitled row', author: PERSON },
+    },
+    docs: {
+      mint: async (ws) => {
+        const file = join(dataDir, `doc-${ws}.md`);
+        writeFileSync(file, '# A doc\n\nBody.\n');
+        const r = await post(`/workspaces/${ws}/docs`, {
+          docId: `doc-${ws}`,
+          type: 'markdown',
+          sourceUrl: file,
+        });
+        expect(r.status).toBe(200);
+        return ((await r.json()) as { docId: string }).docId;
+      },
+      method: 'GET',
+      sub: 'docs/{id}?format=json',
+    },
+    mockups: {
+      // A mockup's address is a PAGE, which the middleware checks and then
+      // hands on — so this row is also the assertion that the page surface is
+      // checked rather than passed unchecked.
+      mint: async (ws) => {
+        const r = await post(`/workspaces/${ws}/docs`, {
+          docId: `mock-${ws}`,
+          type: 'mockup',
+          sourceUrl: mockupHtml(join(dataDir, `mock-${ws}`)),
+        });
+        expect(r.status).toBe(200);
+        return ((await r.json()) as { docId: string }).docId;
+      },
+      method: 'GET',
+      sub: 'mockups/{id}',
+    },
+    reviews: {
+      // An attachment SET, filed on the board that bound the folder.
+      mint: async (ws) => {
+        const folder = join(dataDir, `folder-${ws}`);
+        mkdirSync(folder, { recursive: true });
+        writeFileSync(join(folder, 'notes.md'), '# Notes\n\nOne file.\n');
+        const r = await post('/workspaces', { folderPath: folder, hubWorkspaceId: ws });
+        expect(r.status).toBe(200);
+        return ((await r.json()) as { workspaceId: string }).workspaceId;
+      },
+      // The set's own READ, not its archive verb: `reviews/<id>/archive`
+      // refuses a set it cannot find on its own, so it would answer 404 with
+      // this middleware deleted and prove nothing about the board boundary.
+      method: 'GET',
+      sub: 'reviews/{id}?format=json',
+    },
+    'review-items': {
+      mint: async (ws) => {
+        const taskId = await mkTask(ws);
+        const r = await post(`/workspaces/${ws}/tasks/${taskId}/review-items`, {
+          author: PERSON,
+          review: {
+            shape: 'decision',
+            headline: 'Which shape should the cutover take',
+            detail: 'The board in the path, or the board resolved per handler.',
+            options: [
+              { id: 'o-path', label: 'Canonical paths' },
+              { id: 'o-stay', label: 'Leave it' },
+            ],
+          },
+        });
+        expect(r.status).toBe(200);
+        return ((await r.json()) as { item: { id: string } }).item.id;
+      },
+      method: 'GET',
+      sub: 'review-items/{id}',
+    },
+    dispatches: {
+      // Addressed by the TASK it is on, so the task's board is the dispatch's.
+      mint: async (ws) => mkTask(ws),
+      method: 'DELETE',
+      sub: 'dispatches/{id}',
+    },
+  };
+
+  const callProbe = async (workspaceId: string, probe: ForeignProbe, id: string) => {
+    const sub = probe.sub.replace('{id}', encodeURIComponent(id));
+    const r = await local(`/workspaces/${workspaceId}/${sub}`, {
+      method: probe.method,
+      ...(probe.body === undefined
+        ? {}
+        : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(probe.body) }),
+    });
+    await r.body?.cancel();
+    return r.status;
+  };
+
+  it('the probe table covers EVERY collection the middleware checks', () => {
+    // The completeness half. A collection added to `SCOPED_COLLECTIONS`
+    // without a row here would otherwise be checked by a test that never
+    // calls it, which is the same as not being covered.
+    expect(Object.keys(FOREIGN_PROBES).sort()).toEqual(Object.keys(SCOPED_COLLECTIONS).sort());
+  });
+
+  it('refuses a member of ANOTHER board on every scoped collection', async () => {
+    for (const [collection, probe] of Object.entries(FOREIGN_PROBES)) {
+      const id = await probe.mint(other);
+      // POSITIVE CONTROL first: the same call answers on the member's own
+      // board, so the refusal below is the board boundary and not a dead
+      // route. Called first because several of these verbs are one-way.
+      expect(await callProbe(other, probe, id), `${collection} on its own board`).not.toBe(404);
+      expect(await callProbe(board, probe, id), `${collection} across boards`).toBe(404);
+      // And an id nothing minted is refused the same way, so a real id
+      // learns nothing from being real.
+      expect(await callProbe(board, probe, 'never-minted'), `${collection} invented`).toBe(404);
+    }
   });
 
   it('answers nothing at the retired /api spellings', async () => {

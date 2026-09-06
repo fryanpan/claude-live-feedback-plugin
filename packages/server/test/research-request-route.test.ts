@@ -22,6 +22,7 @@ import { type User, prose } from '@feedback/core';
 import { researchAskComment, researchPlaceholderMarkdown } from '../src/huddle.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON: User = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
 
@@ -46,7 +47,10 @@ interface ResearchResponse {
   placeholder: boolean;
 }
 
-describe('POST /api/docs/:docId/research-request', () => {
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
+describe(`POST /workspaces/${WS}/docs/:docId/research-request`, () => {
   let handle: ServerHandle;
   let access: AccessHarness;
   let dataDir: string;
@@ -80,7 +84,8 @@ describe('POST /api/docs/:docId/research-request', () => {
     return docId;
   };
   const threadsOf = async (docId: string): Promise<ThreadRow[]> =>
-    (await jj<{ threads: ThreadRow[] }>(await local(`/api/docs/${docId}/threads`))).threads;
+    (await jj<{ threads: ThreadRow[] }>(await local(`/workspaces/${WS}/docs/${docId}/threads`)))
+      .threads;
   const markdownOf = (docId: string): string => {
     const doc = handle.docStore.get(docId);
     if (!doc) throw new Error('doc missing');
@@ -109,11 +114,13 @@ describe('POST /api/docs/:docId/research-request', () => {
       ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     workspaceId = (
       await jj<{ workspace: { id: string } }>(
         await post('/workspaces', { name: 'research-request-board' }),
       )
     ).workspace.id;
+    WS = workspaceId;
   });
 
   afterAll(async () => {
@@ -128,7 +135,7 @@ describe('POST /api/docs/:docId/research-request', () => {
     expect(markdownOf(docId)).not.toContain('Research:');
 
     const r = await jj<ResearchResponse>(
-      await post(`/api/docs/${docId}/research-request`, {
+      await post(`/workspaces/${WS}/docs/${docId}/research-request`, {
         author: PERSON,
         topic: 'endpoint detection for faster notes',
         anchor: anchorOver(docId, 'endpoint detection may close that gap'),
@@ -168,7 +175,7 @@ describe('POST /api/docs/:docId/research-request', () => {
     const docId = await newHuddle();
     const topic = `${'whether '.repeat(20)}Access covers the mockup route`;
     const r = await jj<ResearchResponse>(
-      await post(`/api/docs/${docId}/research-request`, {
+      await post(`/workspaces/${WS}/docs/${docId}/research-request`, {
         author: PERSON,
         topic,
         anchor: anchorOver(docId, 'more than one voice'),
@@ -183,14 +190,20 @@ describe('POST /api/docs/:docId/research-request', () => {
     const docId = await newHuddle();
     const anchor = anchorOver(docId, 'more than one voice');
     expect(
-      (await post(`/api/docs/${docId}/research-request`, { author: PERSON, anchor })).status,
-    ).toBe(400);
-    expect(
-      (await post(`/api/docs/${docId}/research-request`, { author: PERSON, topic: 'x' })).status,
+      (await post(`/workspaces/${WS}/docs/${docId}/research-request`, { author: PERSON, anchor }))
+        .status,
     ).toBe(400);
     expect(
       (
-        await post(`/api/docs/${docId}/research-request`, {
+        await post(`/workspaces/${WS}/docs/${docId}/research-request`, {
+          author: PERSON,
+          topic: 'x',
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await post(`/workspaces/${WS}/docs/${docId}/research-request`, {
           author: PERSON,
           topic: 'x',
           anchor: { kind: 'subject' },
@@ -205,7 +218,7 @@ describe('POST /api/docs/:docId/research-request', () => {
   it('refuses an author naming nobody, and a share visitor', async () => {
     const docId = await newHuddle();
     const anchor = anchorOver(docId, 'more than one voice');
-    const category = await post(`/api/docs/${docId}/research-request`, {
+    const category = await post(`/workspaces/${WS}/docs/${docId}/research-request`, {
       author: { id: 'agent', name: 'agent', kind: 'agent' },
       topic: 'x',
       anchor,
@@ -214,8 +227,14 @@ describe('POST /api/docs/:docId/research-request', () => {
     const share = await mintAccessShare(base, access, workspaceId);
     // Positive control: those same credentials DO read the doc, so the
     // refusal below is the route's rule rather than a rejected visitor.
-    expect((await fetch(`${base}/api/docs/${docId}`, { headers: share.headers })).status).toBe(200);
-    const visitor = await fetch(`${base}/api/docs/${docId}/research-request`, {
+    expect(
+      (
+        await fetch(`${base}/workspaces/${WS}/docs/${docId}?format=json`, {
+          headers: share.headers,
+        })
+      ).status,
+    ).toBe(200);
+    const visitor = await fetch(`${base}/workspaces/${WS}/docs/${docId}/research-request`, {
       method: 'POST',
       headers: { ...share.headers, 'content-type': 'application/json' },
       body: JSON.stringify({ author: PERSON, topic: 'x', anchor }),

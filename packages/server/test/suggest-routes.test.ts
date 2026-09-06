@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { User } from '@feedback/core';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { pastWriteBack, waitForFileToBe } from './wait-for.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 /**
  * HTTP-level tests for the suggested-edits route layer (redline-suggestions
@@ -18,15 +19,19 @@ import { pastWriteBack, waitForFileToBe } from './wait-for.ts';
 
 const author: User = { id: 'agent-1', name: 'Docs Agent', kind: 'known', color: '#7c5cff' };
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('suggested edits — HTTP routes', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'feedback-suggest-routes-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterAll(async () => {
@@ -43,7 +48,7 @@ describe('suggested edits — HTTP routes', () => {
     const file = join(dataDir, `${docId}.md`);
     writeFileSync(file, md);
     await j(
-      await fetch(`${base}/api/docs`, {
+      await fetch(`${base}/workspaces/${WS}/docs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ docId, type: 'markdown', sourceUrl: file }),
@@ -58,7 +63,7 @@ describe('suggested edits — HTTP routes', () => {
     const file = await makeDoc('sug-far', 'Alpha beta gamma.\n');
 
     const created = await j<{ ok: boolean; suggestionId: string }>(
-      await fetch(`${base}/api/docs/sug-far/find_and_replace`, {
+      await fetch(`${base}/workspaces/${WS}/docs/sug-far/find_and_replace`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ find: 'beta', replace: 'delta', suggest: true, author }),
@@ -76,7 +81,7 @@ describe('suggested edits — HTTP routes', () => {
     expect(readFileSync(file, 'utf8')).toBe('Alpha beta gamma.\n');
 
     const list = await j<{ suggestions: Array<{ sid: string; kind: string; author: User }> }>(
-      await fetch(`${base}/api/docs/sug-far/suggestions`),
+      await fetch(`${base}/workspaces/${WS}/docs/sug-far/suggestions`),
     );
     expect(list.suggestions).toHaveLength(1);
     expect(list.suggestions[0]?.sid).toBe(created.suggestionId);
@@ -84,9 +89,12 @@ describe('suggested edits — HTTP routes', () => {
 
     // Accept via the route → flows to disk via the normal write-back.
     const accepted = await j<{ ok: boolean }>(
-      await fetch(`${base}/api/docs/sug-far/suggestions/${created.suggestionId}/accept`, {
-        method: 'POST',
-      }),
+      await fetch(
+        `${base}/workspaces/${WS}/docs/sug-far/suggestions/${created.suggestionId}/accept`,
+        {
+          method: 'POST',
+        },
+      ),
     );
     expect(accepted.ok).toBe(true);
     await waitForFileToBe(file, 'Alpha delta gamma.\n');
@@ -94,14 +102,14 @@ describe('suggested edits — HTTP routes', () => {
 
   it('suggest:true on find_and_replace without an author is rejected — 400, no proposal created', async () => {
     await makeDoc('sug-noauthor', 'Alpha beta gamma.\n');
-    const res = await fetch(`${base}/api/docs/sug-noauthor/find_and_replace`, {
+    const res = await fetch(`${base}/workspaces/${WS}/docs/sug-noauthor/find_and_replace`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ find: 'beta', replace: 'delta', suggest: true }),
     });
     expect(res.status).toBe(400);
     const list = await j<{ suggestions: unknown[] }>(
-      await fetch(`${base}/api/docs/sug-noauthor/suggestions`),
+      await fetch(`${base}/workspaces/${WS}/docs/sug-noauthor/suggestions`),
     );
     expect(list.suggestions).toHaveLength(0);
   });
@@ -109,20 +117,23 @@ describe('suggested edits — HTTP routes', () => {
   it('reject via the route restores exactly the pre-suggestion text', async () => {
     const file = await makeDoc('sug-reject', 'Alpha beta gamma.\n');
     const created = await j<{ suggestionId: string }>(
-      await fetch(`${base}/api/docs/sug-reject/find_and_replace`, {
+      await fetch(`${base}/workspaces/${WS}/docs/sug-reject/find_and_replace`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ find: 'beta', replace: 'delta', suggest: true, author }),
       }),
     );
     const rejected = await j<{ ok: boolean }>(
-      await fetch(`${base}/api/docs/sug-reject/suggestions/${created.suggestionId}/reject`, {
-        method: 'POST',
-      }),
+      await fetch(
+        `${base}/workspaces/${WS}/docs/sug-reject/suggestions/${created.suggestionId}/reject`,
+        {
+          method: 'POST',
+        },
+      ),
     );
     expect(rejected.ok).toBe(true);
     const list = await j<{ suggestions: unknown[] }>(
-      await fetch(`${base}/api/docs/sug-reject/suggestions`),
+      await fetch(`${base}/workspaces/${WS}/docs/sug-reject/suggestions`),
     );
     expect(list.suggestions).toHaveLength(0);
     // timed: the assertion is that the pending proposal NEVER reaches disk,
@@ -133,7 +144,7 @@ describe('suggested edits — HTTP routes', () => {
 
   it('accept/reject on an unknown sid → 404 not-found', async () => {
     await makeDoc('sug-404', 'Alpha.\n');
-    const res = await fetch(`${base}/api/docs/sug-404/suggestions/nope/accept`, {
+    const res = await fetch(`${base}/workspaces/${WS}/docs/sug-404/suggestions/nope/accept`, {
       method: 'POST',
     });
     expect(res.status).toBe(404);
@@ -143,14 +154,14 @@ describe('suggested edits — HTTP routes', () => {
     const other: User = { id: 'human-1', name: 'Bryan', kind: 'known', color: '#00aa55' };
     const file = await makeDoc('sug-resolve-all', 'Alpha beta gamma.\n\nSecond paragraph here.\n');
     await j(
-      await fetch(`${base}/api/docs/sug-resolve-all/find_and_replace`, {
+      await fetch(`${base}/workspaces/${WS}/docs/sug-resolve-all/find_and_replace`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ find: 'beta', replace: 'delta', suggest: true, author }),
       }),
     );
     await j(
-      await fetch(`${base}/api/docs/sug-resolve-all/find_and_replace`, {
+      await fetch(`${base}/workspaces/${WS}/docs/sug-resolve-all/find_and_replace`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -162,7 +173,7 @@ describe('suggested edits — HTTP routes', () => {
       }),
     );
     const res = await j<{ ok: boolean; resolved: number; sids: string[] }>(
-      await fetch(`${base}/api/docs/sug-resolve-all/suggestions/resolve_all`, {
+      await fetch(`${base}/workspaces/${WS}/docs/sug-resolve-all/suggestions/resolve_all`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'accept', authorId: 'agent-1' }),
@@ -171,7 +182,7 @@ describe('suggested edits — HTTP routes', () => {
     expect(res.ok).toBe(true);
     expect(res.resolved).toBe(1);
     const list = await j<{ suggestions: Array<{ sid: string }> }>(
-      await fetch(`${base}/api/docs/sug-resolve-all/suggestions`),
+      await fetch(`${base}/workspaces/${WS}/docs/sug-resolve-all/suggestions`),
     );
     expect(list.suggestions).toHaveLength(1);
     await waitForFileToBe(file, 'Alpha delta gamma.\n\nSecond paragraph here.\n');
@@ -179,18 +190,21 @@ describe('suggested edits — HTTP routes', () => {
 
   it('resolve_all requires a valid action', async () => {
     await makeDoc('sug-bad-action', 'Alpha.\n');
-    const res = await fetch(`${base}/api/docs/sug-bad-action/suggestions/resolve_all`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ action: 'nonsense' }),
-    });
+    const res = await fetch(
+      `${base}/workspaces/${WS}/docs/sug-bad-action/suggestions/resolve_all`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'nonsense' }),
+      },
+    );
     expect(res.status).toBe(400);
   });
 
   it('suggest:true on rewrite_region proposes the thread-anchored rewrite instead of applying it — disk unchanged until accept', async () => {
     const file = await makeDoc('sug-rewrite-region', 'The quick brown fox jumped.\n');
     const thread = await j<{ thread: { id: string } }>(
-      await fetch(`${base}/api/docs/sug-rewrite-region/threads/by_find`, {
+      await fetch(`${base}/workspaces/${WS}/docs/sug-rewrite-region/threads/by_find`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ author, text: 'fix this', find: 'quick brown' }),
@@ -199,7 +213,7 @@ describe('suggested edits — HTTP routes', () => {
 
     const created = await j<{ ok: boolean; suggestionId: string }>(
       await fetch(
-        `${base}/api/docs/sug-rewrite-region/threads/${thread.thread.id}/rewrite_region`,
+        `${base}/workspaces/${WS}/docs/sug-rewrite-region/threads/${thread.thread.id}/rewrite_region`,
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -217,7 +231,7 @@ describe('suggested edits — HTTP routes', () => {
 
     const accepted = await j<{ ok: boolean }>(
       await fetch(
-        `${base}/api/docs/sug-rewrite-region/suggestions/${created.suggestionId}/accept`,
+        `${base}/workspaces/${WS}/docs/sug-rewrite-region/suggestions/${created.suggestionId}/accept`,
         { method: 'POST' },
       ),
     );
@@ -228,14 +242,14 @@ describe('suggested edits — HTTP routes', () => {
   it('suggest:true on rewrite_region without an author is rejected — 400', async () => {
     await makeDoc('sug-rr-noauthor', 'The quick brown fox.\n');
     const thread = await j<{ thread: { id: string } }>(
-      await fetch(`${base}/api/docs/sug-rr-noauthor/threads/by_find`, {
+      await fetch(`${base}/workspaces/${WS}/docs/sug-rr-noauthor/threads/by_find`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ author, text: 'fix this', find: 'quick brown' }),
       }),
     );
     const res = await fetch(
-      `${base}/api/docs/sug-rr-noauthor/threads/${thread.thread.id}/rewrite_region`,
+      `${base}/workspaces/${WS}/docs/sug-rr-noauthor/threads/${thread.thread.id}/rewrite_region`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -261,7 +275,7 @@ describe('suggested edits — HTTP routes', () => {
       // `sug-hook` is the readable name; the server mints the id, and every
       // event it fires carries the minted one.
       const { docId: hookDocId } = await j<{ docId: string }>(
-        await fetch(`${base}/api/docs`, {
+        await fetch(`${base}/workspaces/${WS}/docs`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
@@ -273,16 +287,19 @@ describe('suggested edits — HTTP routes', () => {
         }),
       );
       const created = await j<{ suggestionId: string }>(
-        await fetch(`${base}/api/docs/sug-hook/find_and_replace`, {
+        await fetch(`${base}/workspaces/${WS}/docs/sug-hook/find_and_replace`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ find: 'beta', replace: 'delta', suggest: true, author }),
         }),
       );
       await j(
-        await fetch(`${base}/api/docs/sug-hook/suggestions/${created.suggestionId}/accept`, {
-          method: 'POST',
-        }),
+        await fetch(
+          `${base}/workspaces/${WS}/docs/sug-hook/suggestions/${created.suggestionId}/accept`,
+          {
+            method: 'POST',
+          },
+        ),
       );
 
       const deadline = Date.now() + 2000;
@@ -313,7 +330,7 @@ describe('suggested edits — HTTP routes', () => {
   it('parseInlineMarks + suggest:true survives the route — the accepted proposal carries the link mark', async () => {
     const file = await makeDoc('sug-marks', 'See the docs here.\n');
     const created = await j<{ ok: boolean; suggestionId: string }>(
-      await fetch(`${base}/api/docs/sug-marks/find_and_replace`, {
+      await fetch(`${base}/workspaces/${WS}/docs/sug-marks/find_and_replace`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -336,14 +353,17 @@ describe('suggested edits — HTTP routes', () => {
     // raw `[label](url)` characters. On disk the two are identical strings,
     // so asserting on the file alone would pass either way.
     const list = await j<{ suggestions: Array<{ sid: string; insertedText: string }> }>(
-      await fetch(`${base}/api/docs/sug-marks/suggestions`),
+      await fetch(`${base}/workspaces/${WS}/docs/sug-marks/suggestions`),
     );
     expect(list.suggestions[0]?.insertedText).toBe('the docs');
 
     await j(
-      await fetch(`${base}/api/docs/sug-marks/suggestions/${created.suggestionId}/accept`, {
-        method: 'POST',
-      }),
+      await fetch(
+        `${base}/workspaces/${WS}/docs/sug-marks/suggestions/${created.suggestionId}/accept`,
+        {
+          method: 'POST',
+        },
+      ),
     );
     await waitForFileToBe(file, 'See [the docs](https://example.com) here.\n');
   });
@@ -351,33 +371,39 @@ describe('suggested edits — HTTP routes', () => {
   it('parseInlineMarks + suggest:true on rewrite_region survives the route too', async () => {
     const file = await makeDoc('sug-rr-marks', 'See the docs here.\n');
     const thread = await j<{ thread: { id: string } }>(
-      await fetch(`${base}/api/docs/sug-rr-marks/threads/by_find`, {
+      await fetch(`${base}/workspaces/${WS}/docs/sug-rr-marks/threads/by_find`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ author, text: 'link this', find: 'the docs' }),
       }),
     );
     const created = await j<{ ok: boolean; suggestionId: string }>(
-      await fetch(`${base}/api/docs/sug-rr-marks/threads/${thread.thread.id}/rewrite_region`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          replacement: '[the docs](https://example.com)',
-          parseInlineMarks: true,
-          suggest: true,
-          author,
-        }),
-      }),
+      await fetch(
+        `${base}/workspaces/${WS}/docs/sug-rr-marks/threads/${thread.thread.id}/rewrite_region`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            replacement: '[the docs](https://example.com)',
+            parseInlineMarks: true,
+            suggest: true,
+            author,
+          }),
+        },
+      ),
     );
     expect(created.ok).toBe(true);
     const list = await j<{ suggestions: Array<{ insertedText: string }> }>(
-      await fetch(`${base}/api/docs/sug-rr-marks/suggestions`),
+      await fetch(`${base}/workspaces/${WS}/docs/sug-rr-marks/suggestions`),
     );
     expect(list.suggestions[0]?.insertedText).toBe('the docs');
     await j(
-      await fetch(`${base}/api/docs/sug-rr-marks/suggestions/${created.suggestionId}/accept`, {
-        method: 'POST',
-      }),
+      await fetch(
+        `${base}/workspaces/${WS}/docs/sug-rr-marks/suggestions/${created.suggestionId}/accept`,
+        {
+          method: 'POST',
+        },
+      ),
     );
     await waitForFileToBe(file, 'See [the docs](https://example.com) here.\n');
   });
@@ -385,7 +411,7 @@ describe('suggested edits — HTTP routes', () => {
   it('a suggestion inside a bold span keeps the bold through accept', async () => {
     const file = await makeDoc('sug-bold', 'This is **bold text** here.\n');
     const created = await j<{ suggestionId: string }>(
-      await fetch(`${base}/api/docs/sug-bold/find_and_replace`, {
+      await fetch(`${base}/workspaces/${WS}/docs/sug-bold/find_and_replace`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -397,9 +423,12 @@ describe('suggested edits — HTTP routes', () => {
       }),
     );
     await j(
-      await fetch(`${base}/api/docs/sug-bold/suggestions/${created.suggestionId}/accept`, {
-        method: 'POST',
-      }),
+      await fetch(
+        `${base}/workspaces/${WS}/docs/sug-bold/suggestions/${created.suggestionId}/accept`,
+        {
+          method: 'POST',
+        },
+      ),
     );
     await waitForFileToBe(file, 'This is **strong text** here.\n');
   });
@@ -407,13 +436,13 @@ describe('suggested edits — HTTP routes', () => {
   it('a find that only matches inside a pending proposal is refused — 409 match-in-pending-suggestion', async () => {
     await makeDoc('sug-isolation', 'Alpha beta gamma.\n');
     await j(
-      await fetch(`${base}/api/docs/sug-isolation/find_and_replace`, {
+      await fetch(`${base}/workspaces/${WS}/docs/sug-isolation/find_and_replace`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ find: 'beta', replace: 'delta zeta', suggest: true, author }),
       }),
     );
-    const res = await fetch(`${base}/api/docs/sug-isolation/find_and_replace`, {
+    const res = await fetch(`${base}/workspaces/${WS}/docs/sug-isolation/find_and_replace`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ find: 'zeta', replace: 'eta', suggest: true, author }),
@@ -421,7 +450,7 @@ describe('suggested edits — HTTP routes', () => {
     expect(res.status).toBe(409);
     expect(((await res.json()) as { error: string }).error).toBe('match-in-pending-suggestion');
     const list = await j<{ suggestions: unknown[] }>(
-      await fetch(`${base}/api/docs/sug-isolation/suggestions`),
+      await fetch(`${base}/workspaces/${WS}/docs/sug-isolation/suggestions`),
     );
     expect(list.suggestions).toHaveLength(1);
   });

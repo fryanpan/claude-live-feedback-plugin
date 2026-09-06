@@ -37,6 +37,10 @@ import {
   settle,
   waitForFrames,
 } from './doc-activity-stall-harness.ts';
+import { seedBoard } from './workspace-seed.ts';
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe("a linked doc's discussion counts too", () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -53,10 +57,11 @@ describe("a linked doc's discussion counts too", () => {
     return res.json() as Promise<T>;
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'doc-threads-stall-'));
     handle = createServer({ port: 0, dataDir, stallNudgeQuietMs: QUIET_MS });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterEach(async () => {
@@ -71,6 +76,7 @@ describe("a linked doc's discussion counts too", () => {
     const { workspace } = await jj<{ workspace: { id: string } }>(
       await post('/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id }),
     );
+    WS = workspace.id;
     for (const agent of [LEAD, BUILDER]) {
       await jj(
         await post(`/workspaces/${workspace.id}/agents`, {
@@ -102,10 +108,14 @@ describe("a linked doc's discussion counts too", () => {
       }),
     );
     await jj(
-      await post(`/api/tasks/${task.id}/transition`, { to: 'todo', author: PERSON, workspaceId }),
+      await post(`/workspaces/${workspaceId}/tasks/${task.id}/transition`, {
+        to: 'todo',
+        author: PERSON,
+        workspaceId,
+      }),
     );
     await jj(
-      await post(`/api/tasks/${task.id}/transition`, {
+      await post(`/workspaces/${workspaceId}/tasks/${task.id}/transition`, {
         to: 'in-progress',
         author: LEAD,
         workspaceId,
@@ -118,8 +128,10 @@ describe("a linked doc's discussion counts too", () => {
   async function linkedDoc(taskId: string, docId: string): Promise<string> {
     const file = join(dataDir, `${docId}.md`);
     writeFileSync(file, '# Mock round\n\nFirst pass.\n');
-    await jj(await post('/api/docs', { docId, type: 'markdown', sourceUrl: file }));
-    await jj(await post(`/api/tasks/${taskId}/links`, { ref: { kind: 'doc', docId } }));
+    await jj(await post(`/workspaces/${WS}/docs`, { docId, type: 'markdown', sourceUrl: file }));
+    await jj(
+      await post(`/workspaces/${WS}/tasks/${taskId}/links`, { ref: { kind: 'doc', docId } }),
+    );
     return docId;
   }
 
@@ -129,7 +141,7 @@ describe("a linked doc's discussion counts too", () => {
     asker: { id: string; name: string; kind: string } = LEAD,
   ): Promise<{ threadId: string; commentId: string }> {
     const { thread } = await jj<{ thread: { id: string; comments: Array<{ id: string }> } }>(
-      await post(`/api/docs/${encodeURIComponent(docId)}/threads`, {
+      await post(`/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads`, {
         text: 'Does this round read the way you wanted?',
         author: asker,
         anchor: { kind: 'subject' },
@@ -178,7 +190,7 @@ describe("a linked doc's discussion counts too", () => {
     expect(stalls(ctx.lead.frames)).toHaveLength(0);
 
     await jj(
-      await post(`/api/docs/${encodeURIComponent(docId)}/threads/${threadId}/answer`, {
+      await post(`/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads/${threadId}/answer`, {
         author: PERSON,
         text: 'Yes — ship it.',
         commentId,
@@ -202,11 +214,14 @@ describe("a linked doc's discussion counts too", () => {
     const docId = await linkedDoc(asked, 'mock-round-three');
     const { threadId, commentId } = await askOnDoc(docId);
     await jj(
-      await post(`/api/docs/${encodeURIComponent(docId)}/threads/${threadId}/withdraw`, {
-        author: LEAD,
-        commentId,
-        reason: 'asked the wrong round',
-      }),
+      await post(
+        `/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads/${threadId}/withdraw`,
+        {
+          author: LEAD,
+          commentId,
+          reason: 'asked the wrong round',
+        },
+      ),
     );
     await settle(QUIET_MS + 100);
 
@@ -227,7 +242,7 @@ describe("a linked doc's discussion counts too", () => {
     // the untouched second row proves the pass still fires.
     await settle(QUIET_MS + 100);
     await jj(
-      await post(`/api/docs/${encodeURIComponent(docId)}/threads`, {
+      await post(`/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads`, {
         text: 'Second pass is up; the spacing question is closed.',
         author: LEAD,
         anchor: { kind: 'subject' },
@@ -282,7 +297,9 @@ describe("a linked doc's discussion counts too", () => {
     const asker = await inProgressRow(ctx.workspaceId, 'Rank results by recency', LEAD);
     const bystander = await inProgressRow(ctx.workspaceId, 'Cache the facet counts', BUILDER);
     const docId = await linkedDoc(asker, 'shared-design-doc');
-    await jj(await post(`/api/tasks/${bystander}/links`, { ref: { kind: 'doc', docId } }));
+    await jj(
+      await post(`/workspaces/${WS}/tasks/${bystander}/links`, { ref: { kind: 'doc', docId } }),
+    );
     // The question is the LEAD's, so it says nothing about whether the
     // Millwright's row is moving.
     await askOnDoc(docId, LEAD);

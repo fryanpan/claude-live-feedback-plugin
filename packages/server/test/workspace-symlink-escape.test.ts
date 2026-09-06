@@ -48,6 +48,7 @@ describe('symlink escape from a shared workspace', () => {
   let repo: string;
   let outside: string;
   let base: string;
+  let boardId: string;
   let workspaceId: string;
   let visitorHeaders: Record<string, string>;
   let access: AccessHarness;
@@ -75,7 +76,7 @@ describe('symlink escape from a shared workspace', () => {
     });
 
   const openContext = (relPath: string) =>
-    visitor(`/api/reviews/${workspaceId}/context-file`, {
+    visitor(`/workspaces/${boardId}/reviews/${workspaceId}/context-file`, {
       method: 'POST',
       body: JSON.stringify({ relPath }),
     });
@@ -120,7 +121,7 @@ describe('symlink escape from a shared workspace', () => {
       method: 'POST',
       body: JSON.stringify({ name: 'Escape board' }),
     }).then((r) => r.json());
-    const boardId = board.workspace.id as string;
+    boardId = board.workspace.id as string;
     expect(boardId).toBeTruthy();
 
     const bound = await local('/workspaces', {
@@ -152,7 +153,7 @@ describe('symlink escape from a shared workspace', () => {
 
     // `plainText`, not `content` — getDoc's shape. Naming it wrong is how the
     // leak assertion below silently passes on `undefined`.
-    const doc = await visitor(`/api/docs/${docId}/content`).then((r) => r.json());
+    const doc = await visitor(`/workspaces/${boardId}/docs/${docId}/content`).then((r) => r.json());
     expect(typeof doc.plainText).toBe('string');
     expect(doc.plainText).toContain('ordinary in-root content');
   });
@@ -192,7 +193,9 @@ describe('symlink escape from a shared workspace', () => {
       const res = await openContext(rel);
       if (res.status !== 200) continue;
       const { docId } = await res.json();
-      const doc = await visitor(`/api/docs/${docId}/content`).then((r) => r.json());
+      const doc = await visitor(`/workspaces/${boardId}/docs/${docId}/content`).then((r) =>
+        r.json(),
+      );
       // Assert on a real string, not `undefined` — a wrong field name here
       // makes this pass whether or not the secret leaked.
       expect(typeof doc.plainText).toBe('string');
@@ -208,7 +211,7 @@ describe('symlink escape from a shared workspace', () => {
     // miss-rescan window (250ms) or the tree gate answers not-listed first.
     symlinkSync(join(outside, 'id_rsa'), join(repo, 'escape.md'));
     await new Promise((r) => setTimeout(r, 400));
-    const res = await visitor(`/api/reviews/${workspaceId}/editable-file`, {
+    const res = await visitor(`/workspaces/${boardId}/reviews/${workspaceId}/editable-file`, {
       method: 'POST',
       body: JSON.stringify({ relPath: 'escape.md' }),
     });

@@ -18,9 +18,13 @@ import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { buildQueue, summarizeGoals } from '../src/task-queue.ts';
 import { CHORES_GOAL_ID, TaskStore } from '../src/tasks.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-bryan', name: 'Bryan', kind: 'known' };
 const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known' };
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('triage status', () => {
   let dataDir: string;
@@ -337,10 +341,11 @@ describe('over the route a goal is already moved through', () => {
   let handle: ServerHandle;
   let base: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), 'triage-http-'));
     handle = createServer({ dataDir: dir, port: 0 });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterEach(async () => {
@@ -348,8 +353,10 @@ describe('over the route a goal is already moved through', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const transition = (id: string, to: string) =>
-    fetch(`${base}/api/tasks/${encodeURIComponent(id)}/transition`, {
+  // The board is an ARGUMENT: these tests make their own board through the
+  // store, and a row is addressed under the board it is actually on.
+  const transition = (id: string, to: string, ws = WS) =>
+    fetch(`${base}/workspaces/${ws}/tasks/${encodeURIComponent(id)}/transition`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ to, author: PERSON }),
@@ -363,14 +370,14 @@ describe('over the route a goal is already moved through', () => {
     const goalId = listed.created[0]?.id as string;
     // Seeded goals arrive in triage; activate over the same route so the move
     // under test is a real transition and not the `same-status` refusal.
-    expect((await transition(goalId, 'todo')).status).toBe(200);
+    expect((await transition(goalId, 'todo', wsId)).status).toBe(200);
 
-    expect((await transition(goalId, 'triage')).status).toBe(200);
+    expect((await transition(goalId, 'triage', wsId)).status).toBe(200);
     expect(store.getGoalRow(goalId)?.status).toBe('triage');
 
     // POSITIVE CONTROL: the same route, the same goal, a different status —
     // so a 200 above cannot be a route that stopped reading `to` at all.
-    expect((await transition(goalId, 'done')).status).toBe(200);
+    expect((await transition(goalId, 'done', wsId)).status).toBe(200);
     expect(store.getGoalRow(goalId)?.status).toBe('done');
   });
 });

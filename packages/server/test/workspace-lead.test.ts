@@ -445,7 +445,7 @@ describe('lead agent routes + projection', () => {
     return ((await r.json()) as { workspace: BoardWorkspace }).workspace;
   };
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'ws-lead-routes-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
@@ -711,7 +711,7 @@ describe('a display-name change keeps the seat and renames every write', () => {
   const post = (path: string, body: unknown) =>
     local(path, { method: 'POST', body: JSON.stringify(body) });
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'ws-lead-rename-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
@@ -751,9 +751,13 @@ describe('a display-name change keeps the seat and renames every write', () => {
     // And a thread on a doc — the comment path, not just the task path.
     const file = join(dataDir, 'renamed.md');
     writeFileSync(file, '# Heading\n\nSome prose.\n');
-    const doc = await post('/api/docs', { docId: 'renamed', type: 'markdown', sourceUrl: file });
+    const doc = await post(`/workspaces/${workspace.id}/docs`, {
+      docId: 'renamed',
+      type: 'markdown',
+      sourceUrl: file,
+    });
     expect(doc.status).toBe(200);
-    const thread = await post('/api/docs/renamed/threads', {
+    const thread = await post(`/workspaces/${workspace.id}/docs/renamed/threads`, {
       author: { id: 'agent-relay', name: 'Relay', kind: 'agent' },
       text: 'signed stale',
       anchor: { kind: 'subject' },
@@ -765,7 +769,7 @@ describe('a display-name change keeps the seat and renames every write', () => {
     expect(t.comments[0]?.author).toMatchObject({ id: 'agent-relay', name: 'Relay Two' });
 
     // POSITIVE CONTROL: a person the roster does not hold is stamped as sent.
-    const person = await post('/api/docs/renamed/threads', {
+    const person = await post(`/workspaces/${workspace.id}/docs/renamed/threads`, {
       author: { id: 'known-jordan', name: 'Jordan', kind: 'person' },
       text: 'unchanged',
       anchor: { kind: 'subject' },
@@ -801,7 +805,7 @@ describe('the shared "agent" identity can neither claim nor be handed the seat',
   let dataDir: string;
   let store: TaskStore;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'ws-lead-shared-'));
     store = new TaskStore({ dataDir, debounceMs: 5 });
   });

@@ -3,10 +3,11 @@ import type { AgentNoteRing } from '../agent-notes.ts';
 import type { DispatchRegistry } from '../dispatch-registry.ts';
 import type { DocStore } from '../doc-store.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
+import type { WorkspaceScope } from '../middleware/workspace-scope.ts';
 import type { ReadyWorkNudger } from '../ready-nudge.ts';
 import type { ReviewGate } from '../review-gate-types.ts';
 import type { TaskProjection } from '../task-projection.ts';
-import type { ParallelismCapChange, Task, TaskStore } from '../tasks.ts';
+import type { BoardWorkspace, ParallelismCapChange, Task, TaskStore } from '../tasks.ts';
 
 /**
  * The review-item quality gate's verdict on one item — held, or through.
@@ -133,6 +134,19 @@ export interface TaskRoutesContext {
 
 /** What only this request knows. */
 export interface TaskRouteRequest {
+  /**
+   * The board this canonical path named, and the remainder under it —
+   * resolved once by `middleware/workspace-scope.ts`, which has already
+   * refused an unknown board and a member filed on a different one.
+   *
+   * `undefined` when the path is not under `/workspaces/<id>/…` at all, and
+   * that is what makes the resolution structural rather than remembered: a
+   * resource route matches through `matchRest`, so with no scope it has no
+   * remainder to match and cannot answer. Read `scope.workspaceId` for the
+   * board rather than a body field — the path is the argument now.
+   */
+  scope?: WorkspaceScope<BoardWorkspace>;
+
   req: Request;
   pathname: string;
   url: URL;

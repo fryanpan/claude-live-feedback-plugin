@@ -17,6 +17,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 let dataDir: string;
 let handle: ServerHandle | null = null;
@@ -34,16 +35,22 @@ afterEach(async () => {
 const timingLines = (calls: unknown[][]): string[] =>
   calls.map((c) => String(c[0])).filter((s) => s.startsWith('[timing]'));
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('slow request log', () => {
   it('logs method, path, duration, status and bytes at or over the threshold', async () => {
     handle = createServer({ port: 0, dataDir, slowRequestMs: 0 });
+    WS = await seedBoard(`http://localhost:${handle.port}`);
     const err = spyOn(console, 'error').mockImplementation(() => {});
     try {
-      const res = await fetch(`http://localhost:${handle.port}/api/docs`);
+      const res = await fetch(`http://localhost:${handle.port}/workspaces/${WS}/docs`);
       expect(res.status).toBe(200);
       const lines = timingLines(err.mock.calls);
       expect(lines.length).toBe(1);
-      expect(lines[0]).toMatch(/^\[timing\] GET \/api\/docs \d+ms status=200 bytes=\d+$/);
+      expect(lines[0]).toMatch(
+        new RegExp(`^\\[timing\\] GET /workspaces/${WS}/docs \\d+ms status=200 bytes=\\d+$`),
+      );
     } finally {
       err.mockRestore();
     }
@@ -51,9 +58,10 @@ describe('slow request log', () => {
 
   it('stays silent under the threshold (default 500 ms)', async () => {
     handle = createServer({ port: 0, dataDir });
+    WS = await seedBoard(`http://localhost:${handle.port}`);
     const err = spyOn(console, 'error').mockImplementation(() => {});
     try {
-      const res = await fetch(`http://localhost:${handle.port}/api/docs`);
+      const res = await fetch(`http://localhost:${handle.port}/workspaces/${WS}/docs`);
       expect(res.status).toBe(200);
       expect(timingLines(err.mock.calls)).toEqual([]);
     } finally {

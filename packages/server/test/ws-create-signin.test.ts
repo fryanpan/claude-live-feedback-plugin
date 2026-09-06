@@ -20,6 +20,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const cleanups: Array<() => Promise<void>> = [];
 
@@ -48,9 +49,13 @@ function boot(requireSignInToWrite: boolean): ServerHandle {
  */
 async function connectAsBrowser(handle: ServerHandle, docId: string): Promise<boolean> {
   const origin = `http://localhost:${handle.port}`;
-  const ws = new WebSocket(`ws://localhost:${handle.port}/y/${docId}?type=mockup`, {
-    headers: { origin },
-  } as unknown as string[]);
+  WS = await seedBoard(origin);
+  const ws = new WebSocket(
+    `ws://localhost:${handle.port}/workspaces/${WS}/docs/${docId}/y?type=mockup`,
+    {
+      headers: { origin },
+    } as unknown as string[],
+  );
   const opened = await new Promise<boolean>((resolve) => {
     ws.addEventListener('open', () => resolve(true));
     ws.addEventListener('error', () => resolve(false));
@@ -63,6 +68,9 @@ async function connectAsBrowser(handle: ServerHandle, docId: string): Promise<bo
   }
   return opened;
 }
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('the /y/ mockup auto-create is behind the sign-in gate', () => {
   it('refuses a signed-out browser: no doc, and no board-workspace row', async () => {

@@ -219,6 +219,11 @@ to an HTML file. Once bound, the file is served here without any symlink dance.<
  * purpose: a module script is deferred, so a plain inline script calling
  * `init` would run before the module that defines it. The element upgrades on
  * parse and reads its own attributes.
+ *
+ * `workspace-id` is THIS board, not a home for the feedback doc: the doc
+ * belongs to every board (see `workspacesOfMember`), so the address it is
+ * reached at is whichever board the reader is standing on. The widget refuses
+ * to run without one, which is why it cannot be left off here.
  */
 export function renderBoardShell(
   workspaceId: string,
@@ -267,7 +272,7 @@ export function renderBoardShell(
   const widget = opts.feedback
     ? `
     <script type="module" src="/widget.esm.js"></script>
-    <claude-feedback-widget doc-id="${escape(BOARD_FEEDBACK_DOC_ID)}" view="${safeName}" identity-scope="host"></claude-feedback-widget>`
+    <claude-feedback-widget workspace-id="${safeId}" doc-id="${escape(BOARD_FEEDBACK_DOC_ID)}" view="${safeName}" identity-scope="host"></claude-feedback-widget>`
     : '';
   return `<!doctype html>
 <html lang="en">
@@ -402,7 +407,7 @@ h1{font-size:22px}code{background:#f3f3f3;padding:1px 5px;border-radius:3px;font
 small{color:#777}</style>
 <h1>Doc not found</h1>
 <p>No attachment exists for <code>${safe}</code>. Markdown attachments are
-created by an agent calling <code>POST /api/docs</code> with a
+created by an agent calling <code>POST /workspaces/&lt;ws&gt;/docs</code> with a
 <code>sourceUrl</code> pointing at a markdown file on disk.</p>
 <p>Ask the agent who shared this URL to create the doc, then refresh this page.</p>
 <p><small><a href="/">all docs</a></small></p>`;
@@ -780,7 +785,7 @@ function landingShell(
 <meta name="theme-color" content="#2e7dd7">${sentryMeta}
 <style>${LANDING_CSS}</style>
 ${body}
-<footer>POST /api/docs · /widget.iife.js · /demos/mockup</footer>`;
+<footer>POST /workspaces/&lt;ws&gt;/docs · /widget.iife.js · /demos/mockup</footer>`;
 }
 
 function renderLandingWorkspaceRow(w: LandingWorkspaceRow): string {

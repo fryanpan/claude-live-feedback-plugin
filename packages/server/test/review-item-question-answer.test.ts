@@ -25,6 +25,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import type { Task } from '../src/tasks.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
 const AGENT = {
@@ -61,6 +62,9 @@ interface ThreadShape {
   comments: Array<{ id: string; text: string; author: { id: string }; review?: unknown }>;
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('answering with a question asks back instead of closing', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -81,7 +85,8 @@ describe('answering with a question asks back instead of closing', () => {
     const { workspace } = await jj<{ workspace: { id: string } }>(
       await post('/workspaces', { name: 'index-rebuild', goal: 'Rebuild the index nightly.' }),
     );
-    return workspace.id;
+    WS = workspace.id;
+    return WS;
   }
   async function seedTask(workspaceId: string, extra: Record<string, unknown> = {}): Promise<Task> {
     const { task } = await jj<{ task: Task }>(
@@ -96,7 +101,10 @@ describe('answering with a question asks back instead of closing', () => {
   }
   async function seedItem(taskId: string): Promise<string> {
     const { item } = await jj<{ item: { id: string } }>(
-      await post(`/api/tasks/${taskId}/review-items`, { review: DECISION, author: AGENT }),
+      await post(`/workspaces/${WS}/tasks/${taskId}/review-items`, {
+        review: DECISION,
+        author: AGENT,
+      }),
     );
     return item.id;
   }
@@ -123,17 +131,18 @@ describe('answering with a question asks back instead of closing', () => {
   }
   async function thread(taskId: string, threadId: string): Promise<ThreadShape> {
     const { thread } = await jj<{ thread: ThreadShape }>(
-      await fetch(`${base}/api/docs/task:${taskId}/threads/${threadId}`),
+      await fetch(`${base}/workspaces/${WS}/docs/task:${taskId}/threads/${threadId}`),
     );
     return thread;
   }
   const answer = (taskId: string, itemId: string, body: Record<string, unknown>) =>
-    post(`/api/tasks/${taskId}/review-items/${itemId}/answer`, body);
+    post(`/workspaces/${WS}/tasks/${taskId}/review-items/${itemId}/answer`, body);
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'review-item-question-answer-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
   afterAll(async () => {
     await handle.stop();
@@ -187,7 +196,7 @@ describe('answering with a question asks back instead of closing', () => {
       );
 
       const revised = await jj<{ item: { id: string } }>(
-        await post(`/api/tasks/${task.id}/review-items/${itemId}/revise`, {
+        await post(`/workspaces/${WS}/tasks/${task.id}/review-items/${itemId}/revise`, {
           author: AGENT,
           detail:
             'It sets tonight’s rebuild cost. A full pass reads the index once; halving the cache reads it twice, doubling the window.',
@@ -300,7 +309,7 @@ describe('answering with a question asks back instead of closing', () => {
 
   // ── The legacy task decision route: the board's own-decision door ──────────
 
-  describe('the task’s own decision (/api/tasks/:id/answer)', () => {
+  describe(`the task’s own decision (/workspaces/${WS}/tasks/:id/answer)`, () => {
     /**
      * Until 2026-08-31 this recorded a THREADLESS request and asserted the
      * decision "stays open and counted" — which meant the card stayed put
@@ -318,7 +327,7 @@ describe('answering with a question asks back instead of closing', () => {
       expect((await queueRows(ws, task.id)).map((r) => r.state)).toEqual(['open']);
 
       const res = await jj<{ asked?: boolean; threadId?: string }>(
-        await post(`/api/tasks/${task.id}/answer`, {
+        await post(`/workspaces/${WS}/tasks/${task.id}/answer`, {
           text: 'Why is this important?',
           author: PERSON,
         }),
@@ -348,7 +357,7 @@ describe('answering with a question asks back instead of closing', () => {
         needs: 'decision',
         body: 'Push rows across, or mirror the whole board?',
       });
-      await post(`/api/tasks/${task.id}/answer`, {
+      await post(`/workspaces/${WS}/tasks/${task.id}/answer`, {
         text: 'Mirror the whole board.',
         author: PERSON,
       });
@@ -356,7 +365,7 @@ describe('answering with a question asks back instead of closing', () => {
       // A stale form: the answer landed from another reader first. The
       // question must not be swallowed into an infoRequest the answered row
       // hides — the caller is told the answer stands.
-      const res = await post(`/api/tasks/${task.id}/answer`, {
+      const res = await post(`/workspaces/${WS}/tasks/${task.id}/answer`, {
         text: 'Why is this important?',
         author: PERSON,
       });
@@ -379,7 +388,7 @@ describe('answering with a question asks back instead of closing', () => {
         body: 'Ship Thursday or Friday? Friday buys one more review pass and misses the demo; Thursday makes the demo on the current pass. Blocked until answered: the release note.',
       });
       const res = await jj<{ asked?: boolean }>(
-        await post(`/api/tasks/${task.id}/answer`, {
+        await post(`/workspaces/${WS}/tasks/${task.id}/answer`, {
           text: 'Ship Friday.',
           author: PERSON,
         }),

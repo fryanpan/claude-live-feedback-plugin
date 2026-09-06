@@ -21,6 +21,7 @@ import type { DispatchRecord } from '../src/dispatch-registry.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { BUILDER_SILENT_BUCKET } from '../src/stall-gate.ts';
 import { STALL_EVENT } from '../src/stall-nudge.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'person' };
 const LEAD = { id: 'agent-cartographer', name: 'Cartographer', kind: 'agent' };
@@ -88,6 +89,9 @@ async function waitForFrames(
   }
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('builder dispatches through the server', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -109,7 +113,7 @@ describe('builder dispatches through the server', () => {
     return res.json() as Promise<T>;
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'dispatch-routes-'));
     fired = new Map();
     failArm = new Set();
@@ -124,6 +128,7 @@ describe('builder dispatches through the server', () => {
       },
     });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterEach(async () => {
@@ -138,6 +143,7 @@ describe('builder dispatches through the server', () => {
     const { workspace } = await jj<{ workspace: { id: string } }>(
       await post('/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id }),
     );
+    WS = workspace.id;
     await jj(
       await post(`/workspaces/${workspace.id}/agents`, {
         agentId: LEAD.id,
@@ -162,10 +168,14 @@ describe('builder dispatches through the server', () => {
       }),
     );
     await jj(
-      await post(`/api/tasks/${task.id}/transition`, { to: 'todo', author: PERSON, workspaceId }),
+      await post(`/workspaces/${workspaceId}/tasks/${task.id}/transition`, {
+        to: 'todo',
+        author: PERSON,
+        workspaceId,
+      }),
     );
     await jj(
-      await post(`/api/tasks/${task.id}/transition`, {
+      await post(`/workspaces/${workspaceId}/tasks/${task.id}/transition`, {
         to: 'in-progress',
         author: LEAD,
         workspaceId,
@@ -178,24 +188,30 @@ describe('builder dispatches through the server', () => {
 
   it('register, list, close over REST', async () => {
     const worktree = mkdtempSync(join(tmpdir(), 'wt-'));
+    // A REAL row on a real board. A dispatch is addressed by its task id, and
+    // the board a task is on is what makes `/workspaces/<ws>/dispatches/<id>`
+    // that board's dispatch rather than any board's — an invented id belongs
+    // to no board and is refused there, which is the rule working.
+    const { workspaceId } = await boardWithLead();
+    const taskId = await inProgressRow(workspaceId, 'Wire the results page');
     try {
       const reg = await jj<{ ok: boolean; dispatch: DispatchRecord }>(
-        await post('/api/dispatches', { taskId: 't-alpha', worktreePath: worktree }),
+        await post(`/workspaces/${workspaceId}/dispatches`, { taskId, worktreePath: worktree }),
       );
-      expect(reg.dispatch.taskId).toBe('t-alpha');
+      expect(reg.dispatch.taskId).toBe(taskId);
       expect(reg.dispatch.watching).toBe(true);
 
       const listed = await jj<{ dispatches: DispatchRecord[] }>(
-        await fetch(`${base}/api/dispatches`),
+        await fetch(`${base}/workspaces/${workspaceId}/dispatches`),
       );
-      expect(listed.dispatches.map((d) => d.taskId)).toEqual(['t-alpha']);
+      expect(listed.dispatches.map((d) => d.taskId)).toEqual([taskId]);
 
       const closed = await jj<{ closed: boolean }>(
-        await fetch(`${base}/api/dispatches/t-alpha`, { method: 'DELETE' }),
+        await fetch(`${base}/workspaces/${workspaceId}/dispatches/${taskId}`, { method: 'DELETE' }),
       );
       expect(closed.closed).toBe(true);
       const again = await jj<{ closed: boolean }>(
-        await fetch(`${base}/api/dispatches/t-alpha`, { method: 'DELETE' }),
+        await fetch(`${base}/workspaces/${workspaceId}/dispatches/${taskId}`, { method: 'DELETE' }),
       );
       expect(again.closed).toBe(false);
     } finally {
@@ -204,20 +220,26 @@ describe('builder dispatches through the server', () => {
   });
 
   it('refuses bad registrations with the registry’s own words', async () => {
-    const missing = await post('/api/dispatches', {
+    const missing = await post(`/workspaces/${WS}/dispatches`, {
       taskId: 't-alpha',
       worktreePath: join(tmpdir(), 'no-such-worktree-here'),
     });
     expect(missing.status).toBe(400);
     expect(((await missing.json()) as { error: string }).error).toBe('no-such-path');
 
-    const relative = await post('/api/dispatches', { taskId: 't-alpha', worktreePath: 'rel/x' });
+    const relative = await post(`/workspaces/${WS}/dispatches`, {
+      taskId: 't-alpha',
+      worktreePath: 'rel/x',
+    });
     expect(relative.status).toBe(400);
 
-    const badId = await post('/api/dispatches', { taskId: 'has spaces', worktreePath: tmpdir() });
+    const badId = await post(`/workspaces/${WS}/dispatches`, {
+      taskId: 'has spaces',
+      worktreePath: tmpdir(),
+    });
     expect(badId.status).toBe(400);
 
-    const noBody = await post('/api/dispatches', {});
+    const noBody = await post(`/workspaces/${WS}/dispatches`, {});
     expect(noBody.status).toBe(400);
   });
 
@@ -226,7 +248,7 @@ describe('builder dispatches through the server', () => {
     try {
       const ctx = await boardWithLead();
       const taskId = await inProgressRow(ctx.workspaceId, 'Rank results by recency');
-      await jj(await post('/api/dispatches', { taskId, worktreePath: worktree }));
+      await jj(await post(`/workspaces/${WS}/dispatches`, { taskId, worktreePath: worktree }));
       // Out-quiet the builder's DOUBLED window with no watcher events at all.
       // (This test out-quieted the single window until the builder-silence
       // clock landed — a watching dispatch now buys one extra window, and its
@@ -252,7 +274,7 @@ describe('builder dispatches through the server', () => {
     try {
       const ctx = await boardWithLead();
       const taskId = await inProgressRow(ctx.workspaceId, 'Rank results by recency');
-      await jj(await post('/api/dispatches', { taskId, worktreePath: worktree }));
+      await jj(await post(`/workspaces/${WS}/dispatches`, { taskId, worktreePath: worktree }));
       // Past the ordinary window — where an undispatched row would be named
       // (the non-watching test below proves this harness fires there) — but
       // inside the builder's doubled one.
@@ -277,7 +299,7 @@ describe('builder dispatches through the server', () => {
       const ctx = await boardWithLead();
       const taskId = await inProgressRow(ctx.workspaceId, 'Rank results by recency');
       const reg = await jj<{ dispatch: DispatchRecord }>(
-        await post('/api/dispatches', { taskId, worktreePath: worktree }),
+        await post(`/workspaces/${WS}/dispatches`, { taskId, worktreePath: worktree }),
       );
       expect(reg.dispatch.watching).toBe(false);
       // The same silence the not-yet-stalled test above holds back on: a
@@ -302,7 +324,7 @@ describe('builder dispatches through the server', () => {
     try {
       const ctx = await boardWithLead();
       const taskId = await inProgressRow(ctx.workspaceId, 'Rank results by recency');
-      await jj(await post('/api/dispatches', { taskId, worktreePath: worktree }));
+      await jj(await post(`/workspaces/${WS}/dispatches`, { taskId, worktreePath: worktree }));
       // Out-quiet even the doubled window, so nothing but the watcher event
       // below can be what keeps the row off the list.
       await settle(2 * QUIET_MS + 150);
@@ -339,7 +361,7 @@ describe('builder dispatches through the server', () => {
         const taskId = await inProgressRow(ctx.workspaceId, title);
         holders.push(taskId);
         await jj(
-          await post('/api/dispatches', {
+          await post(`/workspaces/${WS}/dispatches`, {
             taskId,
             worktreePath: worktrees[i],
             agentName: `Builder ${i + 1}`,
@@ -347,7 +369,7 @@ describe('builder dispatches through the server', () => {
         );
       }
       const taskE = await inProgressRow(ctx.workspaceId, 'Backfill the missing thumbnails');
-      const refused = await post('/api/dispatches', {
+      const refused = await post(`/workspaces/${WS}/dispatches`, {
         taskId: taskE,
         worktreePath: worktrees[4],
         agentName: 'Builder 5',
@@ -376,7 +398,7 @@ describe('builder dispatches through the server', () => {
       );
 
       const listed = await jj<{ dispatches: DispatchRecord[] }>(
-        await fetch(`${base}/api/dispatches`),
+        await fetch(`${base}/workspaces/${WS}/dispatches`),
       );
       // The refusal never registered — only the four originals are open.
       expect(listed.dispatches.map((d) => d.taskId).sort()).toEqual([...holders].sort());
@@ -401,12 +423,15 @@ describe('builder dispatches through the server', () => {
       );
       const taskA = await inProgressRow(ctx.workspaceId, 'Rank results by recency');
       const taskB = await inProgressRow(ctx.workspaceId, 'Dedupe near-identical rows');
-      await jj(await post('/api/dispatches', { taskId: taskA, worktreePath: wtA }));
-      await jj(await post('/api/dispatches', { taskId: taskB, worktreePath: wtB }));
+      await jj(await post(`/workspaces/${WS}/dispatches`, { taskId: taskA, worktreePath: wtA }));
+      await jj(await post(`/workspaces/${WS}/dispatches`, { taskId: taskB, worktreePath: wtB }));
       // Cap (2) is spent by A and B. Re-registering A over a fresh worktree
       // (a crash-and-restart) must not be refused for the slot it already
       // holds.
-      const reRegistered = await post('/api/dispatches', { taskId: taskA, worktreePath: wtA2 });
+      const reRegistered = await post(`/workspaces/${WS}/dispatches`, {
+        taskId: taskA,
+        worktreePath: wtA2,
+      });
       expect(reRegistered.status).toBe(200);
       await ctx.lead.stop();
     } finally {
@@ -435,8 +460,11 @@ describe('builder dispatches through the server', () => {
       );
       const taskA = await inProgressRow(ctx.workspaceId, 'Rank results by recency');
       const taskB = await inProgressRow(ctx.workspaceId, 'Dedupe near-identical rows');
-      await jj(await post('/api/dispatches', { taskId: taskA, worktreePath: wtA }));
-      const refused = await post('/api/dispatches', { taskId: taskB, worktreePath: wtB });
+      await jj(await post(`/workspaces/${WS}/dispatches`, { taskId: taskA, worktreePath: wtA }));
+      const refused = await post(`/workspaces/${WS}/dispatches`, {
+        taskId: taskB,
+        worktreePath: wtB,
+      });
       expect(refused.status).toBe(409);
 
       await jj(
@@ -445,7 +473,10 @@ describe('builder dispatches through the server', () => {
           parallelismCap: 2,
         }),
       );
-      const nowAllowed = await post('/api/dispatches', { taskId: taskB, worktreePath: wtB });
+      const nowAllowed = await post(`/workspaces/${WS}/dispatches`, {
+        taskId: taskB,
+        worktreePath: wtB,
+      });
       expect(nowAllowed.status).toBe(200);
       await ctx.lead.stop();
     } finally {
@@ -467,7 +498,7 @@ describe('builder dispatches through the server', () => {
       expect(before.dispatchesInUse).toBe(0);
 
       const taskA = await inProgressRow(ctx.workspaceId, 'Rank results by recency');
-      await jj(await post('/api/dispatches', { taskId: taskA, worktreePath: wtA }));
+      await jj(await post(`/workspaces/${WS}/dispatches`, { taskId: taskA, worktreePath: wtA }));
       const after = await jj<{ dispatchesInUse: number }>(
         await get(`/workspaces/${ctx.workspaceId}/settings`),
       );
@@ -483,11 +514,13 @@ describe('builder dispatches through the server', () => {
     try {
       const ctx = await boardWithLead();
       const taskId = await inProgressRow(ctx.workspaceId, 'Rank results by recency');
-      await jj(await post('/api/dispatches', { taskId, worktreePath: worktree }));
+      await jj(await post(`/workspaces/${WS}/dispatches`, { taskId, worktreePath: worktree }));
       await settle(QUIET_MS + 150);
       fired.get(worktree)?.();
       await jj(
-        await fetch(`${base}/api/dispatches/${encodeURIComponent(taskId)}`, { method: 'DELETE' }),
+        await fetch(`${base}/workspaces/${WS}/dispatches/${encodeURIComponent(taskId)}`, {
+          method: 'DELETE',
+        }),
       );
 
       handle.nudgeStalls();

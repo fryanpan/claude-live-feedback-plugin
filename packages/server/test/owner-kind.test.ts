@@ -25,9 +25,13 @@ import { type ServerHandle, createServer } from '../src/server.ts';
 import { attachedAgentTest, declaredAssigneeKind, resolveOwnerKind } from '../src/task-owner.ts';
 import { workspaceDocId } from '../src/task-projection.ts';
 import type { Task } from '../src/tasks.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const NOBODY_ATTACHED = () => false;
 const ALWAYS_ATTACHED = () => true;
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('resolveOwnerKind', () => {
   it('reads the reserved literal as a person and a bare category as unknown', () => {
@@ -144,7 +148,8 @@ describe('owner kind over the real routes', () => {
     const { workspace } = await jj<{ workspace: { id: string } }>(
       await post('/workspaces', { name: 'atlas', goal: 'Ship the atlas.' }),
     );
-    return workspace.id;
+    WS = workspace.id;
+    return WS;
   }
 
   /** What the BOARD sees — the ydoc projection, not the REST payload. The
@@ -155,10 +160,11 @@ describe('owner kind over the real routes', () => {
     return doc?.ydoc.getMap('tasks').get(taskId) as Record<string, unknown> | undefined;
   }
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-owner-kind-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterAll(async () => {
@@ -214,7 +220,7 @@ describe('owner kind over the real routes', () => {
     expect(projected(wsId, undeclared.id)?.ownerKind).toBe('unknown');
   });
 
-  it('forwards assigneeKind through POST /api/tasks/:id/assignee', async () => {
+  it(`forwards assigneeKind through POST /workspaces/${WS}/tasks/:id/assignee`, async () => {
     // The route layer is the one nothing type-checks. A param the tool
     // declares and the route drops returns 200 and changes nothing.
     const wsId = await seedWorkspace();
@@ -228,7 +234,7 @@ describe('owner kind over the real routes', () => {
     expect(projected(wsId, task.id)?.ownerKind).toBe('agent');
 
     const handed = await jj<{ changed: boolean }>(
-      await post(`/api/tasks/${task.id}/assignee`, {
+      await post(`/workspaces/${wsId}/tasks/${task.id}/assignee`, {
         assignee: 'Ada Fenwick',
         assigneeKind: 'person',
         author: AGENT,
@@ -251,7 +257,10 @@ describe('owner kind over the real routes', () => {
     expect(projected(wsId, task.id)?.ownerKind).toBe('person');
 
     await jj(
-      await post(`/api/tasks/${task.id}/assignee`, { assignee: 'Rowan Iles', author: AGENT }),
+      await post(`/workspaces/${wsId}/tasks/${task.id}/assignee`, {
+        assignee: 'Rowan Iles',
+        author: AGENT,
+      }),
     );
     // Inheriting would label Rowan a person on nobody's authority.
     expect(projected(wsId, task.id)?.ownerKind).toBe('unknown');
@@ -272,7 +281,7 @@ describe('owner kind over the real routes', () => {
     expect(projected(wsId, task.id)?.ownerKind).toBe('unknown');
 
     const res = await jj<{ changed: boolean }>(
-      await post(`/api/tasks/${task.id}/assignee`, {
+      await post(`/workspaces/${wsId}/tasks/${task.id}/assignee`, {
         assignee: 'Ada Fenwick',
         assigneeKind: 'person',
         author: AGENT,
@@ -299,7 +308,7 @@ describe('owner kind over the real routes', () => {
     expect(projected(wsId, task.id)?.ownerKind).toBe('person');
 
     const res = await jj<{ changed: boolean }>(
-      await post(`/api/tasks/${task.id}/assignee`, {
+      await post(`/workspaces/${wsId}/tasks/${task.id}/assignee`, {
         assignee: 'Ada Fenwick',
         author: AGENT,
       }),
@@ -312,7 +321,10 @@ describe('owner kind over the real routes', () => {
     // undeclared call to a DIFFERENT name still clears, so "kept" above is a
     // decision about sameness rather than the writer having stopped working.
     await jj(
-      await post(`/api/tasks/${task.id}/assignee`, { assignee: 'Wren Halloway', author: AGENT }),
+      await post(`/workspaces/${wsId}/tasks/${task.id}/assignee`, {
+        assignee: 'Wren Halloway',
+        author: AGENT,
+      }),
     );
     expect(projected(wsId, task.id)?.ownerKind).toBe('unknown');
   });
@@ -343,7 +355,7 @@ describe('owner kind over the real routes', () => {
     );
     expect(projected(wsId, task.id)?.ownerKind).toBe('person');
 
-    const handOver = await post(`/api/tasks/${task.id}/assignee`, {
+    const handOver = await post(`/workspaces/${wsId}/tasks/${task.id}/assignee`, {
       assignee: 'Rowan Iles',
       assigneeKind: 'human',
       author: AGENT,
@@ -371,7 +383,7 @@ describe('owner kind over the real routes', () => {
     expect(listed.tasks.find((t) => t.id === task.id)?.ownerKind).toBe('unknown');
 
     const handed = await jj<{ ownerKind: string }>(
-      await post(`/api/tasks/${task.id}/assignee`, {
+      await post(`/workspaces/${wsId}/tasks/${task.id}/assignee`, {
         assignee: 'Ada Fenwick',
         assigneeKind: 'person',
         author: AGENT,
@@ -463,7 +475,8 @@ describe('owner id beside the owner name', () => {
     const { workspace } = await jj<{ workspace: { id: string } }>(
       await post('/workspaces', { name, goal: 'Ship the atlas.' }),
     );
-    return workspace.id;
+    WS = workspace.id;
+    return WS;
   }
   const attach = async (wsId: string, agentId: string, agentName: string) =>
     jj(
@@ -490,10 +503,11 @@ describe('owner id beside the owner name', () => {
     return tasks.map((t) => t.id).sort();
   };
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-owner-id-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
   afterAll(async () => {
     await handle.stop();
@@ -585,14 +599,20 @@ describe('owner id beside the owner name', () => {
     expect(task.assigneeId).toBe(LF);
 
     await jj(
-      await post(`/api/tasks/${task.id}/assignee`, { assignee: 'Ada Fenwick', author: PERSON }),
+      await post(`/workspaces/${wsId}/tasks/${task.id}/assignee`, {
+        assignee: 'Ada Fenwick',
+        author: PERSON,
+      }),
     );
     const handed = handle.tasks.getTask(task.id) as Task;
     expect(handed.assignee).toBe('Ada Fenwick');
     expect(handed.assigneeId).toBeUndefined();
 
     await jj(
-      await post(`/api/tasks/${task.id}/assignee`, { assignee: 'live-feedback', author: PERSON }),
+      await post(`/workspaces/${wsId}/tasks/${task.id}/assignee`, {
+        assignee: 'live-feedback',
+        author: PERSON,
+      }),
     );
     const back = handle.tasks.getTask(task.id) as Task;
     expect(back.assignee).toBe('live-feedback');

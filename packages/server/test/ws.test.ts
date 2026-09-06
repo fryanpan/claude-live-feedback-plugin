@@ -8,6 +8,7 @@ import * as encoding from 'lib0/encoding';
 import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const MSG_SYNC = 0;
 
@@ -89,6 +90,9 @@ function connectDoc(url: string): {
   };
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('ws sync', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -100,6 +104,7 @@ describe('ws sync', () => {
     handle = createServer({ port: 0, dataDir });
     wsBase = `ws://localhost:${handle.port}`;
     restBase = `http://localhost:${handle.port}`;
+    WS = await seedBoard(restBase);
   });
 
   afterAll(async () => {
@@ -108,10 +113,10 @@ describe('ws sync', () => {
   });
 
   it('two clients converge on text edits', async () => {
-    const a = connectDoc(`${wsBase}/y/ws-1?type=mockup`);
+    const a = connectDoc(`${wsBase}/workspaces/${WS}/docs/ws-1/y?type=mockup`);
     await waitForOpen(a.ws);
     await a.ready;
-    const b = connectDoc(`${wsBase}/y/ws-1?type=mockup`);
+    const b = connectDoc(`${wsBase}/workspaces/${WS}/docs/ws-1/y?type=mockup`);
     await waitForOpen(b.ws);
     await b.ready;
 
@@ -130,7 +135,7 @@ describe('ws sync', () => {
   });
 
   it('persists Y.Text to disk and reloads it on a new client', async () => {
-    const a = connectDoc(`${wsBase}/y/ws-persist?type=mockup`);
+    const a = connectDoc(`${wsBase}/workspaces/${WS}/docs/ws-persist/y?type=mockup`);
     await waitForOpen(a.ws);
     await a.ready;
     a.ydoc.getText('content').insert(0, 'Persistent body');
@@ -140,7 +145,7 @@ describe('ws sync', () => {
     // small delay to ensure close has been processed
     await new Promise((r) => setTimeout(r, 100));
 
-    const b = connectDoc(`${wsBase}/y/ws-persist?type=mockup`);
+    const b = connectDoc(`${wsBase}/workspaces/${WS}/docs/ws-persist/y?type=mockup`);
     await waitForOpen(b.ws);
     await b.ready;
     expect(b.ydoc.getText('content').toString()).toBe('Persistent body');
@@ -156,7 +161,7 @@ describe('ws sync', () => {
     // while the agent find_and_replaces another, and BOTH land on disk.
     const file = join(dataDir, 'concurrent.md');
     writeFileSync(file, 'Alpha line\n\nBravo line\n');
-    const r = await fetch(`${restBase}/api/docs`, {
+    const r = await fetch(`${restBase}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'concur-1', type: 'markdown', sourceUrl: file }),
@@ -164,7 +169,7 @@ describe('ws sync', () => {
     expect(r.ok).toBe(true);
 
     // Connect a browser-shaped client and wait for the seeded prose to sync.
-    const browser = connectDoc(`${wsBase}/y/concur-1`);
+    const browser = connectDoc(`${wsBase}/workspaces/${WS}/docs/concur-1/y`);
     await waitForOpen(browser.ws);
     await browser.ready;
     const frag = prose.getProseFragment(browser.ydoc);
@@ -179,7 +184,7 @@ describe('ws sync', () => {
     bravoText.insert(bravoText.length, ' EDIT');
 
     // Concurrently, the agent rewrites the OTHER paragraph via REST.
-    await fetch(`${restBase}/api/docs/concur-1/find_and_replace`, {
+    await fetch(`${restBase}/workspaces/${WS}/docs/concur-1/find_and_replace`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ find: 'Alpha', replace: 'Alpha2' }),

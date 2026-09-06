@@ -5,13 +5,14 @@ import {
   isReviewItemHeld,
   latestThreadedQuestion,
 } from '@feedback/core';
+import { classifyActor } from '../actor-identity.ts';
 /**
  * A ticket's review items — 0..n, several possibly open at once.
  *
  * Lifted verbatim out of `createServer`'s request closure; the handlers
  * read their collaborators off `TaskRoutesContext` instead of the scope.
  */
-import { classifyActor } from '../actor-identity.ts';
+import { matchRest } from '../middleware/workspace-scope.ts';
 import { isCategoryAuthor } from '../task-owner.ts';
 import { LEGACY_REVIEW_ITEM_ID } from '../tasks.ts';
 import type { TaskRouteRequest, TaskRoutesContext } from './task-routes-context.ts';
@@ -34,7 +35,7 @@ export async function handleTaskReviewItems(
     judgeReviewItem,
     judgeTaskDecision,
   } = ctx;
-  const { req, pathname, visitor, authorFor, refuseCategoryAuthor } = rq;
+  const { req, scope, visitor, authorFor, refuseCategoryAuthor } = rq;
   // ── A ticket's review items: 0..n, several possibly open at once ────
   //
   // The two routes ABOVE are untouched and stay that way. They are the
@@ -50,7 +51,7 @@ export async function handleTaskReviewItems(
   // question had nowhere to go. Now the question is a row with its own
   // headline and why, and `:reviewItemId` says which one an answer
   // lands on.
-  const taskReviewAddMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/review-items$/);
+  const taskReviewAddMatch = matchRest(scope, /^tasks\/([^/]+)\/review-items$/);
   if (taskReviewAddMatch && req.method === 'POST') {
     const taskId = decodeURIComponent(taskReviewAddMatch[1] ?? '');
     const body = await safeJson(req);
@@ -82,9 +83,7 @@ export async function handleTaskReviewItems(
       ...heldFields(gate),
     });
   }
-  const taskReviewAnswerMatch = pathname.match(
-    /^\/api\/tasks\/([^/]+)\/review-items\/([^/]+)\/answer$/,
-  );
+  const taskReviewAnswerMatch = matchRest(scope, /^tasks\/([^/]+)\/review-items\/([^/]+)\/answer$/);
   if (taskReviewAnswerMatch && req.method === 'POST') {
     const taskId = decodeURIComponent(taskReviewAnswerMatch[1] ?? '');
     const reviewItemId = decodeURIComponent(taskReviewAnswerMatch[2] ?? '');
@@ -155,8 +154,9 @@ export async function handleTaskReviewItems(
   // item off the person's queue. A person's question goes through the
   // threads route (a `review-item` anchor on the task doc), which is
   // what makes the item wait on its owner.
-  const taskReviewInfoMatch = pathname.match(
-    /^\/api\/tasks\/([^/]+)\/review-items\/([^/]+)\/more-info$/,
+  const taskReviewInfoMatch = matchRest(
+    scope,
+    /^tasks\/([^/]+)\/review-items\/([^/]+)\/more-info$/,
   );
   if (taskReviewInfoMatch && req.method === 'POST') {
     const taskId = decodeURIComponent(taskReviewInfoMatch[1] ?? '');
@@ -191,8 +191,9 @@ export async function handleTaskReviewItems(
    * on a slow connection must not turn into an error the reader has to
    * think about.
    */
-  const taskReviewReleaseMatch = pathname.match(
-    /^\/api\/tasks\/([^/]+)\/review-items\/([^/]+)\/release$/,
+  const taskReviewReleaseMatch = matchRest(
+    scope,
+    /^tasks\/([^/]+)\/review-items\/([^/]+)\/release$/,
   );
   if (taskReviewReleaseMatch && req.method === 'POST') {
     const taskId = decodeURIComponent(taskReviewReleaseMatch[1] ?? '');
@@ -234,9 +235,7 @@ export async function handleTaskReviewItems(
   // than dropped after the revision applied, because "revised, and the
   // reply went nowhere" is the accepted-and-discarded shape this repo
   // keeps re-shipping.
-  const taskReviewReviseMatch = pathname.match(
-    /^\/api\/tasks\/([^/]+)\/review-items\/([^/]+)\/revise$/,
-  );
+  const taskReviewReviseMatch = matchRest(scope, /^tasks\/([^/]+)\/review-items\/([^/]+)\/revise$/);
   if (taskReviewReviseMatch && req.method === 'POST') {
     const taskId = decodeURIComponent(taskReviewReviseMatch[1] ?? '');
     const reviewItemId = decodeURIComponent(taskReviewReviseMatch[2] ?? '');
@@ -351,8 +350,9 @@ export async function handleTaskReviewItems(
   // verbatim, marked withdrawn with the reason beside them; refused on
   // an answered item (409 — the state, not the request, is what's
   // wrong); `/undo` puts the ask back in front of the reader.
-  const taskReviewWithdrawMatch = pathname.match(
-    /^\/api\/tasks\/([^/]+)\/review-items\/([^/]+)\/withdraw(\/undo)?$/,
+  const taskReviewWithdrawMatch = matchRest(
+    scope,
+    /^tasks\/([^/]+)\/review-items\/([^/]+)\/withdraw(\/undo)?$/,
   );
   if (taskReviewWithdrawMatch && req.method === 'POST') {
     // No visitor refusal here, unlike its neighbours. Withdrawing is the exit

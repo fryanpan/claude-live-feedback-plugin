@@ -59,9 +59,11 @@ describe('POST /api/links/titles', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'link-titles-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
-
     const ws = await post('/workspaces', { name: 'Link Titles Board', goal: 'Ship.' });
     wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
+    // The unrelated board exists so a wrong-board address has somewhere to
+    // point. Nothing in this file is filed on it — that is what makes it the
+    // wrong board.
     const other = await post('/workspaces', { name: 'Unrelated Board', goal: 'Else.' });
     otherWsId = ((await other.json()) as { workspace: { id: string } }).workspace.id;
 
@@ -74,7 +76,7 @@ describe('POST /api/links/titles', () => {
 
     const mdPath = join(dataDir, 'design.md');
     writeFileSync(mdPath, '# Design\n\nBody.\n');
-    const doc = await post('/api/docs', {
+    const doc = await post(`/workspaces/${wsId}/docs`, {
       docId: 'lt-design',
       type: 'markdown',
       sourceUrl: mdPath,
@@ -83,7 +85,7 @@ describe('POST /api/links/titles', () => {
     docId = ((await doc.json()) as { docId: string }).docId;
     // File the doc on the board, so the board-scoped address is truthful —
     // the route refuses to resolve a doc through a board it isn't on.
-    const attach = await post(`/workspaces/${wsId}/docs`, { docId });
+    const attach = await post(`/workspaces/${wsId}/docs:attach`, { docId });
     expect(attach.status).toBe(200);
   });
 
@@ -92,12 +94,16 @@ describe('POST /api/links/titles', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it('resolves a doc URL (both address shapes) to the doc title', async () => {
+  it('resolves a doc URL to the doc title, and the retired shape to nothing', async () => {
     const modern = `${base}/workspaces/${wsId}/docs/${encodeURIComponent(docId)}`;
-    const legacy = `${base}/review/${encodeURIComponent(docId)}`;
-    const titles = await titlesFor([modern, legacy]);
+    // `/review/<id>` was the address before the cutover. It names no
+    // workspace, so there is nothing to hold the id against — it resolves to
+    // no title now, and `modern` beside it is the control that says so
+    // because the shape is gone rather than because the doc is.
+    const retired = `${base}/review/${encodeURIComponent(docId)}`;
+    const titles = await titlesFor([modern, retired]);
     expect(titles[modern]).toBe('Redline Design');
-    expect(titles[legacy]).toBe('Redline Design');
+    expect(titles[retired]).toBeNull();
   });
 
   it('falls back to the file basename for a doc with no title — never the raw doc id', async () => {
@@ -108,13 +114,13 @@ describe('POST /api/links/titles', () => {
     // and a raw id like "d-xyz123".
     const untitledPath = join(dataDir, 'untitled-notes.md');
     writeFileSync(untitledPath, '# Untitled\n\nNo title was ever set on this one.\n');
-    const created = await post('/api/docs', {
+    const created = await post(`/workspaces/${wsId}/docs`, {
       docId: 'lt-untitled',
       type: 'markdown',
       sourceUrl: untitledPath,
     });
     const untitledId = ((await created.json()) as { docId: string }).docId;
-    const attach = await post(`/workspaces/${wsId}/docs`, { docId: untitledId });
+    const attach = await post(`/workspaces/${wsId}/docs:attach`, { docId: untitledId });
     expect(attach.status).toBe(200);
 
     const url = `${base}/workspaces/${wsId}/docs/${encodeURIComponent(untitledId)}`;
@@ -162,7 +168,7 @@ describe('POST /api/links/titles', () => {
       expect(before.titles[url]).toBe('Ship the widget');
       expect(before.statuses[url]).toBe('todo');
 
-      const moved = await post(`/api/tasks/${taskId}/transition`, {
+      const moved = await post(`/workspaces/${wsId}/tasks/${taskId}/transition`, {
         to: 'in-progress',
         author: { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' },
       });
@@ -209,7 +215,7 @@ describe('POST /api/links/titles', () => {
     });
 
     it('carries the status for a task BODY doc address too', async () => {
-      const url = `${base}/review/${encodeURIComponent(`task:${taskId}`)}`;
+      const url = `${base}/workspaces/${wsId}/docs/${encodeURIComponent(`task:${taskId}`)}`;
       const { titles, statuses } = await lookup([url]);
       expect(titles[url]).toBe('Ship the widget');
       expect(typeof statuses[url]).toBe('string');
@@ -229,7 +235,7 @@ describe('POST /api/links/titles', () => {
       // "draft" — and stop saying it the moment the plan is approved.
       const mdPath = join(dataDir, 'held-plan.md');
       writeFileSync(mdPath, '# Held plan\n\nThe plan.\n');
-      const doc = await post('/api/docs', {
+      const doc = await post(`/workspaces/${wsId}/docs`, {
         docId: 'lt-held-plan',
         type: 'markdown',
         sourceUrl: mdPath,
@@ -250,7 +256,7 @@ describe('POST /api/links/titles', () => {
       // Control: an ordinary task never appears in planHeld.
       expect(before.planHeld[plainUrl]).toBeUndefined();
 
-      const approve = await post('/api/docs/lt-held-plan/plan', {
+      const approve = await post(`/workspaces/${wsId}/docs/lt-held-plan/plan`, {
         state: 'approved',
         author: { id: 'known-jordan', name: 'Jordan', kind: 'person' },
       });

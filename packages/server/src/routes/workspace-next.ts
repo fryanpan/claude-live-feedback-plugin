@@ -97,14 +97,16 @@ export async function handleWorkspaceNext(
   rq: WorkspaceRouteRequest,
 ): Promise<Response | undefined> {
   const { taskStore, taskProjection, dataDir, opts, j, safeJson, parallelismCapView } = ctx;
-  const { req, pathname, url, visitor } = rq;
+  const { req, pathname, scope, url, visitor } = rq;
   // The work queue: priority order, dependency-aware, grouped into
   // waves that can run at once (§3.9 agent side).
   const wsNextMatch = pathname.match(/^\/workspaces\/([^/]+)\/next$/);
-  if (wsNextMatch && req.method === 'GET') {
-    const workspaceId = decodeURIComponent(wsNextMatch[1] ?? '');
-    const workspace = taskStore.getWorkspace(workspaceId);
-    if (!workspace) return j(404, { error: 'workspace not found' });
+  if (wsNextMatch && scope && req.method === 'GET') {
+    // The board itself comes off the scope. `middleware/workspace-scope.ts`
+    // resolved it once, above every handler, so the lookup and the 404 that
+    // used to open this block are DELETED rather than left dormant — there
+    // is no second copy of "does this board exist" here to drift.
+    const { workspaceId, board: workspace } = scope;
     const limitRaw = url.searchParams.get('limit');
     // Same additive flag as `/tasks`, and the same default: an archived
     // row is not work to pick up, so it leaves the queue unless a caller

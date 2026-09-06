@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 interface DocStatus {
   docId: string;
@@ -33,7 +34,10 @@ interface DocStatus {
   pendingSuggestions: number;
 }
 
-describe('GET /api/docs/:docId/status', () => {
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
+describe(`GET /workspaces/${WS}/docs/:docId/status`, () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
@@ -73,13 +77,14 @@ describe('GET /api/docs/:docId/status', () => {
       ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
 
     // A doc big enough that "status is small" is a real claim, not a claim
     // that would also hold for the full content payload.
     const bigSection = `Filler paragraph about synthetic rockets. ${'x'.repeat(400)}\n\n`;
     boundPath = join(dataDir, 'status-doc.md');
     writeFileSync(boundPath, `# Status Fixture\n\n${bigSection.repeat(80)}`);
-    const created = await post('/api/docs', {
+    const created = await post(`/workspaces/${WS}/docs`, {
       docId: 'status-doc',
       type: 'markdown',
       sourceUrl: boundPath,
@@ -90,7 +95,7 @@ describe('GET /api/docs/:docId/status', () => {
 
     // One open + one resolved thread, so the counts are non-vacuous.
     const mkThread = async () => {
-      const res = await post('/api/docs/status-doc/threads/by_find', {
+      const res = await post(`/workspaces/${WS}/docs/status-doc/threads/by_find`, {
         author: { id: 'a1', name: 'Agent One', kind: 'known', color: '#123456' },
         text: 'a comment',
         find: 'Status Fixture',
@@ -100,12 +105,17 @@ describe('GET /api/docs/:docId/status', () => {
     };
     await mkThread();
     const resolvedId = await mkThread();
-    expect((await post(`/api/docs/status-doc/threads/${resolvedId}/resolve`, {})).status).toBe(200);
+    expect(
+      (await post(`/workspaces/${WS}/docs/status-doc/threads/${resolvedId}/resolve`, {})).status,
+    ).toBe(200);
 
     // Share the workspace the doc landed on so a visitor can reach it.
     const ws = await post('/workspaces', { name: 'status-board', goal: 'Check status.' });
     const boardId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
-    expect((await post(`/workspaces/${boardId}/docs`, { docId: 'status-doc' })).status).toBe(200);
+    WS = boardId;
+    expect((await post(`/workspaces/${boardId}/docs:attach`, { docId: 'status-doc' })).status).toBe(
+      200,
+    );
     visitorHeaders = (await mintAccessShare(base, access, boardId, { label: 'status share' }))
       .headers;
   });
@@ -116,7 +126,7 @@ describe('GET /api/docs/:docId/status', () => {
   });
 
   it('answers the metadata shape without any content payload, and stays small', async () => {
-    const res = await local('/api/docs/status-doc/status');
+    const res = await local(`/workspaces/${WS}/docs/status-doc/status`);
     expect(res.status).toBe(200);
     const text = await res.text();
     const status = JSON.parse(text) as DocStatus;
@@ -146,25 +156,27 @@ describe('GET /api/docs/:docId/status', () => {
   });
 
   it('counts pending suggestions', async () => {
-    const res = await post('/api/docs/status-doc/find_and_replace', {
+    const res = await post(`/workspaces/${WS}/docs/status-doc/find_and_replace`, {
       find: 'Status Fixture',
       replace: 'Status Fixture (proposed)',
       suggest: true,
       author: { id: 'a1', name: 'Agent One', kind: 'known', color: '#123456' },
     });
     expect(res.status).toBe(200);
-    const status = (await (await local('/api/docs/status-doc/status')).json()) as DocStatus;
+    const status = (await (
+      await local(`/workspaces/${WS}/docs/status-doc/status`)
+    ).json()) as DocStatus;
     expect(status.pendingSuggestions).toBe(1);
   });
 
   it('404s on an unknown docId', async () => {
-    expect((await local('/api/docs/no-such-doc/status')).status).toBe(404);
+    expect((await local(`/workspaces/${WS}/docs/no-such-doc/status`)).status).toBe(404);
   });
 
   it('omits the bound path (and any path-shaped detail) for a share visitor', async () => {
     // The canonical id, because the share scope is decided from the raw path
     // segment against the board's membership — and a board holds minted ids.
-    const res = await pub(`/api/docs/${docId}/status`);
+    const res = await pub(`/workspaces/${WS}/docs/${docId}/status`);
     expect(res.status).toBe(200); // the visitor really can read status
     const text = await res.text();
     const status = JSON.parse(text) as DocStatus;

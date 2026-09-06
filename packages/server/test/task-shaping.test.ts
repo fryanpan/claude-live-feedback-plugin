@@ -29,6 +29,7 @@ import { type ServerHandle, createServer } from '../src/server.ts';
 import { workspaceDocId } from '../src/task-projection.ts';
 import type { Task, TaskStoreEvent } from '../src/tasks.ts';
 import { waitFor } from './wait-for.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const AGENT: User = {
   id: 'agent-shelf-planner',
@@ -55,6 +56,9 @@ const CAPTURE = {
   ].join('\n'),
 };
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('triage shaping', () => {
   let handle: ServerHandle | undefined;
   let dataDir: string | undefined;
@@ -77,15 +81,18 @@ describe('triage shaping', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-task-shaping-'));
     handle = await createServer({ port: 0, dataDir });
     base = `http://127.0.0.1:${handle.port}`;
+    WS = await seedBoard(base);
     const { workspace } = await jj<{ workspace: { id: string } }>(
       await post('/workspaces', { name: 'shelf-planner', goal: 'Planning feels fast.' }),
     );
+    WS = workspace.id;
     await fetch(`${base}/workspaces/${workspace.id}/goals`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ author: AGENT, goals: [{ id: 'g-flow', title: 'Navigation flow' }] }),
     });
-    return workspace.id;
+    WS = workspace.id;
+    return WS;
   }
 
   /** File exactly what quick-capture files: no goal, so it lands unplaced. */
@@ -142,7 +149,7 @@ describe('triage shaping', () => {
     // above were an artefact of nothing being able to change this row, this
     // half would fail too.
     await jj(
-      await post(`/api/tasks/${task.id}/body`, {
+      await post(`/workspaces/${wsId}/tasks/${task.id}/body`, {
         author: AGENT,
         title: 'Moving between shelves loses your place',
         markdown:
@@ -164,7 +171,7 @@ describe('triage shaping', () => {
     expect((await readTask(wsId, task.id)).quote).toBeUndefined();
 
     await jj(
-      await post(`/api/tasks/${task.id}/body`, {
+      await post(`/workspaces/${wsId}/tasks/${task.id}/body`, {
         author: AGENT,
         title: 'Moving between shelves loses your place',
         markdown: 'A story-shaped body that no longer contains the utterance.',
@@ -187,7 +194,7 @@ describe('triage shaping', () => {
       }),
     );
     await jj(
-      await post(`/api/tasks/${task.id}/body`, {
+      await post(`/workspaces/${wsId}/tasks/${task.id}/body`, {
         author: AGENT,
         title: 'Moving between shelves loses your place',
         markdown: 'A real body.',
@@ -204,7 +211,7 @@ describe('triage shaping', () => {
     const { task } = await capture(wsId, { quote: spoken });
 
     await jj(
-      await post(`/api/tasks/${task.id}/body`, {
+      await post(`/workspaces/${wsId}/tasks/${task.id}/body`, {
         author: AGENT,
         title: 'Moving between shelves loses your place',
         markdown: 'A story-shaped body.',
@@ -218,14 +225,20 @@ describe('triage shaping', () => {
     const { task } = await capture(wsId);
 
     await jj(
-      await post(`/api/tasks/${task.id}/body`, { author: AGENT, markdown: 'First shaping.' }),
+      await post(`/workspaces/${wsId}/tasks/${task.id}/body`, {
+        author: AGENT,
+        markdown: 'First shaping.',
+      }),
     );
     expect((await readTask(wsId, task.id)).quote).toBe(CAPTURE.body);
 
     // A second pass corrects the shaper's own words. Those are an edit, not
     // an origin, so the preserved capture must not be replaced by them.
     await jj(
-      await post(`/api/tasks/${task.id}/body`, { author: AGENT, markdown: 'Second shaping.' }),
+      await post(`/workspaces/${wsId}/tasks/${task.id}/body`, {
+        author: AGENT,
+        markdown: 'Second shaping.',
+      }),
     );
     expect((await readTask(wsId, task.id)).quote).toBe(CAPTURE.body);
   });
@@ -247,7 +260,7 @@ describe('triage shaping', () => {
    */
   describe('every door into a task body preserves the capture', () => {
     const docContent = (taskId: string) =>
-      `/api/docs/${encodeURIComponent(`task:${taskId}`)}/content`;
+      `/workspaces/${WS}/docs/${encodeURIComponent(`task:${taskId}`)}/content`;
 
     it('preserves the capture when the rewrite comes through set_doc_content', async () => {
       const wsId = await seedWorkspace();
@@ -321,10 +334,13 @@ describe('triage shaping', () => {
       expect((await readTask(wsId, task.id)).quote).toBeUndefined();
 
       await jj(
-        await post(`/api/docs/${encodeURIComponent(`task:${task.id}`)}/find_and_replace`, {
-          find: 'I keep losing my place.',
-          replace: 'The place indicator is lost on shelf change.',
-        }),
+        await post(
+          `/workspaces/${wsId}/docs/${encodeURIComponent(`task:${task.id}`)}/find_and_replace`,
+          {
+            find: 'I keep losing my place.',
+            replace: 'The place indicator is lost on shelf change.',
+          },
+        ),
       );
       // The snapshot is debounced on this path — there is no flush to ride, so
       // poll the row until the rewrite shows up in it.
@@ -363,7 +379,7 @@ describe('triage shaping', () => {
     const off = handle?.tasks.onEvent((e) => events.push(e));
     try {
       await jj(
-        await post(`/api/tasks/${task.id}/body`, {
+        await post(`/workspaces/${wsId}/tasks/${task.id}/body`, {
           author: AGENT,
           title: 'Moving between shelves loses your place',
           markdown: 'A story-shaped body.',
@@ -388,7 +404,12 @@ describe('triage shaping', () => {
     const events: TaskStoreEvent[] = [];
     const off = handle?.tasks.onEvent((e) => events.push(e));
     try {
-      await jj(await post(`/api/tasks/${task.id}/body`, { author: AGENT, markdown: 'Body only.' }));
+      await jj(
+        await post(`/workspaces/${wsId}/tasks/${task.id}/body`, {
+          author: AGENT,
+          markdown: 'Body only.',
+        }),
+      );
     } finally {
       off?.();
     }
@@ -403,7 +424,7 @@ describe('triage shaping', () => {
     const wsId = await seedWorkspace();
     const { task } = await capture(wsId);
     await jj(
-      await post(`/api/tasks/${task.id}/body`, {
+      await post(`/workspaces/${wsId}/tasks/${task.id}/body`, {
         author: AGENT,
         title: '   ',
         markdown: 'Body only.',
@@ -427,7 +448,7 @@ describe('triage shaping', () => {
     expect((doc.ydoc.getMap('tasks').get(task.id) as { title: string }).title).toBe(CAPTURE.title);
 
     await jj(
-      await post(`/api/tasks/${task.id}/body`, {
+      await post(`/workspaces/${wsId}/tasks/${task.id}/body`, {
         author: AGENT,
         title: 'Moving between shelves loses your place',
         markdown: 'A story-shaped body.',

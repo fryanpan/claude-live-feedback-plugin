@@ -37,10 +37,10 @@ describe('the review-item gate when the judge is unreliable', () => {
 
   describe('a judge that cannot answer', () => {
     it('leaves a held item held rather than admitting it on a failed call', async () => {
-      const { taskId } = await board();
+      const { workspaceId, taskId } = await board();
       h.judge = async () => ({ ok: false, reason: 'The detail does not say what waits on this.' });
       const filed = await jj<Held>(
-        await post(`/api/tasks/${taskId}/review-items`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
           author: FILER,
           review: COSTS_IN_OPTIONS,
         }),
@@ -52,7 +52,7 @@ describe('the review-item gate when the judge is unreliable', () => {
       // could clear any hold by revising until a call failed.
       h.judge = async () => null;
       const out = await jj<Held>(
-        await post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items/${itemId}/revise`, {
           author: FILER,
           detail: 'A different blurb that does not close the gap either.',
         }),
@@ -69,10 +69,10 @@ describe('the review-item gate when the judge is unreliable', () => {
     });
 
     it('still passes an item nobody has held — the fail-open rule is intact', async () => {
-      const { taskId } = await board();
+      const { workspaceId, taskId } = await board();
       h.judge = async () => null;
       const out = await jj<Held>(
-        await post(`/api/tasks/${taskId}/review-items`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
           author: FILER,
           review: COSTS_IN_OPTIONS,
         }),
@@ -82,10 +82,10 @@ describe('the review-item gate when the judge is unreliable', () => {
     });
 
     it('does the same when the judge throws', async () => {
-      const { taskId } = await board();
+      const { workspaceId, taskId } = await board();
       h.judge = async () => ({ ok: false, reason: 'The detail does not say what waits on this.' });
       const filed = await jj<Held>(
-        await post(`/api/tasks/${taskId}/review-items`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
           author: FILER,
           review: COSTS_IN_OPTIONS,
         }),
@@ -95,7 +95,7 @@ describe('the review-item gate when the judge is unreliable', () => {
         throw new Error('judge exploded');
       };
       const out = await jj<Held>(
-        await post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items/${itemId}/revise`, {
           author: FILER,
           detail: 'A different blurb that does not close the gap either.',
         }),
@@ -110,14 +110,14 @@ describe('the review-item gate when the judge is unreliable', () => {
       const { workspaceId, taskId } = await board();
       h.judge = contradictoryJudge();
       const filed = await jj<Held>(
-        await post(`/api/tasks/${taskId}/review-items`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items`, {
           author: FILER,
           review: COSTS_IN_OPTIONS,
         }),
       );
       const itemId = filed.item?.id as string;
       await jj(
-        await post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
+        await post(`/workspaces/${workspaceId}/tasks/${taskId}/review-items/${itemId}/revise`, {
           author: FILER,
           detail: 'The rollout waits on this: nothing ships until the size is picked.',
         }),

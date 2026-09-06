@@ -25,6 +25,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('the review API', () => {
   let handle: ServerHandle;
@@ -57,9 +61,11 @@ describe('the review API', () => {
     writeFileSync(join(folder, 'sub', 'two.md'), '# Two\n\nmore\n');
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
 
     const board = await post('/workspaces', { name: 'a board', goal: 'Ship it.' });
     boardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
+    WS = boardId;
 
     const bound = await post('/workspaces', { folderPath: folder, hubWorkspaceId: boardId });
     expect(bound.status).toBe(200);
@@ -81,7 +87,7 @@ describe('the review API', () => {
   describe('answers at the review spelling, and only there', () => {
     for (const sub of ['tree', 'files', 'threads'] as const) {
       it(`GET /${sub}`, async () => {
-        const now = await local(`/api/reviews/${encodeURIComponent(setId)}/${sub}`);
+        const now = await local(`/workspaces/${WS}/reviews/${encodeURIComponent(setId)}/${sub}`);
         expect(now.status, `review /${sub}`).toBe(200);
         // The retired alias. A review id is not a board id, so the board
         // family refuses it before any handler runs.
@@ -91,14 +97,14 @@ describe('the review API', () => {
     }
 
     it('POST /refresh', async () => {
-      expect((await post(`/api/reviews/${encodeURIComponent(setId)}/refresh`, {})).status).toBe(
-        200,
-      );
+      expect(
+        (await post(`/workspaces/${WS}/reviews/${encodeURIComponent(setId)}/refresh`, {})).status,
+      ).toBe(200);
       expect((await post(`/workspaces/${encodeURIComponent(setId)}/refresh`, {})).status).toBe(404);
     });
 
     it('POST /context-file opens a member lazily', async () => {
-      const r = await post(`/api/reviews/${encodeURIComponent(setId)}/context-file`, {
+      const r = await post(`/workspaces/${WS}/reviews/${encodeURIComponent(setId)}/context-file`, {
         relPath: 'sub/two.md',
       });
       expect(r.status).toBe(200);
@@ -109,22 +115,26 @@ describe('the review API', () => {
       // A 400 rather than a 404 is what proves the request reached the
       // review's own handler; the retired spelling gets the 404 instead,
       // which is what proves it reached nothing.
-      expect((await post(`/api/reviews/${setId}/groups`, {})).status).toBe(400);
+      expect((await post(`/workspaces/${WS}/reviews/${setId}/groups`, {})).status).toBe(400);
       expect((await post(`/workspaces/${setId}/groups`, {})).status).toBe(404);
     });
   });
 
   it('reports a review id it has never heard of as not-found', async () => {
-    const r = await local('/api/reviews/no-such-review/tree');
+    // The scope middleware answers this now, before the review handler is
+    // reached — a review id this board does not hold is refused by the same
+    // rule, and with the same body, as a doc id it does not hold. The old
+    // reply echoed the id back; one refusal shape is what replaces it, and a
+    // refusal that varied by collection was a way to tell a real foreign id
+    // from an invented one.
+    const r = await local(`/workspaces/${WS}/reviews/no-such-review/tree`);
     expect(r.status).toBe(404);
-    const body = (await r.json()) as { setId?: string; workspaceId?: string };
-    expect(body.setId).toBe('no-such-review');
-    expect(body.workspaceId).toBe('no-such-review'); // deprecated, same value
+    expect((await r.json()) as { error?: string }).toEqual({ error: 'not-found' });
   });
 
   describe('delete is two verbs because it deletes two things', () => {
-    it('DELETE /api/reviews/<setId> drops the review and its board row', async () => {
-      const r = await local(`/api/reviews/${encodeURIComponent(setId)}?force=true`, {
+    it('DELETE /workspaces/<ws>/reviews/<setId> drops the review and its board row', async () => {
+      const r = await local(`/workspaces/${WS}/reviews/${encodeURIComponent(setId)}?force=true`, {
         method: 'DELETE',
       });
       expect(r.status).toBe(200);
@@ -135,8 +145,8 @@ describe('the review API', () => {
       expect(docIds).not.toContain(setId);
     });
 
-    it('DELETE /api/reviews/<boardId> cannot touch a board', async () => {
-      const r = await local(`/api/reviews/${encodeURIComponent(boardId)}?force=true`, {
+    it('DELETE /workspaces/<ws>/reviews/<boardId> cannot touch a board', async () => {
+      const r = await local(`/workspaces/${WS}/reviews/${encodeURIComponent(boardId)}?force=true`, {
         method: 'DELETE',
       });
       expect(r.status).toBe(404);
@@ -145,14 +155,24 @@ describe('the review API', () => {
       expect((await local(`/workspaces/${boardId}?format=json`)).status).toBe(200);
     });
 
-    it('DELETE /workspaces/<id> still fronts both, for callers we cannot restart', async () => {
+    it('DELETE /workspaces/<id> no longer fronts a review — it is a board verb only', async () => {
+      // The two-store compatibility on this path is gone (owner decision, this
+      // cutover): `/workspaces/<id>` is a BOARD address, and a review is
+      // deleted at the review's own address. A set id here now names a board
+      // nothing knows.
       expect(
         (
           await local(`/workspaces/${encodeURIComponent(setId)}?force=true`, {
             method: 'DELETE',
           })
         ).status,
+      ).toBe(404);
+      // Positive control in the same pass: the set really is still there, so
+      // the 404 is the address being wrong rather than the review being gone.
+      expect(
+        (await local(`/workspaces/${boardId}/reviews/${encodeURIComponent(setId)}/tree`)).status,
       ).toBe(200);
+      // …and the board verb itself still works on a board.
       expect(
         (
           await local(`/workspaces/${encodeURIComponent(boardId)}?force=true`, {

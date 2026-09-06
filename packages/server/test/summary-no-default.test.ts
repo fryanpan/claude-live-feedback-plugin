@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import type { ElementAnchor, User } from '@feedback/core';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { DEBOUNCE_MS, ThreadSummarizer } from '../src/summarize.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const bryan: User = { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' };
 const SNIPPET = 'the retry loop swallows the error';
@@ -42,12 +43,15 @@ const anchor: ElementAnchor = {
 let outbound: string[] = [];
 const realFetch = globalThis.fetch;
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('createServer builds no summarizer of its own', () => {
   let dataDir: string;
   const priorKey = process.env.LIVE_FEEDBACK_SUMMARY_API_KEY;
   const priorFlag = process.env.CW_SUMMARIES;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'summary-no-default-'));
     // A key that resolves on ANY machine, so this test is not quietly vacuous
     // on a box (or a CI runner) that happens to have no Keychain entry — which
@@ -80,14 +84,15 @@ describe('createServer builds no summarizer of its own', () => {
   /** Create a doc + one thread on a running server. */
   async function seed(handle: ServerHandle, docId: string): Promise<void> {
     const base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     const file = join(dataDir, `${docId}.md`);
     writeFileSync(file, `# Doc\n\n${SNIPPET}\n`);
-    await realFetch(`${base}/api/docs`, {
+    await realFetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId, type: 'markdown', sourceUrl: file }),
     });
-    const r = await realFetch(`${base}/api/docs/${docId}/threads`, {
+    const r = await realFetch(`${base}/workspaces/${WS}/docs/${docId}/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ author: bryan, text: 'a fixture comment body', anchor }),

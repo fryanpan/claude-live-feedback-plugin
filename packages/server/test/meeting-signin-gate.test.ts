@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import { MEETING_AUDIO_ENCODING, MEETING_SAMPLE_RATE, meetingSocketPath } from '@feedback/core';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { createMockTranscriptionEngine } from '../src/transcribe.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 interface ServerFrame {
   type: string;
@@ -33,11 +34,14 @@ interface Booted {
   base: string;
   wsBase: string;
   dataDir: string;
+  /** This server's board. Per-server, because this file boots TWO of them and
+   *  a doc filed on one is not addressable through the other's board. */
+  ws: string;
 }
 
 const booted: Booted[] = [];
 
-function boot(requireSignInToWrite: boolean): Booted {
+async function boot(requireSignInToWrite: boolean): Promise<Booted> {
   const dataDir = mkdtempSync(join(tmpdir(), 'cw-meeting-signin-'));
   const handle = createServer({
     port: 0,
@@ -50,6 +54,7 @@ function boot(requireSignInToWrite: boolean): Booted {
     dataDir,
     base: `http://localhost:${handle.port}`,
     wsBase: `ws://localhost:${handle.port}`,
+    ws: await seedBoard(`http://localhost:${handle.port}`),
   };
   booted.push(b);
   return b;
@@ -60,7 +65,7 @@ function boot(requireSignInToWrite: boolean): Booted {
 async function createDoc(b: Booted, docId: string): Promise<string> {
   const path = join(b.dataDir, `${docId}.md`);
   writeFileSync(path, `# ${docId}\n\nNotes go here.\n`);
-  const res = await fetch(`${b.base}/api/docs`, {
+  const res = await fetch(`${b.base}/workspaces/${b.ws}/docs`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ docId, sourceUrl: path, title: docId }),
@@ -85,7 +90,7 @@ async function openAudio(
   const init = opts.asBrowser
     ? ({ headers: { origin: b.base } } as unknown as string[])
     : undefined;
-  const ws = new WebSocket(`${b.wsBase}${meetingSocketPath(docId)}`, init);
+  const ws = new WebSocket(`${b.wsBase}${meetingSocketPath(b.ws, docId)}`, init);
   const frames: ServerFrame[] = [];
   ws.addEventListener('message', (ev) => {
     frames.push(JSON.parse(ev.data as string) as ServerFrame);
@@ -125,7 +130,9 @@ async function waitForFrame(
 /** How many meetings this doc has on the server — the durable half, so a
  *  refusal is measured by what was NOT written rather than by a frame. */
 async function meetingCount(b: Booted, docId: string): Promise<number> {
-  const res = await fetch(`${b.base}/api/docs/${encodeURIComponent(docId)}/meetings`);
+  const res = await fetch(
+    `${b.base}/workspaces/${b.ws}/docs/${encodeURIComponent(docId)}/meetings`,
+  );
   expect(res.status).toBe(200);
   return ((await res.json()) as { meetings: unknown[] }).meetings.length;
 }
@@ -134,9 +141,9 @@ describe('meeting audio socket: the sign-in gate', () => {
   let gated: Booted;
   let ungated: Booted;
 
-  beforeAll(() => {
-    gated = boot(true);
-    ungated = boot(false);
+  beforeAll(async () => {
+    gated = await boot(true);
+    ungated = await boot(false);
   });
 
   afterAll(async () => {

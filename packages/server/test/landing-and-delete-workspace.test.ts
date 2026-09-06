@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 /**
  * HTTP e2e for the landing page + workspace deletion:
@@ -12,10 +13,13 @@ import { type ServerHandle, createServer } from '../src/server.ts';
  *   - GET /projects/<owner> renders that project's artifacts, folder members
  *     nested under one expandable row
  *   - GET /workspaces lists the rolled-up summary
- *   - DELETE /workspaces/:id enforces the all-or-nothing open-thread
+ *   - DELETE /workspaces/:ws/reviews/:id enforces the all-or-nothing open-thread
  *     guardrail and force-retires the whole folder as a unit — ARCHIVING it
  *     by default, and purging only when ?purge=true asks for it
  */
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('landing + delete_workspace e2e (HTTP)', () => {
   let handle: ServerHandle;
@@ -25,7 +29,7 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
   let standalone: string;
   let base: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'land-data-'));
     folder = mkdtempSync(join(tmpdir(), 'land-src-'));
     // The standalone doc lives OUTSIDE the bound folder so bind_folder doesn't
@@ -34,6 +38,7 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     standalone = join(standaloneDir, 'STANDALONE.md');
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
 
     mkdirSync(join(folder, 'src'));
     writeFileSync(join(folder, 'README.md'), '# Project\n\nthe unique md line\n');
@@ -67,18 +72,20 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     const r = await fetch(`${base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ folderPath: folder, owner: '/proj/alpha' }),
+      body: JSON.stringify({ folderPath: folder, owner: '/proj/alpha', hubWorkspaceId: WS }),
     });
     const body = await j<BindResp>(r);
     workspaceId = body.workspaceId;
     files = new Map(body.files.map((f) => [f.relPath, f]));
     // bind is lazy now (entry only) — open the rest like a reviewer would.
-    const allR = await fetch(`${base}/api/reviews/${encodeURIComponent(workspaceId)}/files`);
+    const allR = await fetch(
+      `${base}/workspaces/${WS}/reviews/${encodeURIComponent(workspaceId)}/files`,
+    );
     const all = await j<{ files: Array<{ relPath: string }> }>(allR);
     for (const f of all.files) {
       if (files.has(f.relPath)) continue;
       const cr = await fetch(
-        `${base}/api/reviews/${encodeURIComponent(workspaceId)}/context-file`,
+        `${base}/workspaces/${WS}/reviews/${encodeURIComponent(workspaceId)}/context-file`,
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -90,7 +97,7 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     }
 
     // Standalone markdown doc under the same project owner.
-    const sr = await fetch(`${base}/api/docs`, {
+    const sr = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -175,21 +182,24 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     expect(w.owner).toBe('/proj/alpha');
   });
 
-  it('DELETE /workspaces/:id is blocked all-or-nothing when a member has open threads', async () => {
+  it('DELETE /workspaces/:ws/reviews/:id is blocked all-or-nothing when a member has open threads', async () => {
     // Open a thread on the markdown member.
     const mdDocId = files.get('README.md')!.docId;
-    const tr = await fetch(`${base}/api/docs/${encodeURIComponent(mdDocId)}/threads/by_find`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        author: { id: 'u1', name: 'Reviewer', kind: 'known', color: '#2e7dd7' },
-        text: 'wait on this',
-        find: 'the unique md line',
-      }),
-    });
+    const tr = await fetch(
+      `${base}/workspaces/${WS}/docs/${encodeURIComponent(mdDocId)}/threads/by_find`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          author: { id: 'u1', name: 'Reviewer', kind: 'known', color: '#2e7dd7' },
+          text: 'wait on this',
+          find: 'the unique md line',
+        }),
+      },
+    );
     await j(tr);
 
-    const r = await fetch(`${base}/workspaces/${encodeURIComponent(workspaceId)}`, {
+    const r = await fetch(`${base}/workspaces/${WS}/reviews/${encodeURIComponent(workspaceId)}`, {
       method: 'DELETE',
     });
     expect(r.status).toBe(409);
@@ -206,14 +216,17 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     expect(handle.docStore.get(files.get('src/index.ts')!.docId)).toBeTruthy();
   });
 
-  it('DELETE /workspaces/:id?force=true ARCHIVES the whole folder', async () => {
+  it('DELETE /workspaces/:ws/reviews/:id?force=true ARCHIVES the whole folder', async () => {
     // The old payload still means "retire this review" and still takes every
     // member out of the live server — what changed is that the persisted
     // state is parked in `_archive` instead of destroyed, so this is
     // recoverable. `deleted` is gone from the response because nothing was.
-    const r = await fetch(`${base}/workspaces/${encodeURIComponent(workspaceId)}?force=true`, {
-      method: 'DELETE',
-    });
+    const r = await fetch(
+      `${base}/workspaces/${WS}/reviews/${encodeURIComponent(workspaceId)}?force=true`,
+      {
+        method: 'DELETE',
+      },
+    );
     const body = await j<{ ok: true; archived: number; docIds: string[] }>(r);
     expect(body.archived).toBe(2);
     for (const f of files.values()) expect(handle.docStore.get(f.docId)).toBeUndefined();
@@ -229,14 +242,14 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     // Bring back what the previous test archived, which is the round trip
     // that makes archiving safe to be the default.
     const restored = await fetch(
-      `${base}/api/reviews/${encodeURIComponent(workspaceId)}/unarchive`,
+      `${base}/workspaces/${WS}/reviews/${encodeURIComponent(workspaceId)}/unarchive`,
       { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' },
     );
     expect((await j<{ ok: true; restored: number }>(restored)).restored).toBe(2);
     for (const f of files.values()) expect(handle.docStore.get(f.docId)).toBeTruthy();
 
     const r = await fetch(
-      `${base}/workspaces/${encodeURIComponent(workspaceId)}?force=true&purge=true`,
+      `${base}/workspaces/${WS}/reviews/${encodeURIComponent(workspaceId)}?force=true&purge=true`,
       { method: 'DELETE' },
     );
     const body = await j<{ ok: true; deleted: number }>(r);

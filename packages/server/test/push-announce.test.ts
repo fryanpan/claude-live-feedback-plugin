@@ -21,6 +21,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { b64urlEncode } from '../src/push-crypto.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const AGENT = { id: 'agent-index-keeper', name: 'Index Keeper', kind: 'known', color: '#888888' };
 const BASE_URL = 'https://reviews.example.com';
@@ -113,7 +114,7 @@ describe('filing a review item announces it', () => {
       })
     ).json()) as { task: { id: string } };
 
-    const filed = await post(`/api/tasks/${task.id}/review-items`, {
+    const filed = await post(`/workspaces/${workspace.id}/tasks/${task.id}/review-items`, {
       author: AGENT,
       review: {
         shape: 'decision',
@@ -161,7 +162,7 @@ describe('filing a review item announces it', () => {
         author: AGENT,
       })
     ).json()) as { task: { id: string } };
-    await post(`/api/tasks/${task.id}/review-items`, {
+    await post(`/workspaces/${workspace.id}/tasks/${task.id}/review-items`, {
       author: AGENT,
       review: {
         shape: 'decision',
@@ -212,7 +213,7 @@ describe('filing a review item announces it', () => {
         author: AGENT,
       })
     ).json()) as { task: { id: string } };
-    await post(`/api/tasks/${task.id}/review-items`, {
+    await post(`/workspaces/${workspace.id}/tasks/${task.id}/review-items`, {
       author: AGENT,
       review: {
         shape: 'decision',
@@ -256,6 +257,9 @@ describe('withdrawing a doc-thread review item', () => {
 
   async function threadWithItem() {
     const { base, sent } = await start();
+    // `start()` is a fresh server; a board from an earlier one is not an
+    // address on it.
+    const ws = await seedBoard(base);
     const post = (path: string, body: unknown) =>
       fetch(`${base}${path}`, {
         method: 'POST',
@@ -271,10 +275,14 @@ describe('withdrawing a doc-thread review item', () => {
     const file = join(dataDir, 'notes.md');
     writeFileSync(file, '# Notes\n\nThe phone layout holds together.\n');
     const { docId } = (await (
-      await post('/api/docs', { docId: 'push-notes', type: 'markdown', sourceUrl: file })
+      await post(`/workspaces/${ws}/docs`, {
+        docId: 'push-notes',
+        type: 'markdown',
+        sourceUrl: file,
+      })
     ).json()) as { docId: string };
     const { thread } = (await (
-      await post(`/api/docs/${docId}/threads/by_find`, {
+      await post(`/workspaces/${ws}/docs/${docId}/threads/by_find`, {
         find: 'The phone layout holds together.',
         text: 'Checked this at 430px.',
         author: AUTHOR,
@@ -289,6 +297,7 @@ describe('withdrawing a doc-thread review item', () => {
     return {
       post,
       sent,
+      ws,
       docId,
       threadId: thread.id,
       commentId: (thread.comments[0] as { id: string }).id,
@@ -302,11 +311,11 @@ describe('withdrawing a doc-thread review item', () => {
   });
 
   it('sends nothing on the way out, and announces again on the way back', async () => {
-    const { post, sent, docId, threadId, commentId } = await threadWithItem();
+    const { post, sent, ws, docId, threadId, commentId } = await threadWithItem();
     await waitForSend(sent);
     const afterRaise = sent.length;
 
-    const gone = await post(`/api/docs/${docId}/threads/${threadId}/withdraw`, {
+    const gone = await post(`/workspaces/${ws}/docs/${docId}/threads/${threadId}/withdraw`, {
       author: AUTHOR,
       commentId,
       reason: 'Superseded — I measured it wrong.',
@@ -317,7 +326,7 @@ describe('withdrawing a doc-thread review item', () => {
     await new Promise((r) => setTimeout(r, 500));
     expect(sent.length).toBe(afterRaise);
 
-    const back = await post(`/api/docs/${docId}/threads/${threadId}/withdraw/undo`, {
+    const back = await post(`/workspaces/${ws}/docs/${docId}/threads/${threadId}/withdraw/undo`, {
       author: AUTHOR,
       commentId,
     });

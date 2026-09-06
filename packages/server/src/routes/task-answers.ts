@@ -6,6 +6,7 @@ import { answerAsksBack } from '@feedback/core';
  * read their collaborators off `TaskRoutesContext` instead of the scope.
  */
 import { classifyActor } from '../actor-identity.ts';
+import { matchRest } from '../middleware/workspace-scope.ts';
 import { legacyDecisionItem } from '../tasks.ts';
 import type { TaskRouteRequest, TaskRoutesContext } from './task-routes-context.ts';
 
@@ -15,10 +16,10 @@ export async function handleTaskAnswers(
   rq: TaskRouteRequest,
 ): Promise<Response | undefined> {
   const { taskStore, j, safeJson, askBackOnItem } = ctx;
-  const { req, pathname, visitor, authorFor } = rq;
+  const { req, scope, visitor, authorFor } = rq;
   // answer_decision (§3.10): record the VERBATIM answer. Does not
   // transition the task — status changes stay with the single gate.
-  const taskAnswerMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/answer$/);
+  const taskAnswerMatch = matchRest(scope, /^tasks\/([^/]+)\/answer$/);
   if (taskAnswerMatch && req.method === 'POST') {
     const taskId = decodeURIComponent(taskAnswerMatch[1] ?? '');
     const body = await safeJson(req);
@@ -84,7 +85,7 @@ export async function handleTaskAnswers(
   // decision goes back to open. Matched BEFORE `/answer` would be a
   // mistake either way (that pattern is anchored), but it is written
   // first so the pair reads together.
-  const taskAnswerUndoMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/answer\/undo$/);
+  const taskAnswerUndoMatch = matchRest(scope, /^tasks\/([^/]+)\/answer\/undo$/);
   if (taskAnswerUndoMatch && req.method === 'POST') {
     const taskId = decodeURIComponent(taskAnswerUndoMatch[1] ?? '');
     const body = await safeJson(req);
@@ -97,7 +98,7 @@ export async function handleTaskAnswers(
   // "Tell me more" — a question asked back at a decision INSTEAD of
   // answering it. Keeps the options from being a closed set: the row
   // stays open, stays counted, and the attached agent owes context.
-  const taskMoreInfoMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/more-info$/);
+  const taskMoreInfoMatch = matchRest(scope, /^tasks\/([^/]+)\/more-info$/);
   if (taskMoreInfoMatch && req.method === 'POST') {
     const taskId = decodeURIComponent(taskMoreInfoMatch[1] ?? '');
     const body = await safeJson(req);

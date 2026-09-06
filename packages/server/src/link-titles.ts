@@ -9,10 +9,11 @@
  * module owns which URL shape asks which one. Unresolvable is ALWAYS `null`,
  * never a throw — the client's contract is "null means show the raw URL".
  *
- * A board-scoped address must be TRUTHFUL to resolve: a URL that names a
- * workspace only yields a title when the resource actually belongs to that
- * workspace. Otherwise a valid id pasted under the wrong board would leak the
- * title of a resource the address lies about.
+ * A board-scoped address must be TRUTHFUL to resolve: a URL only yields a
+ * title when the resource actually belongs to the workspace it names.
+ * Otherwise a valid id pasted under the wrong board would leak the title of a
+ * resource the address lies about. Every shape names a workspace, so this
+ * holds for all of them.
  */
 import { parseWorkspaceLink } from '@feedback/core';
 import { taskIdOfBodyDoc } from './task-projection.ts';
@@ -92,16 +93,15 @@ export function linkInfoFor(url: string, sources: LinkTitleSources): ResolvedLin
       if (taskId) {
         const task = sources.task(taskId);
         if (!task) return { title: null };
-        if (link.workspaceId !== null && task.workspaceId !== link.workspaceId)
-          return { title: null };
+        if (task.workspaceId !== link.workspaceId) return { title: null };
         return taskLink(task);
       }
       const meta = sources.docMeta(link.docId);
       if (!meta) return { title: null };
-      // The legacy `/review/<id>` shape names no workspace — nothing to hold
-      // it against. The board-scoped shape must be telling the truth.
-      if (link.workspaceId !== null && !sources.docInWorkspace(link.docId, link.workspaceId))
-        return { title: null };
+      // Every shape names a workspace now, so there is no address left that
+      // resolves without being held against one: the board in the path has to
+      // be telling the truth.
+      if (!sources.docInWorkspace(link.docId, link.workspaceId)) return { title: null };
       // A diff-review member has no stored title; its repo-relative path is
       // what every sidebar calls it, so it is the honest display name. A doc
       // bound by an absolute `sourceUrl` outside any notes home (no

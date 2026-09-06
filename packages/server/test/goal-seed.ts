@@ -116,11 +116,14 @@ export async function seedGoalsOverHttp(
   const ids = zip(spec, body.created);
   if (!opts.leaveInTriage) {
     for (const id of Object.values(ids)) {
-      const moved = await fetch(`${base}/api/tasks/${encodeURIComponent(id)}/transition`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ to: 'todo', author }),
-      });
+      const moved = await fetch(
+        `${base}/workspaces/${encodeURIComponent(workspaceId)}/tasks/${encodeURIComponent(id)}/transition`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ to: 'todo', author }),
+        },
+      );
       if (!moved.ok) {
         throw new Error(`seedGoalsOverHttp: could not activate ${id} — ${moved.status}`);
       }

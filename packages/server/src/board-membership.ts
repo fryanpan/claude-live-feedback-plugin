@@ -144,7 +144,7 @@ export interface WatchCoverage {
  * the wire keeps its old spelling) is the tag binding the member docs of one
  * folder bind or diff review together. It is content, not a container of
  * tasks: it has no live doc of its own, and it is read through
- * `/api/reviews/<setId>/tree|threads`. `attachmentIdOf` in `@feedback/core`
+ * `/workspaces/<ws>/reviews/<setId>/tree|threads`. `attachmentIdOf` in `@feedback/core`
  * is the one place a member's set id is derived.
  *
  * Note the board page no longer LISTS attachments: the Docs and
@@ -205,7 +205,11 @@ export interface BoardMembership {
   /** The coverage readout for one agent's watch set. */
   watchCoverageFor: (agentId: string, keys: string[]) => WatchCoverage;
   /** The board a doc's "back" affordance should return to, or null. */
-  backTargetFor: (docId: string, attachmentId?: string) => { id: string; name: string } | null;
+  backTargetFor: (
+    docId: string,
+    attachmentId?: string,
+    prefer?: string,
+  ) => { id: string; name: string } | null;
   /** Put an attachment on a board workspace and answer which one. */
   fileUnderBoardWorkspace: (attachmentId: string, requested?: string) => string;
   /** Filing onto a real board takes it out of the default holding pen. */
@@ -474,7 +478,7 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
    *
    * The per-id versions above allocate a fresh array of every board and scan
    * each one's `docIds`. That is the right shape for a single lookup and the
-   * wrong shape for a listing. `GET /api/docs` asked twice per row — once for
+   * wrong shape for a listing. The docs listing asked twice per row — once for
    * the doc, once for the set-id fallback — so the work grew with the
    * SQUARE of the doc count, and docs no board holds paid for both halves —
    * which, once a server accumulates diff-review members, is most of them.
@@ -733,15 +737,23 @@ export function createBoardMembership(ctx: BoardMembershipContext): BoardMembers
   const backTargetFor = (
     docId: string,
     attachmentId?: string,
+    prefer?: string,
   ): { id: string; name: string } | null => {
     const pick = (id: string | undefined): { id: string; name: string } | null => {
       if (!id) return null;
       const ws = taskStore.getWorkspace(id);
       return ws ? { id: ws.id, name: ws.name } : null;
     };
-    return (
-      pick(boardWorkspacesHolding(docId)[0]) ?? pick(boardWorkspacesHolding(attachmentId ?? '')[0])
-    );
+    // `prefer` is the board in the READER'S path. A doc reachable from two
+    // boards has two addresses, and the `←` belongs to the one they are
+    // standing on — picking `[0]` sent them to a board they may never have
+    // been given, which is both a wrong arrow and a disclosed id.
+    const candidates = [
+      ...boardWorkspacesHolding(docId),
+      ...boardWorkspacesHolding(attachmentId ?? ''),
+    ];
+    if (prefer && candidates.includes(prefer)) return pick(prefer);
+    return pick(candidates[0]);
   };
 
   /**

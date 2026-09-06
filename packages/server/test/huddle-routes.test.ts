@@ -93,7 +93,7 @@ describe('POST /workspaces/:id/huddles and the empty task', () => {
     return res.json() as Promise<T>;
   };
   const boardDocs = async (ws: string): Promise<DocRow[]> =>
-    (await jj<{ docs: DocRow[] }>(await local(`/api/docs?workspaceId=${ws}`))).docs;
+    (await jj<{ docs: DocRow[] }>(await local(`/workspaces/${ws}/docs`))).docs;
   const startHuddle = (ws: string, body: unknown = {}) => post(`/workspaces/${ws}/huddles`, body);
   const newBoard = async (name: string): Promise<string> =>
     (await jj<{ workspace: { id: string } }>(await post('/workspaces', { name }))).workspace.id;
@@ -128,7 +128,7 @@ describe('POST /workspaces/:id/huddles and the empty task', () => {
 
       // Genuinely empty: no seeded blocks, nothing on disk to be read back.
       const doc = await jj<{ blocks: unknown[]; plainText: string }>(
-        await local(`/api/docs/${r.docId}/content`),
+        await local(`/workspaces/${workspaceId}/docs/${r.docId}/content`),
       );
       expect(doc.blocks).toHaveLength(0);
       expect(doc.plainText.trim()).toBe('');
@@ -170,11 +170,10 @@ describe('POST /workspaces/:id/huddles and the empty task', () => {
       const plainPath = join(dataDir, 'plain.md');
       writeFileSync(plainPath, '# Plain\n\nBody.\n');
       const plain = await jj<{ docId: string }>(
-        await post('/api/docs', {
+        await post(`/workspaces/${ws}/docs`, {
           docId: 'plain-doc',
           type: 'markdown',
           sourceUrl: plainPath,
-          hubWorkspaceId: ws,
         }),
       );
       const huddle = await jj<HuddleResponse>(await startHuddle(ws));
@@ -197,7 +196,7 @@ describe('POST /workspaces/:id/huddles and the empty task', () => {
       );
       const doc = await jj<{
         blocks: Array<{ type: string | null; headingLevel?: number; text: string }>;
-      }>(await local(`/api/docs/${r.docId}/content`));
+      }>(await local(`/workspaces/${workspaceId}/docs/${r.docId}/content`));
       expect(doc.blocks.length).toBeGreaterThan(0);
       expect(doc.blocks[0]?.type).toBe('heading');
       expect(doc.blocks[0]?.headingLevel).toBe(1);
@@ -218,7 +217,7 @@ describe('POST /workspaces/:id/huddles and the empty task', () => {
       expect(r.meta.title).toMatch(PLAN_TITLE);
       const doc = await jj<{
         blocks: Array<{ type: string | null; headingLevel?: number; text: string }>;
-      }>(await local(`/api/docs/${r.docId}/content`));
+      }>(await local(`/workspaces/${workspaceId}/docs/${r.docId}/content`));
       expect(doc.blocks[0]?.type).toBe('heading');
       expect(doc.blocks[0]?.headingLevel).toBe(1);
       expect(doc.blocks[0]?.text).toBe('# Goal');
@@ -241,7 +240,9 @@ describe('POST /workspaces/:id/huddles and the empty task', () => {
       // the other word. "Huddle" is gone from every title the server mints.
       expect(r.meta.title).toMatch(MEETING_TITLE);
       expect(r.meta.title).not.toContain('Huddle');
-      const doc = await jj<{ plainText: string }>(await local(`/api/docs/${r.docId}/content`));
+      const doc = await jj<{ plainText: string }>(
+        await local(`/workspaces/${workspaceId}/docs/${r.docId}/content`),
+      );
       expect(doc.plainText.trim()).toBe('');
     });
 
@@ -313,7 +314,10 @@ describe('POST /workspaces/:id/huddles and the empty task', () => {
         await post(`/workspaces/${workspaceId}/tasks`, { untitled: true, author: PERSON }),
       );
       const renamed = await jj<{ task: TaskRow }>(
-        await post(`/api/tasks/${task.id}/title`, { title: 'Ship the huddle', author: PERSON }),
+        await post(`/workspaces/${workspaceId}/tasks/${task.id}/title`, {
+          title: 'Ship the huddle',
+          author: PERSON,
+        }),
       );
       expect(renamed.task.title).toBe('Ship the huddle');
       expect(renamed.task.untitled).toBeUndefined();
@@ -335,7 +339,10 @@ describe('POST /workspaces/:id/huddles and the empty task', () => {
         await post(`/workspaces/${workspaceId}/tasks`, { untitled: true, author: PERSON }),
       );
       const renamed = await jj<{ task: TaskRow }>(
-        await post(`/api/tasks/${task.id}/title`, { title: UNTITLED_TASK_TITLE, author: PERSON }),
+        await post(`/workspaces/${workspaceId}/tasks/${task.id}/title`, {
+          title: UNTITLED_TASK_TITLE,
+          author: PERSON,
+        }),
       );
       expect(renamed.task.title).toBe(UNTITLED_TASK_TITLE);
       expect(renamed.task.untitled).toBeUndefined();
@@ -354,7 +361,10 @@ describe('POST /workspaces/:id/huddles and the empty task', () => {
       );
       expect(task.untitled).toBeUndefined();
       const same = await jj<{ task: TaskRow; changed: boolean }>(
-        await post(`/api/tasks/${task.id}/title`, { title: 'Plain row', author: PERSON }),
+        await post(`/workspaces/${workspaceId}/tasks/${task.id}/title`, {
+          title: 'Plain row',
+          author: PERSON,
+        }),
       );
       expect(same.changed).toBe(false);
       expect(same.task.title).toBe('Plain row');

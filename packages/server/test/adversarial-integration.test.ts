@@ -21,6 +21,7 @@ import * as Y from 'yjs';
 import { runBackfill } from '../src/activity-backfill.ts';
 import { activityLogPath } from '../src/activity.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 /**
  * Adversarial integration verification of BOTH areas on this branch:
@@ -74,6 +75,9 @@ function readEvents(dataDir: string): ActivityEvent[] {
     .map((l) => JSON.parse(l) as ActivityEvent);
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('ADVERSARIAL: activity stream e2e (throwaway server)', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -82,10 +86,11 @@ describe('ADVERSARIAL: activity stream e2e (throwaway server)', () => {
    *  name stays a working address, the activity rows carry the minted id. */
   let advDocId: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'adv-act-data-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
   afterAll(async () => {
     await handle.stop();
@@ -102,7 +107,7 @@ describe('ADVERSARIAL: activity stream e2e (throwaway server)', () => {
     writeFileSync(file, '# Heading\n\nSome prose to comment on.\n');
     advDocId = (
       await j<{ docId: string }>(
-        await fetch(`${base}/api/docs`, {
+        await fetch(`${base}/workspaces/${WS}/docs`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ docId: 'adv-doc', type: 'markdown', sourceUrl: file }),
@@ -111,7 +116,7 @@ describe('ADVERSARIAL: activity stream e2e (throwaway server)', () => {
     ).docId;
 
     await j(
-      await fetch(`${base}/api/docs/adv-doc/threads`, {
+      await fetch(`${base}/workspaces/${WS}/docs/adv-doc/threads`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -143,7 +148,7 @@ describe('ADVERSARIAL: activity stream e2e (throwaway server)', () => {
   });
 
   it('read_session appends with interactionBounded:true + durationMs', async () => {
-    const r = await fetch(`${base}/api/docs/adv-doc/activity`, {
+    const r = await fetch(`${base}/workspaces/${WS}/docs/adv-doc/activity`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -241,7 +246,7 @@ describe('ADVERSARIAL: landing project->artifacts + delete_workspace guardrail',
   let folder: string;
   let base: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'adv-land-data-'));
     folder = mkdtempSync(join(tmpdir(), 'adv-land-src-'));
     mkdirSync(join(folder, 'src'));
@@ -249,6 +254,7 @@ describe('ADVERSARIAL: landing project->artifacts + delete_workspace guardrail',
     writeFileSync(join(folder, 'src', 'index.ts'), 'export const x = 1;\n');
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
   afterAll(async () => {
     await handle.stop();
@@ -269,18 +275,20 @@ describe('ADVERSARIAL: landing project->artifacts + delete_workspace guardrail',
     const r = await fetch(`${base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ folderPath: folder, owner: '/proj/adv' }),
+      body: JSON.stringify({ folderPath: folder, owner: '/proj/adv', hubWorkspaceId: WS }),
     });
     const body = await j<{ ok: true; workspaceId: string; files: BindFile[] }>(r);
     workspaceId = body.workspaceId;
     files = new Map(body.files.map((f) => [f.relPath, f]));
     // bind is lazy now (entry only) — open the rest like a reviewer would.
-    const allR = await fetch(`${base}/api/reviews/${encodeURIComponent(workspaceId)}/files`);
+    const allR = await fetch(
+      `${base}/workspaces/${WS}/reviews/${encodeURIComponent(workspaceId)}/files`,
+    );
     const all = await j<{ files: Array<{ relPath: string }> }>(allR);
     for (const f of all.files) {
       if (files.has(f.relPath)) continue;
       const cr = await fetch(
-        `${base}/api/reviews/${encodeURIComponent(workspaceId)}/context-file`,
+        `${base}/workspaces/${WS}/reviews/${encodeURIComponent(workspaceId)}/context-file`,
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -313,10 +321,10 @@ describe('ADVERSARIAL: landing project->artifacts + delete_workspace guardrail',
     expect(proj).toContain('1 artifact');
   });
 
-  it('DELETE /workspaces/:id without force is refused all-or-nothing with an open thread', async () => {
+  it('DELETE /workspaces/:ws/reviews/:id without force is refused all-or-nothing with an open thread', async () => {
     const mdDocId = files.get('README.md')!.docId;
     await j(
-      await fetch(`${base}/api/docs/${encodeURIComponent(mdDocId)}/threads/by_find`, {
+      await fetch(`${base}/workspaces/${WS}/docs/${encodeURIComponent(mdDocId)}/threads/by_find`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -327,7 +335,7 @@ describe('ADVERSARIAL: landing project->artifacts + delete_workspace guardrail',
       }),
     );
 
-    const r = await fetch(`${base}/workspaces/${encodeURIComponent(workspaceId)}`, {
+    const r = await fetch(`${base}/workspaces/${WS}/reviews/${encodeURIComponent(workspaceId)}`, {
       method: 'DELETE',
     });
     expect(r.status).toBe(409);
@@ -339,13 +347,14 @@ describe('ADVERSARIAL: landing project->artifacts + delete_workspace guardrail',
     expect(handle.docStore.get(files.get('src/index.ts')!.docId)).toBeTruthy();
   });
 
-  it('DELETE /workspaces/:id?force=true retires ALL members', async () => {
+  it('DELETE /workspaces/:ws/reviews/:id?force=true retires ALL members', async () => {
     // Soft since 0.1.92: the whole review leaves the live server as one unit,
     // which is what this test has always been about, but the persisted state
     // is archived rather than destroyed.
-    const r = await fetch(`${base}/workspaces/${encodeURIComponent(workspaceId)}?force=true`, {
-      method: 'DELETE',
-    });
+    const r = await fetch(
+      `${base}/workspaces/${WS}/reviews/${encodeURIComponent(workspaceId)}?force=true`,
+      { method: 'DELETE' },
+    );
     const body = await j<{ ok: true; archived: number }>(r);
     expect(body.archived).toBe(2);
     for (const f of files.values()) expect(handle.docStore.get(f.docId)).toBeUndefined();

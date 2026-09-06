@@ -35,6 +35,7 @@ import { type Anchor, type Thread, type User, createThread } from '@feedback/cor
 import type * as Y from 'yjs';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { pastReanchor, waitFor } from './wait-for.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const reviewer: User = { id: 'known-reviewer', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
 
@@ -63,7 +64,7 @@ async function mkdoc(prefix: string): Promise<string> {
   const docId = `${prefix}-${docSeq++}`;
   const file = join(dataDir, `${docId}.md`);
   writeFileSync(file, BODY);
-  const res = await fetch(`${base}/api/docs`, {
+  const res = await fetch(`${base}/workspaces/${WS}/docs`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ docId, type: 'markdown', sourceUrl: file }),
@@ -76,7 +77,7 @@ async function postThread(
   docId: string,
   anchor: unknown,
 ): Promise<{ status: number; body: { error?: string; thread?: Thread } }> {
-  const res = await fetch(`${base}/api/docs/${docId}/threads`, {
+  const res = await fetch(`${base}/workspaces/${WS}/docs/${docId}/threads`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ author: reviewer, text: 'a comment', anchor }),
@@ -85,7 +86,7 @@ async function postThread(
 }
 
 async function listThreads(docId: string): Promise<Thread[]> {
-  const res = await fetch(`${base}/api/docs/${docId}/threads`);
+  const res = await fetch(`${base}/workspaces/${WS}/docs/${docId}/threads`);
   expect(res.status).toBe(200);
   return ((await res.json()) as { threads: Thread[] }).threads;
 }
@@ -118,7 +119,7 @@ function plantLegacyAnchor(docId: string, anchor: unknown): string {
  *  past it. Returns the edit's own status — the edit SUCCEEDS either way;
  *  the crash is deferred, which is the whole problem. */
 async function editAndLetSweepRun(docId: string, until?: () => boolean): Promise<number> {
-  const res = await fetch(`${base}/api/docs/${docId}/find_and_replace`, {
+  const res = await fetch(`${base}/workspaces/${WS}/docs/${docId}/find_and_replace`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ find: 'jumps', replace: 'leaps' }),
@@ -134,11 +135,15 @@ async function editAndLetSweepRun(docId: string, until?: () => boolean): Promise
   return res.status;
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('a malformed text-range anchor', () => {
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'feedback-bad-anchor-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     process.on('uncaughtException', onUncaught);
     process.on('unhandledRejection', onUncaught);
   });
@@ -150,11 +155,11 @@ describe('a malformed text-range anchor', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     uncaught = [];
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     // No test in this file is entitled to leave a process-level error behind
     // for the NEXT one to be blamed for. That mis-attribution is the bug.
     expect(uncaught).toEqual([]);
@@ -255,11 +260,14 @@ describe('a malformed text-range anchor', () => {
       const { thread } = await createValidThread(docId);
       const before = storedAnchor(docId, thread.id);
 
-      const res = await fetch(`${base}/api/docs/${docId}/threads/${thread.id}/reanchor`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ anchor: { kind: 'text-range', snippet: { text: SNIPPET } } }),
-      });
+      const res = await fetch(
+        `${base}/workspaces/${WS}/docs/${docId}/threads/${thread.id}/reanchor`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ anchor: { kind: 'text-range', snippet: { text: SNIPPET } } }),
+        },
+      );
       expect(res.status).toBe(400);
       expect(((await res.json()) as { error: string }).error).toContain('startRel');
       expect(storedAnchor(docId, thread.id)).toEqual(before);
@@ -312,7 +320,9 @@ describe('a malformed text-range anchor', () => {
 
       // Positive control: the bystander is reachable BEFORE the sweep fires,
       // so a failure afterwards is the sweep's doing and not a dead server.
-      expect((await fetch(`${base}/api/docs/${bystander}`)).status).toBe(200);
+      expect((await fetch(`${base}/workspaces/${WS}/docs/${bystander}?format=json`)).status).toBe(
+        200,
+      );
 
       // The edit that arms the sweep succeeds — the damage is deferred.
       expect(await editAndLetSweepRun(victim)).toBe(200);
@@ -320,7 +330,9 @@ describe('a malformed text-range anchor', () => {
       // ...and lands here, on a doc that has no threads, no bad anchor, and
       // no connection to the victim at all. This is the request that used to
       // eat the TypeError.
-      expect((await fetch(`${base}/api/docs/${bystander}`)).status).toBe(200);
+      expect((await fetch(`${base}/workspaces/${WS}/docs/${bystander}?format=json`)).status).toBe(
+        200,
+      );
       expect(uncaught).toEqual([]);
     });
 
@@ -335,12 +347,18 @@ describe('a malformed text-range anchor', () => {
       // a 500 on the first request that opens the doc — not a deferred
       // orphan. This is the "cannot be opened" half.
       handle.docStore.flush();
+      // The board and its doc attachment are debounced writes: without this
+      // the restarted server comes up on a data dir that has the `.ydoc` but
+      // not the board the doc is filed on, and every address 404s.
+      handle.tasks.flush();
       const restarted = createServer({ port: 0, dataDir });
       try {
         const restartedBase = `http://localhost:${restarted.port}`;
-        const res = await fetch(`${restartedBase}/api/docs/${docId}`);
+        // Deliberately NOT re-seeded: the board comes back with the data dir,
+        // and a fresh one would be a board this doc was never filed on.
+        const res = await fetch(`${restartedBase}/workspaces/${WS}/docs/${docId}?format=json`);
         expect(res.status).toBe(200);
-        const listed = await fetch(`${restartedBase}/api/docs/${docId}/threads`);
+        const listed = await fetch(`${restartedBase}/workspaces/${WS}/docs/${docId}/threads`);
         expect(listed.status).toBe(200);
         const { threads } = (await listed.json()) as { threads: Thread[] };
         // Positive control: the reload really did carry the planted thread
@@ -355,7 +373,7 @@ describe('a malformed text-range anchor', () => {
 
 /** A real anchor, built from the doc by the server. Never hand-written. */
 async function createValidThread(docId: string): Promise<{ thread: Thread }> {
-  const res = await fetch(`${base}/api/docs/${docId}/threads/by_find`, {
+  const res = await fetch(`${base}/workspaces/${WS}/docs/${docId}/threads/by_find`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ author: reviewer, text: 'anchored properly', find: SNIPPET }),

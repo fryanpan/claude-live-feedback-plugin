@@ -555,10 +555,12 @@ describe('import route (dry-run first, apply stamps the file)', () => {
     const workspaceId = await seedWorkspace();
     const path = trackerCopy();
     const docId = `tracker-doc-${seq}`;
-    await jj(await post('/api/docs', { docId, type: 'markdown', sourceUrl: path }));
+    await jj(
+      await post(`/workspaces/${workspaceId}/docs`, { docId, type: 'markdown', sourceUrl: path }),
+    );
     // Positive control: the live doc has the tracker but no banner yet.
     const before = await jj<{ plainText: string }>(
-      await fetch(`${base}/api/docs/${docId}/content`),
+      await fetch(`${base}/workspaces/${workspaceId}/docs/${docId}/content`),
     );
     expect(before.plainText).toContain('Harborlight Market');
     expect(before.plainText).not.toContain('Imported into');
@@ -570,7 +572,9 @@ describe('import route (dry-run first, apply stamps the file)', () => {
         author: PERSON,
       }),
     );
-    const after = await jj<{ plainText: string }>(await fetch(`${base}/api/docs/${docId}/content`));
+    const after = await jj<{ plainText: string }>(
+      await fetch(`${base}/workspaces/${workspaceId}/docs/${docId}/content`),
+    );
     expect(after.plainText).toContain('Imported into');
   });
 

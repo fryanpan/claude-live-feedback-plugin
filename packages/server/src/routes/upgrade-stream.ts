@@ -62,7 +62,7 @@ import type { UpgradeData } from '../socket-handlers.ts';
 import { channelForWatchKey, openAgentMuxStream } from '../sse-mux.ts';
 import { type SseBus, openSseStream } from '../sse.ts';
 import type { TaskStore } from '../tasks.ts';
-import { matchWorkspaceRoute } from '../workspace-path.ts';
+import { matchWorkspaceRoute, safeDecodeSegment } from '../workspace-path.ts';
 
 /** The id a reconnecting SSE client last saw: the `Last-Event-ID` header a
  *  native EventSource sends back by itself once frames carry `id:` lines,
@@ -107,9 +107,24 @@ export interface UpgradeStreamContext {
   isValidDocId: (id: string) => boolean;
   /** An address resolved to the canonical doc id, for the mux channel map. */
   canonicalDocId: (addressed: string) => string;
-  /** Files a doc under the board workspace — the widget's own creation path,
-   *  which is the `/y/` upgrade for a mockup. */
-  fileUnderBoardWorkspace: (docId: string) => void;
+  /** Files a doc under a board — the widget's own creation path, which is
+   *  the doc socket's upgrade for a mockup. `requested` is the board the
+   *  canonical path named. */
+  fileUnderBoardWorkspace: (docId: string, requested?: string) => void;
+  /**
+   * Which boards hold this member — THE SAME function
+   * `middleware/workspace-scope.ts` runs for every REST route, injected here
+   * rather than reimplemented.
+   *
+   * These three sockets are the middleware's documented exception, and it is
+   * not an oversight: an SSE open and a websocket upgrade are TAKEN OVER
+   * rather than answered, so every gate a long-lived connection has must be
+   * decided at its handshake, above the chain position the middleware runs
+   * at. What the exception must not become is a second membership RULE —
+   * that is the thing the whole cutover exists to delete. So the position
+   * differs and the function does not.
+   */
+  workspacesOfMember: (collection: string, memberId: string) => readonly string[];
   /** The JSON responder, so a refusal here is spelled as a route's. */
   j: (status: number, body: unknown) => Response;
   /** The request's SOCKET peer address, never a header. Long-lived here
@@ -173,12 +188,56 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
     isValidDocId,
     canonicalDocId,
     fileUnderBoardWorkspace,
+    workspacesOfMember,
     j,
     requestAddress,
     agentTokenKey,
     requireAgentToken,
     warnLegacyAgentCaller,
   } = ctx;
+
+  /**
+   * `/workspaces/<ws>/docs/<docId>/<verb>` — the three long-lived
+   * connections a doc has, read out of a canonical path.
+   *
+   * ONE parser for all three, and it answers the membership question with
+   * `workspacesOfMember` — the same function every REST route reaches through
+   * `middleware/workspace-scope.ts`. See that dep's comment for why the
+   * POSITION differs here and the rule does not.
+   *
+   * `undefined` when the path is not this shape at all. A `{ refusal }` when
+   * it is this shape and the board or the doc does not answer for it: 404
+   * with no detail either way, so a doc id that turns out to be real learns
+   * nothing from being real — the same posture the middleware takes on the
+   * same question.
+   */
+  const docSocket = (
+    pathname: string,
+    verb: string,
+  ): { docId: string; workspaceId: string } | { refusal: Response } | undefined => {
+    const match = pathname.match(new RegExp(`^/workspaces/([^/]+)/docs/([^/]+)/${verb}$`));
+    if (!match) return undefined;
+    const workspaceId = safeDecodeSegment(match[1] ?? '');
+    const addressed = safeDecodeSegment(match[2] ?? '');
+    if (!isValidDocId(addressed)) return { refusal: j(400, { error: 'bad docId' }) };
+    // The canonical id, because `ws.data.docId` is re-resolved on every frame
+    // and a socket opened by alias would otherwise sync a doc of its own.
+    const docId = docStore.get(addressed)?.docId ?? addressed;
+    // A doc that EXISTS and is held by a different board is refused here.
+    //
+    // A doc that exists nowhere is NOT — it is handed on, and each caller
+    // decides: the editing socket creates it when the widget names a mockup
+    // type (its whole creation path is this upgrade), and the other two 404.
+    // Refusing an unknown id here would make the one route that legitimately
+    // addresses a doc before it exists unreachable, and it would leak
+    // nothing to close: an id no store knows tells a caller only what they
+    // already typed.
+    const known = docStore.get(docId) !== undefined;
+    if (known && !workspacesOfMember('docs', docId).includes(workspaceId)) {
+      return { refusal: j(404, { error: 'not-found' }) };
+    }
+    return { docId, workspaceId };
+  };
 
   const serveUpgradeAndStreamRoutes = ({
     req,
@@ -218,21 +277,24 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
       }
 
       // --- WebSocket upgrade: a doc's live meeting audio ---
+      // `/workspaces/<ws>/docs/<docId>/audio`, which was `/audio/<docId>`.
       //
-      // Same guard as `/y/` below and for the same reason: CORS does not
-      // apply to websockets, so without the Origin check any page the user
-      // visits could open a microphone relay against any doc — and this one
-      // spends money while it is open.
-      if (pathname.startsWith('/audio/')) {
+      // Same guard as the editing socket below and for the same reason: CORS
+      // does not apply to websockets, so without the Origin check any page
+      // the user visits could open a microphone relay against any doc — and
+      // this one spends money while it is open.
+      const audio = docSocket(pathname, 'audio');
+      if (audio) {
+        if ('refusal' in audio) return audio.refusal;
         if (!isAllowedBrowserOrigin(req.headers.get('origin'), policyFor(req))) {
           return j(403, { error: 'origin_not_allowed' });
         }
-        const addressed = decodeURIComponent(pathname.slice('/audio/'.length));
-        if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-        const docId = docStore.get(addressed)?.docId ?? addressed;
-        // Unlike `/y/`, this never conjures a doc: a meeting belongs to a
-        // doc that already exists, and auto-creating one here would let a
-        // typo start a billed session against a doc nobody can find.
+        const { docId } = audio;
+        // Unlike the editing socket, this never conjures a doc: a meeting
+        // belongs to a doc that already exists, and auto-creating one here
+        // would let a typo start a billed session against a doc nobody can
+        // find. The membership check above has already refused an id no board
+        // holds, so this is the narrower "and it is live" half.
         if (!docStore.get(docId)) return j(404, { error: 'doc not found' });
         // The SAME sign-in decision `/y/` makes two branches down, for a
         // surface that is write-only: a meeting opens a billed engine
@@ -265,8 +327,50 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
         return undefined;
       }
 
-      // --- WebSocket upgrade ---
-      if (pathname.startsWith('/y/')) {
+      // --- WebSocket upgrade: the BOARD's own room ---
+      // `/workspaces/<ws>/y`, which was `/y/ws:<workspaceId>`.
+      //
+      // The board doc is `ws:<id>` in the store and always will be — that is
+      // the id the CRDT is keyed on. What changed is the ADDRESS: the board
+      // was named inside a doc id in a segment the guard could not read as a
+      // board, so the one board-scoped socket on the server was the one path
+      // no board rule applied to. Now it is the board's own address with the
+      // socket as a verb under it, and `shareScopeAllows` judges its first
+      // segment exactly as it judges every other board path.
+      const boardRoom = matchWorkspaceRoute(pathname, 'y');
+      if (boardRoom) {
+        if (!isAllowedBrowserOrigin(req.headers.get('origin'), policyFor(req))) {
+          return j(403, { error: 'origin_not_allowed' });
+        }
+        if (!isValidDocId(boardRoom.workspaceId)) return j(400, { error: 'bad workspaceId' });
+        // A board room exists for a board OR for a review with member docs —
+        // the same wider question `events:stream` asks below, and for the
+        // same reason: task events and a review's thread events ride the one
+        // channel. The doc is conjured on demand exactly as it was at
+        // `/y/ws:<id>`: the board doc is server-owned and materializes when
+        // the first client asks for it.
+        const roomExists =
+          taskStore.getWorkspace(boardRoom.workspaceId) !== undefined ||
+          docStore.list().some((m) => m.workspaceId === boardRoom.workspaceId);
+        if (!roomExists) return j(404, { error: 'workspace not found' });
+        const roomReadOnly = requireSignInToWrite && browserProvedNobody();
+        const upgraded = server.upgrade(req, {
+          data: {
+            docId: `ws:${boardRoom.workspaceId}`,
+            ...(visitorShareId ? { shareId: visitorShareId } : {}),
+            ...(visitorMemberKey ? { shareMember: visitorMemberKey } : {}),
+            ...(roomReadOnly ? { readOnly: true } : {}),
+          },
+        });
+        if (!upgraded) return new Response('upgrade required', { status: 426 });
+        return undefined;
+      }
+
+      // --- WebSocket upgrade: a DOC's live editing socket ---
+      // `/workspaces/<ws>/docs/<docId>/y`, which was `/y/<docId>`.
+      const live = docSocket(pathname, 'y');
+      if (live) {
+        if ('refusal' in live) return live.refusal;
         // CORS does not apply to websockets — the browser opens the socket and
         // hands the page the data regardless of what headers we set. So the
         // Origin check has to happen HERE, or any page the user visits can
@@ -275,20 +379,20 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
         if (!isAllowedBrowserOrigin(req.headers.get('origin'), policyFor(req))) {
           return j(403, { error: 'origin_not_allowed' });
         }
-        const addressed = decodeURIComponent(pathname.slice(3));
-        if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-        // `ws.data.docId` is re-resolved on every frame, so it must be the
-        // canonical id — a socket opened by alias would otherwise sync a
-        // doc of its own.
-        const docId = docStore.get(addressed)?.docId ?? addressed;
+        const { docId, workspaceId } = live;
         const type = url.searchParams.get('type') as DocType | null;
         const sourceUrl = url.searchParams.get('sourceUrl') ?? undefined;
         // Mockup docs auto-create on WS — the widget connects first with a
         // known type + sourceUrl (this covers the dev-server surface too;
         // the widget always identifies as 'mockup'). Markdown docs MUST be
-        // created upfront via POST /api/docs (which auto-attaches a file).
-        // The browser navigating to /review/<docId> before the agent has
-        // created the doc gets a clean 404 from /review's own handler.
+        // created upfront via POST /workspaces/<ws>/docs (which auto-attaches
+        // a file). The browser navigating to a doc page before the agent has
+        // created the doc gets a clean 404 from the shell's own handler.
+        //
+        // The board the doc lands on is the one the SOCKET's path named. It
+        // used to be whichever board `fileUnderBoardWorkspace` picked as a
+        // default, because `/y/<docId>` named none — which is the whole
+        // reason the widget now carries a `workspace-id`.
         // Decided BEFORE the creation below, not after it. Creating a doc
         // and filing a workspace row is a write like any other, and it used
         // to run above this line: a browser that had proven nobody could
@@ -302,11 +406,11 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
             // this socket would have created does not exist for anybody.
             if (readOnly) return j(401, signInRequiredBody());
             docStore.getOrCreate(docId, { type, sourceUrl });
-            // The widget is the third creation path (next to POST /api/docs
+            // The widget is the third creation path (next to POST /workspaces/:workspaceId/docs
             // and the MCP tools that front it), so it files its doc too —
             // otherwise a mockup that was only ever opened in a browser is
             // an orphan the board can't see.
-            fileUnderBoardWorkspace(docId);
+            fileUnderBoardWorkspace(docId, workspaceId);
           } else {
             return j(404, { error: 'doc not found' });
           }
@@ -425,11 +529,16 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
           visitorMemberKey ?? undefined,
         );
       }
-      // --- SSE ---
-      if (pathname.startsWith('/events/')) {
-        const addressed = decodeURIComponent(pathname.slice('/events/'.length));
-        if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-        const eventsDoc = docStore.get(addressed);
+      // --- SSE (doc-level) ---
+      // `/workspaces/<ws>/docs/<docId>/events:stream`, which was
+      // `/events/<docId>`. The colon verb is the same spelling the board's
+      // own stream uses one block up, and for the same reason: it keeps the
+      // LIVE stream apart from `events`, which is the activity feed's name on
+      // the REST surface.
+      const docEvents = docSocket(pathname, 'events:stream');
+      if (docEvents) {
+        if ('refusal' in docEvents) return docEvents.refusal;
+        const eventsDoc = docStore.get(docEvents.docId);
         if (!eventsDoc) return j(404, { error: 'doc not found' });
         // The CHANNEL is the doc's own id: a watcher that opened the stream
         // by the readable name and a writer that fired on the canonical one

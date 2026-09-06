@@ -27,6 +27,7 @@ import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PUBLIC_HOST = 'feedback.example.com';
 
@@ -42,6 +43,9 @@ function git(repo: string, ...args: string[]): string {
     },
   }).trim();
 }
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('workspace refresh routes', () => {
   let handle: ServerHandle;
@@ -92,11 +96,12 @@ describe('workspace refresh routes', () => {
       share: { config: { publicHostname: PUBLIC_HOST } },
     });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
 
-    const bind = await post('/workspaces', { folderPath: folder });
+    const bind = await post('/workspaces', { folderPath: folder, hubWorkspaceId: WS });
     workspaceId = ((await bind.json()) as { workspaceId: string }).workspaceId;
 
-    const diff = await post('/api/diffs', { repo, base: repoBase });
+    const diff = await post(`/workspaces/${WS}/reviews`, { repo, base: repoBase });
     reviewId = ((await diff.json()) as { reviewId: string }).reviewId;
   });
 
@@ -105,21 +110,21 @@ describe('workspace refresh routes', () => {
     for (const d of [dataDir, folder, repo]) rmSync(d, { recursive: true, force: true });
   });
 
-  describe('POST /api/reviews/:id/refresh', () => {
+  describe(`POST /workspaces/${WS}/reviews/:id/refresh`, () => {
     it('404s an unknown workspace', async () => {
-      const r = await post('/api/reviews/nope/refresh', {});
+      const r = await post(`/workspaces/${WS}/reviews/nope/refresh`, {});
       expect(r.status).toBe(404);
     });
 
     it('reports a renamed browse member as stale and keeps its doc', async () => {
-      const opened = await post(`/api/reviews/${workspaceId}/context-file`, {
+      const opened = await post(`/workspaces/${WS}/reviews/${workspaceId}/context-file`, {
         relPath: 'design.md',
       });
       expect(opened.status).toBe(200);
       const docId = ((await opened.json()) as { docId: string }).docId;
 
       renameSync(join(folder, 'design.md'), join(folder, 'design-v2.md'));
-      const r = await post(`/api/reviews/${workspaceId}/refresh`, {});
+      const r = await post(`/workspaces/${WS}/reviews/${workspaceId}/refresh`, {});
       expect(r.status).toBe(200);
       const body = (await r.json()) as {
         kind: string;
@@ -129,18 +134,18 @@ describe('workspace refresh routes', () => {
       expect(body.stale).toEqual([{ docId, relPath: 'design.md', openThreads: 0 }]);
 
       // The doc survives — only the marker changed.
-      const doc = await local(`/api/docs/${encodeURIComponent(docId)}`);
+      const doc = await local(`/workspaces/${WS}/docs/${encodeURIComponent(docId)}?format=json`);
       expect(doc.status).toBe(200);
       expect(((await doc.json()) as { meta: { stale?: boolean } }).meta.stale).toBe(true);
 
       renameSync(join(folder, 'design-v2.md'), join(folder, 'design.md'));
-      const back = await post(`/api/reviews/${workspaceId}/refresh`, {});
+      const back = await post(`/workspaces/${WS}/reviews/${workspaceId}/refresh`, {});
       expect(((await back.json()) as { restored: unknown[] }).restored).toHaveLength(1);
     });
 
     it('adds a file that changed after the diff review was created', async () => {
       writeFileSync(join(repo, 'test', 'a.test.ts'), 'check a harder\n');
-      const r = await post(`/api/reviews/${reviewId}/refresh`, {});
+      const r = await post(`/workspaces/${WS}/reviews/${reviewId}/refresh`, {});
       expect(r.status).toBe(200);
       const body = (await r.json()) as {
         kind: string;
@@ -153,14 +158,14 @@ describe('workspace refresh routes', () => {
     });
   });
 
-  describe('POST /api/reviews/:id/groups', () => {
+  describe(`POST /workspaces/${WS}/reviews/:id/groups`, () => {
     it('rejects a missing groups array rather than silently regrouping', async () => {
-      const r = await post(`/api/reviews/${reviewId}/groups`, {});
+      const r = await post(`/workspaces/${WS}/reviews/${reviewId}/groups`, {});
       expect(r.status).toBe(400);
     });
 
     it('regroups in place and the grouped view reflects it', async () => {
-      const r = await post(`/api/reviews/${reviewId}/groups`, {
+      const r = await post(`/workspaces/${WS}/reviews/${reviewId}/groups`, {
         groups: [
           { title: 'The change', paths: ['src'], details: 'what actually moved' },
           { title: 'Coverage', paths: ['test'] },
@@ -170,7 +175,7 @@ describe('workspace refresh routes', () => {
       const body = (await r.json()) as { groups: Array<{ title: string; fileCount: number }> };
       expect(body.groups.map((g) => g.title)).toEqual(['The change', 'Coverage']);
 
-      const grouped = await local(`/api/reviews/${reviewId}/grouped`);
+      const grouped = await local(`/workspaces/${WS}/reviews/${reviewId}/grouped`);
       const view = (await grouped.json()) as {
         groups: Array<{ title: string; details?: string }>;
       };
@@ -182,18 +187,18 @@ describe('workspace refresh routes', () => {
       // The route only knows `groups` is an array — everything about what is
       // inside it is checked below it. A bad spec used to be persisted before
       // the assignment threw, which left refresh permanently broken.
-      const r = await post(`/api/reviews/${reviewId}/groups`, {
+      const r = await post(`/workspaces/${WS}/reviews/${reviewId}/groups`, {
         groups: [{ title: 'No paths' }],
       });
       expect(r.status).toBe(400);
       expect(((await r.json()) as { error: string }).error).toBe('bad-groups');
       // …and the review still refreshes.
-      const after = await post(`/api/reviews/${reviewId}/refresh`, {});
+      const after = await post(`/workspaces/${WS}/reviews/${reviewId}/refresh`, {});
       expect(after.status).toBe(200);
     });
 
     it('rejects an over-long details intro', async () => {
-      const r = await post(`/api/reviews/${reviewId}/groups`, {
+      const r = await post(`/workspaces/${WS}/reviews/${reviewId}/groups`, {
         groups: [{ title: 'Long', paths: ['src'], details: 'x'.repeat(501) }],
       });
       expect(r.status).toBe(400);

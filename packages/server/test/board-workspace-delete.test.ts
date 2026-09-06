@@ -1,27 +1,23 @@
 /**
  * DELETE /workspaces/:id, for a BOARD workspace.
  *
- * The route existed and did not cover board workspaces at all:
- * `docStore.deleteWorkspace` starts from `docStore.list().filter(m =>
- * m.workspaceId === id)`, and a board workspace has no doc members — board
- * workspaces live in `TaskStore`, a different store — so every call hit
- * `members.length === 0` and returned `not-found`. A workspace made for a
+ * The route existed and did not cover boards at all: `deleteWorkspace` starts
+ * from `docStore.list().filter(m => m.workspaceId === id)`, and a board has no
+ * doc members — boards live in `TaskStore` — so every call hit
+ * `members.length === 0` and returned `not-found`. A board made for a
  * five-minute experiment was permanent.
  *
- * A board workspace's footprint is bigger than its map entry, and every piece
- * left behind fails differently:
- *   - the tasks sidecar    → hydrate RESURRECTS the workspace on restart
- *   - the events log       → the audit trail of a board nobody can see
- *   - the `ws:<id>` doc   → the board URL still loads, with stale content
- *   - `task:<id>` docs    → one orphan Yjs doc per task, forever
- *   - the taskIndex        → task ids resolve to a workspace that is gone
+ * A board's footprint is bigger than its map entry, and each piece left behind
+ * fails differently: the tasks sidecar RESURRECTS the board on restart; the
+ * events log is the audit trail of a board nobody can see; the `ws:<id>` doc
+ * keeps the board URL loading with stale content; `task:<id>` docs are one
+ * orphan Yjs doc per task, forever; and the taskIndex resolves task ids to a
+ * workspace that is gone.
  *
- * The one thing deletion must NOT touch is linked docs. `attachDoc` is a
- * LINK ("the docs' own metadata is untouched"); a doc attached to a board
- * keeps working at its own URL after the board is gone.
+ * The one thing deletion must NOT touch is linked docs. `attachDoc` is a LINK;
+ * a doc attached to a board stays readable through any OTHER board citing it.
  *
- * All fixtures are synthetic — invented names in the jordan@partner.example
- * register. The repo is public.
+ * Fixtures are synthetic — the jordan@partner.example register. Public repo.
  */
 import { afterEach, describe, expect, it } from 'bun:test';
 import {
@@ -56,6 +52,9 @@ const AGENT: User = {
   color: '#888888',
 };
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('DELETE /workspaces/:id — board workspace', () => {
   let handle: ServerHandle | undefined;
   let dataDir: string | undefined;
@@ -64,6 +63,8 @@ describe('DELETE /workspaces/:id — board workspace', () => {
   const start = async (dir: string): Promise<ServerHandle> => {
     const h = createServer({ port: 0, dataDir: dir });
     base = `http://127.0.0.1:${h.port}`;
+    // No board seeded here: `start` is also the RESTART, and minting a fresh
+    // one would leave `WS` naming a board no doc was filed under.
     return h;
   };
 
@@ -78,13 +79,12 @@ describe('DELETE /workspaces/:id — board workspace', () => {
 
   /**
    * A comment on a task's body, anchored the way the product anchors one.
-   * These threads live ONLY in the body doc — nothing in the task store
-   * holds them — which is what makes destroying a body doc before the
-   * delete has committed a data-loss path rather than a cache miss.
+   * These threads live ONLY in the body doc, which makes destroying one before
+   * the delete commits a data-loss path rather than a cache miss.
    */
   const commentOnBody = async (taskId: string, find: string) => {
     const docId = taskBodyDocId(taskId);
-    const r = await post(`/api/docs/${encodeURIComponent(docId)}/threads/by_find`, {
+    const r = await post(`/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads/by_find`, {
       author: AGENT,
       text: 'Does this cover the retry case?',
       find,
@@ -94,18 +94,17 @@ describe('DELETE /workspaces/:id — board workspace', () => {
 
   const openThreadCount = async (taskId: string): Promise<number> => {
     const docId = taskBodyDocId(taskId);
-    const r = await fetch(`${base}/api/docs/${encodeURIComponent(docId)}/threads`);
+    const r = await fetch(`${base}/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads`);
     if (r.status !== 200) return -1;
     const payload = (await r.json()) as { threads?: unknown[] };
     return (payload.threads ?? []).length;
   };
 
   /**
-   * Both the tasks sidecar and a doc's `.ydoc` are written on a debounce, so
-   * "it exists" is a condition to wait for, not a fact right after the
-   * create. This matters beyond timing: a test that deletes before the first
-   * write would assert the absence of a file that was never there, and pass
-   * with the removal gone.
+   * The tasks sidecar and a doc's `.ydoc` are written on a debounce, so "it
+   * exists" is a condition to wait for. Beyond timing: a test that deletes
+   * before the first write asserts a file was never there, and passes with
+   * the removal gone.
    */
   const awaitFile = async (path: string): Promise<boolean> => {
     for (let i = 0; i < 100; i++) {
@@ -116,9 +115,9 @@ describe('DELETE /workspaces/:id — board workspace', () => {
   };
 
   /**
-   * Boards and doc groupings are two lists in one payload, and the one
-   * this file is about is `boardWorkspaces` — reading `workspaces` reports a
-   * board as absent before anything has been deleted.
+   * Boards and doc groupings are two lists in one payload, and this file is
+   * about `boardWorkspaces` — reading `workspaces` reports a board as absent
+   * before anything has been deleted.
    */
   const listWorkspaceIds = async (): Promise<string[]> => {
     const r = await fetch(`${base}/workspaces`);
@@ -129,11 +128,8 @@ describe('DELETE /workspaces/:id — board workspace', () => {
   /**
    * Every file under the data dir whose NAME carries this workspace id.
    *
-   * Named on purpose rather than a list of the sidecars I happen to know
-   * about: the first draft of the delete enumerated three of the five
-   * per-workspace paths, and the two it missed (the voice queue, the pending
-   * re-triage) are exactly the kind that get added later. A scan fails when
-   * the sixth one arrives; a list quietly doesn't.
+   * A scan, not a list of the sidecars I know about: the delete's first draft
+   * enumerated three of five, and the two it missed get added later.
    */
   const filesMentioning = (id: string): string[] => {
     const out: string[] = [];
@@ -154,6 +150,7 @@ describe('DELETE /workspaces/:id — board workspace', () => {
     handle = await start(dataDir);
     const ws = await post('/workspaces', { name: 'scratch', goal: 'Try one thing.' });
     const wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
+    WS = wsId;
 
     const mk = async (title: string): Promise<Task> => {
       const r = await post(`/workspaces/${wsId}/tasks`, {
@@ -167,7 +164,10 @@ describe('DELETE /workspaces/:id — board workspace', () => {
     };
     const open = await mk('still open');
     const done = await mk('already closed');
-    const t = await post(`/api/tasks/${done.id}/transition`, { to: 'done', author: AGENT });
+    const t = await post(`/workspaces/${WS}/tasks/${done.id}/transition`, {
+      to: 'done',
+      author: AGENT,
+    });
     expect(t.status).toBe(200);
     // The sidecar is written on the task store's own debounce, and several
     // tests below assert on whether a failed delete LEFT it there — a claim
@@ -431,22 +431,34 @@ describe('DELETE /workspaces/:id — board workspace', () => {
     const docDir = mkdtempSync(join(tmpdir(), 'board-ws-delete-doc-'));
     const docPath = join(docDir, 'spec.md');
     writeFileSync(docPath, '# Spec\n\nStill useful after the board is gone.\n');
-    const created = await post('/api/docs', {
+    const created = await post(`/workspaces/${wsId}/docs`, {
       docId,
       title: 'Spec',
       type: 'markdown',
       sourceUrl: docPath,
     });
     expect(created.status).toBe(200);
-    const attached = await post(`/workspaces/${wsId}/docs`, { docId });
+    const attached = await post(`/workspaces/${wsId}/docs:attach`, { docId });
     expect(attached.status).toBe(200);
+
+    // A second board that also cites the doc. A doc has no address of its own
+    // now — it is read THROUGH a board — so "the doc survives" can only be
+    // asserted from a board that still exists.
+    const other = await post('/workspaces', { name: 'still here', goal: 'Hold the doc.' });
+    const otherId = ((await other.json()) as { workspace: { id: string } }).workspace.id;
+    expect((await post(`/workspaces/${otherId}/docs:attach`, { docId })).status).toBe(200);
 
     expect((await del(`/workspaces/${wsId}?force=true`)).status).toBe(200);
 
-    // The doc keeps working at its own URL. Deleting a board that merely
-    // CITED it must not take it down.
+    // The doc keeps working. Deleting a board that merely CITED it must not
+    // take it down.
     expect(handle?.docStore.get(docId)).toBeDefined();
-    expect((await fetch(`${base}/api/docs/${docId}`)).status).toBe(200);
+    expect((await fetch(`${base}/workspaces/${otherId}/docs/${docId}?format=json`)).status).toBe(
+      200,
+    );
+    // And the deleted board is no longer a way to reach it: the address went
+    // with the board.
+    expect((await fetch(`${base}/workspaces/${wsId}/docs/${docId}?format=json`)).status).toBe(404);
     rmSync(docDir, { recursive: true, force: true });
   });
 
@@ -456,11 +468,13 @@ describe('DELETE /workspaces/:id — board workspace', () => {
     expect((await del('/workspaces/w-nope?force=true')).status).toBe(404);
   });
 
-  it('still deletes a doc-grouping workspace — the pre-existing path', async () => {
+  it('no longer deletes a doc-grouping workspace — the compatibility is gone', async () => {
     // Two different stores answer to the word "workspace", and ONE route
-    // creates both: `POST /workspaces` mints a board from `name` and
-    // a doc grouping from `folderPath`. So the delete has to consult both,
-    // and the regression to fear is the new board branch shadowing this one.
+    // creates both: `POST /workspaces` mints a board from `name` and a doc
+    // grouping from `folderPath`. The delete used to consult both and destroy
+    // whichever knew the id first. The cutover ends that (owner's call): this
+    // route is the board's, and a grouping is a board's review set. The cost,
+    // asserted rather than assumed: deleting one here 404s and its docs stay.
     dataDir = mkdtempSync(join(tmpdir(), 'board-ws-delete-grouping-'));
     const folder = mkdtempSync(join(tmpdir(), 'board-ws-delete-folder-'));
     writeFileSync(join(folder, 'README.md'), '# Member\n\nOne file is enough.\n');
@@ -477,8 +491,10 @@ describe('DELETE /workspaces/:id — board workspace', () => {
     expect(handle?.docStore.get(memberDoc)).toBeDefined();
 
     const res = await del(`/workspaces/${encodeURIComponent(workspaceId)}?force=true`);
-    expect(res.status).toBe(200);
-    expect(handle?.docStore.get(memberDoc)).toBeUndefined();
+    expect(res.status).toBe(404);
+    // Non-vacuous: the same route returns 200 on a board id above, so the 404
+    // is the store lookup refusing a non-board and not the route being absent.
+    expect(handle?.docStore.get(memberDoc)).toBeDefined();
     rmSync(folder, { recursive: true, force: true });
   });
 });

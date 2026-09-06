@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import { DOC_STORE_TIMINGS } from '../src/doc-store-timings.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { waitFor } from './wait-for.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const N = 120;
 const PAGE = 50;
@@ -54,7 +55,10 @@ interface Page {
   full: boolean;
 }
 
-describe('GET /api/docs pages', () => {
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
+describe(`GET /workspaces/${WS}/docs pages`, () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
@@ -76,7 +80,7 @@ describe('GET /api/docs pages', () => {
       },
     });
   const getText = async (qs: string): Promise<string> => {
-    const r = await local(`/api/docs${qs}`);
+    const r = await local(`/workspaces/${WS}/docs${qs}`);
     expect(r.status).toBe(200);
     return r.text();
   };
@@ -132,11 +136,12 @@ describe('GET /api/docs pages', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'list-docs-paging-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     for (let i = 0; i < N; i++) {
       const docId = `paged-doc-${String(i).padStart(3, '0')}`;
       const file = join(dataDir, `${docId}.md`);
       writeFileSync(file, `# ${docId}\n\nBody ${i}.\n`);
-      const r = await local('/api/docs', {
+      const r = await local(`/workspaces/${WS}/docs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({

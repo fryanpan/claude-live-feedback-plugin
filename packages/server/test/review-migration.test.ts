@@ -29,6 +29,7 @@ import {
 } from '../src/review-migration.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { taskBodyDocId } from '../src/task-projection.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const AGENT: User = { id: 'agent-indexer', name: 'Indexer', kind: 'known', color: '#888888' };
 const PERSON: User = { id: 'known-morgan', name: 'Morgan', kind: 'known', color: '#2e7dd7' };
@@ -51,6 +52,9 @@ function thread(comments: Comment[], over: Partial<Thread> = {}): Thread {
 }
 
 const PEOPLE = ['Morgan'];
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('opensWithClosingVerb', () => {
   it('accepts a plain report of finished work', () => {
@@ -263,7 +267,7 @@ describe('against a running server, through the real routes', () => {
     expect(r.status, await r.clone().text()).toBe(200);
     const { task } = (await r.json()) as { task: { id: string } };
     const docId = taskBodyDocId(task.id);
-    const t = await post(`/api/docs/${encodeURIComponent(docId)}/threads`, {
+    const t = await post(`/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads`, {
       author: PERSON,
       text: opener,
       anchor: { kind: 'subject' },
@@ -272,7 +276,7 @@ describe('against a running server, through the real routes', () => {
     const { thread: created } = (await t.json()) as { thread: { id: string } };
     for (const text of replies) {
       const c = await post(
-        `/api/docs/${encodeURIComponent(docId)}/threads/${created.id}/comments`,
+        `/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads/${created.id}/comments`,
         { author: AGENT, text },
       );
       expect(c.status, await c.clone().text()).toBe(200);
@@ -284,8 +288,10 @@ describe('against a running server, through the real routes', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'review-migration-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     const w = await post('/workspaces', { name: 'picker-revamp', goal: 'Ship the picker.' });
     workspaceId = ((await w.json()) as { workspace: { id: string } }).workspace.id;
+    WS = workspaceId;
 
     const receipt = await seedTask('Move the retry banner', 'Can you move this below the fold?', [
       'Done — it sits below the fold now.',
@@ -317,7 +323,7 @@ describe('against a running server, through the real routes', () => {
     // The receipt thread is real and open, but it is not a row any more.
     expect(rows.map((r) => r.docId)).toEqual([questionDoc]);
 
-    const plan = triageThreads(await fetchQueueThreads(base, rows));
+    const plan = triageThreads(await fetchQueueThreads(base, workspaceId, rows));
     const byDoc = new Map(plan.triaged.map((t) => [t.docId, t.disposition]));
     expect(byDoc.get(questionDoc)).toBe('question');
     expect(resolvable(plan)).toEqual([]);
@@ -325,8 +331,13 @@ describe('against a running server, through the real routes', () => {
 
   it('a receipt thread stays OPEN and untouched — off the queue is not resolved', async () => {
     const rows = await fetchQueueRows(base, workspaceId);
-    const plan = triageThreads(await fetchQueueThreads(base, rows));
-    const { resolved, failed } = await resolveReceipts(base, 'Migration', resolvable(plan));
+    const plan = triageThreads(await fetchQueueThreads(base, workspaceId, rows));
+    const { resolved, failed } = await resolveReceipts(
+      base,
+      workspaceId,
+      'Migration',
+      resolvable(plan),
+    );
     expect(failed).toEqual([]);
     expect(resolved).toEqual([]);
 
@@ -334,7 +345,7 @@ describe('against a running server, through the real routes', () => {
     // receipt thread keeps its status and every word. Leaving the queue was a
     // membership change, not an action taken against the thread.
     const read = await fetch(
-      `${base}/api/docs/${encodeURIComponent(receiptDoc)}/threads/${receiptThread}`,
+      `${base}/workspaces/${WS}/docs/${encodeURIComponent(receiptDoc)}/threads/${receiptThread}`,
     );
     expect(read.status).toBe(200);
     const { thread: stored } = (await read.json()) as { thread: Thread };
@@ -349,7 +360,7 @@ describe('against a running server, through the real routes', () => {
 
   it('is idempotent — a second pass still finds nothing to resolve', async () => {
     const rows = await fetchQueueRows(base, workspaceId);
-    const plan = triageThreads(await fetchQueueThreads(base, rows));
+    const plan = triageThreads(await fetchQueueThreads(base, workspaceId, rows));
     expect(resolvable(plan)).toEqual([]);
     // POSITIVE CONTROL: it is not that the pass read nothing at all.
     expect(plan.counts.question).toBe(1);

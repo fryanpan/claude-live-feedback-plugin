@@ -90,14 +90,14 @@ describe('link mode is retired', () => {
     boardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
 
     docId = 'note';
-    const doc = await local('/api/docs', {
+    const doc = await local(`/workspaces/${boardId}/docs`, {
       method: 'POST',
       body: JSON.stringify({ docId, type: 'markdown', sourceUrl: docPath }),
     });
     expect(doc.status).toBe(200);
     expect(
       (
-        await local(`/workspaces/${boardId}/docs`, {
+        await local(`/workspaces/${boardId}/docs:attach`, {
           method: 'POST',
           body: JSON.stringify({ docId }),
         })
@@ -114,6 +114,9 @@ describe('link mode is retired', () => {
     );
     handle = createServer({ port: 0, dataDir, ...access.serverOptions });
     base = `http://localhost:${handle.port}`;
+    // No re-seed: the restart is on the same data dir, so `boardId` — the
+    // board the doc is filed on and every share below is scoped to — comes
+    // back with it.
 
     live = await mintAccessShare(base, access, boardId, { label: 'the replacement' });
   });
@@ -200,16 +203,20 @@ describe('link mode is retired', () => {
     it('refuses a validly signed cookie for the legacy share and for a live one', async () => {
       const key = loadCookieKey(dataDir);
       for (const shareId of ['legacy-link-01', live.shareId]) {
-        const r = await fetch(`${base}/api/docs/${docId}`, {
+        const r = await fetch(`${base}/workspaces/${boardId}/docs/${docId}?format=json`, {
           headers: { host: live.host, cookie: `${SHARE_COOKIE}=${signSession(shareId, key)}` },
         });
         // 401: Access sees no token at all. The cookie is never consulted.
         expect(r.status, shareId).toBe(401);
       }
       // POSITIVE CONTROL: the Access token on the same host reads that doc.
-      expect((await fetch(`${base}/api/docs/${docId}`, { headers: live.headers })).status).toBe(
-        200,
-      );
+      expect(
+        (
+          await fetch(`${base}/workspaces/${boardId}/docs/${docId}?format=json`, {
+            headers: live.headers,
+          })
+        ).status,
+      ).toBe(200);
     });
   });
 

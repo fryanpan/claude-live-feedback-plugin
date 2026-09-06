@@ -24,6 +24,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-reviewer', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
 
@@ -83,6 +84,9 @@ function git(repo: string, ...args: string[]): string {
   }).trim();
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('companion (:edit) doc comments route to the member watchers', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -100,13 +104,13 @@ describe('companion (:edit) doc comments route to the member watchers', () => {
     fetch(`${base}${path}`, { headers: { host: `localhost:${handle.port}` } });
 
   const comment = (docId: string, text: string) =>
-    post(`/api/docs/${encodeURIComponent(docId)}/threads`, {
+    post(`/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads`, {
       author: PERSON,
       text,
       anchor: { kind: 'subject' },
     });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'companion-routing-'));
     repo = mkdtempSync(join(tmpdir(), 'companion-repo-'));
     git(repo, 'init', '-q');
@@ -119,6 +123,7 @@ describe('companion (:edit) doc comments route to the member watchers', () => {
     writeFileSync(join(repo, 'Main.kt'), 'fun main() { println("x") }\n');
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterEach(async () => {
@@ -133,7 +138,7 @@ describe('companion (:edit) doc comments route to the member watchers', () => {
     memberId: string;
     companionId: string;
   }> {
-    const bind = await post('/api/diffs', { repo, base: baseSha });
+    const bind = await post(`/workspaces/${WS}/reviews`, { repo, base: baseSha });
     expect(bind.status).toBe(200);
     const bound = (await bind.json()) as {
       reviewId: string;
@@ -141,9 +146,12 @@ describe('companion (:edit) doc comments route to the member watchers', () => {
     };
     const memberId = bound.files.find((f) => f.relPath === 'README.md')?.docId ?? '';
     expect(memberId).not.toBe('');
-    const open = await post(`/api/reviews/${encodeURIComponent(bound.reviewId)}/editable-file`, {
-      relPath: 'README.md',
-    });
+    const open = await post(
+      `/workspaces/${WS}/reviews/${encodeURIComponent(bound.reviewId)}/editable-file`,
+      {
+        relPath: 'README.md',
+      },
+    );
     expect(open.status).toBe(200);
     const companionId = ((await open.json()) as { docId: string }).docId;
     expect(companionId).not.toBe(memberId);
@@ -152,7 +160,9 @@ describe('companion (:edit) doc comments route to the member watchers', () => {
 
   it('watch_doc on the diff member hears a comment on its companion', async () => {
     const { memberId, companionId } = await openReview();
-    const stream = await get(`/events/${encodeURIComponent(memberId)}`);
+    const stream = await get(
+      `/workspaces/${WS}/docs/${encodeURIComponent(memberId)}/events:stream`,
+    );
     expect(stream.status).toBe(200);
     await settle(150);
     const heard = listen(stream);
@@ -196,7 +206,9 @@ describe('companion (:edit) doc comments route to the member watchers', () => {
     // collapses copies across streams; what must not happen is one stream
     // carrying the same frame twice.
     const { memberId, companionId } = await openReview();
-    const stream = await get(`/events/${encodeURIComponent(memberId)}`);
+    const stream = await get(
+      `/workspaces/${WS}/docs/${encodeURIComponent(memberId)}/events:stream`,
+    );
     await settle(150);
     const heard = listen(stream);
     expect((await comment(companionId, 'On the prose.')).status).toBe(200);
@@ -210,7 +222,7 @@ describe('companion (:edit) doc comments route to the member watchers', () => {
     expect((await comment(companionId, 'On the prose.')).status).toBe(200);
     expect((await comment(memberId, 'On the diff line.')).status).toBe(200);
 
-    const res = await get(`/api/docs/${encodeURIComponent(memberId)}/threads`);
+    const res = await get(`/workspaces/${WS}/docs/${encodeURIComponent(memberId)}/threads`);
     expect(res.status).toBe(200);
     const { threads } = (await res.json()) as {
       threads: Array<{ docId?: string; comments: Array<{ text: string }> }>;
@@ -226,7 +238,7 @@ describe('companion (:edit) doc comments route to the member watchers', () => {
     expect(diff?.docId ?? memberId).toBe(memberId);
 
     // Control: the companion's own listing is unchanged (no reflection back).
-    const own = await get(`/api/docs/${encodeURIComponent(companionId)}/threads`);
+    const own = await get(`/workspaces/${WS}/docs/${encodeURIComponent(companionId)}/threads`);
     const ownTexts = (
       (await own.json()) as { threads: Array<{ comments: Array<{ text: string }> }> }
     ).threads.map((t) => t.comments[0]?.text);

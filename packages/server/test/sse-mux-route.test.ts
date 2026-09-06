@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { waitFor } from './wait-for.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-reviewer', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
 const AGENT = 'agent-mira';
@@ -64,6 +65,9 @@ function listen(res: Response): { frames: Frame[]; stop: () => void } {
   };
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('GET /events/agent/<agentId>', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -92,11 +96,19 @@ describe('GET /events/agent/<agentId>', () => {
   const makeDoc = async (alias: string): Promise<string> => {
     const path = join(srcDir, `${alias}.md`);
     writeFileSync(path, `# ${alias}\n\nBody.\n`);
-    const res = await post('/api/docs', { docId: alias, sourceUrl: path, title: alias });
+    const res = await post(`/workspaces/${WS}/docs`, {
+      docId: alias,
+      sourceUrl: path,
+      title: alias,
+    });
     return ((await res.json()) as { docId: string }).docId;
   };
   const comment = (docId: string, text: string) =>
-    post(`/api/docs/${docId}/threads`, { author: PERSON, text, anchor: { kind: 'subject' } });
+    post(`/workspaces/${WS}/docs/${docId}/threads`, {
+      author: PERSON,
+      text,
+      anchor: { kind: 'subject' },
+    });
 
   /** Canonical ids of the two fixture docs, resolved per test. */
   let one: string;
@@ -107,6 +119,7 @@ describe('GET /events/agent/<agentId>', () => {
     srcDir = mkdtempSync(join(tmpdir(), 'sse-mux-route-src-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     one = await makeDoc('doc-one');
     two = await makeDoc('doc-two');
   });
@@ -177,7 +190,7 @@ describe('GET /events/agent/<agentId>', () => {
   it('leaves the per-key routes exactly as they were', async () => {
     // The rollout depends on this: a session still running the previous
     // bundle keeps its own streams while the new one uses the mux.
-    const feed = listen(await get('/events/doc-one'));
+    const feed = listen(await get(`/workspaces/${WS}/docs/doc-one/events:stream`));
     await comment('doc-one', 'Old route.');
     await waitFor(() => feed.frames.some((f) => f.event === 'thread.created'));
     // No key tag on the old route — its stream IS the key.

@@ -23,6 +23,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { type Task, TaskStore, tasksSidecarPath } from '../src/tasks.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known', color: '#888888' };
 
@@ -31,6 +32,9 @@ const LEGACY_EVIDENCE = {
   commit: 'abc1234def',
   threadRef: { kind: 'thread', docId: 'board-plan-doc', threadId: 'th-2' },
 };
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('a legacy evidence payload on the transition route', () => {
   let handle: ServerHandle;
@@ -63,8 +67,10 @@ describe('a legacy evidence payload on the transition route', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'legacy-evidence-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     const r = await post('/workspaces', { name: 'legacy-evidence-ws' });
     wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+    WS = wsId;
   });
 
   afterAll(async () => {
@@ -74,7 +80,7 @@ describe('a legacy evidence payload on the transition route', () => {
 
   it('applies the move and never refuses over the field', async () => {
     const t = await mkTask('an old bundle still sends evidence');
-    const r = await post(`/api/tasks/${t.id}/transition`, {
+    const r = await post(`/workspaces/${WS}/tasks/${t.id}/transition`, {
       to: 'done',
       author: AGENT,
       note: 'shipped',
@@ -100,9 +106,9 @@ describe('a legacy evidence payload on the transition route', () => {
 
   it('accepts the retired amend route without an error the caller cannot explain', async () => {
     const t = await mkTask('an old bundle still amends');
-    await post(`/api/tasks/${t.id}/transition`, { to: 'done', author: AGENT });
+    await post(`/workspaces/${WS}/tasks/${t.id}/transition`, { to: 'done', author: AGENT });
 
-    const r = await post(`/api/tasks/${t.id}/evidence`, {
+    const r = await post(`/workspaces/${WS}/tasks/${t.id}/evidence`, {
       author: AGENT,
       evidence: { commit: '621f371abc' },
       note: 'wrote the sha from memory',
@@ -120,7 +126,7 @@ describe('a legacy evidence payload on the transition route', () => {
     // handle it. What must never appear is a NEW refusal (a 400 over the
     // payload) or a 500, either of which reads to the caller as its own
     // version being broken.
-    const r = await post('/api/tasks/t-ghost/evidence', {
+    const r = await post(`/workspaces/${WS}/tasks/t-ghost/evidence`, {
       author: AGENT,
       evidence: { commit: '621f371abc' },
     });

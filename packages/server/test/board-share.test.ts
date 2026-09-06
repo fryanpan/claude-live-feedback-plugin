@@ -44,6 +44,7 @@ import {
   accessHarness,
   mintAccessShare,
 } from './access-share.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
 
@@ -135,6 +136,15 @@ function sseData(text: string, event: string): Record<string, unknown> | null {
   return null;
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+/**
+ * The board the docs below are FILED under, which is deliberately not the
+ * board this file shares. `ATTACHED` is then attached to the shared board and
+ * `PRIVATE` is not, so "the visitor reaches one and not the other" is a
+ * question about the link table rather than about where the file was written.
+ */
+let SEED_WS = '';
+
 describe('workspace-board minimal share (§3.12 commit 8)', () => {
   let handle: ServerHandle;
   let access: AccessHarness;
@@ -204,13 +214,18 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
       ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
+    SEED_WS = await seedBoard(base);
     wsBase = `ws://localhost:${handle.port}`;
 
     // Two markdown docs: one attached to the board workspace, one private.
     for (const id of [ATTACHED, PRIVATE]) {
       const path = join(dataDir, `${id}.md`);
       writeFileSync(path, `# ${id}\n\nBody text to comment on.\n`);
-      const r = await post('/api/docs', { docId: id, type: 'markdown', sourceUrl: path });
+      const r = await post(`/workspaces/${SEED_WS}/docs`, {
+        docId: id,
+        type: 'markdown',
+        sourceUrl: path,
+      });
       expect(r.status).toBe(200);
       const minted = ((await r.json()) as { docId: string }).docId;
       if (id === ATTACHED) attachedId = minted;
@@ -224,7 +239,9 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
     expect(ws.status).toBe(200);
     boardId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
 
-    expect((await post(`/workspaces/${boardId}/docs`, { docId: ATTACHED })).status).toBe(200);
+    expect((await post(`/workspaces/${boardId}/docs:attach`, { docId: ATTACHED })).status).toBe(
+      200,
+    );
 
     const t = await post(`/workspaces/${boardId}/tasks`, {
       author: PERSON,
@@ -243,14 +260,17 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
 
     // Cross-reference so the chip endpoint has something to resolve.
     expect(
-      (await post(`/api/tasks/${taskId}/links`, { ref: { kind: 'doc', docId: attachedId } }))
-        .status,
+      (
+        await post(`/workspaces/${boardId}/tasks/${taskId}/links`, {
+          ref: { kind: 'doc', docId: attachedId },
+        })
+      ).status,
     ).toBe(200);
 
     // A transition so the projected task carries an attributed history.
     expect(
       (
-        await post(`/api/tasks/${taskId}/transition`, {
+        await post(`/workspaces/${boardId}/tasks/${taskId}/transition`, {
           to: 'in-progress',
           author: PERSON,
         })
@@ -363,7 +383,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
 
   describe('transport 2: the ws:<id> board doc socket', () => {
     it('a workspace visitor completes a REAL Yjs sync and sees the board (presence)', async () => {
-      const client = connectDoc(`${wsBase}/y/ws%3A${boardId}`, { ...boardCookie });
+      const client = connectDoc(`${wsBase}/workspaces/${boardId}/y`, { ...boardCookie });
       try {
         await client.ready;
         // Positive control FIRST: the doc's own state arrived. Without this
@@ -390,9 +410,9 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
     it('refuses the socket to another workspace’s visitor whose socket auth otherwise works (absence)', async () => {
       // Positive control: the SAME cookie passes the guard for its own board
       // doc (426 = past the guard, upgrade-required on a plain fetch).
-      expect((await pub(`/y/ws%3A${otherId}`, otherCookie)).status).toBe(426);
-      expect((await pub(`/y/ws%3A${boardId}`, otherCookie)).status).toBe(403);
-      expect((await pub(`/y/ws%3A${boardId}`)).status).toBe(403);
+      expect((await pub(`/workspaces/${otherId}/y`, otherCookie)).status).toBe(426);
+      expect((await pub(`/workspaces/${boardId}/y`, otherCookie)).status).toBe(403);
+      expect((await pub(`/workspaces/${boardId}/y`)).status).toBe(403);
     });
   });
 
@@ -402,7 +422,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
       expect(stream.status).toBe(200);
       expect(stream.headers.get('content-type')).toContain('text/event-stream');
 
-      const trigger = post(`/api/tasks/${taskId}/transition`, {
+      const trigger = post(`/workspaces/${boardId}/tasks/${taskId}/transition`, {
         to: 'done',
         author: PERSON,
         note: 'shipped',
@@ -422,7 +442,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
     it('the OWNER stream still carries actor ids (positive control for the redaction)', async () => {
       const stream = await local(`/workspaces/${boardId}/events:stream`);
       expect(stream.status).toBe(200);
-      const trigger = post(`/api/tasks/${taskId}/transition`, {
+      const trigger = post(`/workspaces/${boardId}/tasks/${taskId}/transition`, {
         to: 'in-progress',
         author: PERSON,
       });
@@ -604,35 +624,35 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
           { method: 'POST', body: JSON.stringify({ title: 'A member’s goal', author }) },
         ],
         [
-          `/api/tasks/${filedId}/title`,
+          `/workspaces/${boardId}/tasks/${filedId}/title`,
           { method: 'POST', body: JSON.stringify({ title: 'Retitled by a member', author }) },
         ],
         [
-          `/api/tasks/${filedId}/body`,
+          `/workspaces/${boardId}/tasks/${filedId}/body`,
           { method: 'POST', body: JSON.stringify({ markdown: 'Rewritten.', author }) },
         ],
         [
-          `/api/tasks/${filedId}/assignee`,
+          `/workspaces/${boardId}/tasks/${filedId}/assignee`,
           { method: 'POST', body: JSON.stringify({ assignee: 'human', author }) },
         ],
         [
-          `/api/tasks/${filedId}/goal`,
+          `/workspaces/${boardId}/tasks/${filedId}/goal`,
           { method: 'POST', body: JSON.stringify({ goal: 'chores', author }) },
         ],
         [
-          `/api/tasks/${filedId}/links`,
+          `/workspaces/${boardId}/tasks/${filedId}/links`,
           {
             method: 'POST',
             body: JSON.stringify({ ref: { kind: 'doc', docId: ATTACHED }, author }),
           },
         ],
-        [`/api/tasks/${filedId}/links`, { method: 'GET' }],
+        [`/workspaces/${boardId}/tasks/${filedId}/links`, { method: 'GET' }],
         [
-          `/api/tasks/${filedId}/transition`,
+          `/workspaces/${boardId}/tasks/${filedId}/transition`,
           { method: 'POST', body: JSON.stringify({ to: 'in-progress', author }) },
         ],
         [
-          `/api/tasks/${decisionId}/answer`,
+          `/workspaces/${boardId}/tasks/${decisionId}/answer`,
           { method: 'POST', body: JSON.stringify({ text: 'Ship now.', author }) },
         ],
       ];
@@ -674,7 +694,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
       expect(task.createdBy).not.toBe('Mallory');
 
       // …and on the task trail, which is what the owner actually reads back.
-      const moved = await pub(`/api/tasks/${task.id}/transition`, boardCookie, {
+      const moved = await pub(`/workspaces/${boardId}/tasks/${task.id}/transition`, boardCookie, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -701,10 +721,13 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
       // The same verbs the test above ran green.
       for (const [path, init] of [
         [
-          `/api/tasks/${taskId}/transition`,
+          `/workspaces/${boardId}/tasks/${taskId}/transition`,
           { method: 'POST', body: JSON.stringify({ to: 'done' }) },
         ],
-        [`/api/tasks/${taskId}/title`, { method: 'POST', body: JSON.stringify({ title: 'X' }) }],
+        [
+          `/workspaces/${boardId}/tasks/${taskId}/title`,
+          { method: 'POST', body: JSON.stringify({ title: 'X' }) },
+        ],
         [`/workspaces/${boardId}/tasks`, { method: 'POST', body: JSON.stringify({ title: 'X' }) }],
         [`/workspaces/${boardId}/tasks`, { method: 'GET' }],
       ] as Array<[string, RequestInit]>) {
@@ -741,8 +764,10 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
         body: JSON.stringify({ kind: 'discussion' }),
       });
       expect(meeting.status, await meeting.clone().text()).toBe(200);
-      // Filing a doc this member can already open onto the same board.
-      const filed = await pub(`/workspaces/${boardId}/docs`, boardCookie, {
+      // Filing a doc this member can already open onto the same board. The
+      // filing verb is `docs:attach`; `POST .../docs` is where a doc is
+      // CREATED, and that one a share visitor does not get.
+      const filed = await pub(`/workspaces/${boardId}/docs:attach`, boardCookie, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ docId: ATTACHED }),
@@ -778,7 +803,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
         // is allowed and asserted in the test above — so this row is the
         // TARGET rule and not the verb.
         [
-          `/workspaces/${boardId}/docs`,
+          `/workspaces/${boardId}/docs:attach`,
           { method: 'POST', body: JSON.stringify({ docId: PRIVATE }) },
         ],
         // Reads a file off the owner's disk by the path in the body.
@@ -810,8 +835,8 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
         ],
         // The whole-server lists and the global review-item resolver.
         ['/workspaces', { method: 'GET' }],
-        ['/api/docs', { method: 'GET' }],
-        ['/api/review-items/r-anything', { method: 'GET' }],
+        [`/workspaces/${boardId}/docs`, { method: 'GET' }],
+        [`/workspaces/${boardId}/review-items/r-anything`, { method: 'GET' }],
         // Share administration — minting, revoking, and the master switch.
         [
           '/api/share/workspace',
@@ -862,21 +887,25 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
     });
 
     it('promotes a thread to a task, and edits the region it is anchored to', async () => {
-      const mk = await post(`/api/docs/${attachedId}/threads/by_find`, {
+      const mk = await post(`/workspaces/${boardId}/docs/${attachedId}/threads/by_find`, {
         author: PERSON,
         text: 'This paragraph needs a task.',
         find: 'Body text',
       });
       expect(mk.status).toBe(200);
       const threadId = ((await mk.json()) as { thread: { id: string } }).thread.id;
-      const r = await pub(`/api/docs/${attachedId}/threads/${threadId}/promote`, boardCookie, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId: boardId, author: PERSON }),
-      });
+      const r = await pub(
+        `/workspaces/${boardId}/docs/${attachedId}/threads/${threadId}/promote`,
+        boardCookie,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ workspaceId: boardId, author: PERSON }),
+        },
+      );
       expect(r.status, await r.clone().text()).toBe(200);
       const surgery = await pub(
-        `/api/docs/${attachedId}/threads/${threadId}/rewrite_region`,
+        `/workspaces/${boardId}/docs/${attachedId}/threads/${threadId}/rewrite_region`,
         boardCookie,
         {
           method: 'POST',
@@ -891,7 +920,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
       // …and the same verb on a doc THIS member cannot open stays refused,
       // which is the boundary that was ever doing the work.
       const elsewhere = await pub(
-        `/api/docs/${privateId}/threads/${threadId}/rewrite_region`,
+        `/workspaces/${boardId}/docs/${privateId}/threads/${threadId}/rewrite_region`,
         boardCookie,
         {
           method: 'POST',
@@ -901,11 +930,15 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
       );
       expect(elsewhere.status).toBe(403);
       // And the member can reply on the same thread.
-      const reply = await pub(`/api/docs/${attachedId}/threads/${threadId}/comments`, boardCookie, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ author: PERSON, text: 'Agreed — but from a member.' }),
-      });
+      const reply = await pub(
+        `/workspaces/${boardId}/docs/${attachedId}/threads/${threadId}/comments`,
+        boardCookie,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ author: PERSON, text: 'Agreed — but from a member.' }),
+        },
+      );
       expect(reply.status).toBe(200);
     });
 
@@ -915,46 +948,63 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ speaker: 'A', name: 'Priya' }),
       };
-      const r = await pub(`/api/docs/${attachedId}/meetings/m-none/speakers`, boardCookie, rename);
+      const r = await pub(
+        `/workspaces/${boardId}/docs/${attachedId}/meetings/m-none/speakers`,
+        boardCookie,
+        rename,
+      );
       // 403 BEFORE the meeting lookup: the guard, not a missing meeting.
       expect(r.status).toBe(403);
       // Positive control: the owner's same probe gets PAST the guard and is
       // refused by the lookup instead — the route was really reached.
-      expect((await local(`/api/docs/${attachedId}/meetings/m-none/speakers`, rename)).status).toBe(
-        404,
-      );
+      expect(
+        (await local(`/workspaces/${boardId}/docs/${attachedId}/meetings/m-none/speakers`, rename))
+          .status,
+      ).toBe(404);
     });
   });
 
   describe('a workspace visitor reaches the workspace’s own docs, comments only', () => {
     it('reads the attached doc and the task body doc', async () => {
-      expect((await pub(`/api/docs/${attachedId}`, boardCookie)).status).toBe(200);
-      expect((await pub(`/api/docs/task%3A${taskId}`, boardCookie)).status).toBe(200);
+      expect(
+        (await pub(`/workspaces/${boardId}/docs/${attachedId}?format=json`, boardCookie)).status,
+      ).toBe(200);
+      expect(
+        (await pub(`/workspaces/${boardId}/docs/task%3A${taskId}?format=json`, boardCookie)).status,
+      ).toBe(200);
     });
 
     it('the doc payload never hands a visitor the board workspace id', async () => {
       // Positive control: the owner's copy of the same payload carries it —
       // the doc-surface voice dock resolves its workspace from this field.
-      const owner = (await (await local(`/api/docs/${attachedId}`)).json()) as {
+      const owner = (await (
+        await local(`/workspaces/${boardId}/docs/${attachedId}?format=json`)
+      ).json()) as {
         hubWorkspaceId?: string;
       };
       expect(owner.hubWorkspaceId).toBe(boardId);
-      const seen = (await (await pub(`/api/docs/${attachedId}`, boardCookie)).json()) as {
+      const seen = (await (
+        await pub(`/workspaces/${boardId}/docs/${attachedId}?format=json`, boardCookie)
+      ).json()) as {
         hubWorkspaceId?: string;
       };
       expect(seen.hubWorkspaceId).toBeUndefined();
     });
 
     it('posts a comment under the proven email, never a claimed fleet identity', async () => {
-      const r = await pub(`/api/docs/${attachedId}/threads/by_find`, boardCookie, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          author: { id: 'known-bryan', name: 'Mallory', kind: 'known', color: '#123456' },
-          text: 'A visitor comment.',
-          find: 'comment on',
-        }),
-      });
+      const r = await pub(
+        `/workspaces/${boardId}/docs/${attachedId}/threads/by_find`,
+        boardCookie,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            author: { id: 'known-bryan', name: 'Mallory', kind: 'known', color: '#123456' },
+            text: 'A visitor comment.',
+            find: 'comment on',
+          }),
+        },
+      );
       expect(r.status).toBe(200);
       const { thread } = (await r.json()) as {
         thread: { comments: Array<{ author: { id: string; name: string } }> };
@@ -969,7 +1019,9 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
     });
 
     it('still cannot reach a doc outside the workspace (absence)', async () => {
-      expect((await pub(`/api/docs/${privateId}`, boardCookie)).status).toBe(403);
+      expect(
+        (await pub(`/workspaces/${boardId}/docs/${privateId}?format=json`, boardCookie)).status,
+      ).toBe(403);
       expect((await pub(`/review/${privateId}`, boardCookie)).status).toBe(403);
     });
   });
@@ -984,8 +1036,8 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
    * visitor holding some other workspace's link.
    */
   describe('task chips resolve via REST, in the §3.3 rule-2 shape', () => {
-    it('GET /api/docs/<id>/tasks returns the chip shape, nothing more', async () => {
-      const r = await pub(`/api/docs/${attachedId}/tasks`, boardCookie);
+    it(`GET /workspaces/${boardId}/docs/<id>/tasks returns the chip shape, nothing more`, async () => {
+      const r = await pub(`/workspaces/${boardId}/docs/${attachedId}/tasks`, boardCookie);
       expect(r.status).toBe(200);
       const { tasks } = (await r.json()) as { tasks: Array<Record<string, unknown>> };
       const chip = tasks.find((t) => t.id === taskId);
@@ -998,8 +1050,12 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
     it('the chip endpoint stays scoped — not a task enumeration oracle', async () => {
       // A doc in no shared workspace, and a doc in someone else's — both
       // refused, next to the 200 the in-scope read gets above.
-      expect((await pub(`/api/docs/${privateId}/tasks`, boardCookie)).status).toBe(403);
-      expect((await pub(`/api/docs/${attachedId}/tasks`, otherCookie)).status).toBe(403);
+      expect(
+        (await pub(`/workspaces/${boardId}/docs/${privateId}/tasks`, boardCookie)).status,
+      ).toBe(403);
+      expect(
+        (await pub(`/workspaces/${boardId}/docs/${attachedId}/tasks`, otherCookie)).status,
+      ).toBe(403);
     });
   });
 
@@ -1008,7 +1064,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
       const share = await mintAccessShare(base, access, boardId);
       const cookie = share.headers;
 
-      const client = connectDoc(`${wsBase}/y/ws%3A${boardId}`, { ...share.headers });
+      const client = connectDoc(`${wsBase}/workspaces/${boardId}/y`, { ...share.headers });
       await client.ready; // positive control: the socket really synced
       const closedCode = new Promise<number>((resolve) => {
         client.ws.addEventListener('close', (e) => resolve((e as CloseEvent).code));

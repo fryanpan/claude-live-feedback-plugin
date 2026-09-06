@@ -18,6 +18,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 /**
  * `hubWorkspaceId` — the BOARD the doc belongs to — and deliberately not
@@ -29,6 +30,9 @@ interface DocResponse {
   hubWorkspaceId?: string;
   meta: { docId?: string; workspaceId?: string; type?: string };
 }
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('a doc always lands in a workspace', () => {
   let handle: ServerHandle;
@@ -56,10 +60,11 @@ describe('a doc always lands in a workspace', () => {
     return p;
   };
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'doc-workspace-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterAll(() => {
@@ -73,9 +78,10 @@ describe('a doc always lands in a workspace', () => {
     // non-empty workspaceId in the other tests means something.
     const ws = await post('/workspaces', { name: 'named-ws', goal: 'Ship.' });
     const wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
+    WS = wsId;
     // The body an MCP `attach_markdown` call puts on the wire, so this also
     // covers the layer that hand-copies fields into the doc-store call.
-    const r = await post('/api/docs', {
+    const r = await post(`/workspaces/${wsId}/docs`, {
       docId: 'doc-named-ws',
       type: 'markdown',
       sourceUrl: mdFile('named.md'),
@@ -92,7 +98,8 @@ describe('a doc always lands in a workspace', () => {
     // with a workspace in mind.
     const ws = await post('/workspaces', { name: 'mock-ws', goal: 'Ship.' });
     const wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
-    const r = await post('/api/docs', {
+    WS = wsId;
+    const r = await post(`/workspaces/${wsId}/docs`, {
       docId: 'doc-named-mock-ws',
       type: 'mockup',
       owner: '/tmp/some-agent-cwd',
@@ -103,7 +110,7 @@ describe('a doc always lands in a workspace', () => {
   });
 
   it('materializes one when the caller has none — still a single call', async () => {
-    const r = await post('/api/docs', {
+    const r = await post(`/workspaces/${WS}/docs`, {
       docId: 'doc-no-ws',
       type: 'markdown',
       sourceUrl: mdFile('orphan.md'),
@@ -127,13 +134,13 @@ describe('a doc always lands in a workspace', () => {
     expect(wsBody.workspace.docIds).toContain(body.docId);
 
     // ...and the readable name the caller chose still gets there.
-    const viaAlias = await local('/api/docs/doc-no-ws');
+    const viaAlias = await local(`/workspaces/${WS}/docs/doc-no-ws?format=json`);
     expect(viaAlias.status).toBe(200);
     expect(((await viaAlias.json()) as DocResponse).meta.docId).toBe(body.docId);
   });
 
   it('puts the auto-created workspace in the list the board renders', async () => {
-    const r = await post('/api/docs', {
+    const r = await post(`/workspaces/${WS}/docs`, {
       docId: 'doc-listed-ws',
       type: 'markdown',
       sourceUrl: mdFile('listed.md'),
@@ -154,12 +161,12 @@ describe('a doc always lands in a workspace', () => {
   it('reuses one auto-created workspace instead of minting one per doc', async () => {
     // A workspace per doc is the same as no workspace: the board fills with
     // single-doc boards and the grouping stops meaning anything.
-    const a = await post('/api/docs', {
+    const a = await post(`/workspaces/${WS}/docs`, {
       docId: 'doc-auto-a',
       type: 'markdown',
       sourceUrl: mdFile('auto-a.md'),
     });
-    const b = await post('/api/docs', {
+    const b = await post(`/workspaces/${WS}/docs`, {
       docId: 'doc-auto-b',
       type: 'markdown',
       sourceUrl: mdFile('auto-b.md'),
@@ -171,50 +178,56 @@ describe('a doc always lands in a workspace', () => {
   });
 
   it('leaves a mockup doc in a workspace too, not just markdown', async () => {
-    const r = await post('/api/docs', { docId: 'doc-mockup-ws', type: 'mockup' });
+    const r = await post(`/workspaces/${WS}/docs`, { docId: 'doc-mockup-ws', type: 'mockup' });
     expect(r.status).toBe(200);
     expect(((await r.json()) as DocResponse).hubWorkspaceId).toBeTruthy();
   });
 
-  it('filing a doc into a real workspace takes it out of the default one', async () => {
-    // The ordinary agent flow is create-then-attach, so the doc is filed into
-    // the holding pen before anyone names a workspace for it. Left in both, it
-    // has two board workspaces and `workspaceOfDoc` answers with whichever the
-    // store iterates first — which is what share scoping resolves against, so
-    // a workspace visitor gets a 403 on the doc the share was made for.
-    const created = await post('/api/docs', {
+  it('files a created doc on the board in its PATH, and attaching adds a second address', async () => {
+    // The holding pen is not on this route any more: the path names the board,
+    // so `POST /workspaces/<ws>/docs` files there and there is nothing to be
+    // swept out of. (The pen still catches a folder bind, which is top-level
+    // and names no board — group-bind-workspace.test.ts covers the move.)
+    //
+    // What replaces the old one-home invariant: a doc filed on two boards has
+    // TWO addresses, deliberately, and both answer. That is the shape share
+    // scoping reads now — a set, not a single winner — so the failure this
+    // test was written against (a visitor 403'd because `workspaceOfDoc`
+    // happened to answer with the other board) cannot recur through it.
+    const created = await post(`/workspaces/${WS}/docs`, {
       docId: 'doc-then-attached',
       type: 'markdown',
       sourceUrl: mdFile('then-attached.md'),
     });
     const createdBody = (await created.json()) as DocResponse;
     const docId = createdBody.docId;
-    const holdingId = createdBody.hubWorkspaceId as string;
-    // Positive control: it really is in the holding pen right now, so the
-    // "no longer there" assertion below is a claim about a move.
-    expect(holdingId).toBeTruthy();
-    expect(handle.tasks.getWorkspace(holdingId)?.docIds).toContain(docId);
+    expect(createdBody.hubWorkspaceId).toBe(WS);
+    expect(handle.tasks.getWorkspace(WS)?.docIds).toContain(docId);
 
     const ws = await post('/workspaces', { name: 'real-home', goal: 'Ship.' });
     const realId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
+    // Positive control that `realId` is a DIFFERENT board, so "both answer"
+    // below is a claim about two of them.
+    expect(realId).not.toBe(WS);
     // Attached by the READABLE name — the attach route resolves it, and the
     // membership it writes is still keyed by the minted id below.
-    expect((await post(`/workspaces/${realId}/docs`, { docId: 'doc-then-attached' })).status).toBe(
-      200,
-    );
+    expect(
+      (await post(`/workspaces/${realId}/docs:attach`, { docId: 'doc-then-attached' })).status,
+    ).toBe(200);
 
     expect(handle.tasks.getWorkspace(realId)?.docIds).toContain(docId);
-    expect(handle.tasks.getWorkspace(holdingId)?.docIds).not.toContain(docId);
-    // One home, and it is the one the caller asked for — this is the value
-    // share scoping and the doc surface's voice dock both read.
-    expect(handle.tasks.workspaceOfDoc(docId)).toBe(realId);
+    expect(handle.tasks.getWorkspace(WS)?.docIds).toContain(docId);
+    for (const board of [WS, realId]) {
+      const r = await local(`/workspaces/${board}/docs/${docId}?format=json`);
+      expect(r.status, board).toBe(200);
+    }
   });
 
   it('a deleted doc leaves no link behind on the board', async () => {
     // Filing every doc means a board would otherwise collect one tombstone per
     // deleted doc — invisible in the UI (a dangling id renders as nothing) and
     // permanent in the store.
-    const created = await post('/api/docs', {
+    const created = await post(`/workspaces/${WS}/docs`, {
       docId: 'doc-to-delete',
       type: 'markdown',
       sourceUrl: mdFile('to-delete.md'),
@@ -228,7 +241,9 @@ describe('a doc always lands in a workspace', () => {
 
     // Deleted by the readable name — which must unlink the minted id it
     // resolves to, not a second membership under the alias.
-    const del = await local('/api/docs/doc-to-delete', { method: 'DELETE' });
+    const del = await local(`/workspaces/${wsId}/docs/doc-to-delete?format=json`, {
+      method: 'DELETE',
+    });
     expect(del.status).toBe(200);
     expect(handle.tasks.getWorkspace(wsId)?.docIds).not.toContain(docId);
   });
@@ -248,7 +263,7 @@ describe('a doc always lands in a workspace', () => {
     try {
       const docId = 'doc-widget-ws';
       const ws = new WebSocket(
-        `ws://localhost:${open.port}/y/${docId}?type=mockup`,
+        `ws://localhost:${open.port}/workspaces/${WS}/docs/${docId}/y?type=mockup`,
         // The socket is refused without an allowed browser Origin.
         { headers: { origin: `http://localhost:${open.port}` } } as unknown as string[],
       );
@@ -269,19 +284,18 @@ describe('a doc always lands in a workspace', () => {
   });
 });
 
-describe('docs that predate the rule stay reachable', () => {
+describe('a doc that predates the rule has no address', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'doc-legacy-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     // The gate lives in the route, so going straight at DocStore produces the
     // shape a doc persisted before this rule has: meta with no workspaceId.
-    // That is the state we promise not to strand, and after this change it is
-    // unreachable through any HTTP path — which is the point.
     const p = join(dataDir, 'legacy.md');
     writeFileSync(p, '# Legacy\n\nStill here.\n');
     handle.docStore.getOrCreate('legacy-doc', { type: 'markdown', sourceUrl: p });
@@ -292,16 +306,37 @@ describe('docs that predate the rule stay reachable', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it('still serves a doc that has no workspace at all', async () => {
-    // Positive control that the fixture is the shape we mean: it really has
-    // no workspace, so "still reachable" is a claim about an orphan.
+  it('404s under every board, because it belongs to none', async () => {
+    // It used to be served at `/review/<id>`, which named no board — and that
+    // is exactly why "unfiled" was a state nobody ever met. That address is
+    // deleted with the rest of the pre-cutover paths, so a doc filed nowhere
+    // now has nowhere to be reached from, and the 404 is the prompt to file
+    // it. Reaching it from every board instead would put the retired
+    // compatibility back under another name.
+    //
+    // Positive control that the fixture is the shape we mean: it really has no
+    // workspace, so the 404 is a claim about an orphan.
     expect(handle.tasks.workspaceOfDoc('legacy-doc')).toBeNull();
     expect(handle.docStore.get('legacy-doc')?.meta.workspaceId ?? '').toBe('');
-    const r = await fetch(`${base}/api/docs/legacy-doc`, {
+    const r = await fetch(`${base}/workspaces/${WS}/docs/legacy-doc?format=json`, {
       headers: { host: `localhost:${handle.port}` },
     });
-    expect(r.status).toBe(200);
-    const body = (await r.json()) as { meta: { type?: string } };
-    expect(body.meta.type).toBe('markdown');
+    expect(r.status).toBe(404);
+
+    // …and it is the ORPHAN being refused, not the board or the route: a doc
+    // filed on this same board answers on the same spelling.
+    const filedPath = join(dataDir, 'filed.md');
+    writeFileSync(filedPath, '# Filed\n\nOn a board.\n');
+    const made = await fetch(`${base}/workspaces/${WS}/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', host: `localhost:${handle.port}` },
+      body: JSON.stringify({ docId: 'filed-doc', type: 'markdown', sourceUrl: filedPath }),
+    });
+    expect(made.status).toBe(200);
+    const filedId = ((await made.json()) as { docId: string }).docId;
+    const control = await fetch(`${base}/workspaces/${WS}/docs/${filedId}?format=json`, {
+      headers: { host: `localhost:${handle.port}` },
+    });
+    expect(control.status).toBe(200);
   });
 });

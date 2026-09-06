@@ -27,12 +27,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 interface DocResponse {
   hubWorkspaceId?: string;
   backTo?: { workspaceId: string; name: string };
   meta: { workspaceId?: string; type?: string };
 }
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('a doc knows which board to go back to', () => {
   let handle: ServerHandle;
@@ -55,16 +59,17 @@ describe('a doc knows which board to go back to', () => {
       body: JSON.stringify(body),
     });
   const getDoc = async (docId: string): Promise<DocResponse> => {
-    const r = await local(`/api/docs/${encodeURIComponent(docId)}`);
+    const r = await local(`/workspaces/${WS}/docs/${encodeURIComponent(docId)}?format=json`);
     expect(r.status).toBe(200);
     return (await r.json()) as DocResponse;
   };
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'doc-back-'));
     folder = mkdtempSync(join(tmpdir(), 'doc-back-src-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterAll(() => {
@@ -82,9 +87,10 @@ describe('a doc knows which board to go back to', () => {
   it('names the board a plain doc is attached to, with the board name', async () => {
     const ws = await post('/workspaces', { name: 'search-revamp', goal: 'Ship search.' });
     const wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
+    WS = wsId;
     expect(
       (
-        await post('/api/docs', {
+        await post(`/workspaces/${wsId}/docs`, {
           docId: 'doc-on-a-board',
           type: 'markdown',
           sourceUrl: mdFile('on-a-board.md'),
@@ -112,8 +118,12 @@ describe('a doc knows which board to go back to', () => {
 
     const ws = await post('/workspaces', { name: 'review-home', goal: 'Review it.' });
     const boardId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
+    WS = boardId;
 
-    const bound = await post('/api/diffs', { repo: folder, hubWorkspaceId: boardId });
+    const bound = await post(`/workspaces/${boardId}/reviews`, {
+      repo: folder,
+      hubWorkspaceId: boardId,
+    });
     expect(bound.status).toBe(200);
     const res = (await bound.json()) as {
       reviewId: string;
@@ -142,6 +152,7 @@ describe('a doc knows which board to go back to', () => {
   it("names a task body's own board", async () => {
     const ws = await post('/workspaces', { name: 'task-home', goal: 'Do the work.' });
     const wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
+    WS = wsId;
     const t = await post(`/workspaces/${wsId}/tasks`, {
       title: 'Agent can read the body so that the work is unambiguous',
       author: { id: 'person-1', name: 'Reviewer', kind: 'known' },
@@ -201,10 +212,11 @@ describe('the back target is not handed to a share visitor', () => {
       ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
 
     const p = join(dataDir, 'shared.md');
     writeFileSync(p, '# Shared\n\nBody.\n');
-    const createdShared = await post('/api/docs', {
+    const createdShared = await post(`/workspaces/${WS}/docs`, {
       docId: 'shared-doc',
       type: 'markdown',
       sourceUrl: p,
@@ -214,7 +226,10 @@ describe('the back target is not handed to a share visitor', () => {
 
     const ws = await post('/workspaces', { name: 'shared-board', goal: 'Ship it.' });
     boardId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
-    expect((await post(`/workspaces/${boardId}/docs`, { docId: 'shared-doc' })).status).toBe(200);
+    WS = boardId;
+    expect((await post(`/workspaces/${boardId}/docs:attach`, { docId: 'shared-doc' })).status).toBe(
+      200,
+    );
 
     visitorHeaders = (await mintAccessShare(base, access, boardId, { label: 'a share' })).headers;
   });
@@ -230,7 +245,7 @@ describe('the back target is not handed to a share visitor', () => {
     // resolves anything for anybody.
     // Addressed by the readable name on purpose: the owner's half of the
     // alias contract, answered by the same doc the visitor reads below.
-    const owner = (await (await local('/api/docs/shared-doc')).json()) as {
+    const owner = (await (await local(`/workspaces/${WS}/docs/shared-doc?format=json`)).json()) as {
       meta?: { docId: string };
       backTo?: { workspaceId: string };
     };
@@ -239,7 +254,7 @@ describe('the back target is not handed to a share visitor', () => {
 
     // The canonical id for the visitor: share scope is decided from the raw
     // path segment against the board's membership, which holds minted ids.
-    const seen = await pub(`/api/docs/${sharedId}`);
+    const seen = await pub(`/workspaces/${WS}/docs/${sharedId}?format=json`);
     expect(seen.status).toBe(200); // the visitor really can read this doc
     const visitor = (await seen.json()) as {
       meta?: unknown;
@@ -260,9 +275,13 @@ describe('the back target is not handed to a share visitor', () => {
     // "the first workspace holding this doc" would hand over.
     const other = await post('/workspaces', { name: 'other-board', goal: 'Not shared.' });
     const otherId = ((await other.json()) as { workspace: { id: string } }).workspace.id;
-    expect((await post(`/workspaces/${otherId}/docs`, { docId: 'shared-doc' })).status).toBe(200);
+    expect((await post(`/workspaces/${otherId}/docs:attach`, { docId: 'shared-doc' })).status).toBe(
+      200,
+    );
 
-    const body = await (await pub(`/api/docs/${sharedId}`)).text();
+    // Read through the board the visitor WAS shared: the second board's id
+    // must not appear in the payload of the address they legitimately hold.
+    const body = await (await pub(`/workspaces/${boardId}/docs/${sharedId}?format=json`)).text();
     expect(body).not.toContain(otherId);
     // Control, same payload: the resolver IS producing workspace-addressed
     // URLs here, so the absence above is a refusal rather than a URL shape

@@ -19,9 +19,13 @@ import * as Y from 'yjs';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
 import { waitFor } from './wait-for.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const EVIL = 'https://evil.example.com';
 const CANARY = 'CanaryDocBody';
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('cross-origin access to the trusted host', () => {
   let handle: ServerHandle;
@@ -58,8 +62,9 @@ describe('cross-origin access to the trusted host', () => {
       requireSignInToWrite: false,
     });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     host = `localhost:${handle.port}`;
-    await req('/api/docs', null, {
+    await req(`/workspaces/${WS}/docs`, null, {
       method: 'POST',
       body: JSON.stringify({ docId: 'doc-1', type: 'markdown', sourceUrl: docPath }),
     });
@@ -72,7 +77,7 @@ describe('cross-origin access to the trusted host', () => {
 
   describe('REST', () => {
     it('does not grant an arbitrary origin permission to read the doc list', async () => {
-      const r = await req('/api/docs', EVIL);
+      const r = await req(`/workspaces/${WS}/docs`, EVIL);
       // The server still ANSWERS — it must, since it can't tell a browser from
       // curl, and CORS is the browser's to enforce. What matters is that we
       // send no permission, which is what makes the browser discard it.
@@ -82,7 +87,7 @@ describe('cross-origin access to the trusted host', () => {
     it('never answers with a wildcard origin', async () => {
       // The specific bug: `access-control-allow-origin: *` on every response.
       for (const origin of [EVIL, 'http://localhost:3000', null]) {
-        const r = await req('/api/docs', origin);
+        const r = await req(`/workspaces/${WS}/docs`, origin);
         expect(r.headers.get('access-control-allow-origin')).not.toBe('*');
       }
     });
@@ -90,7 +95,7 @@ describe('cross-origin access to the trusted host', () => {
     it('grants a loopback dev server — the widget depends on it', async () => {
       // POSITIVE CONTROL: if this fails, the "no header" assertions above
       // would pass trivially on a server that never sends CORS at all.
-      const r = await req('/api/docs', 'http://localhost:3000');
+      const r = await req(`/workspaces/${WS}/docs`, 'http://localhost:3000');
       expect(r.headers.get('access-control-allow-origin')).toBe('http://localhost:3000');
       expect(r.headers.get('vary')).toBe('Origin');
     });
@@ -99,7 +104,7 @@ describe('cross-origin access to the trusted host', () => {
       // host-guard already treats 0.0.0.0 as local; the origin policy is meant
       // to mirror it, and dropping it would refuse a widget the host gate
       // considers local.
-      const r = await req('/api/docs', 'http://0.0.0.0:5173');
+      const r = await req(`/workspaces/${WS}/docs`, 'http://0.0.0.0:5173');
       expect(r.headers.get('access-control-allow-origin')).toBe('http://0.0.0.0:5173');
     });
 
@@ -107,30 +112,33 @@ describe('cross-origin access to the trusted host', () => {
       // codex flagged this: restricting cross-origin to loopback would have
       // broken the documented setup where the reviewed app is served from the
       // tailnet/LAN and points back at this server.
-      const r = await req('/api/docs', 'http://mac-mini.example.ts.net:3000');
+      const r = await req(`/workspaces/${WS}/docs`, 'http://mac-mini.example.ts.net:3000');
       expect(r.headers.get('access-control-allow-origin')).toBe(
         'http://mac-mini.example.ts.net:3000',
       );
     });
 
     it('still refuses a lookalike of that hostname', async () => {
-      const r = await req('/api/docs', 'http://mac-mini.example.ts.net.evil.example.com');
+      const r = await req(
+        `/workspaces/${WS}/docs`,
+        'http://mac-mini.example.ts.net.evil.example.com',
+      );
       expect(r.headers.get('access-control-allow-origin')).toBeNull();
     });
 
     it('grants an explicitly configured origin', async () => {
-      const r = await req('/api/docs', 'https://mockups.example.com');
+      const r = await req(`/workspaces/${WS}/docs`, 'https://mockups.example.com');
       expect(r.headers.get('access-control-allow-origin')).toBe('https://mockups.example.com');
     });
 
     it('refuses the preflight for a cross-origin write', async () => {
-      const evil = await req('/api/docs', EVIL, {
+      const evil = await req(`/workspaces/${WS}/docs`, EVIL, {
         method: 'OPTIONS',
         headers: { 'access-control-request-method': 'POST' },
       });
       expect(evil.headers.get('access-control-allow-origin')).toBeNull();
       // ...while the widget's preflight still succeeds.
-      const ok = await req('/api/docs', 'http://localhost:3000', {
+      const ok = await req(`/workspaces/${WS}/docs`, 'http://localhost:3000', {
         method: 'OPTIONS',
         headers: { 'access-control-request-method': 'POST' },
       });
@@ -144,7 +152,7 @@ describe('cross-origin access to the trusted host', () => {
       // write lands, the page just can't read the reply. safeJson() parses the
       // body regardless of content-type, so this was a working CSRF write:
       // post comments, or create a doc bound to any file on the machine.
-      const r = await req('/api/docs', EVIL, {
+      const r = await req(`/workspaces/${WS}/docs`, EVIL, {
         method: 'POST',
         headers: { 'content-type': 'text/plain' },
         body: JSON.stringify({ docId: 'csrf-made-this', type: 'markdown', sourceUrl: docPath }),
@@ -152,13 +160,15 @@ describe('cross-origin access to the trusted host', () => {
       expect(r.status).toBe(403);
       // The write must not have happened. Fetched as a non-browser caller so
       // this checks the SERVER's state, not what CORS let us see.
-      expect((await req('/api/docs/csrf-made-this', null)).status).toBe(404);
+      expect((await req(`/workspaces/${WS}/docs/csrf-made-this?format=json`, null)).status).toBe(
+        404,
+      );
     });
 
     it('refuses a DELETE from a disallowed origin', async () => {
-      const r = await req('/api/docs/doc-1', EVIL, { method: 'DELETE' });
+      const r = await req(`/workspaces/${WS}/docs/doc-1?format=json`, EVIL, { method: 'DELETE' });
       expect(r.status).toBe(403);
-      expect((await req('/api/docs/doc-1', null)).status).toBe(200);
+      expect((await req(`/workspaces/${WS}/docs/doc-1?format=json`, null)).status).toBe(200);
     });
 
     it('still allows writes from an allowed origin — POSITIVE CONTROL', async () => {
@@ -177,17 +187,19 @@ describe('cross-origin access to the trusted host', () => {
     it('an allowed origin is still not allowed to BIND a file', async () => {
       // The origin gate admits this page; the binding gate behind it does
       // not. Pinned here so the two never get read as one rule.
-      const r = await req('/api/docs', 'http://localhost:3000', {
+      const r = await req(`/workspaces/${WS}/docs`, 'http://localhost:3000', {
         method: 'POST',
         body: JSON.stringify({ docId: 'widget-made-this', type: 'markdown', sourceUrl: docPath }),
       });
       expect(r.status).toBe(403);
       expect(((await r.json()) as { error: string }).error).toBe('browser_cannot_bind');
-      expect((await req('/api/docs/widget-made-this', null)).status).toBe(404);
+      expect((await req(`/workspaces/${WS}/docs/widget-made-this?format=json`, null)).status).toBe(
+        404,
+      );
     });
 
     it('still allows writes from a non-browser caller — agents and MCP', async () => {
-      const r = await req('/api/docs', null, {
+      const r = await req(`/workspaces/${WS}/docs`, null, {
         method: 'POST',
         body: JSON.stringify({ docId: 'agent-made-this', type: 'markdown', sourceUrl: docPath }),
       });
@@ -198,12 +210,14 @@ describe('cross-origin access to the trusted host', () => {
       // Blocking reads outright isn't the job here: the response simply never
       // reaches the page. Keeping GET working avoids breaking <script>/<img>
       // style loads of the widget bundle from arbitrary dev sites.
-      expect((await req('/api/docs/doc-1', EVIL)).status).toBe(200);
+      expect((await req(`/workspaces/${WS}/docs/doc-1?format=json`, EVIL)).status).toBe(200);
     });
 
     it('still serves same-origin and non-browser callers normally', async () => {
-      expect((await req('/api/docs/doc-1', null)).status).toBe(200);
-      expect((await req('/api/docs/doc-1', `http://${host}`)).status).toBe(200);
+      expect((await req(`/workspaces/${WS}/docs/doc-1?format=json`, null)).status).toBe(200);
+      expect((await req(`/workspaces/${WS}/docs/doc-1?format=json`, `http://${host}`)).status).toBe(
+        200,
+      );
     });
   });
 
@@ -218,7 +232,7 @@ describe('cross-origin access to the trusted host', () => {
       until?: (text: string) => boolean,
     ): Promise<{ opened: boolean; text: string; closeCode: number | null }> => {
       const ydoc = new Y.Doc();
-      const ws = new WebSocket(`ws://localhost:${handle.port}/y/doc-1`, {
+      const ws = new WebSocket(`ws://localhost:${handle.port}/workspaces/${WS}/docs/doc-1/y`, {
         headers: { host, ...(origin ? { origin } : {}) },
       } as unknown as string[]);
       ws.binaryType = 'arraybuffer';
@@ -317,6 +331,7 @@ describe('the public share host is same-origin only', () => {
       requireSignInToWrite: false,
     });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     const local = (p: string, i: RequestInit = {}) =>
       fetch(`${base}${p}`, {
         ...i,
@@ -326,7 +341,7 @@ describe('the public share host is same-origin only', () => {
     // grouping on a board, share the board. `shared` is the grouping's only
     // member, so the visitor's reach — and therefore what a forged origin
     // could steal through it — is exactly what it was.
-    await local('/api/docs', {
+    await local(`/workspaces/${WS}/docs`, {
       method: 'POST',
       body: JSON.stringify({
         docId: 'shared',
@@ -341,7 +356,8 @@ describe('the public share host is same-origin only', () => {
     });
     expect(board.status).toBe(200);
     const boardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
-    const filed = await local(`/workspaces/${encodeURIComponent(boardId)}/docs`, {
+    WS = boardId;
+    const filed = await local(`/workspaces/${encodeURIComponent(boardId)}/docs:attach`, {
       method: 'POST',
       body: JSON.stringify({ docId: 'ws-shared' }),
     });
@@ -369,7 +385,10 @@ describe('the public share host is same-origin only', () => {
     });
 
   it('grants the share host its own origin — POSITIVE CONTROL', async () => {
-    const r = await asVisitor('/api/docs/shared', `https://${PUBLIC_HOST}`);
+    const r = await asVisitor(
+      `/workspaces/${WS}/docs/shared?format=json`,
+      `https://${PUBLIC_HOST}`,
+    );
     expect(r.status).toBe(200);
     expect(r.headers.get('access-control-allow-origin')).toBe(`https://${PUBLIC_HOST}`);
   });
@@ -377,7 +396,7 @@ describe('the public share host is same-origin only', () => {
   it('refuses a plain-http page on the same hostname', async () => {
     // http://x and https://x are different browser origins. The share host is
     // https; a page served over http on that name must not be trusted.
-    const r = await asVisitor('/api/docs/shared', `http://${PUBLIC_HOST}`);
+    const r = await asVisitor(`/workspaces/${WS}/docs/shared?format=json`, `http://${PUBLIC_HOST}`);
     expect(r.headers.get('access-control-allow-origin')).toBeNull();
   });
 
@@ -386,7 +405,7 @@ describe('the public share host is same-origin only', () => {
     // the browser sends `Origin: https://feedback.example.com`. A raw string
     // compare would treat every legitimate request as foreign and 403 the
     // websocket — an outage, not a hardening.
-    const r = await fetch(`${base}/api/docs/shared`, {
+    const r = await fetch(`${base}/workspaces/${WS}/docs/shared?format=json`, {
       headers: {
         ...visitorHeaders,
         host: `${PUBLIC_HOST}:443`,
@@ -409,7 +428,7 @@ describe('the public share host is same-origin only', () => {
       'https://evil.example.com#, https',
       'https://evil.example.com/',
     ]) {
-      const r = await fetch(`${base}/api/docs/shared`, {
+      const r = await fetch(`${base}/workspaces/${WS}/docs/shared?format=json`, {
         headers: {
           ...visitorHeaders,
           'x-forwarded-proto': forged,
@@ -425,7 +444,7 @@ describe('the public share host is same-origin only', () => {
    * socket handed us inside the window. Empty means nothing ever synced.
    */
   const syncedProse = async (headers: Record<string, string>): Promise<string> => {
-    const ws = new WebSocket(`ws://localhost:${handle.port}/y/shared`, {
+    const ws = new WebSocket(`ws://localhost:${handle.port}/workspaces/${WS}/docs/shared/y`, {
       headers,
     } as unknown as string[]);
     const ydoc = new Y.Doc();
@@ -478,17 +497,23 @@ describe('the public share host is same-origin only', () => {
   it('still honours a LEGITIMATE x-forwarded-proto — POSITIVE CONTROL', async () => {
     // Rejecting every forwarded scheme would pass the tests above and take
     // every share websocket down with it.
-    const r = await asVisitor('/api/docs/shared', `https://${PUBLIC_HOST}`);
+    const r = await asVisitor(
+      `/workspaces/${WS}/docs/shared?format=json`,
+      `https://${PUBLIC_HOST}`,
+    );
     expect(r.headers.get('access-control-allow-origin')).toBe(`https://${PUBLIC_HOST}`);
   });
 
   it('does NOT honour ALLOWED_ORIGINS on the share host', async () => {
-    const r = await asVisitor('/api/docs/shared', 'https://mockups.example.com');
+    const r = await asVisitor(
+      `/workspaces/${WS}/docs/shared?format=json`,
+      'https://mockups.example.com',
+    );
     expect(r.headers.get('access-control-allow-origin')).toBeNull();
   });
 
   it('does NOT honour loopback on the share host', async () => {
-    const r = await asVisitor('/api/docs/shared', 'http://localhost:3000');
+    const r = await asVisitor(`/workspaces/${WS}/docs/shared?format=json`, 'http://localhost:3000');
     expect(r.headers.get('access-control-allow-origin')).toBeNull();
   });
 

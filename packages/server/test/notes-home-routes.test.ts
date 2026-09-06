@@ -12,6 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 /**
  * The workspace notes-home setting and the doc-origin-repo routes, through the real
@@ -37,6 +38,9 @@ function git(cwd: string, ...args: string[]): string {
     },
   });
 }
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('workspace notes home + doc origin repo routes', () => {
   let tmp: string;
@@ -65,7 +69,7 @@ describe('workspace notes home + doc origin repo routes', () => {
   const get = (path: string) => fetch(`${base}${path}`);
   const del = (path: string) => fetch(`${base}${path}`, { method: 'DELETE' });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     tmp = realpathSync(mkdtempSync(join(tmpdir(), 'cw-noteshome-')));
     dataDir = join(tmp, 'data');
     mkdirSync(dataDir);
@@ -79,6 +83,7 @@ describe('workspace notes home + doc origin repo routes', () => {
     git(repo, 'worktree', 'add', wt, '-b', 'notes');
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterEach(async () => {
@@ -90,7 +95,8 @@ describe('workspace notes home + doc origin repo routes', () => {
     const { workspace } = await jj<{ workspace: { id: string } }>(
       await post('/workspaces', { name: 'planning-board' }),
     );
-    return workspace.id;
+    WS = workspace.id;
+    return WS;
   }
 
   it('settings PUT/GET round-trips notesHome, validates it, and null clears it', async () => {
@@ -122,7 +128,7 @@ describe('workspace notes home + doc origin repo routes', () => {
     expect(cleared.notesHome).toBeUndefined();
   });
 
-  it('POST /api/docs derives a pinned, checked-in file from the workspace notes home', async () => {
+  it('POST /workspaces/:id/docs derives a pinned, checked-in file from the workspace notes home', async () => {
     const ws = await board();
     await jj(
       await put(`/workspaces/${ws}/settings`, {
@@ -131,14 +137,14 @@ describe('workspace notes home + doc origin repo routes', () => {
       }),
     );
     const created = await jj<{ docId: string }>(
-      await post('/api/docs', { docId: 'sprint-plan', hubWorkspaceId: ws }),
+      await post(`/workspaces/${ws}/docs`, { docId: 'sprint-plan' }),
     );
     const file = join(wt, 'docs/notes/sprint-plan.md');
     expect(existsSync(file)).toBe(true);
     const home = await jj<{
       home: { branch: string; relPath: string };
       placement: { placed: boolean; path?: string };
-    }>(await get(`/api/docs/${created.docId}/home`));
+    }>(await get(`/workspaces/${WS}/docs/${created.docId}/home`));
     expect(home.home.branch).toBe('notes');
     expect(home.home.relPath).toBe('docs/notes/sprint-plan.md');
     expect(home.placement).toEqual({ placed: true, path: file });
@@ -153,7 +159,7 @@ describe('workspace notes home + doc origin repo routes', () => {
       }),
     );
     git(repo, 'worktree', 'remove', '--force', wt);
-    const res = await post('/api/docs', { docId: 'orphan-plan', hubWorkspaceId: ws });
+    const res = await post(`/workspaces/${ws}/docs`, { docId: 'orphan-plan' });
     expect(res.status).toBe(409);
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe('notes_home_unplaced');
@@ -172,31 +178,34 @@ describe('workspace notes home + doc origin repo routes', () => {
     const path = join(scratch, 'scratch-note.md');
     writeFileSync(path, '# Scratch\n\nnot checked in\n');
     const created = await jj<{ docId: string }>(
-      await post('/api/docs', { docId: 'scratch-note', sourceUrl: path, hubWorkspaceId: ws }),
+      await post(`/workspaces/${ws}/docs`, {
+        docId: 'scratch-note',
+        sourceUrl: path,
+      }),
     );
     // No home was pinned, and the file stays where the caller put it.
-    expect((await get(`/api/docs/${created.docId}/home`)).status).toBe(404);
+    expect((await get(`/workspaces/${WS}/docs/${created.docId}/home`)).status).toBe(404);
     expect(readFileSync(path, 'utf8')).toContain('not checked in');
   });
 
-  it('PUT/DELETE /api/docs/<id>/home pin and unpin an existing doc', async () => {
+  it(`PUT/DELETE /workspaces/${WS}/docs/<id>/home pin and unpin an existing doc`, async () => {
     const path = join(tmp, 'floating.md');
     writeFileSync(path, '# Floating\n\ncontent\n');
     const created = await jj<{ docId: string }>(
-      await post('/api/docs', { docId: 'floating', sourceUrl: path }),
+      await post(`/workspaces/${WS}/docs`, { docId: 'floating', sourceUrl: path }),
     );
     const pinned = await jj<{ placement: { placed: boolean; path?: string } }>(
-      await put(`/api/docs/${created.docId}/home`, {
+      await put(`/workspaces/${WS}/docs/${created.docId}/home`, {
         home: { repoRoot: repo, branch: 'notes', relPath: 'docs/floating.md' },
       }),
     );
     expect(pinned.placement).toEqual({ placed: true, path: join(wt, 'docs/floating.md') });
     expect(readFileSync(join(wt, 'docs/floating.md'), 'utf8')).toContain('content');
 
-    await jj(await del(`/api/docs/${created.docId}/home`));
-    expect((await get(`/api/docs/${created.docId}/home`)).status).toBe(404);
+    await jj(await del(`/workspaces/${WS}/docs/${created.docId}/home`));
+    expect((await get(`/workspaces/${WS}/docs/${created.docId}/home`)).status).toBe(404);
 
-    const bad = await put(`/api/docs/${created.docId}/home`, {
+    const bad = await put(`/workspaces/${WS}/docs/${created.docId}/home`, {
       home: { repoRoot: repo, branch: 'notes', relPath: '../escape.md' },
     });
     expect(bad.status).toBe(400);
