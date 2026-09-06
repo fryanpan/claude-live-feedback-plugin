@@ -9,19 +9,31 @@
  * editor's content element: plain DOM, no Yjs, gone without trace when the
  * meeting ends. Nothing here can leak a provisional word into the record.
  *
- * WHAT IT SHOWS: a dashed block labelled "Live transcript" holding ONE
- * flowing run of text. The engine hands words over in turns of a few words
- * every few seconds, and a turn is the engine's unit, not the reader's
- * (owner, 2026-09-01: "engine turns have no meaning or value to the viewer,
- * I expect a stream of text"). So turns are inline spans joined by a space
- * — no per-turn time stamp, no per-turn block — and the only line breaks are
- * the ones the engine itself put in a turn's text. When a tick fires, the
- * settled words SPLIT OFF into a card above the stream ("Writing this into
- * the notes above…", with a spinner) while the remainder keeps streaming;
- * when the note lands, the card's words leave the zone — the settle wash on
- * the freshly written note (settle-wash.ts) is what carries the eye upward.
+ * WHAT IT SHOWS: an unframed block, labelled "Live transcript" in its top
+ * right corner, holding ONE flowing run of text. The engine hands words over
+ * in turns of a few words every few seconds, and a turn is the engine's
+ * unit, not the reader's (owner, 2026-09-01: "engine turns have no meaning
+ * or value to the viewer, I expect a stream of text"). So turns are inline
+ * spans joined by a space — no per-turn time stamp, no per-turn block — and
+ * the only line breaks are the ones the engine itself put in a turn's text.
  * No status lights, no blinking dots; the one animated thing in the stream
  * is the caret on the words still being spoken.
+ *
+ * THE SETTLE (approved settle mock, round 2). When a tick fires the
+ * settled words split off into a block of their own, so their height can be
+ * collapsed later. That block carries no box, no label and no type change,
+ * so its words land on the very pixels they were already on, and whatever is
+ * still being said keeps streaming below it. When the note lands, those
+ * words FADE WHERE THEY SIT — opacity alone, so not one word around them
+ * moves — and only once they are gone does the slot collapse and ease the
+ * stream up into the space. Two beats, never overlapping: the complaint was
+ * drift, and every simultaneous movement is a source of it. The settle wash
+ * on the freshly written note (settle-wash.ts) carries the eye upward.
+ *
+ * Nothing is drawn in the chunk's place while it composes — no card, no
+ * "Writing this into the notes above…" line, no spinner. Both of those took
+ * up space and shifted the words they wrapped (owner, 2026-09-05: "just fade
+ * the text chunk out when it's written up into the text").
  *
  * Speaker pills follow the notes rule, not the strip's: only once a second
  * voice has actually been heard, and then only where the voice CHANGES — a
@@ -77,6 +89,30 @@ export interface MeetingLiveZone {
 /** How long after a meeting ends its last note may still earn the wash. */
 export const WASH_GRACE_MS = 30_000;
 
+/**
+ * The settle's two beats. The chunk fades where it sits, and only then does
+ * its slot collapse.
+ *
+ * doc.css owns the same two numbers as `--lz-fade-ms` / `--lz-collapse-ms`,
+ * because the transitions are CSS; these are what the JS waits for between
+ * beats. live-zone-css.test.ts fails if the pair ever disagrees.
+ */
+export const FADE_MS = 260;
+export const COLLAPSE_MS = 440;
+
+/**
+ * How long the settled chunk holds — height pinned, fully visible — after
+ * its note is reported written, before the fade starts.
+ *
+ * The `written` frame and the note's own Yjs update reach the client over
+ * two different channels, so the note can land a beat AFTER the frame.
+ * Fading on the frame let the arriving note push the fading words down the
+ * page: 28 measured pixels of drift in the mock, and the second source of
+ * the movement this change exists to remove. The note lands, the page
+ * settles, then the fade starts. One motion at a time.
+ */
+export const NOTE_LAND_MS = 420;
+
 interface ZoneTurn {
   turn: number;
   text: string;
@@ -105,9 +141,20 @@ export function createMeetingLiveZone(opts: {
   /** The scroll pane the zone is kept in view within. Defaults to `parent`. */
   scroller?: HTMLElement;
   now?: () => number;
+  /**
+   * Whether the viewer asked for reduced motion. Reads the media query by
+   * default; injected by tests, which have no media engine to read.
+   */
+  reducedMotion?: () => boolean;
 }): MeetingLiveZone {
   const now = opts.now ?? (() => Date.now());
   const scroller = opts.scroller ?? opts.parent;
+  const reducedMotion =
+    opts.reducedMotion ??
+    (() =>
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 
   const root = document.createElement('div');
   root.className = 'live-zone';
@@ -121,23 +168,16 @@ export function createMeetingLiveZone(opts: {
   label.textContent = 'Live transcript';
   head.append(label);
 
-  const chunk = document.createElement('div');
-  chunk.className = 'lz-chunk';
-  chunk.hidden = true;
-  const chunkLines = document.createElement('div');
-  chunkLines.className = 'lz-chunk-lines';
-  const chunkNote = document.createElement('div');
-  chunkNote.className = 'lz-chunk-note';
-  const spinner = document.createElement('span');
-  spinner.className = 'lz-spinner';
-  spinner.setAttribute('aria-hidden', 'true');
-  chunkNote.append(spinner, 'Writing this into the notes above…');
-  chunk.append(chunkLines, chunkNote);
+  // Holds the settled chunks: the one a tick is composing, plus any still
+  // fading out behind it. A container, not a surface — the sheet gives it
+  // nothing, so it adds no box and no space of its own.
+  const chunkHost = document.createElement('div');
+  chunkHost.className = 'lz-chunks';
 
   const lines = document.createElement('div');
   lines.className = 'lz-lines';
 
-  root.append(head, chunk, lines);
+  root.append(head, chunkHost, lines);
   opts.parent.append(root);
 
   let live = false;
@@ -224,6 +264,80 @@ export function createMeetingLiveZone(opts: {
     return out;
   }
 
+  /** A split-off chunk: the block its words were lifted into, and the timer
+   *  carrying it through the settle. */
+  interface Chunk {
+    slot: HTMLElement;
+    body: HTMLElement;
+    timer: ReturnType<typeof setTimeout> | null;
+  }
+  /** The chunk a tick is composing, if one is. */
+  let openChunk: Chunk | null = null;
+  /** Chunks whose note has landed and that are fading / collapsing out. */
+  const settling = new Set<Chunk>();
+
+  function mountChunk(): Chunk {
+    const slot = document.createElement('div');
+    slot.className = 'lz-slot';
+    const body = document.createElement('div');
+    // The chunk and the stream are typographically the SAME text: `lz-chunk`
+    // adds the fade and nothing else — no size, no colour, no box — or
+    // splitting one off would move the words it holds.
+    body.className = 'lz-chunk lz-chunk-lines';
+    slot.append(body);
+    chunkHost.append(slot);
+    return { slot, body, timer: null };
+  }
+
+  function step(c: Chunk, ms: number, fn: () => void): void {
+    c.timer = setTimeout(() => {
+      c.timer = null;
+      fn();
+    }, ms);
+  }
+
+  function discard(c: Chunk): void {
+    if (c.timer !== null) clearTimeout(c.timer);
+    c.timer = null;
+    settling.delete(c);
+    c.slot.remove();
+  }
+
+  /** Fade the chunk out where it stands, then collapse the space it held. */
+  function settle(c: Chunk): void {
+    settling.add(c);
+    // Pin the height BEFORE anything animates: from here nothing this chunk
+    // does can move a word below it, for the whole of the fade.
+    c.slot.style.height = `${c.slot.getBoundingClientRect().height}px`;
+    const reduced = reducedMotion();
+    step(c, NOTE_LAND_MS, () => {
+      c.body.classList.add('is-fading');
+      step(c, FADE_MS, () => {
+        // Reduced motion keeps the cross-fade and loses only the travel
+        // (owner, 2026-09-05: the instant swap "was too sudden"). Less
+        // movement, not none.
+        if (reduced) c.slot.style.setProperty('--lz-collapse-ms', '0ms');
+        c.slot.classList.add('is-collapsing');
+        void c.slot.offsetHeight; // flush, so the height below transitions
+        c.slot.style.height = '0px';
+        step(c, reduced ? 0 : COLLAPSE_MS, () => {
+          discard(c);
+          render();
+        });
+      });
+    });
+  }
+
+  /** Drop every chunk on the floor, mid-settle or not: the meeting is over,
+   *  restarting, or the zone is going away. */
+  function clearChunks(): void {
+    for (const c of [...settling]) discard(c);
+    if (openChunk) {
+      openChunk.slot.remove();
+      openChunk = null;
+    }
+  }
+
   function render(): void {
     if (!live) {
       root.hidden = true;
@@ -232,9 +346,17 @@ export function createMeetingLiveZone(opts: {
     const all = ordered();
     const splitting = all.filter((t) => t.composing);
     const streaming = all.filter((t) => !t.composing);
-    root.hidden = all.length === 0;
-    chunk.hidden = splitting.length === 0;
-    chunkLines.replaceChildren(...runOf(splitting));
+    // A chunk mid-settle still has words on screen after its turns are gone.
+    root.hidden = all.length === 0 && settling.size === 0;
+    if (splitting.length > 0) {
+      openChunk ??= mountChunk();
+      openChunk.body.replaceChildren(...runOf(splitting));
+    } else if (openChunk) {
+      // A failed tick returns its words to the stream, so the block they
+      // were lifted into goes with no animation — nothing settled.
+      openChunk.slot.remove();
+      openChunk = null;
+    }
     lines.replaceChildren(...runOf(streaming));
     matchProseWidth();
     keepInView();
@@ -244,6 +366,7 @@ export function createMeetingLiveZone(opts: {
     begin() {
       live = true;
       follow = true;
+      clearChunks();
       turns.clear();
       voices.clear();
       render();
@@ -269,8 +392,17 @@ export function createMeetingLiveZone(opts: {
           if (t) t.composing = true;
         }
       } else if (e.phase === 'written') {
-        // The note is in the doc; the settle wash up there takes over.
+        // The note is in the doc; the settle wash up there takes over. The
+        // words do NOT leave with their turns — the block holding them is
+        // handed to the settle, which fades them where they sit and only
+        // then collapses the space.
         for (const id of e.turns) turns.delete(id);
+        const done = openChunk;
+        openChunk = null;
+        if (done) settling.add(done); // before render, or the zone hides
+        render();
+        if (done) settle(done);
+        return;
       } else {
         // Failed: the tick's words are carried into the next tick — they are
         // still provisional, so they return to the stream.
@@ -295,6 +427,7 @@ export function createMeetingLiveZone(opts: {
     end() {
       if (live) endedAt = now();
       live = false;
+      clearChunks();
       turns.clear();
       voices.clear();
       render();
@@ -303,6 +436,7 @@ export function createMeetingLiveZone(opts: {
     washActive: () => live || (endedAt > 0 && now() - endedAt < WASH_GRACE_MS),
     destroy() {
       live = false;
+      clearChunks();
       resize?.disconnect();
       scroller.removeEventListener('scroll', onScroll);
       root.remove();
