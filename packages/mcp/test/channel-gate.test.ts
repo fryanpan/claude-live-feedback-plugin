@@ -129,7 +129,7 @@ describe('the committed bundle applies the gate', () => {
           docId: 'doc-1',
           threadId: 't-1',
           seq: 3,
-          thread: { comments: [{ text: 'does the gate hold', author: { name: 'Rowan Pike' } }] },
+          thread: { comments: [{ text: 'does the gate hold' }] },
         },
       });
 
@@ -141,7 +141,7 @@ describe('the committed bundle applies the gate', () => {
       // The measurement. Fourteen meeting frames went down the same stream,
       // ahead of the one that arrived.
       expect(h.channel.filter((c) => (c.event ?? '').startsWith('meeting.'))).toEqual([]);
-      expect(h.channel.filter((c) => c.content.includes('Rowan Pike')).length).toBe(1);
+      expect(h.channel.filter((c) => c.event === 'thread.created').length).toBe(1);
       expect(h.channel.some((c) => c.content.includes('word 10'))).toBe(false);
     } finally {
       await h?.stop();

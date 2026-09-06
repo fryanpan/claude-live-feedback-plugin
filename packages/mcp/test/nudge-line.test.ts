@@ -336,7 +336,7 @@ describe('the channel switch and the shipped bundle both use it', () => {
           docId: 'doc-1',
           taskId: 't-linked',
           title: 'Rank results by recency',
-          actor: { id: 'a-someone-else', name: 'Alex' },
+          actor: { id: 'a-someone-else' },
           links: [{ id: 't-other' }],
         },
       });
@@ -354,7 +354,7 @@ describe('the channel switch and the shipped bundle both use it', () => {
           docId: 'doc-1',
           taskId: 't-bare',
           title: 'Cache the facet counts',
-          actor: { id: 'a-someone-else', name: 'Alex' },
+          actor: { id: 'a-someone-else' },
           links: [],
         },
       });

@@ -99,7 +99,7 @@ describe('the channel switch and the shipped bundle both use it', () => {
           docId: 'doc-1',
           taskId: 't-linked',
           answer: 'Rebuild after the freeze.',
-          actor: { id: 'a-someone-else', name: 'Alex' },
+          actor: { id: 'a-someone-else' },
           links: [{ id: 't-other' }],
         },
       });
@@ -118,7 +118,7 @@ describe('the channel switch and the shipped bundle both use it', () => {
           docId: 'doc-1',
           taskId: 't-bare',
           answer: 'Rebuild after the freeze.',
-          actor: { id: 'a-someone-else', name: 'Alex' },
+          actor: { id: 'a-someone-else' },
           links: [],
         },
       });
