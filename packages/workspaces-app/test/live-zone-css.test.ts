@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { COLLAPSE_MS, FADE_MS } from '../src/meeting-live-zone.ts';
-import { IPAD, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
+import { IPAD, PHONE, attach, installSheets, setViewport, styleOf } from './css-harness.ts';
 
 /**
  * The live zone's stylesheet contract (meeting-live-zone.ts).
@@ -67,6 +67,48 @@ describe('the transcript starts on the next line down from the doc', () => {
       expect(colour(el), cls).not.toBe(colour(prose));
       expect(colour(el), cls).toBe('#6e7781');
     }
+  });
+
+  it('the transcript steps down with the notes at phone width', () => {
+    // Read the pair at one viewport and drop the nodes: `styleOf` hands back
+    // a LIVE declaration, so a value held across `setViewport` re-answers for
+    // the new width and would compare the phone against itself.
+    const read = (): { notes: number; lines: number; chunk: number; leading: string } => {
+      const editor = attach('', { attrs: { id: 'editor' } });
+      const prose = attach('ProseMirror', { parent: editor });
+      const notes = Number.parseFloat(styleOf(attach('', { tag: 'p', parent: prose })).fontSize);
+      const zone = attach('live-zone', { parent: editor });
+      const lines = Number.parseFloat(styleOf(attach('lz-lines', { parent: zone })).fontSize);
+      const chunkStyle = styleOf(attach('lz-chunk lz-chunk-lines', { parent: zone }));
+      const chunk = Number.parseFloat(chunkStyle.fontSize);
+      const leading = chunkStyle.lineHeight;
+      document.body.replaceChildren();
+      return { notes, lines, chunk, leading };
+    };
+
+    setViewport(IPAD);
+    const wide = read();
+    setViewport(PHONE);
+    const phone = read();
+
+    // Controls first, and the second one is the one that matters: the notes
+    // drop to 16px at `max-width: 720px` in styles.css whatever this sheet
+    // does, so a harness that never evaluated the media query would fail
+    // HERE rather than passing the assertions below by accident.
+    expect(wide.notes).toBe(18);
+    expect(phone.notes).toBe(16);
+
+    // The transcript rides the notes' own breakpoint. Left on its own 15px it
+    // would sit 1px under 16px notes on a phone, and the size half of
+    // "smaller and greyer" would stop being legible as a distinction.
+    expect(wide.lines).toBe(15);
+    expect(phone.lines).toBe(14);
+    expect(phone.chunk).toBe(14); // the split-off chunk is the same text
+    expect(phone.leading).not.toBe(wide.leading);
+
+    // What the two readings are actually for: the gap survives the step down.
+    expect(wide.notes - wide.lines).toBe(3);
+    expect(phone.notes - phone.lines).toBe(2);
   });
 
   it('the label floats into the corner rather than taking a row above the words', () => {
