@@ -601,21 +601,29 @@ describe('the audit sees a source read one module away', () => {
   });
 
   it('holds on the real harnesses, not only on planted ones', () => {
-    // The two modules the rule was written for. `watch-coverage.test.ts` owns
-    // no read of its own — every line of source it asserts on arrives through
-    // `harness/mcp-source.ts`. `board-island.test.tsx` imports `css-harness.ts`
-    // and asserts computed styles with `toBe`, so it matches every widened
-    // criterion except the one that matters.
+    // `board-island.test.tsx` imports `css-harness.ts` and asserts computed
+    // styles with `toBe`, so it matches every widened criterion except the one
+    // that matters — the harness's marker line over fully annotated exports.
+    // This is the exemption's real-tree positive control.
     const listed = runAudit('--list').stdout;
-    expect(listed).toContain(join('packages', 'mcp', 'test', 'watch-coverage.test.ts'));
     expect(listed).not.toContain(join('packages', 'workspaces-app', 'test', 'board-island'));
 
-    // And the real wrapped read. `css-minify.test.ts` is the one to name
-    // because its ONLY read is the wrapped one — the other five files the
-    // widening added were already on the list for a read that happened to fit
-    // on a line, so naming one of those would pass against a line-based
-    // detector too. If this file's read stops being wrapped, point this at
-    // `review-item-comments.test.tsx`, the other single-site case.
-    expect(listed).toContain(join('packages', 'widget', 'test', 'css-minify.test.ts'));
+    // The COUNTED side of the transitive-import rule has no real instance left
+    // to name. It used to be `watch-coverage.test.ts`, which owned no read of
+    // its own and took every line it asserted on through
+    // `harness/mcp-source.ts`; that harness and its eight siblings now drive
+    // the built bundle instead, and the harness is deleted. So the counted
+    // transitive case is held by `via-harness.test.ts` in the probe dir above
+    // and nowhere else on the real tree. If a test ever imports a reading
+    // module again, name it here — a rule whose only positive is planted is a
+    // rule that can rot without a single test going red.
+
+    // And the real wrapped read. `review-item-comments.test.tsx` is the one to
+    // name now: `css-minify.test.ts` held this until it took a per-site marker,
+    // and these two are the only single-site files the widening added, so a
+    // line-based detector would still miss them.
+    expect(listed).toContain(
+      `${join('packages', 'workspaces-app', 'test', 'review-item-comments.test.tsx')}:633`,
+    );
   });
 });

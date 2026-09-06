@@ -20,9 +20,9 @@
  *
  * Fixtures are synthetic. The repo is public.
  */
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { declareWorkspaceLead } from '../src/declare-lead.ts';
-import { readMcpSource } from './harness/mcp-source.ts';
+import { type BundleHarness, startBundle } from './harness/mcp-bundle.ts';
 
 const SELF = { id: 'agent-self', name: 'Self Agent', kind: 'agent' };
 const WS = 'ws-1';
@@ -282,50 +282,91 @@ describe('POSITIVE CONTROL — the legacy payload keeps its meaning', () => {
   });
 });
 
-/** mcp.ts ends in a top-level `await server.connect(transport)` and exports
- *  nothing, so its wiring can only be checked by reading it. */
-async function mcpSource(): Promise<string> {
-  return readMcpSource();
-}
-
+/**
+ * The schema and the forward, read off the RUNNING bundle.
+ *
+ * These three claims used to be made by slicing `name: 'set_workspace_lead'`
+ * and `case 'set_workspace_lead'` out of the concatenated source. Two of them
+ * are about what a client receives and what the server is sent, and both of
+ * those are observable: `tools/list` returns the schema, and the stub records
+ * the seat request. The third — that `watchWorkspace` hands back
+ * `{ open, persisted }` rather than one boolean — was a `toContain` over a
+ * type annotation, and is enforced for real by `bun run typecheck`:
+ * `declare-lead.ts` declares that dep signature and `tools/workspace.ts`
+ * passes the registry's own function into it, so narrowing the return to a
+ * bare boolean fails the typecheck gate rather than this file.
+ */
 describe('the tool schema widened rather than narrowed', () => {
-  it('set_workspace_lead no longer requires leadAgentId', async () => {
-    const src = await mcpSource();
-    const decl = src.slice(src.indexOf("name: 'set_workspace_lead'"));
-    const schema = decl.slice(0, decl.indexOf('\n    },'));
+  let h: BundleHarness;
+
+  beforeAll(async () => {
+    h = await startBundle();
+  }, 60_000);
+
+  afterAll(async () => {
+    await h?.stop();
+  });
+
+  const schema = () => {
+    const decl = h.tool('set_workspace_lead');
+    expect(
+      decl,
+      `set_workspace_lead is not in tools/list (${h.tools.length} listed)`,
+    ).toBeDefined();
+    return (
+      (decl as { inputSchema?: { properties?: Record<string, unknown>; required?: string[] } })
+        .inputSchema ?? {}
+    );
+  };
+
+  it('set_workspace_lead no longer requires leadAgentId', () => {
     // Old bundles keep sending leadAgentId; the field stays, it just stops
     // being mandatory. A narrowing here would break callers that cannot be
     // restarted.
-    expect(schema).toContain('leadAgentId');
-    expect(schema).toContain("required: ['workspaceId']");
-    expect(schema).not.toContain("required: ['workspaceId', 'leadAgentId']");
+    expect(Object.keys(schema().properties ?? {})).toContain('leadAgentId');
+    expect(schema().required).toEqual(['workspaceId']);
+  });
+
+  it('POSITIVE CONTROL: the legacy payload is still accepted on the wire', async () => {
+    // A schema that merely lists the field proves nothing if the handler
+    // refuses it. An old session sends exactly this.
+    const res = await h.call('set_workspace_lead', {
+      workspaceId: 'ws-1',
+      leadAgentId: 'agent-somebody-else',
+    });
+    expect(res.isError, res.text).toBe(false);
+    expect(res.sent.some((r) => r.path.endsWith('/lead'))).toBe(true);
   });
 
   it('exposes takeover as an OPTIONAL escape hatch, and the handler forwards it', async () => {
-    const src = await mcpSource();
-    const decl = src.slice(src.indexOf("name: 'set_workspace_lead'"));
-    const schema = decl.slice(0, decl.indexOf('\n    },'));
     // Refusing to displace a live lead is only safe if there IS a way to say
     // you mean it — otherwise the guard becomes a wall and callers route
     // around it by writing the seat some other way.
-    expect(schema).toContain('takeover');
-    expect(schema).toContain("required: ['workspaceId']");
+    expect(Object.keys(schema().properties ?? {})).toContain('takeover');
+    expect(schema().required).toEqual(['workspaceId']);
 
     // The schema advertising a field the dispatcher drops is worse than no
     // field: the caller reads a documented override and gets a refusal it
-    // cannot explain.
-    const handler = src.slice(src.indexOf("case 'set_workspace_lead'"));
-    const body = handler.slice(0, handler.indexOf("case 'attach_doc'"));
-    expect(body).toContain('takeover');
-    expect(body).toContain('takeover: true');
+    // cannot explain. So read what the server was actually sent.
+    const res = await h.call('set_workspace_lead', {
+      workspaceId: 'ws-1',
+      leadAgentId: 'agent-somebody-else',
+      takeover: true,
+    });
+    const seat = res.sent.find((r) => r.path.endsWith('/lead'));
+    expect(seat, `no seat request; sent ${JSON.stringify(res.sent)}`).toBeDefined();
+    expect((seat?.body as { takeover?: unknown }).takeover).toBe(true);
   });
 
-  it('mcp.ts hands watchWorkspace back as { open, persisted } — the two failures stay apart', async () => {
-    const src = await mcpSource();
-    // A single boolean here is how `subscribed: true` got asserted over a
-    // stream that never opened. Pinning the SIGNATURE is what keeps the
-    // module contract this file tests wired to the real caller.
-    expect(src).toContain('Promise<{ open: boolean; persisted: boolean }>');
+  it('CONTROL: takeover is absent, not defaulted, when the caller omits it', async () => {
+    // A handler that hard-coded it would pass the assertion above while
+    // displacing a live lead on every call that never asked to.
+    const res = await h.call('set_workspace_lead', {
+      workspaceId: 'ws-1',
+      leadAgentId: 'agent-somebody-else',
+    });
+    const seat = res.sent.find((r) => r.path.endsWith('/lead'));
+    expect((seat?.body as { takeover?: unknown }).takeover).toBeUndefined();
   });
 });
 

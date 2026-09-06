@@ -18,6 +18,16 @@ import { minifyCss } from '../scripts/minify-css.ts';
  * no interpolations left in it to preserve.
  */
 
+// The stylesheet is this transform's INPUT, not its subject. Nothing below
+// asserts anything about what `styles.ts` says — every assertion compares
+// `minifyCss(rawCss)` against `rawCss`, so a renamed selector, a deleted rule
+// or a reworded declaration changes both sides and cannot make a case pass or
+// fail. Same standing as the `fixtures/` carve-out, except that the sample has
+// to be the REAL stylesheet: a copy would drift, and the break this catches —
+// a `${…}` interpolation mangled in the text the build actually feeds the
+// minifier — only exists in the live file.
+// audit: not-source — parser input, not the subject; every assertion is a
+// relation between the input and the transform's output
 const stylesSource = readFileSync(
   join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'styles.ts'),
   'utf8',
