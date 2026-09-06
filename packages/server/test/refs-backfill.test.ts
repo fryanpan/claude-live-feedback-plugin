@@ -200,12 +200,12 @@ describe('refs backfill (route + settle scan)', () => {
     const lateTaskId = await makeTask('Linked after the sweep');
     // Write the link into doc A's live prose the way an editor would, then
     // settle the authoring burst (the same commit the debounce timer makes).
-    const room = handle.docStore.get(docAId);
-    expect(room).toBeDefined();
+    const doc = handle.docStore.get(docAId);
+    expect(doc).toBeDefined();
     const before = docRefsOf(handle.tasks.getTask(lateTaskId)?.links);
     expect(before).toEqual([]); // control
-    room?.ydoc.transact(() => {
-      const frag = prose.getProseFragment(room.ydoc);
+    doc?.ydoc.transact(() => {
+      const frag = prose.getProseFragment(doc.ydoc);
       frag.insert(
         0,
         prose.parseMarkdownBlocks(`Also /workspaces/${wsId}?task=${lateTaskId} here.`),
@@ -217,15 +217,15 @@ describe('refs backfill (route + settle scan)', () => {
 
   it('a settled TASK-BODY edit scans that row: a doc link typed into a task lands too', async () => {
     const proseTaskId = await makeTask('Body gains a doc link later');
-    const bodyRoomId = `task:${proseTaskId}`;
-    const room = handle.docStore.get(bodyRoomId);
-    expect(room).toBeDefined();
+    const bodyDocId = `task:${proseTaskId}`;
+    const doc = handle.docStore.get(bodyDocId);
+    expect(doc).toBeDefined();
     expect(docRefsOf(handle.tasks.getTask(proseTaskId)?.links)).toEqual([]); // control
-    room?.ydoc.transact(() => {
-      const frag = prose.getProseFragment(room.ydoc);
+    doc?.ydoc.transact(() => {
+      const frag = prose.getProseFragment(doc.ydoc);
       frag.insert(0, prose.parseMarkdownBlocks('Background in /review/refs-doc-b here.'));
     }, 'agent');
-    handle.docStore.settledContentRevision(bodyRoomId);
+    handle.docStore.settledContentRevision(bodyDocId);
     expect(docRefsOf(handle.tasks.getTask(proseTaskId)?.links)).toEqual([docBId]);
   });
 

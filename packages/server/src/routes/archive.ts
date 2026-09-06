@@ -194,7 +194,7 @@ export function createArchiveRoutes(ctx: ArchiveRoutesContext): {
     }
     // The same pair for ONE free-standing doc. They sit HERE rather than in
     // the `/api/docs/:id/...` block below because that block opens with
-    // `docStore.get(docId)` and 404s without a room — which is precisely the
+    // `docStore.get(docId)` and 404s without a doc — which is precisely the
     // state an archived doc is in, so an unarchive route inside it could
     // never be reached.
     const docArchiveMatch = pathname.match(/^\/api\/docs\/([^/]+)\/archive$/);
@@ -219,7 +219,7 @@ export function createArchiveRoutes(ctx: ArchiveRoutesContext): {
     const docUnarchiveMatch = pathname.match(/^\/api\/docs\/([^/]+)\/unarchive$/);
     if (docUnarchiveMatch && req.method === 'POST') {
       if (visitor) return j(403, { error: 'not available to share visitors' });
-      // Deliberately NOT canonicalized: an archived doc has no room, so
+      // Deliberately NOT canonicalized: an archived doc has no doc, so
       // there is nothing for an alias to resolve against. The canonical
       // id is what `list_archived_reviews` hands back, which is where a
       // caller gets one. Asserted in doc-id-routes.test.ts so the

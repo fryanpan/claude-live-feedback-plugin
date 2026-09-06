@@ -255,13 +255,13 @@ export function createShellStatic(ctx: ShellStaticContext): ShellStatic {
    * Both doc routes therefore check this and redirect instead.
    *
    * Deliberately keyed on the doc's own type rather than `contentKind`: a
-   * `workspace` room also holds no content surface, but its route is the
+   * `workspace` doc also holds no content surface, but its route is the
    * board, not a mockup.
    */
   const isMockupDoc = (docId: string): boolean => docStore.peekMeta(docId)?.type === 'mockup';
 
   /**
-   * A mockup's own HTML, streamed from the file the room is bound to — with
+   * A mockup's own HTML, streamed from the file the doc is bound to — with
    * the comment widget added on the way out.
    *
    * The embed is attached HERE rather than written into the file, so a page
@@ -282,20 +282,20 @@ export function createShellStatic(ctx: ShellStaticContext): ShellStatic {
         status: 404,
         headers: { 'content-type': 'text/html; charset=utf-8' },
       });
-    const room = docStore.get(docId);
-    if (!room || room.meta.type !== 'mockup' || !room.meta.sourceUrl) return notFound();
-    const source = room.meta.sourceUrl;
+    const doc = docStore.get(docId);
+    if (!doc || doc.meta.type !== 'mockup' || !doc.meta.sourceUrl) return notFound();
+    const source = doc.meta.sourceUrl;
     // A mockup bound to something that isn't HTML is served as-is, as before:
     // nothing is injected into it and nothing is captured from it.
     if (!isHtmlMockupSource(source)) return serveStatic(source) ?? notFound();
     const live = readMockupHtml(source);
-    if (live !== null) captureMockup(dataDir, room.docId, live);
-    const html = live ?? readMockupCapture(dataDir, room.docId);
+    if (live !== null) captureMockup(dataDir, doc.docId, live);
+    const html = live ?? readMockupCapture(dataDir, doc.docId);
     if (html === null) return notFound();
     // Sentry tags ride out with the widget embed, for the same reason and by
     // the same route: a mockup is somebody's own file, and neither the review
     // scaffolding nor the box's monitoring config belongs in it on disk.
-    const withWidget = injectWidget(html, room.meta.docId);
+    const withWidget = injectWidget(html, doc.meta.docId);
     const body = injectSentryHead(
       withWidget,
       browserSentry,
@@ -524,7 +524,7 @@ export function createShellStatic(ctx: ShellStaticContext): ShellStatic {
     }
 
     // --- Mockup HTML — bound to a docId via bind_mock / POST /api/docs
-    //     with type='mockup'. Reads the file at the room's sourceUrl
+    //     with type='mockup'. Reads the file at the doc's sourceUrl
     //     (any absolute path on disk) and streams it as text/html. The
     //     pre-bind_mock workflow required symlinking each new HTML
     //     into <plugin-repo>/demos/ — `/mockup/<docId>` replaces that
@@ -609,7 +609,7 @@ export function createShellStatic(ctx: ShellStaticContext): ShellStatic {
     // --- One project's artifacts, on demand ---
     // The landing page deliberately does not carry these. Work here is
     // proportional to the project somebody actually opened, not to every
-    // room on the server.
+    // doc on the server.
     if (pathname.startsWith('/projects/')) {
       let owner: string;
       try {

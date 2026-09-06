@@ -81,8 +81,8 @@ async function seedThread(
 }
 
 function markerOf(handle: ServerHandle, docId: string, threadId: string): unknown {
-  const room = handle.docStore.get(docId);
-  const threads = room?.ydoc.getMap('threads') as Y.Map<Y.Map<unknown>> | undefined;
+  const doc = handle.docStore.get(docId);
+  const threads = doc?.ydoc.getMap('threads') as Y.Map<Y.Map<unknown>> | undefined;
   return threads?.get(threadId)?.get('summaryPendingTs');
 }
 
@@ -131,9 +131,9 @@ describe('summaryPendingTs marker', () => {
       const { docId, threadId } = await seedThread(base, dataDir, 'marker-gated');
       // The readable name still addresses the doc — and resolves to the id the
       // doc-store handle keys on.
-      const room = handle.docStore.get('marker-gated');
-      if (!room) throw new Error('room missing');
-      expect(room.docId).toBe(docId);
+      const doc = handle.docStore.get('marker-gated');
+      if (!doc) throw new Error('doc missing');
+      expect(doc.docId).toBe(docId);
       const stampedAtCreate = markerOf(handle, docId, threadId) as number;
 
       // The same gate the routes apply to share visitors (`generate: !visitor`).

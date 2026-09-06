@@ -4,17 +4,17 @@
  * handshake, so every absence it reports is vacuous — learnings.md).
  *
  *  1. **The `meta` map is a file-bind vector.** The projection guards the
- *     `tasks` and `workspace` maps; every OTHER type in a board room was
+ *     `tasks` and `workspace` maps; every OTHER type in a board doc was
  *     freely writable by any connected peer, share visitors included. The
- *     board rooms (`ws:<id>`, `task:<id>`) are the only visitor-writable rooms
+ *     board docs (`ws:<id>`, `task:<id>`) are the only visitor-writable docs
  *     with no private-meta sidecar, so a peer-written `meta.sourceUrl`
  *     survived `readPrivateMeta` returning `{}` and was promoted into
- *     `room.meta` on the next load — where `hydrateFromDisk` binds the room
+ *     `doc.meta` on the next load — where `hydrateFromDisk` binds the doc
  *     to that path, seeds the fragment with the file's bytes, and wires the
  *     write-back. Read, then overwrite, any file the server can reach.
  *
  *  2. **The revert guard was keyed to the workspaceId, not to the ydoc.**
- *     Deleting the board room and letting it be recreated handed back a NEW
+ *     Deleting the board doc and letting it be recreated handed back a NEW
  *     Y.Doc while `wired` still said "guarded", so every later client write
  *     stood — silently, until the process restarted.
  *
@@ -98,7 +98,7 @@ function connectDoc(url: string): {
   return { ws, ydoc, ready, close: () => ws.close() };
 }
 
-describe('board rooms defend everything the server owns', () => {
+describe('board docs defend everything the server owns', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
@@ -151,10 +151,10 @@ describe('board rooms defend everything the server owns', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it('a peer cannot bind the board room to a file by writing meta.sourceUrl', async () => {
+  it('a peer cannot bind the board doc to a file by writing meta.sourceUrl', async () => {
     const wsId = await makeWorkspace('meta-injection');
-    const roomId = workspaceDocId(wsId);
-    const client = connectDoc(`${wsBase}/y/${roomId}`);
+    const boardDocId = workspaceDocId(wsId);
+    const client = connectDoc(`${wsBase}/y/${boardDocId}`);
     try {
       await waitForOpen(client.ws);
       await client.ready;
@@ -170,20 +170,20 @@ describe('board rooms defend everything the server owns', () => {
       client.close();
     }
 
-    const room = handle.docStore.get(roomId);
-    if (!room) throw new Error('ws room missing');
+    const doc = handle.docStore.get(boardDocId);
+    if (!doc) throw new Error('ws doc missing');
     // POSITIVE CONTROL: the write really reached the server's copy of the
-    // room — a non-private key the guard has no opinion about survives, so
+    // doc — a non-private key the guard has no opinion about survives, so
     // "sourceUrl is gone" is not a claim about a socket that did nothing.
-    expect(room.ydoc.getMap('meta').get('probeReachedTheServer')).toBe('yes');
-    expect(room.ydoc.getMap('meta').get('sourceUrl')).toBeUndefined();
-    expect(room.meta.sourceUrl).toBeUndefined();
+    expect(doc.ydoc.getMap('meta').get('probeReachedTheServer')).toBe('yes');
+    expect(doc.ydoc.getMap('meta').get('sourceUrl')).toBeUndefined();
+    expect(doc.meta.sourceUrl).toBeUndefined();
 
     await restart();
-    const after = handle.docStore.get(roomId);
-    if (!after) throw new Error('ws room missing after restart');
+    const after = handle.docStore.get(boardDocId);
+    if (!after) throw new Error('ws doc missing after restart');
     expect(after.meta.sourceUrl).toBeUndefined();
-    // The file's bytes never entered the room the peer still syncs.
+    // The file's bytes never entered the doc the peer still syncs.
     expect(prose.serializeFragmentToMarkdown(prose.getProseFragment(after.ydoc))).not.toContain(
       'CANARY-9271',
     );
@@ -196,14 +196,14 @@ describe('board rooms defend everything the server owns', () => {
       (await post('/api/docs', { docId: 'bound', type: 'markdown', sourceUrl: bound })).status,
     ).toBe(200);
     await restart();
-    const boundRoom = handle.docStore.get('bound');
-    if (!boundRoom) throw new Error('bound doc missing after restart');
-    expect(prose.serializeFragmentToMarkdown(prose.getProseFragment(boundRoom.ydoc))).toContain(
+    const boundDoc = handle.docStore.get('bound');
+    if (!boundDoc) throw new Error('bound doc missing after restart');
+    expect(prose.serializeFragmentToMarkdown(prose.getProseFragment(boundDoc.ydoc))).toContain(
       'CANARY-9271',
     );
   });
 
-  it('a peer cannot bind a task body room to a file either', async () => {
+  it('a peer cannot bind a task body doc to a file either', async () => {
     const wsId = await makeWorkspace('body-injection');
     const taskId = await makeTask(wsId, { title: 'Write the rollout note' });
     const docId = taskBodyDocId(taskId);
@@ -220,27 +220,27 @@ describe('board rooms defend everything the server owns', () => {
     } finally {
       client.close();
     }
-    const room = handle.docStore.get(docId);
-    if (!room) throw new Error('body room missing');
-    expect(room.ydoc.getMap('meta').get('probeReachedTheServer')).toBe('yes'); // positive control
-    expect(room.ydoc.getMap('meta').get('sourceUrl')).toBeUndefined();
+    const doc = handle.docStore.get(docId);
+    if (!doc) throw new Error('body doc missing');
+    expect(doc.ydoc.getMap('meta').get('probeReachedTheServer')).toBe('yes'); // positive control
+    expect(doc.ydoc.getMap('meta').get('sourceUrl')).toBeUndefined();
 
     await restart();
     const after = handle.docStore.get(docId);
-    if (!after) throw new Error('body room missing after restart');
+    if (!after) throw new Error('body doc missing after restart');
     expect(after.meta.sourceUrl).toBeUndefined();
     expect(prose.serializeFragmentToMarkdown(prose.getProseFragment(after.ydoc))).not.toContain(
       'CANARY-9271',
     );
   });
 
-  it('re-arms the revert guard when the board room is deleted and recreated', async () => {
+  it('re-arms the revert guard when the board doc is deleted and recreated', async () => {
     const wsId = await makeWorkspace('guard-rearm');
-    const roomId = workspaceDocId(wsId);
+    const boardDocId = workspaceDocId(wsId);
     await makeTask(wsId, { title: 'Real task' });
 
     const forge = async (id: string): Promise<unknown> => {
-      const client = connectDoc(`${wsBase}/y/${roomId}`);
+      const client = connectDoc(`${wsBase}/y/${boardDocId}`);
       try {
         await waitForOpen(client.ws);
         await client.ready;
@@ -252,17 +252,17 @@ describe('board rooms defend everything the server owns', () => {
       } finally {
         client.close();
       }
-      return handle.docStore.get(roomId)?.ydoc.getMap('tasks').get(id);
+      return handle.docStore.get(boardDocId)?.ydoc.getMap('tasks').get(id);
     };
 
-    // POSITIVE CONTROL: the guard is armed on the freshly created room.
+    // POSITIVE CONTROL: the guard is armed on the freshly created doc.
     expect(await forge('t-forged-1')).toBeUndefined();
 
-    const del = await local(`/api/docs/${encodeURIComponent(roomId)}`, { method: 'DELETE' });
+    const del = await local(`/api/docs/${encodeURIComponent(boardDocId)}`, { method: 'DELETE' });
     expect(del.status).toBe(200);
-    // Any store mutation re-creates the board room — with a NEW Y.Doc.
+    // Any store mutation re-creates the board doc — with a NEW Y.Doc.
     await makeTask(wsId, { title: 'Task after the delete' });
-    expect(handle.docStore.get(roomId)).toBeDefined();
+    expect(handle.docStore.get(boardDocId)).toBeDefined();
 
     expect(await forge('t-forged-2')).toBeUndefined();
   });

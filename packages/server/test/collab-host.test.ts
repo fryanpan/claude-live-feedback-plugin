@@ -549,7 +549,7 @@ describe('the collaboration hostname over HTTP', () => {
     });
 
     it('refuses the DOCS of a board it was not given, over REST and the socket', async () => {
-      // The board id is the cheap probe; the doc and its Yjs room are what
+      // The board id is the cheap probe; the doc and its Yjs doc are what
       // the probe would have been worth. `/y/<id>` is gated before the
       // upgrade, so a 403 here is the gate rather than a failed handshake.
       for (const path of [

@@ -32,12 +32,12 @@ export async function handleWorkspaceDelete(
         return j(409, { ok: false, error: 'has-open-tasks', openTasks });
       }
       // Three steps, ordered so that nothing irreversible happens
-      // while the operation can still fail. (1) STAGE the rooms' files
+      // while the operation can still fail. (1) STAGE the docs' files
       // — a rename, so it proves they are removable and can be undone;
       // orphan .ydocs must not outlive the board, because once the
       // store entry is gone the id no longer resolves as a board and
       // nothing can come back for them. (2) Delete the board: the
-      // commit point. (3) Only now tear the live rooms down, which
+      // commit point. (3) Only now tear the live docs down, which
       // destroys each task's discussion threads and is therefore the
       // one step that must never run ahead of a refusal. Both failure
       // paths unstage, so a failed DELETE costs nothing at all — not
@@ -51,7 +51,7 @@ export async function handleWorkspaceDelete(
       const taskIds = taskStore.listTasks(workspaceId, { includeArchived: true }).map((t) => t.id);
       if (!taskProjection.stageWorkspaceFiles(workspaceId, taskIds).ok) {
         taskProjection.unstageWorkspaceFiles(workspaceId, taskIds);
-        return j(500, { ok: false, error: 'rooms-cleanup-failed' });
+        return j(500, { ok: false, error: 'docs-cleanup-failed' });
       }
       // force: the open-task guard was applied above.
       const board = taskStore.deleteWorkspace(workspaceId, { force: true });

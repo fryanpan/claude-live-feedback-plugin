@@ -83,7 +83,7 @@ export interface ReviewThreadItem {
    * panel, a goal row opens the goal panel — and a client that cannot tell
    * them apart takes the reader nowhere. An OLD bundle that has never heard
    * of this kind falls through to its doc branch and opens
-   * `/review/task:<goalId>`, which is the goal's real body room in the full
+   * `/review/task:<goalId>`, which is the goal's real body doc in the full
    * editor: a narrower landing than the panel, and a working one. Spelling it
    * `task-thread` instead would have handed those bundles a taskId that
    * resolves to no task, which is a click that silently does nothing.
@@ -239,7 +239,7 @@ export interface ReviewDocRef {
 }
 
 export interface ThreadSource {
-  /** A doc's threads, or `[]` when its room isn't loaded. A room that has
+  /** A doc's threads, or `[]` when its doc isn't loaded. A doc that has
    *  never been opened has no threads either way, so absence and emptiness
    *  are the same answer here. */
   threadsOf(docId: string): Thread[];

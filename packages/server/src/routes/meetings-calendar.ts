@@ -46,8 +46,8 @@ export interface MeetingCalendarRoutesContext {
   docStore: DocStore;
   /** The board task store, for the board a newly created huddle is filed on. */
   taskStore: TaskStore;
-  /** The append-only transcript store. A transcript outlives its room, so
-   *  these routes deliberately do not require the room to still exist. */
+  /** The append-only transcript store. A transcript outlives its doc, so
+   *  these routes deliberately do not require the doc to still exist. */
   meetingStore: MeetingStore;
   /** The live meeting relay — which docs have a meeting running. */
   meetingRelay: MeetingRelay;
@@ -112,9 +112,9 @@ export async function handleMeetingCalendarRoutes(
   // --- A doc's meetings (read-only) ---
   //
   // Ahead of the `/api/docs/<id>/...` catch-all below, which would
-  // otherwise swallow both. Deliberately NOT gated on the doc's room
+  // otherwise swallow both. Deliberately NOT gated on the doc's doc
   // existing: a transcript outlives the meeting and the notes agent
-  // that reads it arrives afterwards, sometimes after the room has been
+  // that reads it arrives afterwards, sometimes after the doc has been
   // evicted. There is no write and no delete here — a transcript is the
   // least reconstructible thing this server holds, because the audio is
   // already gone.
@@ -446,7 +446,7 @@ export async function handleMeetingCalendarRoutes(
         });
       }
       if (!created.ok || !created.minted) return j(500, { error: 'doc-not-minted' });
-      docId = created.room.docId;
+      docId = created.doc.docId;
       // The file first, then the bind — same order and reason as the
       // huddle route: the doc is a record on disk before the first word.
       const file = meetingDocFilePath(dataDir, docId);

@@ -87,7 +87,7 @@ describe('sidecar round-trip', () => {
     expect(readPrivateMeta(dir, 'never-written')).toEqual({});
   });
 
-  it('survives a corrupt sidecar instead of taking the room down', () => {
+  it('survives a corrupt sidecar instead of taking the doc down', () => {
     const dir = mkdtempSync(join(tmpdir(), 'pm-'));
     writeFileSync(join(dir, 'doc-3.private.json'), '{not json');
     expect(readPrivateMeta(dir, 'doc-3')).toEqual({});

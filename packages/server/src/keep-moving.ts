@@ -193,7 +193,7 @@ export function classifyOpenTasks(
    * listing's `lastActivityAt` is NOT usable here — it is a `.ydoc` mtime,
    * refreshed by server-side snapshot rewrites; see
    * packages/server/src/landing.ts rule 1. Nor is a doc's `lastTouchedAt`,
-   * which mere reads set. `DocRoom.lastContentChangeAt` is the signal that
+   * which mere reads set. `LiveDoc.lastContentChangeAt` is the signal that
    * means somebody actually changed the content.)
    */
   threadActivity?: Map<string, number>,

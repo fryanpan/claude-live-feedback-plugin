@@ -199,8 +199,8 @@ export interface ServerHandle {
   docStore: DocStore;
   /** The board task store — workspaces, tasks, the transition gate. */
   tasks: TaskStore;
-  /** The ydoc projection of the task store (ws:<id> board rooms + task
-   *  body rooms). Exposed so tests can force a reassert. */
+  /** The ydoc projection of the task store (ws:<id> board docs + task
+   *  body docs). Exposed so tests can force a reassert. */
   projection: TaskProjection;
   /** Per-agent durable watch sets (agent-watches.ts). Exposed so tests can
    *  read the store the route wrote, not only the route's answer. */
@@ -466,19 +466,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    */
   const calendarOauthStates = new Map<string, number>();
   // Late-bound because DocStore is constructed before the task store and the
-  // projection it needs. Nothing can fire through it until a room exists,
+  // projection it needs. Nothing can fire through it until a doc exists,
   // which is after both.
-  let onDocRoomEvent: ((docId: string, payload: WebhookPayload) => void) | null = null;
+  let onLiveDocEvent: ((docId: string, payload: WebhookPayload) => void) | null = null;
   const docStore = new DocStore({
     dataDir,
     sse,
     webhooks,
     decorateDocMeta: withReviewUrl,
-    onRoomEvent: (docId, payload) => onDocRoomEvent?.(docId, payload),
+    onDocEvent: (docId, payload) => onLiveDocEvent?.(docId, payload),
     ...(summarizer ? { summarizer } : {}),
   });
   // Materialize the shared board-feedback doc at startup rather than letting
-  // the first widget connection conjure it. A room created by a `/y/<id>`
+  // the first widget connection conjure it. A doc created by a `/y/<id>`
   // connect has no title and no type, so it reads as a ghost in list_docs —
   // and this one is meant to be found and watched by an agent that never
   // visited a board.
@@ -507,7 +507,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const agentWatches = new AgentWatches({ dataDir });
 
   /**
-   * A watch key is live when the thing it names still exists: a doc room, or
+   * A watch key is live when the thing it names still exists: a live doc, or
    * for `ws:<id>` a board workspace / review. Anything else is a subscription
    * the child would open against a 404 forever.
    *
@@ -577,7 +577,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     }
     if (!filed) return;
     // Same two steps the review-item route takes: re-project so the board
-    // room carries the item, and announce so the queue hears about it.
+    // doc carries the item, and announce so the queue hears about it.
     taskProjection.ensureWorkspace(filed.task.workspaceId);
     announceTaskReview(filed.task, filed.item, {
       id: agentIdForName(note.agent),
@@ -819,9 +819,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   taskStore.setAgentStreamProbe((workspaceId, agentId) =>
     sse.agentsOn(`ws~${workspaceId}`).has(agentId),
   );
-  // The ydoc projection (§3.3): ws:<workspaceId> board rooms the server
+  // The ydoc projection (§3.3): ws:<workspaceId> board docs the server
   // writes and defends (foreign writes reverted), plus task:<taskId> body
-  // rooms. init() runs after both stores hydrated, so the sidecar is
+  // docs. init() runs after both stores hydrated, so the sidecar is
   // authoritative for gated fields on restart.
   const taskProjection = new TaskProjection({ docStore, tasks: taskStore });
   taskProjection.init();
@@ -861,7 +861,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const artifactChecker = new ArtifactChecker({
     getTask: (id) => taskStore.getTask(id),
     record: (id, result) => void taskStore.recordArtifactCheck(id, result),
-    // A doc exists if a live room holds it or an archive manifest does —
+    // A doc exists if a live doc holds it or an archive manifest does —
     // archiving is the board's reversible removal, so a retired doc still
     // counts as delivered. Review members archive under a set manifest, not
     // a per-doc one, so both archive shapes are consulted.
@@ -982,7 +982,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   });
   // The late binding `DocStore` was constructed with: the bridge needs the task
   // store and the projection, which are built after `DocStore` is.
-  onDocRoomEvent = stallWiring.onDocRoomEvent;
+  onLiveDocEvent = stallWiring.onLiveDocEvent;
 
   // ── Home pane: per-person read markers + the "What's New?" brief ─────────
   // One subject, one module (`home-pane.ts`); `createServer` composes it here
@@ -996,8 +996,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     summarizer,
   });
   /**
-   * Rewrite a task's description through its live `task:<id>` body room, with
-   * everything the act owes: the room exists, the snapshot the board and
+   * Rewrite a task's description through its live `task:<id>` body doc, with
+   * everything the act owes: the doc exists, the snapshot the board and
    * `next_tasks` read is fresh immediately rather than on the debounce, and —
    * when the caller said who it is — an attributed `task.body_edited` row.
    *
@@ -1091,7 +1091,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // Whether `answerReviewItem` can stamp an answer onto it, which is
             // true exactly when the comment carries the declaration. Read from
             // the item rather than discovered from that function's error
-            // string: it decides which existing room write voice calls, and a
+            // string: it decides which existing doc write voice calls, and a
             // plain open question (the `unreplied` band — since the membership
             // narrowing, direct asks only rather than most of the queue)
             // gets a plain threaded reply instead of a silent deferral.
@@ -1131,14 +1131,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         askedBy: item.askedBy,
       }));
     },
-    // The room store itself, for the two text verbs. Voice calls
+    // The doc store itself, for the two text verbs. Voice calls
     // `postComment` — the one choke point every reply path in this server
     // already funnels through — and `answerReviewItem` exactly as it stands,
     // so a spoken comment and a typed one are the same write, fire the same
     // events, and reach a watching agent identically.
     docStore,
-    // A task's discussion room, CREATED if this process has not served it
-    // yet. Body rooms are lazy, so on a freshly restarted server the room for
+    // A task's discussion doc, CREATED if this process has not served it
+    // yet. Body docs are lazy, so on a freshly restarted server the doc for
     // a task nobody has opened does not exist and a comment aimed straight at
     // `task:<id>` is dropped with a `null` the caller reads as "no such doc".
     taskCommentDoc: (taskId) => {
@@ -1209,7 +1209,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    *
    * The `/api/docs/<id>/…` block canonicalizes for the ~30 subroutes inside
    * it. This is for the doc routes matched OUTSIDE that block — they exist
-   * because they must run before it or without a room, and each one is a
+   * because they must run before it or without a doc, and each one is a
    * place where "the alias works everywhere" quietly stopped being true.
    * `doc-id-routes.test.ts` walks the whole surface by alias so the next one
    * added without this goes red rather than out.
@@ -2483,7 +2483,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // Close the books on any live meeting, so a restart never finds a doc
       // marked as recording by a socket that died with the process. Awaited
       // because the close handlers above start their teardowns async, and
-      // their notes belong in the rooms this flushes next.
+      // their notes belong in the docs this flushes next.
       await meetingRelay.dispose();
       // And the bots. A bot left in a call after this process is gone bills
       // two vendors and delivers nothing — see RecallMeetingRelay.dispose.
@@ -2494,13 +2494,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // Flush pending sidecar writes so a clean shutdown never loses board
       // state that was still inside the debounce window.
       taskStore.stop();
-      // Same contract for the docs themselves: run the rooms' pending 200ms
+      // Same contract for the docs themselves: run the docs' pending 200ms
       // .ydoc saves and ~800ms bound-file write-backs. SIGTERM reaches here
       // via bin.ts, and before this call it lost exactly as much just-typed
       // content as SIGKILL (measured 0/100 kept on a burst killed 103ms
       // after the last keystroke, on both signals).
       // Stop the sweeps BEFORE flushing: an eviction landing mid-flush would
-      // drop a room the flush is about to write.
+      // drop a doc the flush is about to write.
       docStore.stop();
       docStore.flush();
       // Hand the next process each channel's final event id. Without it every

@@ -101,9 +101,9 @@ describe('agent notes routes', () => {
   }
 
   function projected(workspaceId: string, taskId: string): ProjectedTask {
-    const room = handle.docStore.get(workspaceDocId(workspaceId));
-    if (!room) throw new Error('ws room was not created');
-    const row = room.ydoc.getMap('tasks').get(taskId) as ProjectedTask | undefined;
+    const doc = handle.docStore.get(workspaceDocId(workspaceId));
+    if (!doc) throw new Error('ws doc was not created');
+    const row = doc.ydoc.getMap('tasks').get(taskId) as ProjectedTask | undefined;
     if (!row) throw new Error('task was not projected');
     return row;
   }

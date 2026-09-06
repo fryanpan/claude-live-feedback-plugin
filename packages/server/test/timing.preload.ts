@@ -1,6 +1,6 @@
 /**
  * Loaded by every `bun test` run (bunfig.toml [test].preload), BEFORE any test
- * file imports the server, which is the only moment this can be set: the room
+ * file imports the server, which is the only moment this can be set: the doc
  * cadences are resolved once at `doc-store-timings.ts` module load.
  *
  * Why it lives in the preload rather than in `bun run test:server`: the

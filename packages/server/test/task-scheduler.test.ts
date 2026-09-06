@@ -47,8 +47,8 @@ function seed(store: TaskStore, schedule: TaskSchedule) {
   const goalId = goals.created[0]?.id;
   if (goalId === undefined) throw new Error('no goal id');
   const created = store.createTask(ws.id, {
-    title: 'Sweep the lamp room',
-    body: 'Agent can sweep the lamp room so that the beam stays clean.',
+    title: 'Sweep the lamp doc',
+    body: 'Agent can sweep the lamp doc so that the beam stays clean.',
     assignee: OWNER.name,
     assigneeKind: 'agent',
     goal: goalId,

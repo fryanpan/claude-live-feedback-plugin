@@ -199,7 +199,7 @@ export function runBackfill(opts: BackfillOptions): BackfillStats {
     }
     // `owner` / `workspaceRoot` / `producedBy` moved out of the CRDT into a
     // sidecar (they described the host, and the CRDT syncs to share
-    // visitors). This reads .ydoc files directly rather than through a room,
+    // visitors). This reads .ydoc files directly rather than through a doc,
     // so it has to merge the sidecar itself or every event loses its repo
     // and its producedBy attribution.
     //

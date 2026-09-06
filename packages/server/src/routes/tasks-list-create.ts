@@ -194,7 +194,7 @@ export async function handleTaskListCreate(
       // `createTask` already emitted `task.created` — and therefore
       // already projected this ticket, a moment before it had any
       // review items. `addReviewItem` emits nothing, so without this the
-      // board room carries the ticket with no `reviews` until some
+      // board doc carries the ticket with no `reviews` until some
       // unrelated store event happens to touch the workspace, which on a
       // quiet board is never. Same call the dedicated review-item route
       // makes for the same reason.
