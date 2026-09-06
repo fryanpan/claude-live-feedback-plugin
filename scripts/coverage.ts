@@ -41,6 +41,34 @@
  * everything else. It errs low, which is the safe direction for a floor, and
  * `--list` marks each one `never-imported` so it is never mistaken for a
  * measured 0%.
+ *
+ * ## The two denominators, and why bun's is not its own
+ *
+ * Vitest's `all: true` gives a denominator that is a property of the SOURCE:
+ * every included file is instrumented whether a test touched it or not, and
+ * the line set it reports for a file does not move when the suite is split
+ * across `--shard`s. Measured 2026-09-06: four shards merged report exactly
+ * the numbers one run reports, to the line.
+ *
+ * Bun's does move. `bun test --coverage` reports the lines it LEARNED about
+ * while running, so the same source file comes back with 298 lines from a run
+ * of the whole suite and 660 from the union of that suite run in chunks —
+ * `middleware/host-guard.ts`, 1289 lines long, both times with the identical
+ * 295 hit. The hits are a fact about the code; that denominator is a fact
+ * about the execution. A percentage over it cannot be compared between two
+ * runs that were scheduled differently, so a ratcheted floor over it is a
+ * gate that fails on how the suite was CHUNKED. It also flatters: 295/298 is
+ * 99% of the lines bun happened to notice, and 295 of the file's real code
+ * lines is not 99% of anything.
+ *
+ * So a bun-measured package's denominator is its source's code lines — the
+ * same count this file already uses for a never-imported file, applied to
+ * every file rather than only the ones no test loaded. That number is
+ * identical whether the suite ran in one process or seventy-five, which is
+ * what lets `bun run test:server` split across processes without moving the
+ * gate. It is a bigger denominator than bun's, so the reported percentage
+ * fell when it landed (server: 95.6% → 75.4%) and the floor moved with it in
+ * the same commit. Nothing about the tests changed; the ruler did.
  */
 // `node:child_process`, not `Bun.spawnSync`: the colocated test runs under
 // vitest, where the `Bun` global does not exist and module load throws.
@@ -56,6 +84,17 @@ const BASELINE = join(REPO_ROOT, 'scripts', 'coverage.baseline.json');
 export const TARGET_PCT = 80;
 
 type Runner = 'vitest' | 'bun';
+
+/**
+ * Where a runner's denominator comes from. `lcov` trusts the tool's own line
+ * set; `source` counts the file's code lines instead. See the header — bun's
+ * line set depends on how the suite was scheduled, and vitest's does not.
+ */
+export const DENOMINATOR: Record<Runner, 'lcov' | 'source'> = {
+  vitest: 'lcov',
+  bun: 'source',
+};
+
 const PACKAGES: Record<string, Runner> = {
   core: 'vitest',
   'workspaces-app': 'vitest',
@@ -167,18 +206,21 @@ function measure(reuse: boolean): { vitest: string; bun: string } {
       '--coverage.reporter=lcovonly',
       `--coverage.reportsDirectory=${vitestDir}`,
     ]);
-    sh([
-      'bun',
-      'test',
-      '--coverage',
-      '--coverage-reporter=lcov',
-      `--coverage-dir=${bunDir}`,
-      'packages/server/test',
-    ]);
+    // Through the same runner `bun run test:server` uses, so the suite is
+    // scheduled here exactly as it is scheduled when it is a gate — and so
+    // this run takes the minute that one takes rather than three.
+    sh(['bun', 'run', 'scripts/test-server.ts', '--coverage', `--coverage-dir=${bunDir}`]);
   }
   const read = (dir: string) => {
     const p = join(dir, 'lcov.info');
-    if (!existsSync(p)) throw new Error(`no lcov at ${p} — run without --reuse`);
+    if (!existsSync(p)) {
+      throw new Error(
+        `no lcov at ${p}.\n` +
+          '--reuse reads what the two suites left behind; it does not run them. Run the ' +
+          'suites first (`bun run verify --only test:vitest,test:server,coverage`), or drop ' +
+          '--reuse to measure from scratch.',
+      );
+    }
     return readFileSync(p, 'utf8');
   };
   return { vitest: read(vitestDir), bun: read(bunDir) };
@@ -200,21 +242,24 @@ export function summarize(lcov: { vitest: string; bun: string }): PackageCoverag
   const parsed = { vitest: parseLcov(lcov.vitest), bun: parseLcov(lcov.bun) };
   return Object.entries(PACKAGES).map(([pkg, runner]) => {
     const measured = parsed[runner];
+    const fromSource = DENOMINATOR[runner] === 'source';
     const files: FileCoverage[] = [];
     for (const file of sourceFiles(pkg)) {
       const lines = measured.get(file);
+      const source = () => codeLines(readFileSync(join(REPO_ROOT, file), 'utf8'));
       if (lines === undefined) {
-        files.push({
-          file,
-          found: codeLines(readFileSync(join(REPO_ROOT, file), 'utf8')),
-          hit: 0,
-          neverImported: true,
-        });
+        files.push({ file, found: source(), hit: 0, neverImported: true });
         continue;
       }
       let hit = 0;
       for (const count of lines.values()) if (count > 0) hit++;
-      files.push({ file, found: lines.size, hit, neverImported: false });
+      // A source denominator is counted by a different rule than the tool's,
+      // so it could in principle come out under the hit count — a line the
+      // tool attributes to a file that this counts as a comment. It never has
+      // on this tree; the clamp is here so the arithmetic cannot report more
+      // than 100% if it ever does.
+      const found = fromSource ? Math.max(source(), hit) : lines.size;
+      files.push({ file, found, hit, neverImported: false });
     }
     const linesFound = files.reduce((n, f) => n + f.found, 0);
     const linesHit = files.reduce((n, f) => n + f.hit, 0);
@@ -236,9 +281,9 @@ const pct = (f: FileCoverage) => (f.found === 0 ? 100 : (f.hit / f.found) * 100)
 function table(packages: PackageCoverage[], baseline: Record<string, number>): void {
   const w = Math.max(...packages.map((p) => p.package.length), 'package'.length);
   console.log(
-    `${'package'.padEnd(w)}  runner  ${'lines'.padStart(11)}  ${'cov'.padStart(6)}  ${'floor'.padStart(5)}  status`,
+    `${'package'.padEnd(w)}  runner  ${'of'.padEnd(6)}  ${'lines'.padStart(11)}  ${'cov'.padStart(6)}  ${'floor'.padStart(5)}  status`,
   );
-  console.log('-'.repeat(w + 44));
+  console.log('-'.repeat(w + 52));
   for (const p of packages) {
     const floor = baseline[p.package];
     const status =
@@ -250,7 +295,7 @@ function table(packages: PackageCoverage[], baseline: Record<string, number>): v
             ? 'ok'
             : `under ${TARGET_PCT}%`;
     console.log(
-      `${p.package.padEnd(w)}  ${p.runner.padEnd(6)}  ${`${p.linesHit}/${p.linesFound}`.padStart(11)}  ${`${p.pct.toFixed(1)}%`.padStart(6)}  ${`${floor ?? '-'}`.padStart(5)}  ${status}`,
+      `${p.package.padEnd(w)}  ${p.runner.padEnd(6)}  ${DENOMINATOR[p.runner].padEnd(6)}  ${`${p.linesHit}/${p.linesFound}`.padStart(11)}  ${`${p.pct.toFixed(1)}%`.padStart(6)}  ${`${floor ?? '-'}`.padStart(5)}  ${status}`,
     );
   }
 }
