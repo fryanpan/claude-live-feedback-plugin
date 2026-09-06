@@ -193,7 +193,7 @@ export interface DocMeta {
    * Optional provenance passthrough captured at create/bind time, so the
    * activity event stream can attribute a doc to the agent + session that
    * produced it. `agentId` / `sessionId` are best-effort: supplied by the
-   * caller of create_review_doc / bind_folder. Absent on legacy docs and on
+   * caller of attach_markdown / bind_folder. Absent on legacy docs and on
    * any doc created without an explicit producedBy — in which case the
    * activity stream falls back to deriving agentId from `owner` and leaves
    * sessionId null.

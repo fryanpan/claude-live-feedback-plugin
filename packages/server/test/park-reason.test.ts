@@ -99,7 +99,7 @@ describe('a doc parked because its file would not answer', () => {
     // A resident-but-unbound doc does not re-hydrate on its own: `resolveRoom`
     // finds it in memory and returns it, and the deferred bind that parked it
     // has already had its one retry. The recovery is an explicit re-bind,
-    // which is what an owner does (`create_review_doc` on the same path), so
+    // which is what an owner does (`attach_markdown` on the same path), so
     // that is what this drives. `boundFiles.reset()` stands in for the
     // quarantine backoff expiring.
     unlinkSync(boundPath);

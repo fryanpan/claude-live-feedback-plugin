@@ -29,7 +29,7 @@ The MCP surface is intentionally primitive — agents compose these into whateve
 **Doc lifecycle**
 - `list_docs` — list all docs the server knows about (returns `reviewUrl` per markdown doc).
 - `get_doc(docId)` — flat plain-text + per-block markdown + thread metadata.
-- `create_review_doc(docId, path, title?)` — create a markdown review doc backed by a file. The server reads the file, parses it, and sets up bidirectional sync (debounced doc→file write + `fs.watch` file→doc reload). Path should be absolute. **Every markdown review doc is file-backed; this is the only way to create one.**
+- `attach_markdown(docId, path, title?)` — create a markdown review doc backed by a file. The server reads the file, parses it, and sets up bidirectional sync (debounced doc→file write + `fs.watch` file→doc reload). Path should be absolute. **Every markdown review doc is file-backed; this is the only way to create one.**
 
 **Editing**
 - `find_and_replace(docId, find, replace, { contextBefore?, contextAfter?, occurrence? })` — text edits across all block types including table cells.

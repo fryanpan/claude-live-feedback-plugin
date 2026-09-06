@@ -1201,7 +1201,7 @@ kernel-wide socket CREATION failing, and its cause is still unknown.**
 
 ## File-binding semantics
 
-- `create_review_doc` is idempotent and re-runnable. Calling it again on
+- `attach_markdown` is idempotent and re-runnable. Calling it again on
   an existing docId with the same `path` re-runs `attachFile`, which
   re-wires the `observeDeep` listener without re-seeding from disk
   (the seed path is gated on empty fragment). Useful as a recovery tool
@@ -3408,22 +3408,22 @@ write-once in practice, and the repair verb for a moved file cannot repair it.
   of the data dir** (an archived doc stops loading, stops costing memory and
   a poll) **while `activity-backfill.ts` explicitly scans `_archive`** (it
   still feeds analysis). The writer exists as of 0.1.92: `Rooms.archiveReview`
-  / `unarchiveReview`, reached from `archive_review` / `unarchive_review` /
-  `list_archived_reviews`, moves a whole review's `.ydoc`s and sidecars there
+  / `unarchiveReview`, reached from `archive_attachment_set` / `unarchive_attachment_set` /
+  `list_archived_attachments`, moves a whole review's `.ydoc`s and sidecars there
   and back, recording who and why in `_archive/<setId>.review.json`. Sidecars
   travel WITH their `.ydoc`; the backfill resolves a sidecar next to the file
   it just read, falling back to the data dir because ~174 hand-moved ydocs
   left theirs behind.
 - **0.1.93 adds the single-doc half**: `Rooms.archiveDoc` / `unarchiveDoc`,
   reached from `archive_doc` / `unarchive_doc`, for the few hundred
-  free-standing docs (a `create_review_doc` markdown doc, an `attach_mockup`
+  free-standing docs (a `attach_markdown` markdown doc, an `attach_mockup`
   mockup) that belong to no review and so had no soft path at all. Manifest
   at `_archive/<docId>.doc.json` — a different suffix from a review's, so
   each listing enumerates its own kind. It REFUSES a doc that carries a
-  review id (`archive_review` owns those) and a `task:` / `ws:` id.
-  `list_archived_reviews` returns both kinds, under `archived` and `docs`.
+  review id (`archive_attachment_set` owns those) and a `task:` / `ws:` id.
+  `list_archived_attachments` returns both kinds, under `archived` and `docs`.
 - **`purgePersisted` (`rooms.ts`) is the hard path** — `rmSync` on the
-  `.ydoc` plus the private-meta sidecar. `delete_review` and
+  `.ydoc` plus the private-meta sidecar. `delete_attachment_set` and
   `delete_workspace(reviewId)` no longer reach it by default: they archive,
   and only `purge:true` purges. `delete_doc` and a BOARD delete still purge —
   deliberately unchanged in 0.1.93, because `delete_doc` also covers task

@@ -14,7 +14,7 @@
  * A test that only checked the live path would still pass on the day the
  * alias came back.
  *
- * The delete pair is asserted the other way round as well — `delete_review`
+ * The delete pair is asserted the other way round as well — `delete_attachment_set`
  * must NOT be able to destroy a board — because that is the whole reason the
  * verb was split rather than renamed.
  *

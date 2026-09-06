@@ -9,7 +9,7 @@
 3. The mtime poll picks the write up and applies it — but sets `lastWritten` to the **raw disk bytes**, while the live fragment now serializes to the **normalized** form. From this moment `currentSerialized ≠ lastWritten` permanently, even though there are zero un-flushed live edits.
 4. **18:20:33** — agent `Write`s the file again. Reconcile runs `decideReconcile`: disk ≠ lastWritten, disk ≠ currentSerialized, currentSerialized ≠ lastWritten → **`conflict`** (a false positive — the "divergence" is just serializer normalization). The conflict path "keeps live edits and reasserts them to disk": **LF flushes its stale in-memory copy over the agent's rewrite.**
 5. **18:20:37** — agent calls `reparse_from_disk` to force disk in — but disk now holds LF's stale flush, so **the reparse pulls the stale version back into the live doc.** ("The LF write-back clobbered my rewrite — its stale in-memory copy flushed to disk and the reparse pulled that back.")
-6. **18:24** — agent gives up and does the workaround that also appears verbatim in the 07-15 incident: `delete_doc` → `Write` → `create_review_doc`. Unbind, write freely, rebind.
+6. **18:24** — agent gives up and does the workaround that also appears verbatim in the 07-15 incident: `delete_doc` → `Write` → `attach_markdown`. Unbind, write freely, rebind.
 
 The 2026-07-15 incident is the same shape: "live-feedback's background flush overwrote my rewrite on disk with the old version… the reliable fix is to unbind the doc, write the file freely, then rebind."
 
@@ -25,11 +25,11 @@ The 2026-07-15 incident is the same shape: "live-feedback's background flush ove
 
 ### RC3 — There is no legitimate whole-doc rewrite path
 
-The MCP surface offers surgical edits (`find_and_replace`, thread/anchor edits) but nothing for "replace the whole document." Agents doing restructures therefore reach for `Write` — the exact move the docs forbid — and then `reparse_from_disk`, which walks straight into RC1+RC2. The recurring `delete_doc → Write → create_review_doc` dance in transcripts is agents re-inventing the missing tool, at the cost of orphaning every comment thread.
+The MCP surface offers surgical edits (`find_and_replace`, thread/anchor edits) but nothing for "replace the whole document." Agents doing restructures therefore reach for `Write` — the exact move the docs forbid — and then `reparse_from_disk`, which walks straight into RC1+RC2. The recurring `delete_doc → Write → attach_markdown` dance in transcripts is agents re-inventing the missing tool, at the cost of orphaning every comment thread.
 
 ### Secondary defects found in the same review
 
-- **Observer leak:** `attachFile` adds a fresh `observeDeep` on every call and nothing ever `unobserveDeep`s (there is no `unobserve` anywhere in server/core). Re-attach (hydrate, re-run `create_review_doc`) stacks observers → duplicate write-backs on stale binding state, widening the RC2 window.
+- **Observer leak:** `attachFile` adds a fresh `observeDeep` on every call and nothing ever `unobserveDeep`s (there is no `unobserve` anywhere in server/core). Re-attach (hydrate, re-run `attach_markdown`) stacks observers → duplicate write-backs on stale binding state, widening the RC2 window.
 - **Hydrate gap:** for prose docs, `attachFile` only seeds when the fragment is empty and re-baselines the mtime poll — so **edits made while the server was down are never picked up**, and the next live edit overwrites them on disk. This violates the plugin's own contract ("the file is the source of truth at rest"). `attachReadonlyFile` handles this case; `attachFile` doesn't. Also `lastWritten` is left `undefined` on re-attach, which biases the next reconcile toward `conflict`.
 - **`syncError` is invisible:** conflicts are recorded on the binding and surfaced only via `get_doc` — which nothing checks. No event is pushed to watchers; the human editor shows nothing.
 

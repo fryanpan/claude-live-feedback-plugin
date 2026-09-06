@@ -1717,7 +1717,7 @@ export class DocStore {
     // above fired its update event before wireEvents listened, so nothing
     // would ever flush this doc to disk if the user hasn't done another
     // mutation by the next supervisor restart. Force a snapshot now so a
-    // create_review_doc immediately followed by a `bun --watch` reload
+    // attach_markdown immediately followed by a `bun --watch` reload
     // doesn't lose the doc.
     //
     // A migrated legacy doc needs the same forced snapshot for the same
@@ -1891,7 +1891,7 @@ export class DocStore {
    * Idempotent by resolution rather than by upsert: an already-resolving name
    * returns the doc it already names. That is what keeps `bind_mock(docId,
    * newPath)` repointing one doc instead of minting a second, and what makes
-   * a re-run of `create_review_doc` a no-op.
+   * a re-run of `attach_markdown` a no-op.
    */
   createForCaller(
     requested: string,
@@ -2716,7 +2716,7 @@ export class DocStore {
    * update live) and flushes to disk via the normal debounced writer.
    *
    * This is what agents used `Write` + `reparse_from_disk` — or the
-   * delete_doc → Write → create_review_doc dance — to approximate, both of
+   * delete_doc → Write → attach_markdown dance — to approximate, both of
    * which raced the write-back and clobbered (2026-07-15, 2026-08-03).
    */
   /** Record a human (browser-websocket) prose edit. Called by the wireEvents

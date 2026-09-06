@@ -135,7 +135,7 @@ interface FileBinding {
   lastSyncError?: { message: string; at: number };
   /** The observeDeep callback wired by attachFile. Kept so a re-attach can
    *  unobserve it — without this, every re-attach (hydrate, re-run
-   *  create_review_doc) stacked another write-back scheduler holding stale
+   *  attach_markdown) stacked another write-back scheduler holding stale
    *  binding state. */
   observer?: Parameters<Y.XmlFragment['observeDeep']>[0];
   /** True when this flat binding writes doc edits back to the file (the
@@ -499,7 +499,7 @@ export class FileBindings {
     }
 
     // Attaching a NON-empty fragment (hydrate after a restart, or a re-run
-    // create_review_doc): honor the sync contract's "the file is the source
+    // attach_markdown): honor the sync contract's "the file is the source
     // of truth at rest". Without this, an edit made while the server was down
     // was never picked up — and the next flush overwrote it on disk.
     if (!seeded && fileExists()) {

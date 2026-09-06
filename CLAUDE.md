@@ -38,7 +38,7 @@ that way and add new subsystem docs to the list here.
 - Public repo, branch protection on main — all changes via PR.
 - **Never hard delete user content — soft delete** (Bryan, 2026-08-17,
   project-wide). The `.ydoc` is the durable record analyses are rebuilt from.
-  Use `archive_review` / `archive_doc` (reversible); `delete_doc` and
+  Use `archive_attachment_set` / `archive_doc` (reversible); `delete_doc` and
   `purge:true` destroy — calling them is a decision, never a default.
   Transient files (old releases, `.tmp`) are correctly hard-deleted.
   Mechanics and which verb does what: grep learnings.md "Soft delete".
