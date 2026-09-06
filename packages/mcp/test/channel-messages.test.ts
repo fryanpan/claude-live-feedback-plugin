@@ -378,9 +378,7 @@ describe('a voice row is acknowledged only after it has been delivered', () => {
       ack: 'passing it on',
     });
     expect(order).toEqual(['notify', 'ack']);
-    expect(sent).toEqual([
-      { method: 'POST', path: '/api/workspaces/w1/voice-queue/q1/ack', body: {} },
-    ]);
+    expect(sent).toEqual([{ method: 'POST', path: '/workspaces/w1/voice-queue/q1/ack', body: {} }]);
     expect(only(frames).content).toContain('move the card');
   });
 

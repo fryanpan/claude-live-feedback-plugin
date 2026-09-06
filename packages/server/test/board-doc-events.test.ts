@@ -91,7 +91,7 @@ describe('a doc thread reaches the boards holding the doc', () => {
     name: string,
     agentId = 'agent-board-lead',
   ): Promise<{ workspaceId: string; heard: ReturnType<typeof listen> }> {
-    const w = await post('/api/workspaces', { name, goal: 'Ship the index.' });
+    const w = await post('/workspaces', { name, goal: 'Ship the index.' });
     const { workspace } = (await w.json()) as { workspace: { id: string } };
 
     const att = await post(`/workspaces/${workspace.id}/agents`, {
@@ -141,7 +141,7 @@ describe('a doc thread reaches the boards holding the doc', () => {
     const { workspaceId, heard } = await seatLead('index-revamp');
 
     // Control on the same stream, before the doc exists: it is live.
-    await post(`/api/workspaces/${workspaceId}/tasks`, { author: PERSON, title: 'Control task' });
+    await post(`/workspaces/${workspaceId}/tasks`, { author: PERSON, title: 'Control task' });
     await settle();
     expect(heard.events).toContain('task.created');
 
@@ -164,7 +164,7 @@ describe('a doc thread reaches the boards holding the doc', () => {
     const { workspaceId, heard } = await seatLead('review-board');
 
     writeFileSync(join(srcDir, 'README.md'), '# Bound folder\n\nBody.\n');
-    const bound = await post('/api/workspaces', {
+    const bound = await post('/workspaces', {
       folderPath: srcDir,
       hubWorkspaceId: workspaceId,
     });
@@ -197,7 +197,7 @@ describe('a doc thread reaches the boards holding the doc', () => {
    */
   it('POSITIVE CONTROL: a task body thread still arrives once AND refreshes the row count', async () => {
     const { workspaceId, heard } = await seatLead('task-board');
-    const t = await post(`/api/workspaces/${workspaceId}/tasks`, {
+    const t = await post(`/workspaces/${workspaceId}/tasks`, {
       author: PERSON,
       title: 'Wire the index',
     });
@@ -247,7 +247,7 @@ describe('a doc thread reaches the boards holding the doc', () => {
    */
   it('POSITIVE CONTROL: a grouping channel still gets the event exactly once', async () => {
     writeFileSync(join(srcDir, 'README.md'), '# Bound folder\n\nBody.\n');
-    const bound = await post('/api/workspaces', { folderPath: srcDir });
+    const bound = await post('/workspaces', { folderPath: srcDir });
     expect(bound.status).toBe(200);
     const boundJson = (await bound.json()) as {
       workspaceId: string;

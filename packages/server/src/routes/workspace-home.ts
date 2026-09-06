@@ -6,6 +6,7 @@ import { parseThreadReviewItemId } from '@feedback/core';
  * read their collaborators off `WorkspaceRoutesContext` instead of the scope.
  */
 import { LEGACY_REVIEW_ITEM_ID } from '../tasks.ts';
+import { wantsJson } from '../workspace-path.ts';
 import type { WorkspaceRouteRequest, WorkspaceRoutesContext } from './workspace-routes-context.ts';
 
 /** Answers the routes below, or `undefined` when the path is none of them. */
@@ -99,7 +100,7 @@ export async function handleWorkspaceHome(
         // `resolveWorkspaceForDoc` answers `null`, never `undefined`, so
         // the test has to be against `null` — otherwise a doc no board
         // holds ships `workspaceId: null` and `set_review_item_criteria`
-        // reads the key as present and PUTs `/api/workspaces/null/...`.
+        // reads the key as present and PUTs `/workspaces/null/...`.
         ...(workspaceId !== null ? { workspaceId } : {}),
       });
     }
@@ -112,7 +113,7 @@ export async function handleWorkspaceHome(
       workspaceId: found.workspaceId,
     });
   }
-  const wsReviewMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/review-items$/);
+  const wsReviewMatch = pathname.match(/^\/workspaces\/([^/]+)\/review-items$/);
   if (wsReviewMatch && req.method === 'GET') {
     const workspaceId = decodeURIComponent(wsReviewMatch[1] ?? '');
     const workspace = taskStore.getWorkspace(workspaceId);
@@ -123,8 +124,10 @@ export async function handleWorkspaceHome(
   // GET: the brief + marker + instructions for ONE person. `user` is
   // required because everything in the payload is per person — an
   // anonymous read would silently share one marker between everyone.
-  const wsHomeMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/home$/);
-  if (wsHomeMatch && req.method === 'GET') {
+  const wsHomeMatch = pathname.match(/^\/workspaces\/([^/]+)\/home$/);
+  // `?format=json`, for the reason `GET /workspaces/<id>` carries the same
+  // gate: `home` is one of the board's four page tabs.
+  if (wsHomeMatch && req.method === 'GET' && wantsJson(url)) {
     const workspaceId = decodeURIComponent(wsHomeMatch[1] ?? '');
     const workspace = taskStore.getWorkspace(workspaceId);
     if (!workspace) return j(404, { error: 'workspace not found' });
@@ -137,7 +140,7 @@ export async function handleWorkspaceHome(
   // "Mark caught up": move the reader's marker. `at` supports undo —
   // the response names what it replaced, and posting that value back
   // restores it (0 = never read). A removal must be reversible.
-  const wsHomeReadMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/home\/read$/);
+  const wsHomeReadMatch = pathname.match(/^\/workspaces\/([^/]+)\/home\/read$/);
   if (wsHomeReadMatch && req.method === 'POST') {
     const workspaceId = decodeURIComponent(wsHomeReadMatch[1] ?? '');
     const workspace = taskStore.getWorkspace(workspaceId);
@@ -159,7 +162,7 @@ export async function handleWorkspaceHome(
   // response is the full home payload so the caller repaints — with
   // `generating` true when a summarizer is wired, because the drop
   // makes every brief stale by construction.
-  const wsHomeInstrMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/home\/instructions$/);
+  const wsHomeInstrMatch = pathname.match(/^\/workspaces\/([^/]+)\/home\/instructions$/);
   if (wsHomeInstrMatch && req.method === 'PUT') {
     const workspaceId = decodeURIComponent(wsHomeInstrMatch[1] ?? '');
     const workspace = taskStore.getWorkspace(workspaceId);

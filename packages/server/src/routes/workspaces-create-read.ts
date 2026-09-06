@@ -12,6 +12,7 @@ import {
 } from '../share/redact-workspace.ts';
 import { summarizeGoals } from '../task-queue.ts';
 import { isRetired, retiredNotice } from '../tasks.ts';
+import { wantsJson } from '../workspace-path.ts';
 import type { WorkspaceRouteRequest, WorkspaceRoutesContext } from './workspace-routes-context.ts';
 
 /** Answers the routes below, or `undefined` when the path is none of them. */
@@ -30,14 +31,14 @@ export async function handleWorkspaceCreateRead(
     parallelismCapView,
     fileUnderBoardWorkspace,
   } = ctx;
-  const { req, pathname, visitor, authorFor } = rq;
+  const { req, pathname, url, visitor, authorFor } = rq;
   // --- REST: workspaces (board create OR folder bind) ---
   // One resource, two shapes: `folderPath` binds a folder of files
   // (the review), `name` creates a board Workspace —
   // a NEW first-class entity with a crypto-random id that tasks and
   // goals hang off (plan §3.12 commit 1). Nothing is migrated between
   // the two; attach_doc LINKS existing docs/reviews to a board workspace.
-  if (pathname === '/api/workspaces' && req.method === 'POST') {
+  if (pathname === '/workspaces' && req.method === 'POST') {
     const body = await safeJson(req);
     const folderPath = body?.folderPath as string | undefined;
     // Creating a board by name involves no file and stays open to the
@@ -214,7 +215,7 @@ export async function handleWorkspaceCreateRead(
   // List bound workspaces with rolled-up triage signals (fileCount,
   // openThreads, allIdle, owner, lastActivityAt). The daily triage uses
   // this to treat a folder bind as one cleanup unit.
-  if (pathname === '/api/workspaces' && req.method === 'GET') {
+  if (pathname === '/workspaces' && req.method === 'GET') {
     return j(200, {
       workspaces: docStore.listWorkspaces(),
       // Board workspaces (the boards) are a different thing from the
@@ -239,8 +240,12 @@ export async function handleWorkspaceCreateRead(
   // A field that isn't copied is silently discarded while the request
   // still returns 200 — so every param here has an HTTP-level test in
   // task-routes.test.ts (the `groups` lesson).
-  const boardWsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)$/);
-  if (boardWsMatch && req.method === 'GET') {
+  const boardWsMatch = pathname.match(/^\/workspaces\/([^/]+)$/);
+  // `?format=json` and nothing else. `/workspaces/<id>` is the board's PAGE
+  // as well as its record now that the `/api` prefix is gone, and the browser
+  // asking for the page must fall through to the HTML shell at the tail of
+  // the chain rather than be answered here with a body it cannot render.
+  if (boardWsMatch && req.method === 'GET' && wantsJson(url)) {
     const workspaceId = decodeURIComponent(boardWsMatch[1] ?? '');
     const stored = taskStore.getWorkspace(workspaceId);
     if (!stored) return j(404, { error: 'workspace not found' });

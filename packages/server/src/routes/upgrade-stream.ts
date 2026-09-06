@@ -62,7 +62,7 @@ import type { UpgradeData } from '../socket-handlers.ts';
 import { channelForWatchKey, openAgentMuxStream } from '../sse-mux.ts';
 import { type SseBus, openSseStream } from '../sse.ts';
 import type { TaskStore } from '../tasks.ts';
-import { matchWorkspaceRoute } from './workspace-path.ts';
+import { matchWorkspaceRoute } from '../workspace-path.ts';
 
 /** The id a reconnecting SSE client last saw: the `Last-Event-ID` header a
  *  native EventSource sends back by itself once frames carry `id:` lines,

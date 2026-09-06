@@ -60,12 +60,12 @@ describe('POST /api/links/titles', () => {
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
 
-    const ws = await post('/api/workspaces', { name: 'Link Titles Board', goal: 'Ship.' });
+    const ws = await post('/workspaces', { name: 'Link Titles Board', goal: 'Ship.' });
     wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
-    const other = await post('/api/workspaces', { name: 'Unrelated Board', goal: 'Else.' });
+    const other = await post('/workspaces', { name: 'Unrelated Board', goal: 'Else.' });
     otherWsId = ((await other.json()) as { workspace: { id: string } }).workspace.id;
 
-    const t = await post(`/api/workspaces/${wsId}/tasks`, {
+    const t = await post(`/workspaces/${wsId}/tasks`, {
       title: 'Ship the widget',
       goal: 'chores',
       assignee: 'human',
@@ -83,7 +83,7 @@ describe('POST /api/links/titles', () => {
     docId = ((await doc.json()) as { docId: string }).docId;
     // File the doc on the board, so the board-scoped address is truthful —
     // the route refuses to resolve a doc through a board it isn't on.
-    const attach = await post(`/api/workspaces/${wsId}/docs`, { docId });
+    const attach = await post(`/workspaces/${wsId}/docs`, { docId });
     expect(attach.status).toBe(200);
   });
 
@@ -114,7 +114,7 @@ describe('POST /api/links/titles', () => {
       sourceUrl: untitledPath,
     });
     const untitledId = ((await created.json()) as { docId: string }).docId;
-    const attach = await post(`/api/workspaces/${wsId}/docs`, { docId: untitledId });
+    const attach = await post(`/workspaces/${wsId}/docs`, { docId: untitledId });
     expect(attach.status).toBe(200);
 
     const url = `${base}/workspaces/${wsId}/docs/${encodeURIComponent(untitledId)}`;
@@ -123,7 +123,7 @@ describe('POST /api/links/titles', () => {
   });
 
   it('resolves a workspace URL to the workspace name', async () => {
-    const url = `${base}/workspaces/${wsId}`;
+    const url = `${base}/workspaces/${wsId}?format=json`;
     const titles = await titlesFor([url]);
     expect(titles[url]).toBe('Link Titles Board');
   });
@@ -174,7 +174,7 @@ describe('POST /api/links/titles', () => {
     it('resolves a GOAL deep link to the goal title and status', async () => {
       // Goals live outside getTask (separate goalIndex) — the lookup must
       // reach them too, or a pasted goal link stays a raw URL forever.
-      const put = await local(`/api/workspaces/${wsId}/goals`, {
+      const put = await local(`/workspaces/${wsId}/goals`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -202,7 +202,7 @@ describe('POST /api/links/titles', () => {
     });
 
     it('resolves a task link copied from a nav page (/home carries the params)', async () => {
-      const url = `${base}/workspaces/${wsId}/home?task=${taskId}`;
+      const url = `${base}/workspaces/${wsId}/home?task=${taskId}&format=json`;
       const { titles, statuses } = await lookup([url]);
       expect(titles[url]).toBe('Ship the widget');
       expect(typeof statuses[url]).toBe('string');
@@ -217,7 +217,7 @@ describe('POST /api/links/titles', () => {
 
     it('gives docs and workspaces no status entry — only tasks and goals chip', async () => {
       const docUrl = `${base}/workspaces/${wsId}/docs/${encodeURIComponent(docId)}`;
-      const wsUrl = `${base}/workspaces/${wsId}`;
+      const wsUrl = `${base}/workspaces/${wsId}?format=json`;
       const { statuses } = await lookup([docUrl, wsUrl]);
       expect(statuses[docUrl]).toBeUndefined();
       expect(statuses[wsUrl]).toBeUndefined();
@@ -235,7 +235,7 @@ describe('POST /api/links/titles', () => {
         sourceUrl: mdPath,
       });
       expect(doc.status).toBe(200);
-      const batch = await post(`/api/workspaces/${wsId}/tasks/batch`, {
+      const batch = await post(`/workspaces/${wsId}/tasks/batch`, {
         tasks: [{ title: 'Draft the slice', assignee: 'human' }],
         sourceDoc: { docId: 'lt-held-plan' },
       });

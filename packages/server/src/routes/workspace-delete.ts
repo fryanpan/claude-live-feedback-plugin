@@ -13,7 +13,7 @@ export async function handleWorkspaceDelete(
 ): Promise<Response | undefined> {
   const { taskStore, taskProjection, j } = ctx;
   const { req, pathname, url, deleteReview } = rq;
-  const wsDeleteMatch = pathname.match(/^\/api\/workspaces\/([^/]+)$/);
+  const wsDeleteMatch = pathname.match(/^\/workspaces\/([^/]+)$/);
   if (wsDeleteMatch && req.method === 'DELETE') {
     const workspaceId = decodeURIComponent(wsDeleteMatch[1] ?? '');
     const force = url.searchParams.get('force') === 'true';

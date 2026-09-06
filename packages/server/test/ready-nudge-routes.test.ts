@@ -141,7 +141,7 @@ describe('the board wakes its lead over the wire', () => {
     tab: ReturnType<typeof listenFrames>;
   }> {
     const { workspace } = await jj<{ workspace: { id: string; leadAgentId?: string } }>(
-      await post('/api/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id }),
+      await post('/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id }),
     );
     const workspaceId = workspace.id;
     expect(workspace.leadAgentId).toBe(LEAD.id);
@@ -168,7 +168,7 @@ describe('the board wakes its lead over the wire', () => {
     // tab did not receive the wake" would also be satisfied by a tab that
     // was never on the channel at all.
     const { task } = await jj<{ task: { id: string; assignee: string } }>(
-      await post(`/api/workspaces/${workspaceId}/tasks`, {
+      await post(`/workspaces/${workspaceId}/tasks`, {
         title: 'Rank results by recency',
         body: 'Agent can rerank the result list so that fresh pages surface.',
         assignee: LEAD.name,
@@ -203,7 +203,7 @@ describe('the board wakes its lead over the wire', () => {
    */
   async function addReadyRow(workspaceId: string, title: string): Promise<string> {
     const { task } = await jj<{ task: { id: string } }>(
-      await post(`/api/workspaces/${workspaceId}/tasks`, {
+      await post(`/workspaces/${workspaceId}/tasks`, {
         title,
         body: `Agent can ${title.toLowerCase()} so that the queue keeps moving.`,
         assignee: LEAD.name,
@@ -646,7 +646,7 @@ describe('the board wakes its lead over the wire', () => {
     const { workspaceId, lead, tab } = await boardWithReadyWork();
 
     const { workspace } = await jj<{ workspace: { retiredAt?: number } }>(
-      await fetch(`${base}/api/workspaces/${workspaceId}/retired`, {
+      await fetch(`${base}/workspaces/${workspaceId}/retired`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ retired: true, reason: 'search work moved', author: PERSON }),
@@ -662,7 +662,7 @@ describe('the board wakes its lead over the wire', () => {
     // …and the silence above is RETIREMENT, not a board that could never
     // have been woken. Stand it back up and the same pass fires.
     await jj(
-      await fetch(`${base}/api/workspaces/${workspaceId}/retired`, {
+      await fetch(`${base}/workspaces/${workspaceId}/retired`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ retired: false, author: PERSON }),
@@ -749,11 +749,11 @@ describe('the board wakes its lead over the wire', () => {
     // And it is silent for the stated reason — the row is in triage — rather
     // than because the wake broke. `next` drops triage rows entirely.
     const { tasks } = await jj<{ tasks: Array<{ id: string }> }>(
-      await fetch(`${base}/api/workspaces/${workspaceId}/next`),
+      await fetch(`${base}/workspaces/${workspaceId}/next`),
     );
     expect(tasks.find((t) => t.id === taskId)).toBeUndefined();
     const { tasks: all } = await jj<{ tasks: Array<{ id: string; status: string }> }>(
-      await fetch(`${base}/api/workspaces/${workspaceId}/tasks`),
+      await fetch(`${base}/workspaces/${workspaceId}/tasks?format=json`),
     );
     expect(all.find((t) => t.id === taskId)?.status).toBe('triage');
 
@@ -834,7 +834,7 @@ describe('the board wakes its lead over the wire', () => {
     // The silence is the STAMP, not a wake that could no longer be delivered.
     // Move the board and the same pass fires down the same stream.
     await jj(
-      await post(`/api/workspaces/${workspaceId}/tasks`, {
+      await post(`/workspaces/${workspaceId}/tasks`, {
         title: 'Cache the facet counts',
         body: 'Agent can serve facet counts from cache so that the sidebar stops blocking.',
         assignee: LEAD.name,
@@ -867,14 +867,14 @@ describe('the board wakes its lead over the wire', () => {
     it('holds ready rows past the cap, and says so instead of going silent', async () => {
       const { workspaceId, lead, tab } = await boardWithReadyWork();
       await jj(
-        await put(`/api/workspaces/${workspaceId}/settings`, { author: LEAD, parallelismCap: 1 }),
+        await put(`/workspaces/${workspaceId}/settings`, { author: LEAD, parallelismCap: 1 }),
       );
 
       // Spend the one slot on a task the wake never names — an in-progress
       // row the ready gate would not have offered anyway, so the count is
       // provably the dispatch's, not a side effect of the held row.
       const { task: busy } = await jj<{ task: { id: string } }>(
-        await post(`/api/workspaces/${workspaceId}/tasks`, {
+        await post(`/workspaces/${workspaceId}/tasks`, {
           title: 'Migrate the search index',
           body: 'Agent can migrate the index so that queries stop timing out.',
           assignee: LEAD.name,

@@ -211,7 +211,7 @@ describe('cross-reference routes + payload surfacing', () => {
   const del = send('DELETE');
 
   const mkTask = async (opts: Record<string, unknown>): Promise<Task> => {
-    const r = await post(`/api/workspaces/${wsId}/tasks`, { assignee: 'human', ...opts });
+    const r = await post(`/workspaces/${wsId}/tasks`, { assignee: 'human', ...opts });
     expect(r.status).toBe(200);
     return ((await r.json()) as { task: Task }).task;
   };
@@ -220,7 +220,7 @@ describe('cross-reference routes + payload surfacing', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'xref-routes-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
-    const r = await post('/api/workspaces', { name: 'xref-route-ws', goal: 'Ship.' });
+    const r = await post('/workspaces', { name: 'xref-route-ws', goal: 'Ship.' });
     wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
     const mdPath = join(dataDir, 'notes.md');
     writeFileSync(mdPath, '# Notes\n\nBody.\n');
@@ -248,7 +248,7 @@ describe('cross-reference routes + payload surfacing', () => {
       expect(body.task.links).toEqual([{ kind: 'doc', docId: 'xref-notes' }]);
 
       // Read the stored effect back through the OTHER route (groups lesson).
-      const listed = (await (await local(`/api/workspaces/${wsId}/tasks`)).json()) as {
+      const listed = (await (await local(`/workspaces/${wsId}/tasks?format=json`)).json()) as {
         tasks: Task[];
       };
       expect(listed.tasks.find((x) => x.id === t.id)?.links).toEqual([

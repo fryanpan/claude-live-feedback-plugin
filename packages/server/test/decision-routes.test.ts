@@ -47,13 +47,13 @@ describe('decision routes', () => {
 
   async function seedWorkspace(): Promise<string> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
+      await post('/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
     );
     return workspace.id;
   }
   async function getTasks(workspaceId: string): Promise<Task[]> {
     const { tasks } = await jj<{ tasks: Task[] }>(
-      await fetch(`${base}/api/workspaces/${workspaceId}/tasks`),
+      await fetch(`${base}/workspaces/${workspaceId}/tasks?format=json`),
     );
     return tasks;
   }
@@ -62,7 +62,7 @@ describe('decision routes', () => {
     extra: Record<string, unknown> = {},
   ): Promise<Task> {
     const { task } = await jj<{ task: Task }>(
-      await post(`/api/workspaces/${workspaceId}/tasks`, {
+      await post(`/workspaces/${workspaceId}/tasks`, {
         title: 'ship now or wait?',
         assignee: 'human',
         needs: 'decision',
@@ -83,7 +83,7 @@ describe('decision routes', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  // ── POST /api/workspaces/:id/tasks — `options` ──────────────────────────
+  // ── POST /workspaces/:id/tasks — `options` ──────────────────────────
 
   describe('create forwards `options`', () => {
     it('stores them with ids, readable back through the list route', async () => {
@@ -107,7 +107,7 @@ describe('decision routes', () => {
         [{ detail: 'no label' }],
         [{ label: '  ' }],
       ]) {
-        const r = await post(`/api/workspaces/${wsId}/tasks`, {
+        const r = await post(`/workspaces/${wsId}/tasks`, {
           title: 'x',
           assignee: 'human',
           needs: 'decision',
@@ -117,7 +117,7 @@ describe('decision routes', () => {
         expect(r.status).toBe(400);
       }
       // Positive control: the well-formed array is accepted at the same route.
-      const good = await post(`/api/workspaces/${wsId}/tasks`, {
+      const good = await post(`/workspaces/${wsId}/tasks`, {
         title: 'x',
         assignee: 'human',
         needs: 'decision',
@@ -133,7 +133,7 @@ describe('decision routes', () => {
   describe('create gates a decision body at the route', () => {
     it('400s a progress report and names the shape in the message', async () => {
       const wsId = await seedWorkspace();
-      const r = await post(`/api/workspaces/${wsId}/tasks`, {
+      const r = await post(`/workspaces/${wsId}/tasks`, {
         title: 'The name',
         assignee: 'human',
         needs: 'decision',
@@ -150,7 +150,7 @@ describe('decision routes', () => {
     it('returns the advisory gaps alongside a task it DID create', async () => {
       const wsId = await seedWorkspace();
       const r = await jj<{ task: Task; shapeGaps?: string[] }>(
-        await post(`/api/workspaces/${wsId}/tasks`, {
+        await post(`/workspaces/${wsId}/tasks`, {
           title: 'Badge colour',
           assignee: 'human',
           needs: 'decision',
@@ -369,7 +369,7 @@ describe('decision routes', () => {
       const wsId = await seedWorkspace();
       const task = await seedDecision(wsId);
       const { task: plain } = await jj<{ task: Task }>(
-        await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title: 'plain' }),
+        await post(`/workspaces/${wsId}/tasks`, { author: AGENT, title: 'plain' }),
       );
       expect((await post('/api/tasks/t-missing/answer/undo', { author: PERSON })).status).toBe(404);
       expect((await post(`/api/tasks/${task.id}/answer/undo`, {})).status).toBe(400);
@@ -422,7 +422,7 @@ describe('decision routes', () => {
       const wsId = await seedWorkspace();
       const task = await seedDecision(wsId);
       const { task: plain } = await jj<{ task: Task }>(
-        await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title: 'plain' }),
+        await post(`/workspaces/${wsId}/tasks`, { author: AGENT, title: 'plain' }),
       );
       expect(
         (await post('/api/tasks/t-missing/more-info', { question: 'x', author: PERSON })).status,
@@ -442,7 +442,7 @@ describe('decision routes', () => {
       const wsId = await seedWorkspace();
       const gate = await seedDecision(wsId);
       const { task: work } = await jj<{ task: Task }>(
-        await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title: 'Open the PR' }),
+        await post(`/workspaces/${wsId}/tasks`, { author: AGENT, title: 'Open the PR' }),
       );
       // Presence first: with no edge, the transition goes through.
       expect(
@@ -473,7 +473,7 @@ describe('decision routes', () => {
       const wsId = await seedWorkspace();
       const gate = await seedDecision(wsId);
       const { task: work } = await jj<{ task: Task }>(
-        await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title: 'Open the PR' }),
+        await post(`/workspaces/${wsId}/tasks`, { author: AGENT, title: 'Open the PR' }),
       );
       await jj(await post(`/api/tasks/${work.id}/after`, { after: [gate.id], author: AGENT }));
       expect((await getTasks(wsId)).find((t) => t.id === work.id)?.after).toEqual([gate.id]);
@@ -484,7 +484,7 @@ describe('decision routes', () => {
     it('404s an unknown task; 400s a bad edge, a self edge, and a missing author', async () => {
       const wsId = await seedWorkspace();
       const { task: work } = await jj<{ task: Task }>(
-        await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title: 'Open the PR' }),
+        await post(`/workspaces/${wsId}/tasks`, { author: AGENT, title: 'Open the PR' }),
       );
       expect((await post('/api/tasks/t-missing/after', { after: [], author: AGENT })).status).toBe(
         404,
@@ -523,7 +523,7 @@ describe('decision routes', () => {
     it('through create_tasks: needs + options in, optionId out', async () => {
       const wsId = await seedWorkspace();
       const { task } = await jj<{ task: Task }>(
-        await post(`/api/workspaces/${wsId}/tasks`, {
+        await post(`/workspaces/${wsId}/tasks`, {
           title: 'ship now or wait?',
           assignee: 'human',
           needs: 'decision',
@@ -612,7 +612,7 @@ describe('decision routes', () => {
     // legacy path has always accepted, and knows nothing about `needs`.
     it('still refuses options on a non-decision and a decision body with no question', async () => {
       const wsId = await seedWorkspace();
-      const noQuestion = await post(`/api/workspaces/${wsId}/tasks`, {
+      const noQuestion = await post(`/workspaces/${wsId}/tasks`, {
         title: 'Rollout note',
         assignee: 'human',
         needs: 'decision',
@@ -621,7 +621,7 @@ describe('decision routes', () => {
       expect(noQuestion.status).toBe(400);
       expect(((await noQuestion.json()) as { error: string }).error).toBe('decision-body-required');
 
-      const optionsWithoutDecision = await post(`/api/workspaces/${wsId}/tasks`, {
+      const optionsWithoutDecision = await post(`/workspaces/${wsId}/tasks`, {
         title: 'Rollout note',
         assignee: 'human',
         needs: 'action',

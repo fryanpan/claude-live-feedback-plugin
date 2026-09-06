@@ -188,7 +188,7 @@ export function taskLinkHref(workspaceId: string, taskId: string): string {
  * It is a function, and tested, because reading the wrong one of the two
  * failed silently in exactly the way an id mix-up does: `DocMeta` defaults
  * both to the empty string, so an `=== undefined` guard let `''` through and
- * the create went to `/api/workspaces//tasks`. The person got a toast that
+ * the create went to `/workspaces//tasks`. The person got a toast that
  * said "404".
  */
 export function boardIdFor(meta: {
@@ -269,7 +269,7 @@ export async function runSpinoff(
 ): Promise<SpinoffResult | null> {
   if (action === 'research') return runResearch(deps);
   const title = deriveTaskTitle(deps.quote, TITLE_MAX);
-  const res = (await post(deps, `/api/workspaces/${encodeURIComponent(deps.workspaceId)}/tasks`, {
+  const res = (await post(deps, `/workspaces/${encodeURIComponent(deps.workspaceId)}/tasks`, {
     title,
     // The whole selection and the way back to the doc; the title above is
     // only a trimmed reading of the same words.

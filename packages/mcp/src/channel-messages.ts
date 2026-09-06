@@ -323,7 +323,7 @@ async function emitBoardChannelMessage(
     try {
       await deps.http(
         'POST',
-        `/api/workspaces/${encodeURIComponent(p.workspaceId)}/voice-queue/${encodeURIComponent(p.queueId)}/ack`,
+        `/workspaces/${encodeURIComponent(p.workspaceId)}/voice-queue/${encodeURIComponent(p.queueId)}/ack`,
         {},
       );
     } catch {

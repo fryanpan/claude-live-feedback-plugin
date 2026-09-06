@@ -62,7 +62,7 @@ describe('unlinking a spoken link from the note', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'notes-unlink-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
-    const ws = await post('/api/workspaces', { name: 'recorder', goal: 'Ship the recorder.' });
+    const ws = await post('/workspaces', { name: 'recorder', goal: 'Ship the recorder.' });
     wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
     const mdPath = join(dataDir, 'standup.md');
     writeFileSync(mdPath, '# Standup\n\n## Meeting notes\n\n- A point.\n');
@@ -80,7 +80,7 @@ describe('unlinking a spoken link from the note', () => {
   });
 
   const mkTask = async (title: string): Promise<Task> => {
-    const r = await post(`/api/workspaces/${wsId}/tasks`, { title, assignee: 'human' });
+    const r = await post(`/workspaces/${wsId}/tasks`, { title, assignee: 'human' });
     expect(r.status).toBe(200);
     return ((await r.json()) as { task: Task }).task;
   };

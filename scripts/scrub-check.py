@@ -24,8 +24,22 @@ Usage:
   scrub-check.py --push-tip SHA [--remote NAME] [--already-public SHA]...
                                             # files this push makes public (hook mode)
   scrub-check.py --diff-range A..B          # scan files changed in range
-  scrub-check.py --staged                   # scan files in git index
+  scrub-check.py --staged                   # scan whole blobs in the git index
+  scrub-check.py --staged-added             # scan only the lines the commit ADDS
   scrub-check.py --scan-all-tracked         # scan every tracked file (audit)
+
+TWO GATES, TWO QUESTIONS. `.githooks/pre-commit` asks what this commit ADDS
+(`--staged-added`); `.githooks/pre-push` asks what the push MAKES PUBLIC
+(whole blobs). The split is the whole point. A commit gate that read whole
+blobs would refuse an edit to any file whose untouched lines already carry a
+match — a tax on editing near old content, and the reliable way to train
+people into SCRUB_SKIP=1. A push gate that read only additions would let a
+leak through the moment a branch merged a commit that carried one. Catching
+it at commit time is what keeps the remedy cheap: nothing is written yet, so
+there is no history to rewrite — and rewriting history is the step an agent
+cannot take, which is what made PR 675 the repo owner's problem to fix by
+hand. Findings from the push gate name the commit that wrote each line, so
+the writer knows whether the remedy is a rewrite or a forward fix.
 
 `--push-tip` narrows the file list to the ones the becoming-public commits
 touch. This layer is deterministic, so a merge of `main` never produced the
@@ -442,20 +456,21 @@ def should_scan(path: str) -> bool:
     return ext in SCAN_EXTS
 
 
-def scan_content(
-    path: str, data: bytes, patterns: List[Tuple[str, re.Pattern]]
+def scan_lines(
+    path: str, lines: List[Tuple[int, str]], patterns: List[Tuple[str, re.Pattern]]
 ) -> List[Tuple[int, str, str]]:
-    """Return [(line_no, label, line_text)] of matches in `data`.
+    """Return [(line_no, label, line_text)] of matches among `lines`.
 
     `path` decides only whether an inline `scrub-allow` may exempt a line:
     never in a NEVER_ALLOW type, and elsewhere only as a trailing comment
-    token (ALLOW_RX). The bytes come from whichever source the mode named —
-    a commit, the index, or disk — and this function does not care which.
+    token (ALLOW_RX). WHICH lines arrive here is the mode's decision, and it
+    is the whole difference between the two gates: the push gate hands over
+    every line of the blob it would publish, the commit gate hands over only
+    the lines this commit ADDS.
     """
     findings: List[Tuple[int, str, str]] = []
-    text = data.decode("utf-8", errors="replace")
     allow_ok = not is_never_allow(path)
-    for line_no, line in enumerate(text.split("\n"), 1):
+    for line_no, line in lines:
         # A line documenting the gate itself may exempt itself — with a
         # trailing comment, in a type where a comment means something.
         if allow_ok and ALLOW_RX.search(line):
@@ -465,6 +480,19 @@ def scan_content(
                 findings.append((line_no, label, line))
                 break  # one finding per line is enough
     return findings
+
+
+def numbered_lines(data: bytes) -> List[Tuple[int, str]]:
+    """Every line of a blob, 1-based — what the whole-blob modes scan."""
+    text = data.decode("utf-8", errors="replace")
+    return list(enumerate(text.split("\n"), 1))
+
+
+def scan_content(
+    path: str, data: bytes, patterns: List[Tuple[str, re.Pattern]]
+) -> List[Tuple[int, str, str]]:
+    """Whole-blob scan: every line of `data`."""
+    return scan_lines(path, numbered_lines(data), patterns)
 
 
 def scan_file(path: str, patterns: List[Tuple[str, re.Pattern]]) -> List[Tuple[int, str, str]]:
@@ -495,6 +523,40 @@ def read_blob(rev: str, path: str) -> Optional[bytes]:
         ).stdout
     except (subprocess.CalledProcessError, FileNotFoundError):
         return None
+
+
+# Blame is one subprocess per finding, so cap it. Past a few dozen the writer
+# has a category problem rather than a line problem, and the un-annotated
+# findings still name file and line.
+_ATTRIBUTION_BUDGET = [40]
+
+
+def attribute(
+    blame_rev: Optional[str],
+    publishing: Optional[set],
+    path: str,
+    line_no: int,
+) -> Optional[str]:
+    """One line saying WHICH commit wrote this finding, and whether it is new.
+
+    The push gate reads whole blobs, so it can fire on a line the branch never
+    wrote — a file it merely touched. That happened on PR 723, and the writer
+    reached for `git commit --amend` on content that had been on the remote
+    for weeks. The remedy differs completely between the two cases, so the
+    gate now says which one this is instead of leaving it to be worked out.
+    """
+    if blame_rev is None or _ATTRIBUTION_BUDGET[0] <= 0:
+        return None
+    _ATTRIBUTION_BUDGET[0] -= 1
+    found = scrub_git.blame_line(blame_rev, path, line_no)
+    if found is None:
+        return None
+    sha, subject = found
+    short = sha[:9]
+    title = f' "{subject}"' if subject else ""
+    if publishing is not None and sha in publishing:
+        return f"introduced by {short}{title} — this push would publish it (rewrite that commit)"
+    return f"already on the remote in {short}{title} — a forward fix is enough"
 
 
 def tip_of_range(range_spec: str) -> Optional[str]:
@@ -528,6 +590,104 @@ def files_staged() -> List[str]:
         return []
 
 
+def files_staged_alive() -> List[str]:
+    """Staged paths this commit still carries — deletions excluded.
+
+    A commit whose whole point is to REMOVE a file that may never be pushed
+    is the fix, not the leak; `--diff-filter=d` (lowercase: exclude) is what
+    keeps the never-push refusal from blocking it.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "diff", "--cached", "--name-only", "--diff-filter=d"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+        return [f for f in out.strip().split("\n") if f]
+    except subprocess.CalledProcessError:
+        return []
+
+
+_HUNK_RX = re.compile(rb"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+
+
+def _unquote_path(raw: bytes) -> str:
+    """A path as git printed it in a diff header, quoting undone.
+
+    git wraps a path in double quotes and C-escapes it when it contains a
+    quote, a backslash or (without core.quotePath=false) a non-ASCII byte.
+    Left quoted, the path never matches the one `should_scan` and the
+    never-push rules are asked about — the file would be scanned under a
+    name that does not exist, which is a miss dressed as a scan.
+    """
+    text = raw.decode("utf-8", errors="replace")
+    if not (len(text) >= 2 and text[0] == '"' and text[-1] == '"'):
+        return text
+    try:
+        return text[1:-1].encode("latin-1", "backslashreplace").decode("unicode_escape")
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        return text[1:-1]
+
+
+def staged_added_lines() -> Dict[str, List[Tuple[int, str]]]:
+    """{path: [(new_line_no, text)]} — the lines this commit ADDS.
+
+    THE POINT OF THE COMMIT GATE. The push gate reads whole blobs, which is
+    right for a push (everything in the blob becomes public) and wrong for a
+    commit: touching one line of a file whose other lines already carry a
+    match would be refused, and a gate that fires on edits near old content
+    is a gate people turn off. Measured on this repo (PR 723): a codemod
+    changed one line of a doc whose untouched lines carried a private name,
+    the whole-blob read fired, and `git commit --amend` was not available as
+    a remedy.
+
+    `--text` so a NEVER_ALLOW type (`.ydoc`, `.csv`, an image) is diffed as
+    text rather than summarised as "binary files differ" — those are exactly
+    the shapes content arrives in unread. `-U0` so only changed lines appear,
+    never their neighbours.
+    """
+    try:
+        out = subprocess.run(
+            [
+                "git", "-c", "core.quotePath=false", "diff", "--cached",
+                "-U0", "--text", "--no-color", "--no-ext-diff", "--find-renames",
+            ],
+            capture_output=True, check=True,
+        ).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return {}
+
+    added: Dict[str, List[Tuple[int, str]]] = {}
+    path: Optional[str] = None
+    line_no = 0
+    in_hunk = False
+    for raw in out.split(b"\n"):
+        if raw.startswith(b"diff --git "):
+            path, in_hunk = None, False
+            continue
+        # `+++ ` is a file header only BEFORE the first hunk. Inside one it is
+        # an added line whose own text starts with `++`, and reading that as a
+        # header would silently retarget every line after it.
+        if not in_hunk and raw.startswith(b"+++ "):
+            target = raw[4:].strip()
+            if target == b"/dev/null":
+                path = None
+            else:
+                name = _unquote_path(target)
+                path = name[2:] if name[:2] in ("b/", "a/") else name
+            continue
+        m = _HUNK_RX.match(raw)
+        if m:
+            in_hunk = True
+            line_no = int(m.group(1))
+            continue
+        if in_hunk and path and raw.startswith(b"+"):
+            added.setdefault(path, []).append(
+                (line_no, raw[1:].decode("utf-8", errors="replace"))
+            )
+            line_no += 1
+    return added
+
+
 def all_tracked_files() -> List[str]:
     try:
         out = subprocess.run(
@@ -559,9 +719,21 @@ def main() -> int:
     # Where the BYTES come from. Every git-addressed mode reads the blob the
     # push would publish; only bare paths read the working tree.
     read: "Callable[[str], Optional[bytes]]" = read_worktree
-    if rev_args is not None:
+    # Added-lines mode carries its own line sets; nothing is read by path.
+    added: Optional[Dict[str, List[Tuple[int, str]]]] = None
+    # For attribution: the rev whose blame answers "who wrote this line", and
+    # the commits this run would publish. Both None outside the push modes.
+    blame_rev: Optional[str] = None
+    publishing: Optional[set] = None
+    files: List[str] = []
+    if "--staged-added" in args:
+        added = staged_added_lines()
+        files = files_staged_alive()
+    elif rev_args is not None:
         files = scrub_git.push_files(rev_args)
         tip = rev_args[0]
+        blame_rev = tip
+        publishing = scrub_git.becoming_public_shas(rev_args)
         read = lambda path, _rev=tip: read_blob(_rev, path)
     elif "--diff-range" in args:
         idx = args.index("--diff-range")
@@ -578,6 +750,8 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 2
+        blame_rev = tip
+        publishing = scrub_git.becoming_public_shas([range_spec])
         read = lambda path, _rev=tip: read_blob(_rev, path)
     elif "--staged" in args:
         files = files_staged()
@@ -593,7 +767,8 @@ def main() -> int:
             # costume. Silence is what let all of these run for weeks.
             print(
                 "[scrub-check] no files given, and this tool does not read stdin.\n"
-                "  Pass file paths, or --diff-range A..B / --staged / --scan-all-tracked.",
+                "  Pass file paths, or --diff-range A..B / --staged / --staged-added /\n"
+                "  --scan-all-tracked.",
                 file=sys.stderr,
             )
             return 2
@@ -601,29 +776,47 @@ def main() -> int:
     # Filter: keep only files we'd scan and that the source can produce — a
     # path git named that the tip no longer carries (deleted in the push) has
     # no blob to read, and a bare path that is not a file has no bytes.
-    contents: List[Tuple[str, bytes]] = []
-    for f in files:
-        if not should_scan(f):
-            continue
-        if read is read_worktree and not os.path.isfile(f):
-            continue
-        data = read(f)
-        if data is not None:
-            contents.append((f, data))
+    #
+    # `units` is (path, [(line_no, text)]) in every mode. Whole-blob modes
+    # number every line of the blob; added-lines mode carries the diff's own
+    # new-side numbers, so a finding still points at a line of the file.
+    units: List[Tuple[str, List[Tuple[int, str]]]] = []
+    scannable = [f for f in files if should_scan(f)]
+    if added is not None:
+        for f in scannable:
+            lines = added.get(f)
+            if lines:
+                units.append((f, lines))
+        # A never-push file is refused for EXISTING, whatever it adds — a
+        # rename or a mode change of one adds no lines at all.
+        present = scannable
+    else:
+        for f in scannable:
+            if read is read_worktree and not os.path.isfile(f):
+                continue
+            data = read(f)
+            if data is not None:
+                units.append((f, numbered_lines(data)))
+        present = [f for f, _ in units]
 
-    if not contents:
+    if not units and not present:
         return 0
 
     # Before any pattern source is consulted: a file that can never be pushed
     # is refused even on a machine with no patterns at all. Only files the
     # source can still produce — a deleted one is the fix, not the leak.
-    refused = [(f, never_push_reason(f)) for f, _ in contents if never_push_reason(f)]
+    # "Push blocked" is wrong at commit time, and the difference is the useful
+    # half of the message: a blocked commit is fixed by editing a file.
+    blocked = "Commit blocked" if added is not None else "Push blocked"
+    override_cmd = "git commit" if added is not None else "git push"
+
+    refused = [(f, never_push_reason(f)) for f in present if never_push_reason(f)]
     if refused:
         print("[scrub-check] files that are never pushed:", file=sys.stderr)
         for f, why in refused:
             print(f"  {f}  ({why})", file=sys.stderr)
         print(
-            f"\n[scrub-check] {len(refused)} refused file(s). Push blocked.\n"
+            f"\n[scrub-check] {len(refused)} refused file(s). {blocked}.\n"
             "[scrub-check] Fix: these belong under the server data dir, not the repo — "
             "remove them from the commit. No allowlist applies.",
             file=sys.stderr,
@@ -674,8 +867,8 @@ def main() -> int:
 
     total = 0
     files_with_findings = set()
-    for f, data in contents:
-        for line_no, label, line in scan_content(f, data, patterns):
+    for f, lines in units:
+        for line_no, label, line in scan_lines(f, lines, patterns):
             if total == 0:
                 print(f"[scrub-check] leaks detected:", file=sys.stderr)
             files_with_findings.add(f)
@@ -684,19 +877,34 @@ def main() -> int:
                 snippet = snippet[:97] + "..."
             print(f"  {f}:{line_no}  ({label})", file=sys.stderr)
             print(f"    > {snippet}", file=sys.stderr)
+            note = attribute(blame_rev, publishing, f, line_no)
+            if note:
+                print(f"    {note}", file=sys.stderr)
             total += 1
 
     if total:
         print(
-            f"\n[scrub-check] {total} leak(s) across {len(files_with_findings)} file(s). Push blocked.",
+            f"\n[scrub-check] {total} leak(s) across {len(files_with_findings)} file(s). {blocked}.",
             file=sys.stderr,
         )
         print(
             "[scrub-check] Fix: replace with a generic placeholder, anonymize, or move content to a gitignored path.",
             file=sys.stderr,
         )
+        if added is not None:
+            print(
+                "[scrub-check] Nothing is committed yet — edit the file and re-stage. No history to rewrite.",
+                file=sys.stderr,
+            )
+        elif blame_rev is not None:
+            print(
+                "[scrub-check] Each finding says which commit wrote the line: one this push\n"
+                "  publishes needs the history changed (amend / rebase / a new branch); one\n"
+                "  already public needs only a forward commit that anonymizes it.",
+                file=sys.stderr,
+            )
         print(
-            "[scrub-check] Override (sparingly): SCRUB_SKIP=1 git push ...",
+            f"[scrub-check] Override (sparingly): SCRUB_SKIP=1 {override_cmd} ...",
             file=sys.stderr,
         )
         return 1

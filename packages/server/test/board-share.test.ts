@@ -220,20 +220,20 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
     expect(privateId).toBeTruthy();
 
     // The board workspace, one attached doc, one task, one open decision.
-    const ws = await post('/api/workspaces', { name: 'search-revamp' });
+    const ws = await post('/workspaces', { name: 'search-revamp' });
     expect(ws.status).toBe(200);
     boardId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
 
-    expect((await post(`/api/workspaces/${boardId}/docs`, { docId: ATTACHED })).status).toBe(200);
+    expect((await post(`/workspaces/${boardId}/docs`, { docId: ATTACHED })).status).toBe(200);
 
-    const t = await post(`/api/workspaces/${boardId}/tasks`, {
+    const t = await post(`/workspaces/${boardId}/tasks`, {
       author: PERSON,
       title: 'Wire the store',
     });
     expect(t.status).toBe(200);
     taskId = ((await t.json()) as { task: { id: string } }).task.id;
 
-    const d = await post(`/api/workspaces/${boardId}/tasks`, {
+    const d = await post(`/workspaces/${boardId}/tasks`, {
       title: 'Ship search now, or wait for reindex?',
       assignee: 'human',
       needs: 'decision',
@@ -260,7 +260,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
     // A second workspace nobody here belongs to. It needs no docs of its own:
     // a board workspace is shareable with zero bound members, and its only job
     // is to authorize a visitor who is legitimately in SOME workspace.
-    const other = await post('/api/workspaces', { name: 'billing-cleanup' });
+    const other = await post('/workspaces', { name: 'billing-cleanup' });
     expect(other.status).toBe(200);
     otherId = ((await other.json()) as { workspace: { id: string } }).workspace.id;
 
@@ -335,11 +335,11 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
       // 403, not 401: with Access in front of every browser-facing host a
       // request that proves nothing is refused outright, not invited to sign
       // in at a surface this server serves.
-      expect((await pub(`/workspaces/${boardId}`)).status).toBe(403);
+      expect((await pub(`/workspaces/${boardId}?format=json`)).status).toBe(403);
       // Positive control: the same cookie serves its OWN board page, so the
       // 403 is the scope check rather than a dead session.
-      expect((await pub(`/workspaces/${otherId}`, otherCookie)).status).toBe(200);
-      expect((await pub(`/workspaces/${boardId}`, otherCookie)).status).toBe(403);
+      expect((await pub(`/workspaces/${otherId}?format=json`, otherCookie)).status).toBe(200);
+      expect((await pub(`/workspaces/${boardId}?format=json`, otherCookie)).status).toBe(403);
     });
 
     // The board-feedback doc is SHARED BY EVERY WORKSPACE, and Yjs sync is a
@@ -450,7 +450,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
     it('never puts a voice transcript on a visitor stream (absence)', async () => {
       const stream = await pub(`/workspaces/${boardId}/events:stream`, boardCookie);
       expect(stream.status).toBe(200);
-      const trigger = post(`/api/workspaces/${boardId}/voice`, {
+      const trigger = post(`/workspaces/${boardId}/voice`, {
         transcript: 'hold the release until legal clears the acquisition question',
         author: PERSON,
       });
@@ -471,7 +471,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
     it('the OWNER stream still carries the transcript (positive control)', async () => {
       const stream = await local(`/workspaces/${boardId}/events:stream`);
       expect(stream.status).toBe(200);
-      const trigger = post(`/api/workspaces/${boardId}/voice`, {
+      const trigger = post(`/workspaces/${boardId}/voice`, {
         transcript: 'open the task about the device re-run',
         author: PERSON,
       });
@@ -490,14 +490,14 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
   // was silent.
   describe('the board page’s own REST reads are in scope', () => {
     it('serves the workspace record to its own visitor, refuses another workspace’s', async () => {
-      const r = await pub(`/api/workspaces/${boardId}`, boardCookie);
+      const r = await pub(`/workspaces/${boardId}?format=json`, boardCookie);
       expect(r.status).toBe(200);
       const { workspace } = (await r.json()) as { workspace: { name: string } };
       expect(workspace.name).toBe('search-revamp'); // the page title, not the id
       // Positive control for the refusal: the other cookie reads ITS record.
-      expect((await pub(`/api/workspaces/${otherId}`, otherCookie)).status).toBe(200);
-      expect((await pub(`/api/workspaces/${boardId}`, otherCookie)).status).toBe(403);
-      expect((await pub(`/api/workspaces/${boardId}`)).status).toBe(403);
+      expect((await pub(`/workspaces/${otherId}?format=json`, otherCookie)).status).toBe(200);
+      expect((await pub(`/workspaces/${boardId}?format=json`, otherCookie)).status).toBe(403);
+      expect((await pub(`/workspaces/${boardId}?format=json`)).status).toBe(403);
     });
 
     /**
@@ -507,19 +507,19 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
      * split-transport failure as the two reads above.
      */
     it('serves the review queue to its own visitor, refuses another workspace’s', async () => {
-      const r = await pub(`/api/workspaces/${boardId}/review-items`, boardCookie);
+      const r = await pub(`/workspaces/${boardId}/review-items`, boardCookie);
       expect(r.status).toBe(200);
       const seen = (await r.json()) as { items: unknown[] };
       expect(Array.isArray(seen.items)).toBe(true);
-      expect((await pub(`/api/workspaces/${otherId}/review-items`, otherCookie)).status).toBe(200);
-      expect((await pub(`/api/workspaces/${boardId}/review-items`, otherCookie)).status).toBe(403);
-      expect((await pub(`/api/workspaces/${boardId}/review-items`)).status).toBe(403);
+      expect((await pub(`/workspaces/${otherId}/review-items`, otherCookie)).status).toBe(200);
+      expect((await pub(`/workspaces/${boardId}/review-items`, otherCookie)).status).toBe(403);
+      expect((await pub(`/workspaces/${boardId}/review-items`)).status).toBe(403);
       // The board's rows are a member's too now (2026-09-03), so what a
       // stranger is refused is the board, not the verb: an un-vouched-for
       // caller and a member of the OTHER board both get nothing here.
-      expect((await pub(`/api/workspaces/${boardId}/tasks`, boardCookie)).status).toBe(200);
-      expect((await pub(`/api/workspaces/${boardId}/tasks`, otherCookie)).status).toBe(403);
-      expect((await pub(`/api/workspaces/${boardId}/tasks`)).status).toBe(403);
+      expect((await pub(`/workspaces/${boardId}/tasks?format=json`, boardCookie)).status).toBe(200);
+      expect((await pub(`/workspaces/${boardId}/tasks?format=json`, otherCookie)).status).toBe(403);
+      expect((await pub(`/workspaces/${boardId}/tasks?format=json`)).status).toBe(403);
     });
 
     it('serves agent presence redacted — no endpoint — with the owner’s copy as the control', async () => {
@@ -587,7 +587,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
      */
     it('files, edits, moves and answers work on the shared board', async () => {
       const author = PERSON;
-      const filed = await pub(`/api/workspaces/${boardId}/tasks`, boardCookie, {
+      const filed = await pub(`/workspaces/${boardId}/tasks`, boardCookie, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ title: 'Filed by a member', assignee: 'human', author }),
@@ -596,17 +596,11 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
       const filedId = ((await filed.json()) as { task: { id: string } }).task.id;
 
       const cases: Array<[string, RequestInit]> = [
-        [`/api/workspaces/${boardId}/tasks`, { method: 'GET' }],
+        [`/workspaces/${boardId}/tasks?format=json`, { method: 'GET' }],
+        [`/workspaces/${boardId}/home?user=${encodeURIComponent(PERSON.id)}`, { method: 'GET' }],
+        [`/workspaces/${boardId}/home/read`, { method: 'POST', body: JSON.stringify({ author }) }],
         [
-          `/api/workspaces/${boardId}/home?user=${encodeURIComponent(PERSON.id)}`,
-          { method: 'GET' },
-        ],
-        [
-          `/api/workspaces/${boardId}/home/read`,
-          { method: 'POST', body: JSON.stringify({ author }) },
-        ],
-        [
-          `/api/workspaces/${boardId}/goals/add`,
+          `/workspaces/${boardId}/goals/add`,
           { method: 'POST', body: JSON.stringify({ title: 'A member’s goal', author }) },
         ],
         [
@@ -653,7 +647,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
       // …and the board really changed: the owner surface reads the member's
       // work back. A 200 from a route that dropped the write would pass the
       // loop above and fail here.
-      const listed = (await (await local(`/api/workspaces/${boardId}/tasks`)).json()) as {
+      const listed = (await (await local(`/workspaces/${boardId}/tasks?format=json`)).json()) as {
         tasks: Array<{ id: string; title: string; status: string }>;
       };
       const row = listed.tasks.find((t) => t.id === filedId);
@@ -665,7 +659,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
       // The body claims a fleet identity; the trail must name the verified
       // address instead. Same rule the comment routes already follow — this
       // change added no second identity source, it reused `authorFor`.
-      const filed = await pub(`/api/workspaces/${boardId}/tasks`, boardCookie, {
+      const filed = await pub(`/workspaces/${boardId}/tasks`, boardCookie, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -689,7 +683,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
         }),
       });
       expect(moved.status).toBe(200);
-      const log = await local(`/api/workspaces/${boardId}/events`);
+      const log = await local(`/workspaces/${boardId}/events`);
       expect(log.status).toBe(200);
       const { events } = (await log.json()) as {
         events: Array<{ taskId?: string; actor?: { id: string; name: string } }>;
@@ -711,11 +705,8 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
           { method: 'POST', body: JSON.stringify({ to: 'done' }) },
         ],
         [`/api/tasks/${taskId}/title`, { method: 'POST', body: JSON.stringify({ title: 'X' }) }],
-        [
-          `/api/workspaces/${boardId}/tasks`,
-          { method: 'POST', body: JSON.stringify({ title: 'X' }) },
-        ],
-        [`/api/workspaces/${boardId}/tasks`, { method: 'GET' }],
+        [`/workspaces/${boardId}/tasks`, { method: 'POST', body: JSON.stringify({ title: 'X' }) }],
+        [`/workspaces/${boardId}/tasks`, { method: 'GET' }],
       ] as Array<[string, RequestInit]>) {
         const r = await pub(path, otherCookie, {
           ...init,
@@ -730,28 +721,28 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
       // of these was refused while a member was a reader, and each is the
       // positive control for the same path on a board they were not given
       // (the describe above) — one route, two members, two answers.
-      const readSettings = await pub(`/api/workspaces/${boardId}/settings`, boardCookie, {
+      const readSettings = await pub(`/workspaces/${boardId}/settings`, boardCookie, {
         method: 'GET',
       });
       expect(readSettings.status, await readSettings.clone().text()).toBe(200);
-      const wrote = await pub(`/api/workspaces/${boardId}/settings`, boardCookie, {
+      const wrote = await pub(`/workspaces/${boardId}/settings`, boardCookie, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ reviewItemCriteria: 'Written by a member.' }),
       });
       expect(wrote.status, await wrote.clone().text()).toBe(200);
-      const activity = await pub(`/api/workspaces/${boardId}/events`, boardCookie, {
+      const activity = await pub(`/workspaces/${boardId}/events`, boardCookie, {
         method: 'GET',
       });
       expect(activity.status).toBe(200);
-      const meeting = await pub(`/api/workspaces/${boardId}/huddles`, boardCookie, {
+      const meeting = await pub(`/workspaces/${boardId}/huddles`, boardCookie, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ kind: 'discussion' }),
       });
       expect(meeting.status, await meeting.clone().text()).toBe(200);
       // Filing a doc this member can already open onto the same board.
-      const filed = await pub(`/api/workspaces/${boardId}/docs`, boardCookie, {
+      const filed = await pub(`/workspaces/${boardId}/docs`, boardCookie, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ docId: ATTACHED }),
@@ -762,13 +753,13 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
       // given, which is what makes the four answers above a grant on ONE
       // board rather than on the server.
       for (const [path, init] of [
-        [`/api/workspaces/${boardId}/settings`, { method: 'GET' }],
+        [`/workspaces/${boardId}/settings`, { method: 'GET' }],
         [
-          `/api/workspaces/${boardId}/settings`,
+          `/workspaces/${boardId}/settings`,
           { method: 'PUT', body: JSON.stringify({ reviewItemCriteria: 'X' }) },
         ],
-        [`/api/workspaces/${boardId}/events`, { method: 'GET' }],
-        [`/api/workspaces/${boardId}/huddles`, { method: 'POST', body: '{}' }],
+        [`/workspaces/${boardId}/events`, { method: 'GET' }],
+        [`/workspaces/${boardId}/huddles`, { method: 'POST', body: '{}' }],
       ] as Array<[string, RequestInit]>) {
         const r = await pub(path, otherCookie, {
           ...init,
@@ -787,12 +778,12 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
         // is allowed and asserted in the test above — so this row is the
         // TARGET rule and not the verb.
         [
-          `/api/workspaces/${boardId}/docs`,
+          `/workspaces/${boardId}/docs`,
           { method: 'POST', body: JSON.stringify({ docId: PRIVATE }) },
         ],
         // Reads a file off the owner's disk by the path in the body.
         [
-          `/api/workspaces/${boardId}/import-tasks`,
+          `/workspaces/${boardId}/import-tasks`,
           { method: 'POST', body: JSON.stringify({ path: '/etc/hosts', author }) },
         ],
         // The agent roster's own verbs.
@@ -804,21 +795,21 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
           },
         ],
         // Board lifecycle.
-        [`/api/workspaces/${boardId}`, { method: 'DELETE' }],
+        [`/workspaces/${boardId}`, { method: 'DELETE' }],
         [
-          `/api/workspaces/${boardId}/lead`,
+          `/workspaces/${boardId}/lead`,
           { method: 'PUT', body: JSON.stringify({ agentId: 'agent-x' }) },
         ],
         [
-          `/api/workspaces/${boardId}/goals`,
+          `/workspaces/${boardId}/goals`,
           { method: 'PUT', body: JSON.stringify({ goals: [], author }) },
         ],
         [
-          `/api/workspaces/${boardId}/voice`,
+          `/workspaces/${boardId}/voice`,
           { method: 'POST', body: JSON.stringify({ transcript: 'delete everything', author }) },
         ],
         // The whole-server lists and the global review-item resolver.
-        ['/api/workspaces', { method: 'GET' }],
+        ['/workspaces', { method: 'GET' }],
         ['/api/docs', { method: 'GET' }],
         ['/api/review-items/r-anything', { method: 'GET' }],
         // Share administration — minting, revoking, and the master switch.
@@ -851,7 +842,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
     it('the master switch still closes the door on a member', async () => {
       expect((await post('/api/share/enabled', { enabled: false })).status).toBe(200);
       try {
-        const r = await pub(`/api/workspaces/${boardId}/tasks`, boardCookie, {
+        const r = await pub(`/workspaces/${boardId}/tasks`, boardCookie, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ title: 'While the door is shut', assignee: 'human' }),
@@ -862,7 +853,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
         expect((await post('/api/share/enabled', { enabled: true })).status).toBe(200);
       }
       // Positive control: the same call lands again once it is back on.
-      const again = await pub(`/api/workspaces/${boardId}/tasks`, boardCookie, {
+      const again = await pub(`/workspaces/${boardId}/tasks`, boardCookie, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ title: 'After the door reopened', assignee: 'human' }),

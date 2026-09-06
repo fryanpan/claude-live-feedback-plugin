@@ -72,10 +72,10 @@ describe('withdrawing a review item raised on a doc thread', () => {
     );
     docId = created.docId;
     const ws = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id }),
+      await post('/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id }),
     );
     workspaceId = ws.workspace.id;
-    await jj(await post(`/api/workspaces/${workspaceId}/docs`, { docId }));
+    await jj(await post(`/workspaces/${workspaceId}/docs`, { docId }));
   });
 
   afterEach(async () => {
@@ -128,7 +128,7 @@ describe('withdrawing a review item raised on a doc thread', () => {
 
   const queueAsks = async (): Promise<string[]> => {
     const q = await jj<{ items: Array<{ kind: string; ask?: string }> }>(
-      await fetch(`${base}/api/workspaces/${workspaceId}/review-items`),
+      await fetch(`${base}/workspaces/${workspaceId}/review-items`),
     );
     return q.items.filter((i) => i.kind === 'doc-thread').map((i) => i.ask ?? '');
   };

@@ -47,7 +47,7 @@ async function j<T>(res: Response): Promise<T> {
 
 async function makeWorkspace(name: string): Promise<string> {
   const { workspace } = await j<{ workspace: { id: string } }>(
-    await fetch(`${base}/api/workspaces`, {
+    await fetch(`${base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name, goal: 'Ship it.' }),
@@ -58,7 +58,7 @@ async function makeWorkspace(name: string): Promise<string> {
 
 async function makeTask(wsId: string, title: string): Promise<string> {
   const { task } = await j<{ task: { id: string } }>(
-    await fetch(`${base}/api/workspaces/${encodeURIComponent(wsId)}/tasks`, {
+    await fetch(`${base}/workspaces/${encodeURIComponent(wsId)}/tasks`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ author: AGENT, title, assignee: 'One', assigneeKind: 'agent' }),
@@ -189,7 +189,7 @@ describe('the landing page says which workspaces are waiting on the owner', () =
 
   async function makeDecision(wsId: string, title: string): Promise<void> {
     await j(
-      await fetch(`${base}/api/workspaces/${encodeURIComponent(wsId)}/tasks`, {
+      await fetch(`${base}/workspaces/${encodeURIComponent(wsId)}/tasks`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -261,7 +261,7 @@ describe('the landing page says which workspaces are waiting on the owner', () =
     // Retiring is the owner saying "get this out of my way" — the bar
     // steering Review all through a retired board contradicts the act.
     // The retired row itself still renders, in its own fold.
-    await fetch(`${base}/api/workspaces/${encodeURIComponent(waitingId)}/retired`, {
+    await fetch(`${base}/workspaces/${encodeURIComponent(waitingId)}/retired`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ retired: true, author: AGENT, reason: 'superseded in test' }),
@@ -286,7 +286,7 @@ describe('the landing page says which workspaces are waiting on the owner', () =
     );
 
     // Un-retiring brings the items back: the chip, the bar total, the chain.
-    await fetch(`${base}/api/workspaces/${encodeURIComponent(waitingId)}/retired`, {
+    await fetch(`${base}/workspaces/${encodeURIComponent(waitingId)}/retired`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ retired: false, author: AGENT }),

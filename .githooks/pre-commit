@@ -1,0 +1,68 @@
+#!/bin/bash
+# Pre-commit leak gate: run scripts/scrub-check.py over the lines this commit
+# ADDS. The push gate is the backstop; this one exists because of what it
+# costs to be caught later.
+#
+# Two incidents, both on this repo. PR 675: private content reached three
+# commits, the pre-push scanner caught it at push time, and by then the only
+# remedy was a history rewrite — which the permission classifier refuses to
+# let an agent run, so the repo owner ran four git commands by hand. PR 723: a
+# codemod touched ONE line of a doc whose untouched lines already carried a
+# private name on origin/main; the push gate reads whole blobs, so it fired on
+# content the branch never wrote, and `git commit --amend` was denied too.
+#
+# So this hook fires EARLIER and judges LESS: at commit time, nothing is
+# written yet, so the fix is an edit and a re-stage; and it looks only at the
+# staged diff's added lines, so editing near old content is not a tax.
+#
+# Bypass entirely with SCRUB_SKIP=1 (logged). Use sparingly.
+
+set -u
+
+if [ "${SCRUB_SKIP:-}" = "1" ]; then
+  echo "[scrub-check] SCRUB_SKIP=1 — bypassing pre-commit gate." >&2
+  exit 0
+fi
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+regex_script="$repo_root/scripts/scrub-check.py"
+
+# Not installed in this repo — silently no-op so peer repos without the script
+# aren't blocked.
+[ ! -f "$regex_script" ] && exit 0
+
+# A merge commit's staged diff is against the FIRST PARENT, so every line the
+# other side contributed reads as an addition — for the `git merge origin/main`
+# this project's conventions require before every push, that is the branch's
+# whole divergence from main, content that has been public for days. Measured
+# once already at 7,516 insertions across 64 files (see scrub_git.py). The one
+# thing a merge can introduce that neither parent had is a conflict
+# resolution, and the push gate sees it: it reads `git log --patch --cc`,
+# which is the view that shows combined-diff text.
+git_dir="$(git rev-parse --git-dir 2>/dev/null)" || git_dir=""
+if [ -n "$git_dir" ] && [ -f "$git_dir/MERGE_HEAD" ]; then
+  exit 0
+fi
+
+# Prove the gate can still see before trusting anything it says. The scanner's
+# real failure mode is scanning nothing and exiting 0. The commit path is a
+# second way to be blind — a diff parser that yields no lines reports every
+# commit clean — so it gets its own positive control, run here. `--only
+# commit` keeps this to the commit-path cases; the full suite runs pre-push.
+# SCRUB_IN_SELFTEST guards against recursion: the suite commits inside its own
+# fixture repos with this hook installed.
+selftest="$repo_root/scripts/scrub-selftest.py"
+if [ -f "$selftest" ] && [ "${SCRUB_IN_SELFTEST:-}" != "1" ]; then
+  if ! python3 "$selftest" --only commit > /tmp/scrub-selftest-commit.$$ 2>&1; then
+    cat /tmp/scrub-selftest-commit.$$ >&2
+    rm -f /tmp/scrub-selftest-commit.$$
+    echo "[scrub-check] self-test failed — the leak gate is not working. Commit blocked." >&2
+    exit 1
+  fi
+  rm -f /tmp/scrub-selftest-commit.$$
+fi
+
+# Regex layer only. The Haiku layer is a paid API call per run and commits are
+# far more frequent than pushes; it stays on the push, where the content is
+# about to become public.
+python3 "$regex_script" --staged-added

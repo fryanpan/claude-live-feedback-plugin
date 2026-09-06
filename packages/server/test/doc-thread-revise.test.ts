@@ -68,10 +68,10 @@ describe('revising a review item raised on a doc thread', () => {
     // The queue is per workspace, and it reads the docs LINKED to one — so
     // the doc has to be attached for its thread to reach a row at all.
     const ws = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id }),
+      await post('/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id }),
     );
     workspaceId = ws.workspace.id;
-    await jj(await post(`/api/workspaces/${workspaceId}/docs`, { docId }));
+    await jj(await post(`/workspaces/${workspaceId}/docs`, { docId }));
   });
 
   afterEach(async () => {
@@ -182,7 +182,7 @@ describe('revising a review item raised on a doc thread', () => {
 
   describe('the reader can tell a correction from a fresh ask', () => {
     const queueRows = async (): Promise<Array<Record<string, unknown>>> => {
-      const res = await fetch(`${base}/api/workspaces/${workspaceId}/review-items`);
+      const res = await fetch(`${base}/workspaces/${workspaceId}/review-items`);
       expect(res.ok, `${res.status} ${await res.clone().text()}`).toBe(true);
       const body = (await res.json()) as { items?: Array<Record<string, unknown>> };
       return body.items ?? [];

@@ -110,7 +110,7 @@ async function claimNoticeFor(deps: AttachmentDeps, taskId: string): Promise<str
         'GET',
         // includeBlocked so a row held by a dependency is still findable —
         // its being blocked says nothing about whether somebody is on it.
-        `/api/workspaces/${encodeURIComponent(workspaceId)}/next?includeBlocked=true`,
+        `/workspaces/${encodeURIComponent(workspaceId)}/next?includeBlocked=true`,
       )) as { tasks?: PresenceRow[] };
       const row = res.tasks?.find((t) => t?.id === taskId);
       if (row) return claimWarning(row, deps.author.id, now(deps));

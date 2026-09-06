@@ -192,14 +192,14 @@ describe('the cap through the server never counts finished work', () => {
 
   async function board(): Promise<string> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id }),
+      await post('/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id }),
     );
     return workspace.id;
   }
 
   async function addRow(workspaceId: string, title: string): Promise<string> {
     const { task } = await jj<{ task: { id: string } }>(
-      await post(`/api/workspaces/${workspaceId}/tasks`, {
+      await post(`/workspaces/${workspaceId}/tasks`, {
         title,
         body: `Agent can ${title.toLowerCase()} so that the queue keeps moving.`,
         assignee: LEAD.name,
@@ -220,7 +220,7 @@ describe('the cap through the server never counts finished work', () => {
   }
 
   const capView = async (workspaceId: string) =>
-    jj<CapView>(await get(`/api/workspaces/${workspaceId}/parallelism-cap`));
+    jj<CapView>(await get(`/workspaces/${workspaceId}/parallelism-cap`));
 
   it('a task reaching done closes its own dispatch — no close_dispatch needed', async () => {
     const workspaceId = await board();

@@ -9,7 +9,7 @@
  * load-bearing: each match is a distinct anchored regex plus a method, so no
  * two can claim the same request.
  *
- * The `/api/reviews` ⇄ `/api/workspaces` alias every one of them matches
+ * The `/api/reviews` ⇄ `/workspaces` alias every one of them matches
  * is the `REVIEW_API` block below, which moved here with them.
  *
  * Dependencies arrive in an explicit context rather than captured from the
@@ -26,25 +26,27 @@ import {
 } from '../share/redact-meta.ts';
 
 /**
- * ===== COMPAT: the review API answers at two prefixes =====
+ * ===== One prefix. The alias arm is gone. =====
  *
- * A diff review and a bound folder are REVIEWS. They were built as a second
- * thing called a "workspace" and their endpoints are still spelled
- * `/api/workspaces/<id>/…`, which is the vocabulary this change removes: the
- * canonical name is now `/api/reviews/<setId>/…`.
+ * A diff review and a bound folder are REVIEWS, and they were built as a
+ * second thing called a "workspace" — so every route here used to answer at
+ * `/workspaces/<id>/…` as well as `/api/reviews/<setId>/…`, matching both
+ * with one regex. That alias was the repo's precedent for surviving a route
+ * move, kept for plugin bundles inside sessions nobody could restart.
  *
- * Every one of these routes therefore matches BOTH prefixes. This is the whole
- * of the alias — one helper, one comment — and it exists because the callers
- * are plugin bundles running inside sessions nobody can restart, plus browser
- * tabs that are already open. They keep calling the address they were built
- * against and would get a 404 they could not explain from their own version.
+ * It goes with the canonical-routes cutover, which decided against old-path
+ * support of any kind — not redirects, not 410s, not this. And it had to go
+ * FIRST rather than last: the board's own routes have just dropped their
+ * `/api` prefix, so `/workspaces/<id>/threads` no longer names anything a
+ * board answers, and leaving the arm in place would have left one dead
+ * spelling of eight routes answering for a store the rest of the prefix had
+ * stopped serving.
  *
- * The bare `DELETE /api/workspaces/<id>` is deliberately NOT in here: that one
+ * The bare `DELETE /api/reviews/<id>` is deliberately NOT in here: that one
  * route fronts two stores (a board or a review, dispatched by id) and is
  * handled on its own.
  */
-const reviewApi = (sub: string): RegExp =>
-  new RegExp(`^/api/(?:reviews|workspaces)/([^/]+)/${sub}$`);
+const reviewApi = (sub: string): RegExp => new RegExp(`^/api/reviews/([^/]+)/${sub}$`);
 const REVIEW_API = {
   refresh: reviewApi('refresh'),
   groups: reviewApi('groups'),

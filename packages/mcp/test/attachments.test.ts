@@ -129,7 +129,7 @@ describe('a claim says who is already on the row, or says nothing', () => {
     h.attachments.markAttached('w1');
     const notice = await h.attachments.claimNoticeFor('k1');
     expect(h.sent).toEqual([
-      { method: 'GET', path: '/api/workspaces/w1/next?includeBlocked=true', body: undefined },
+      { method: 'GET', path: '/workspaces/w1/next?includeBlocked=true', body: undefined },
     ]);
     expect(notice).toBeUndefined();
   });
@@ -153,20 +153,20 @@ describe('a claim says who is already on the row, or says nothing', () => {
   it('stops at the first board holding the row', async () => {
     const h = harness({
       respond: (_method, path) =>
-        path.startsWith('/api/workspaces/w1/')
+        path.startsWith('/workspaces/w1/')
           ? { tasks: [heldRow('k1', 'agent-peer', 1_000_000)] }
           : { tasks: [] },
     });
     h.attachments.markAttached('w1');
     h.attachments.markAttached('w2');
     await h.attachments.claimNoticeFor('k1');
-    expect(h.sent.map((s) => s.path)).toEqual(['/api/workspaces/w1/next?includeBlocked=true']);
+    expect(h.sent.map((s) => s.path)).toEqual(['/workspaces/w1/next?includeBlocked=true']);
   });
 
   it('carries on to the next board when one read fails, then answers nothing', async () => {
     const h = harness({
       respond: (_method, path) =>
-        path.startsWith('/api/workspaces/w1/') ? new Error('board gone') : { tasks: [] },
+        path.startsWith('/workspaces/w1/') ? new Error('board gone') : { tasks: [] },
     });
     h.attachments.markAttached('w1');
     h.attachments.markAttached('w2');

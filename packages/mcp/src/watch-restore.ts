@@ -184,7 +184,7 @@ async function ensureWatchesRestored(deps: WatchRestoreDeps, rt: RestoreRuntime)
               ackComment: async (rowId) => {
                 await deps.http(
                   'POST',
-                  `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(rowId)}/ack`,
+                  `/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(rowId)}/ack`,
                   {},
                 );
               },

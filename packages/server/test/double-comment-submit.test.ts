@@ -284,10 +284,10 @@ describe('a requestId retry on a review-item anchor is deduped before the waitin
 
   it('the retry gets the already-created thread back, not a 409', async () => {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'index-rebuild', goal: 'Rebuild the index nightly.' }),
+      await post('/workspaces', { name: 'index-rebuild', goal: 'Rebuild the index nightly.' }),
     );
     const { task } = await jj<{ task: { id: string } }>(
-      await post(`/api/workspaces/${workspace.id}/tasks`, {
+      await post(`/workspaces/${workspace.id}/tasks`, {
         title: 'Rebuild the index nightly',
         assignee: 'Index Keeper',
         author: REVIEWER,

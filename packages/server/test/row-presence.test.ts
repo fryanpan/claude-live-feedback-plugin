@@ -74,7 +74,7 @@ describe('the queue says who is already on a row', () => {
 
   const queue = async (workspaceId: string): Promise<QueueRow[]> => {
     const { tasks } = await jj<{ tasks: QueueRow[] }>(
-      await fetch(`${base}/api/workspaces/${workspaceId}/next`),
+      await fetch(`${base}/workspaces/${workspaceId}/next`),
     );
     return tasks;
   };
@@ -88,7 +88,7 @@ describe('the queue says who is already on a row', () => {
     });
     base = `http://localhost:${handle.port}`;
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'atlas', goal: 'Ship the atlas.' }),
+      await post('/workspaces', { name: 'atlas', goal: 'Ship the atlas.' }),
     );
     return workspace.id;
   };
@@ -102,7 +102,7 @@ describe('the queue says who is already on a row', () => {
    */
   const mkTask = async (workspaceId: string, title: string, assignee?: string) => {
     const created = await jj<{ task: { id: string } }>(
-      await post(`/api/workspaces/${workspaceId}/tasks`, {
+      await post(`/workspaces/${workspaceId}/tasks`, {
         title,
         ...(assignee !== undefined ? { assignee } : {}),
         author: { id: 'agent-dispatcher', name: 'Dispatcher', kind: 'agent' },
@@ -262,7 +262,7 @@ describe('the queue says who is already on a row', () => {
       }),
     );
 
-    const res = await fetch(`${base}/api/workspaces/${wsId}/next`);
+    const res = await fetch(`${base}/workspaces/${wsId}/next`);
     const raw = await res.clone().text();
     const rows = await jj<{ tasks: QueueRow[] }>(res);
     const row = rows.tasks.find((r) => r.id === taken.task.id);

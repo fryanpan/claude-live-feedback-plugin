@@ -441,7 +441,7 @@ describe('lead agent routes + projection', () => {
   const put = (path: string, body: unknown) =>
     local(path, { method: 'PUT', body: JSON.stringify(body) });
   const workspaceOf = async (id: string): Promise<BoardWorkspace> => {
-    const r = await local(`/api/workspaces/${id}`);
+    const r = await local(`/workspaces/${id}?format=json`);
     return ((await r.json()) as { workspace: BoardWorkspace }).workspace;
   };
 
@@ -456,8 +456,8 @@ describe('lead agent routes + projection', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it('POST /api/workspaces forwards leadAgentId (the groups lesson: prove it through the real route)', async () => {
-    const r = await post('/api/workspaces', {
+  it('POST /workspaces forwards leadAgentId (the groups lesson: prove it through the real route)', async () => {
+    const r = await post('/workspaces', {
       name: 'explicit-lead',
       goal: 'Ship it.',
       leadAgentId: 'agent-relay',
@@ -470,7 +470,7 @@ describe('lead agent routes + projection', () => {
   });
 
   it('an agent author becomes the lead by default; a person author leaves the seat open', async () => {
-    const byAgent = await post('/api/workspaces', {
+    const byAgent = await post('/workspaces', {
       name: 'agent-created',
       goal: 'Ship it.',
       author: AGENT,
@@ -478,7 +478,7 @@ describe('lead agent routes + projection', () => {
     const agentWs = ((await byAgent.json()) as { workspace: BoardWorkspace }).workspace;
     expect(agentWs.leadAgentId).toBe('agent-relay');
 
-    const byPerson = await post('/api/workspaces', {
+    const byPerson = await post('/workspaces', {
       name: 'person-created',
       goal: 'Ship it.',
       author: PERSON,
@@ -488,8 +488,8 @@ describe('lead agent routes + projection', () => {
     expect(personWs.leadAgentId).toBeUndefined();
   });
 
-  it('PUT /api/workspaces/:id/lead reassigns; 400 without leadAgentId; 404 for an unknown workspace', async () => {
-    const r = await post('/api/workspaces', {
+  it('PUT /workspaces/:id/lead reassigns; 400 without leadAgentId; 404 for an unknown workspace', async () => {
+    const r = await post('/workspaces', {
       name: 'reassign-route',
       goal: 'Ship it.',
       leadAgentId: 'agent-relay',
@@ -502,28 +502,28 @@ describe('lead agent routes + projection', () => {
       runtime: 'claude-code-local',
     });
 
-    const ok = await put(`/api/workspaces/${wsId}/lead`, {
+    const ok = await put(`/workspaces/${wsId}/lead`, {
       leadAgentId: 'agent-helper',
       author: PERSON,
     });
     expect(ok.status).toBe(200);
     expect((await workspaceOf(wsId)).leadAgentId).toBe('agent-helper');
 
-    expect((await put(`/api/workspaces/${wsId}/lead`, { author: PERSON })).status).toBe(400);
+    expect((await put(`/workspaces/${wsId}/lead`, { author: PERSON })).status).toBe(400);
     expect(
-      (await put('/api/workspaces/w-nope/lead', { leadAgentId: 'x', author: PERSON })).status,
+      (await put('/workspaces/w-nope/lead', { leadAgentId: 'x', author: PERSON })).status,
     ).toBe(404);
   });
 
   it('PUT /lead answers 400 with the structured refusal for an id the workspace has never seen', async () => {
-    const r = await post('/api/workspaces', {
+    const r = await post('/workspaces', {
       name: 'unknown-lead-route',
       goal: 'Ship it.',
       leadAgentId: 'agent-relay',
     });
     const wsId = ((await r.json()) as { workspace: BoardWorkspace }).workspace.id;
 
-    const res = await put(`/api/workspaces/${wsId}/lead`, {
+    const res = await put(`/workspaces/${wsId}/lead`, {
       leadAgentId: 'agent-phantom',
       author: PERSON,
     });
@@ -536,7 +536,7 @@ describe('lead agent routes + projection', () => {
   });
 
   it('attaching an agent to a leaderless workspace claims the seat, through the route', async () => {
-    const r = await post('/api/workspaces', { name: 'claim-route', goal: 'Ship it.' });
+    const r = await post('/workspaces', { name: 'claim-route', goal: 'Ship it.' });
     const wsId = ((await r.json()) as { workspace: BoardWorkspace }).workspace.id;
     expect((await workspaceOf(wsId)).leadAgentId).toBeUndefined(); // positive control
 
@@ -550,7 +550,7 @@ describe('lead agent routes + projection', () => {
   });
 
   it('the route forwards takeover — without it a live lead is held, with it the seat moves', async () => {
-    const r = await post('/api/workspaces', { name: 'takeover-route', goal: 'Ship it.' });
+    const r = await post('/workspaces', { name: 'takeover-route', goal: 'Ship it.' });
     const wsId = ((await r.json()) as { workspace: BoardWorkspace }).workspace.id;
     const attach = await post(`/workspaces/${wsId}/agents`, {
       agentId: 'agent-relay',
@@ -565,7 +565,7 @@ describe('lead agent routes + projection', () => {
     const incumbent = await openWorkspaceStream(base, wsId);
 
     const helper = { id: 'agent-helper', name: 'Helper', kind: 'agent' };
-    const held = await put(`/api/workspaces/${wsId}/lead`, {
+    const held = await put(`/workspaces/${wsId}/lead`, {
       leadAgentId: helper.id,
       author: helper,
     });
@@ -576,7 +576,7 @@ describe('lead agent routes + projection', () => {
     // Read the seat back over HTTP rather than trusting the response.
     expect((await workspaceOf(wsId)).leadAgentId).toBe('agent-relay');
 
-    const took = await put(`/api/workspaces/${wsId}/lead`, {
+    const took = await put(`/workspaces/${wsId}/lead`, {
       leadAgentId: helper.id,
       author: helper,
       takeover: true,
@@ -590,7 +590,7 @@ describe('lead agent routes + projection', () => {
   });
 
   it('the board room projects the lead — and drops the key when the seat is empty', async () => {
-    const r = await post('/api/workspaces', {
+    const r = await post('/workspaces', {
       name: 'projected-lead',
       goal: 'Ship it.',
       leadAgentId: 'agent-relay',
@@ -603,7 +603,7 @@ describe('lead agent routes + projection', () => {
     expect(wsMap.get('name')).toBe('projected-lead');
     expect(wsMap.get('leadAgentId')).toBe('agent-relay');
 
-    const leaderless = await post('/api/workspaces', { name: 'projected-empty', goal: 'Ship it.' });
+    const leaderless = await post('/workspaces', { name: 'projected-empty', goal: 'Ship it.' });
     const emptyId = ((await leaderless.json()) as { workspace: BoardWorkspace }).workspace.id;
     const emptyRoom = handle.docStore.get(workspaceDocId(emptyId));
     if (!emptyRoom) throw new Error('ws room missing');
@@ -723,7 +723,7 @@ describe('a display-name change keeps the seat and renames every write', () => {
   });
 
   it('the roster name is what a write is signed with, and the seat does not move', async () => {
-    const created = await post('/api/workspaces', { name: 'rename-board', goal: 'Ship it.' });
+    const created = await post('/workspaces', { name: 'rename-board', goal: 'Ship it.' });
     const { workspace } = (await created.json()) as { workspace: { id: string } };
     const attached = await post(`/workspaces/${workspace.id}/agents`, {
       agentId: 'agent-relay',
@@ -740,7 +740,7 @@ describe('a display-name change keeps the seat and renames every write', () => {
     expect(handle.tasks.getWorkspace(workspace.id)?.leadAgentId).toBe('agent-relay');
 
     // A write still signed with the OLD name lands under the roster's name.
-    const task = await post(`/api/workspaces/${workspace.id}/tasks`, {
+    const task = await post(`/workspaces/${workspace.id}/tasks`, {
       title: 'Signed by a stale env',
       author: { id: 'agent-relay', name: 'Relay', kind: 'agent' },
     });
@@ -778,14 +778,14 @@ describe('a display-name change keeps the seat and renames every write', () => {
   });
 
   it('a row an older bundle attached without a name LEARNS its name from the first signed write', async () => {
-    const created = await post('/api/workspaces', { name: 'legacy-board', goal: 'Ship it.' });
+    const created = await post('/workspaces', { name: 'legacy-board', goal: 'Ship it.' });
     const { workspace } = (await created.json()) as { workspace: { id: string } };
     await post(`/workspaces/${workspace.id}/agents`, {
       agentId: 'agent-legacy',
       runtime: 'claude-code-local',
     });
     expect(handle.identities.get('agent-legacy')?.displayName).toBe('agent-legacy');
-    const task = await post(`/api/workspaces/${workspace.id}/tasks`, {
+    const task = await post(`/workspaces/${workspace.id}/tasks`, {
       title: 'Signed by a legacy bundle',
       author: { id: 'agent-legacy', name: 'Legacy Bundle', kind: 'agent' },
     });
@@ -856,7 +856,7 @@ describe('the shared "agent" identity can neither claim nor be handed the seat',
           headers: { host: `localhost:${handle.port}`, 'content-type': 'application/json' },
           body: JSON.stringify(body),
         });
-      const created = await post('/api/workspaces', { name: 'shared-http', goal: 'Ship it.' });
+      const created = await post('/workspaces', { name: 'shared-http', goal: 'Ship it.' });
       const { workspace } = (await created.json()) as { workspace: { id: string } };
       const res = await post(`/workspaces/${workspace.id}/agents`, {
         agentId: 'known-agent',

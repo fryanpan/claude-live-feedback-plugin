@@ -84,7 +84,7 @@ describe('the task panel’s Plan / Review controls press the doc ask routes', (
   /** A ticket, and the doc id its comments live in. */
   const newTask = async (title: string): Promise<string> => {
     const res = await jj<{ task: { id: string } }>(
-      await post(`/api/workspaces/${workspaceId}/tasks`, { title, author: PERSON }),
+      await post(`/workspaces/${workspaceId}/tasks`, { title, author: PERSON }),
     );
     return `task:${res.task.id}`;
   };
@@ -104,7 +104,7 @@ describe('the task panel’s Plan / Review controls press the doc ask routes', (
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
     workspaceId = (
-      await jj<{ workspace: { id: string } }>(await post('/api/workspaces', { name: 'ask-board' }))
+      await jj<{ workspace: { id: string } }>(await post('/workspaces', { name: 'ask-board' }))
     ).workspace.id;
   });
 

@@ -5,12 +5,21 @@
  * read their collaborators off `WorkspaceRoutesContext` instead of the scope.
  *
  * The roster lives at `/workspaces/<id>/agents`. It used to be
- * `/api/workspaces/<id>/attachments`, and that name was the collision the
+ * `/workspaces/<id>/attachments`, and that name was the collision the
  * glossary could not land around: an *attachment* is a doc, a mockup, a
  * preview or a diff filed on a board, and this collection holds none of
  * those — it holds the sessions sitting at the board. The plainer noun goes
  * to the thing being displaced, and `attachments` is left free for the
  * collection the glossary spends it on. The old path is gone, not aliased.
+ *
+ * EVERY SEGMENT HERE IS DECODED WITH `safeDecodeSegment`, never a bare
+ * decode. `matchWorkspaceRoute` guards the workspace segment and nothing
+ * else, so the agent ids and queue entry ids these four routes read out of
+ * the remainder were the unguarded half: a stray `%` threw a `URIError`
+ * inside the route match, which closes the connection with no response at
+ * all — neither an allow nor a deny, and chosen by whoever sent the request.
+ * Same posture as `middleware/host-guard.ts` and `workspace-path.ts` on the
+ * same problem.
  */
 import { attachNotes } from '../attach-notes.ts';
 import { clientReleaseStatus } from '../client-release.ts';
@@ -20,7 +29,7 @@ import {
   readReleasedPluginVersion,
 } from '../plugin-release.ts';
 import { isAttachmentRuntime } from '../tasks.ts';
-import { matchWorkspaceRoute } from './workspace-path.ts';
+import { matchWorkspaceRoute, safeDecodeSegment } from '../workspace-path.ts';
 import type { WorkspaceRouteRequest, WorkspaceRoutesContext } from './workspace-routes-context.ts';
 
 /** Answers the routes below, or `undefined` when the path is none of them. */
@@ -39,9 +48,9 @@ export async function handleWorkspaceAttachments(
   const wsAgentsMatch = matchWorkspaceRoute(pathname, 'agents');
   if (wsAgentsMatch && req.method === 'GET') {
     const workspaceId = wsAgentsMatch.workspaceId;
-    if (!taskStore.getWorkspace(workspaceId)) {
-      return j(404, { error: 'workspace not found' });
-    }
+    // The board's existence is not asked here any more —
+    // `middleware/workspace-scope.ts` asked it once, above every handler, and
+    // refused with this same 404 when the answer was no.
     const attachments = visitor
       ? taskStore.listPublicAttachments(workspaceId)
       : taskStore.listAttachments(workspaceId);
@@ -148,8 +157,8 @@ export async function handleWorkspaceAttachments(
   );
   if (wsAgentHeartbeatMatch && req.method === 'POST') {
     if (visitor) return j(403, { error: 'not available to share visitors' });
-    const workspaceId = decodeURIComponent(wsAgentHeartbeatMatch[1] ?? '');
-    const agentId = decodeURIComponent(wsAgentHeartbeatMatch[2] ?? '');
+    const workspaceId = safeDecodeSegment(wsAgentHeartbeatMatch[1] ?? '');
+    const agentId = safeDecodeSegment(wsAgentHeartbeatMatch[2] ?? '');
     const body = await safeJson(req);
     const res = taskStore.heartbeat(workspaceId, agentId, {
       // Forwarded, not re-derived: the runtime knows when it last did
@@ -197,13 +206,11 @@ export async function handleWorkspaceAttachments(
   // below, with the same idempotency: a replayed receipt for a row
   // already cleared answers 200 with cleared:false rather than an
   // error.
-  const wsCommentAckMatch = pathname.match(
-    /^\/api\/workspaces\/([^/]+)\/comment-queue\/([^/]+)\/ack$/,
-  );
+  const wsCommentAckMatch = pathname.match(/^\/workspaces\/([^/]+)\/comment-queue\/([^/]+)\/ack$/);
   if (wsCommentAckMatch && req.method === 'POST') {
     if (visitor) return j(403, { error: 'not available to share visitors' });
-    const workspaceId = decodeURIComponent(wsCommentAckMatch[1] ?? '');
-    const entryId = decodeURIComponent(wsCommentAckMatch[2] ?? '');
+    const workspaceId = safeDecodeSegment(wsCommentAckMatch[1] ?? '');
+    const entryId = safeDecodeSegment(wsCommentAckMatch[2] ?? '');
     const cleared = taskStore.ackComment(workspaceId, entryId);
     return j(200, { ok: true, cleared });
   }
@@ -214,19 +221,19 @@ export async function handleWorkspaceAttachments(
   // cleared:false rather than an error, because a retrying client
   // should not have to distinguish "gone because I acked it" from
   // "gone because someone else drained it".
-  const wsVoiceAckMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/voice-queue\/([^/]+)\/ack$/);
+  const wsVoiceAckMatch = pathname.match(/^\/workspaces\/([^/]+)\/voice-queue\/([^/]+)\/ack$/);
   if (wsVoiceAckMatch && req.method === 'POST') {
     if (visitor) return j(403, { error: 'not available to share visitors' });
-    const workspaceId = decodeURIComponent(wsVoiceAckMatch[1] ?? '');
-    const entryId = decodeURIComponent(wsVoiceAckMatch[2] ?? '');
+    const workspaceId = safeDecodeSegment(wsVoiceAckMatch[1] ?? '');
+    const entryId = safeDecodeSegment(wsVoiceAckMatch[2] ?? '');
     const cleared = taskStore.ackVoiceRequest(workspaceId, entryId);
     return j(200, { ok: true, cleared });
   }
   const wsAgentDetachMatch = pathname.match(/^\/workspaces\/([^/]+)\/agents\/([^/]+)$/);
   if (wsAgentDetachMatch && req.method === 'DELETE') {
     if (visitor) return j(403, { error: 'not available to share visitors' });
-    const workspaceId = decodeURIComponent(wsAgentDetachMatch[1] ?? '');
-    const agentId = decodeURIComponent(wsAgentDetachMatch[2] ?? '');
+    const workspaceId = safeDecodeSegment(wsAgentDetachMatch[1] ?? '');
+    const agentId = safeDecodeSegment(wsAgentDetachMatch[2] ?? '');
     if (!taskStore.detachAgent(workspaceId, agentId)) {
       return j(404, { error: 'attachment not found' });
     }

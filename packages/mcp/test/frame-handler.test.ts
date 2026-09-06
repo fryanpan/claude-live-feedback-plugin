@@ -115,7 +115,7 @@ describe('the gates run in the order that keeps them meaningful', () => {
     );
     expect(emitted).toEqual([]);
     expect(sent).toEqual([
-      { method: 'POST', path: '/api/workspaces/w1/comment-queue/c1/ack', body: {} },
+      { method: 'POST', path: '/workspaces/w1/comment-queue/c1/ack', body: {} },
     ]);
   });
 });

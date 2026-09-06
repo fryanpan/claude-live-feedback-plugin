@@ -100,7 +100,7 @@ export async function handleWorkspaceNext(
   const { req, pathname, url, visitor } = rq;
   // The work queue: priority order, dependency-aware, grouped into
   // waves that can run at once (§3.9 agent side).
-  const wsNextMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/next$/);
+  const wsNextMatch = pathname.match(/^\/workspaces\/([^/]+)\/next$/);
   if (wsNextMatch && req.method === 'GET') {
     const workspaceId = decodeURIComponent(wsNextMatch[1] ?? '');
     const workspace = taskStore.getWorkspace(workspaceId);
@@ -225,12 +225,12 @@ export async function handleWorkspaceNext(
   // rather than a memory of watching a spinner. No external service —
   // the report is a JSON object the client shaped, stamped here with
   // when it arrived and what sent it.
-  const wsLoadMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/load-reports$/);
+  const wsLoadMatch = pathname.match(/^\/workspaces\/([^/]+)\/load-reports$/);
   if (wsLoadMatch) {
     const workspaceId = decodeURIComponent(wsLoadMatch[1] ?? '');
-    if (!taskStore.getWorkspace(workspaceId)) {
-      return j(404, { error: 'workspace not found' });
-    }
+    // The board's existence is not asked here any more —
+    // `middleware/workspace-scope.ts` asked it once, above every handler, and
+    // refused with this same 404 when the answer was no.
     const logPath = join(dataDir, 'workspaces', `${workspaceId}.load-reports.jsonl`);
     if (req.method === 'POST') {
       const body = await safeJson(req);
@@ -280,12 +280,12 @@ export async function handleWorkspaceNext(
       return j(200, { workspaceId, reports });
     }
   }
-  const wsAuditMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/events$/);
+  const wsAuditMatch = pathname.match(/^\/workspaces\/([^/]+)\/events$/);
   if (wsAuditMatch && req.method === 'GET') {
     const workspaceId = decodeURIComponent(wsAuditMatch[1] ?? '');
-    if (!taskStore.getWorkspace(workspaceId)) {
-      return j(404, { error: 'workspace not found' });
-    }
+    // The board's existence is not asked here any more —
+    // `middleware/workspace-scope.ts` asked it once, above every handler, and
+    // refused with this same 404 when the answer was no.
     const logPath = eventsLogPath(dataDir, workspaceId);
     let rows: Array<{ event?: unknown; ts?: unknown }> = [];
     if (existsSync(logPath)) {

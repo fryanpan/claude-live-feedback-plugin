@@ -12,6 +12,19 @@
  * and point `CW_BASE_URL` at a stub HTTP server that records every request.
  * A declaration is then what `tools/list` returns, and a route is what the
  * handler actually asks for.
+ *
+ * The same stub also serves the session's ONE event stream
+ * (`/events/agent/<id>`, see `packages/mcp/src/mux-loop.ts`) and keeps it
+ * open, so `pushFrame` puts a real SSE frame through the bundle's own reader,
+ * dedup, kind gate and renderer. What comes back out is a
+ * `notifications/claude/channel` line on stdout — the thing a session
+ * actually reads — collected in `channel`. That is what lets a frame-handling
+ * test assert on the delivered line rather than on a literal surviving in the
+ * bundle's text.
+ *
+ * The stream only opens if this session has a watch, and the bundle learns
+ * its watch set from the restore GET. A test that pushes frames therefore
+ * has to answer that route with one — `restoredWatches` builds the body.
  */
 import { type ChildProcess, spawn } from 'node:child_process';
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from 'node:http';
@@ -35,6 +48,40 @@ export type Recorded = {
 
 /** What the stub answers with. Returning undefined falls through to `{}`. */
 export type Responder = (req: Recorded) => unknown;
+
+/** One `notifications/claude/channel` line, as a session receives it. */
+export type ChannelLine = {
+  /** Arrival order across everything the child wrote to stdout. */
+  index: number;
+  /** The sentence the agent reads. */
+  content: string;
+  /** The event slug the renderer tagged it with, when it set one. */
+  event?: string;
+};
+
+/** One SSE frame to put down the stream, in the mux route's shape. */
+export type Frame = {
+  /** The replay id. Frames without one still deliver; only the cursor cares. */
+  id?: string;
+  event: string;
+  /** Serialised as the frame's `data:` line. `watchKey` is added when absent,
+   *  because the mux route tags every frame with the key it arrived on. */
+  data: Record<string, unknown>;
+};
+
+/**
+ * A restore body that gives this session one watch, so the mux loop opens.
+ *
+ * Without a watch there is no stream, and a `pushFrame` would have nothing to
+ * write to — which would present as a test that silently asserts nothing.
+ */
+export function restoredWatches(...keys: string[]): {
+  watches: Array<{ key: string }>;
+  pruned: string[];
+  workspaces: string[];
+} {
+  return { watches: keys.map((key) => ({ key })), pruned: [], workspaces: [] };
+}
 
 export type ToolDecl = {
   name: string;
@@ -75,6 +122,16 @@ export type BundleHarness = {
     name: string,
     args?: Record<string, unknown>,
   ): Promise<{ isError: boolean; text: string; json: unknown; sent: Recorded[] }>;
+  /** Every channel line the bundle has written to stdout, oldest first. */
+  channel: ChannelLine[];
+  /** Resolve once the bundle has opened its event stream against the stub.
+   *  Rejects rather than hanging, so a test that pushes into nothing says so. */
+  streamOpen(timeoutMs?: number): Promise<void>;
+  /** Write one SSE frame down that stream. */
+  pushFrame(frame: Frame): void;
+  /** Wait for a channel line matching `pred`. Rejects on timeout, naming
+   *  every line seen — a miss is usually a payload the renderer dropped. */
+  waitForChannel(pred: (c: ChannelLine) => boolean, timeoutMs?: number): Promise<ChannelLine>;
   stop(): Promise<void>;
 };
 
@@ -88,9 +145,13 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
+/** The one open event-stream response, once the bundle has dialled it. */
+type StreamHolder = { res: ServerResponse | null };
+
 async function startStub(
   requests: Recorded[],
   respond: Responder,
+  stream: StreamHolder,
 ): Promise<{ server: Server; port: number }> {
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
@@ -104,6 +165,22 @@ async function startStub(
         body: raw ? JSON.parse(raw) : undefined,
       };
       requests.push(rec);
+      // The event stream is a held connection, not a request/response pair:
+      // answer the SSE preamble and keep the socket for `pushFrame`. A
+      // redial replaces the holder, so a frame always goes down the live one.
+      if (url.pathname.startsWith('/events/')) {
+        res.writeHead(200, {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-cache',
+          connection: 'keep-alive',
+        });
+        res.write(': ok\n\n');
+        stream.res = res;
+        req.on('close', () => {
+          if (stream.res === res) stream.res = null;
+        });
+        return;
+      }
       let payload: unknown;
       try {
         payload = respond(rec);
@@ -130,7 +207,8 @@ export async function startBundle(
   env: Record<string, string> = {},
 ): Promise<BundleHarness> {
   const requests: Recorded[] = [];
-  const { server, port } = await startStub(requests, respond);
+  const stream: StreamHolder = { res: null };
+  const { server, port } = await startStub(requests, respond, stream);
 
   const child: ChildProcess = spawn('/bin/sh', [LAUNCHER, BUNDLE], {
     env: {
@@ -144,6 +222,12 @@ export async function startBundle(
   });
 
   const pending = new Map<number, (m: Record<string, unknown>) => void>();
+  const channel: ChannelLine[] = [];
+  const channelWaiters: Array<{
+    pred: (c: ChannelLine) => boolean;
+    hit: (c: ChannelLine) => void;
+  }> = [];
+  let written = 0;
   let buf = '';
   let stderr = '';
   child.stderr?.on('data', (d) => {
@@ -157,8 +241,28 @@ export async function startBundle(
       buf = buf.slice(nl + 1);
       if (line.startsWith('{')) {
         const msg = JSON.parse(line) as Record<string, unknown>;
+        const index = written++;
         const id = msg.id;
         if (typeof id === 'number') pending.get(id)?.(msg);
+        else if (msg.method === 'notifications/claude/channel') {
+          const params = (msg.params ?? {}) as {
+            content?: string;
+            meta?: { event?: string };
+          };
+          const rec: ChannelLine = {
+            index,
+            content: params.content ?? '',
+            event: params.meta?.event,
+          };
+          channel.push(rec);
+          for (let i = channelWaiters.length - 1; i >= 0; i--) {
+            const w = channelWaiters[i];
+            if (w?.pred(rec)) {
+              channelWaiters.splice(i, 1);
+              w.hit(rec);
+            }
+          }
+        }
       }
       nl = buf.indexOf('\n');
     }
@@ -203,7 +307,47 @@ export async function startBundle(
   return {
     requests,
     tools,
+    channel,
     tool: (name) => tools.find((t) => t.name === name),
+    async streamOpen(timeoutMs = 10_000) {
+      const deadline = Date.now() + timeoutMs;
+      while (stream.res === null) {
+        if (Date.now() > deadline) {
+          throw new Error(
+            `no event stream after ${timeoutMs}ms. Did the restore hand back a watch? ` +
+              `paths seen: ${requests.map((r) => r.path).join(', ')}`,
+          );
+        }
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    },
+    pushFrame({ id, event, data }) {
+      const res = stream.res;
+      if (res === null) throw new Error('pushFrame before the event stream opened');
+      const payload = { watchKey: 'doc-1', ...data };
+      res.write(
+        `${id === undefined ? '' : `id: ${id}\n`}event: ${event}\n` +
+          `data: ${JSON.stringify(payload)}\n\n`,
+      );
+    },
+    waitForChannel(pred, timeoutMs = 10_000) {
+      const already = channel.find(pred);
+      if (already) return Promise.resolve(already);
+      return new Promise<ChannelLine>((res, rej) => {
+        const timer = setTimeout(() => {
+          rej(
+            new Error(`no matching channel line in ${timeoutMs}ms; saw ${JSON.stringify(channel)}`),
+          );
+        }, timeoutMs);
+        channelWaiters.push({
+          pred,
+          hit: (c) => {
+            clearTimeout(timer);
+            res(c);
+          },
+        });
+      });
+    },
     async call(name, args = {}) {
       const before = requests.length;
       const reply = await rpc('tools/call', { name, arguments: args });

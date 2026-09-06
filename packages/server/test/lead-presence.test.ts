@@ -134,14 +134,14 @@ describe('GET /api/docs/:docId/lead-presence and the lead.presence stream', () =
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
     workspaceId = (
-      (await (await post('/api/workspaces', { name: 'presence-board' })).json()) as {
+      (await (await post('/workspaces', { name: 'presence-board' })).json()) as {
         workspace: { id: string };
       }
     ).workspace.id;
     docId = (
-      (await (
-        await post(`/api/workspaces/${workspaceId}/huddles`, { kind: 'discussion' })
-      ).json()) as { docId: string }
+      (await (await post(`/workspaces/${workspaceId}/huddles`, { kind: 'discussion' })).json()) as {
+        docId: string;
+      }
     ).docId;
   });
 

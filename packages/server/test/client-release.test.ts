@@ -64,7 +64,12 @@ describe('publishClientRelease', () => {
     try {
       const rel = publishClientRelease({ root, sources: build });
 
+      // audit: not-source — `rel.*Dir` is a tmpdir publishClientRelease just
+      // copied into; this catches a publish that creates the release
+      // directory without putting the bundles in it.
       expect(readFileSync(join(rel.markdownAppDir, 'app.js'), 'utf8')).toContain('gen-1');
+      // audit: not-source — same tmpdir release; catches a publish that copies
+      // the app bundle and silently leaves the widget behind.
       expect(readFileSync(join(rel.widgetDir, 'widget.iife.js'), 'utf8')).toContain('gen-1');
       expect(readFileSync(join(rel.markdownAppDir, 'index.html'), 'utf8')).toContain('gen-1');
 
@@ -93,7 +98,12 @@ describe('publishClientRelease', () => {
       const b = publishClientRelease({ root, sources: second });
 
       expect(b.releaseDir).not.toBe(a.releaseDir);
+      // audit: not-source — reads the FIRST release's tmpdir after a second
+      // publish; catches a switchover that copies in place and rewrites the
+      // directory being served.
       expect(readFileSync(join(a.markdownAppDir, 'app.js'), 'utf8')).toContain('gen-1');
+      // audit: not-source — the second release's own tmpdir; the control that
+      // keeps the line above from passing on a publish that wrote nothing.
       expect(readFileSync(join(b.markdownAppDir, 'app.js'), 'utf8')).toContain('gen-2');
     } finally {
       for (const d of [root, first.dir, second.dir]) rmSync(d, { recursive: true, force: true });
@@ -133,6 +143,9 @@ describe('publishClientRelease', () => {
       const b = publishClientRelease({ root, sources: second });
       expect(lstatSync(link).isSymbolicLink()).toBe(true);
       expect(realpathSync(link)).toBe(realpathSync(b.releaseDir));
+      // audit: not-source — reads through the tmpdir `current` symlink;
+      // catches a swap that repoints the link at a release whose bundles are
+      // still the previous generation's.
       expect(readFileSync(join(link, 'workspaces-app', 'app.js'), 'utf8')).toContain('gen-2');
     } finally {
       for (const d of [root, first.dir, second.dir]) rmSync(d, { recursive: true, force: true });
@@ -148,6 +161,9 @@ describe('publishClientRelease', () => {
     rmSync(join(broken.markdownApp, 'app.js'));
     try {
       const a = publishClientRelease({ root, sources: good });
+      // audit: not-source — the tmpdir release just published; this is the
+      // positive control that makes "current still points at gen-1" mean
+      // something, so it must read what was served, not repo text.
       expect(readFileSync(join(root, 'current', 'workspaces-app', 'app.js'), 'utf8')).toContain(
         'gen-1',
       );
@@ -186,6 +202,9 @@ describe('publishClientRelease', () => {
       expect(entries.length).toBe(2);
       expect(entries).toContain(last.split('/').pop() as string);
       expect(realpathSync(join(root, 'current'))).toBe(realpathSync(last));
+      // audit: not-source — the surviving tmpdir release after five publishes
+      // with keep:2; catches a prune that keeps the right COUNT of releases
+      // while deleting the contents of the one being served.
       expect(readFileSync(join(root, 'current', 'workspaces-app', 'app.js'), 'utf8')).toContain(
         'g5',
       );

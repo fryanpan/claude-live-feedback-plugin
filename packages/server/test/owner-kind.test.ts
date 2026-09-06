@@ -142,7 +142,7 @@ describe('owner kind over the real routes', () => {
 
   async function seedWorkspace(): Promise<string> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'atlas', goal: 'Ship the atlas.' }),
+      await post('/workspaces', { name: 'atlas', goal: 'Ship the atlas.' }),
     );
     return workspace.id;
   }
@@ -182,7 +182,7 @@ describe('owner kind over the real routes', () => {
 
     const mk = async (assignee: string, assigneeKind?: string): Promise<Task> => {
       const { task } = await jj<{ task: Task }>(
-        await post(`/api/workspaces/${wsId}/tasks`, {
+        await post(`/workspaces/${wsId}/tasks`, {
           title: `owned by ${assignee}`,
           assignee,
           ...(assigneeKind !== undefined ? { assigneeKind } : {}),
@@ -219,7 +219,7 @@ describe('owner kind over the real routes', () => {
     // declares and the route drops returns 200 and changes nothing.
     const wsId = await seedWorkspace();
     const { task } = await jj<{ task: Task }>(
-      await post(`/api/workspaces/${wsId}/tasks`, {
+      await post(`/workspaces/${wsId}/tasks`, {
         title: 'turn the tunnel on',
         assignee: 'Cartographer',
         author: AGENT,
@@ -241,7 +241,7 @@ describe('owner kind over the real routes', () => {
   it('clears the previous owner’s kind on an undeclared hand-over', async () => {
     const wsId = await seedWorkspace();
     const { task } = await jj<{ task: Task }>(
-      await post(`/api/workspaces/${wsId}/tasks`, {
+      await post(`/workspaces/${wsId}/tasks`, {
         title: 'merge the branch',
         assignee: 'Ada Fenwick',
         assigneeKind: 'person',
@@ -263,7 +263,7 @@ describe('owner kind over the real routes', () => {
     // calls "the call didn't error".
     const wsId = await seedWorkspace();
     const { task } = await jj<{ task: Task }>(
-      await post(`/api/workspaces/${wsId}/tasks`, {
+      await post(`/workspaces/${wsId}/tasks`, {
         title: 'write the migration note',
         assignee: 'Ada Fenwick',
         author: AGENT,
@@ -289,7 +289,7 @@ describe('owner kind over the real routes', () => {
     // a write that changes something nobody asked to change.
     const wsId = await seedWorkspace();
     const { task } = await jj<{ task: Task }>(
-      await post(`/api/workspaces/${wsId}/tasks`, {
+      await post(`/workspaces/${wsId}/tasks`, {
         title: 'read the survey notes',
         assignee: 'Ada Fenwick',
         assigneeKind: 'person',
@@ -323,7 +323,7 @@ describe('owner kind over the real routes', () => {
     // answers 200, the row lands undeclared, and the board draws "not
     // recorded" with nothing anywhere saying why.
     const wsId = await seedWorkspace();
-    const create = await post(`/api/workspaces/${wsId}/tasks`, {
+    const create = await post(`/workspaces/${wsId}/tasks`, {
       title: 'plot the shoreline',
       assignee: 'Ada Fenwick',
       assigneeKind: 'human',
@@ -334,7 +334,7 @@ describe('owner kind over the real routes', () => {
 
     // Positive control on the same route: the valid spelling still lands.
     const { task } = await jj<{ task: Task }>(
-      await post(`/api/workspaces/${wsId}/tasks`, {
+      await post(`/workspaces/${wsId}/tasks`, {
         title: 'plot the shoreline',
         assignee: 'Ada Fenwick',
         assigneeKind: 'person',
@@ -358,7 +358,7 @@ describe('owner kind over the real routes', () => {
     // landed" and "the call didn't error" are the same observation.
     const wsId = await seedWorkspace();
     const { task } = await jj<{ task: Task }>(
-      await post(`/api/workspaces/${wsId}/tasks`, {
+      await post(`/workspaces/${wsId}/tasks`, {
         title: 'name the ridge',
         assignee: 'Ada Fenwick',
         author: AGENT,
@@ -366,7 +366,7 @@ describe('owner kind over the real routes', () => {
     );
 
     const listed = await jj<{ tasks: Array<{ id: string; ownerKind: string }> }>(
-      await fetch(`${base}/api/workspaces/${wsId}/tasks`),
+      await fetch(`${base}/workspaces/${wsId}/tasks?format=json`),
     );
     expect(listed.tasks.find((t) => t.id === task.id)?.ownerKind).toBe('unknown');
 
@@ -382,7 +382,7 @@ describe('owner kind over the real routes', () => {
     // The sweep query the echo exists for: "which rows read not-recorded"
     // now has a different answer than it did one call ago.
     const after = await jj<{ tasks: Array<{ id: string; ownerKind: string }> }>(
-      await fetch(`${base}/api/workspaces/${wsId}/tasks`),
+      await fetch(`${base}/workspaces/${wsId}/tasks?format=json`),
     );
     expect(after.tasks.find((t) => t.id === task.id)?.ownerKind).toBe('person');
   });
@@ -392,7 +392,7 @@ describe('owner kind over the real routes', () => {
     // no declaration, and must still resolve the moment their owner attaches.
     const wsId = await seedWorkspace();
     const { task } = await jj<{ task: Task }>(
-      await post(`/api/workspaces/${wsId}/tasks`, {
+      await post(`/workspaces/${wsId}/tasks`, {
         title: 'rebuild the tile cache',
         assignee: 'Surveyor',
         // Assigned by somebody else, so nothing is declared about Surveyor.
@@ -461,7 +461,7 @@ describe('owner id beside the owner name', () => {
 
   async function seedWorkspace(name: string): Promise<string> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name, goal: 'Ship the atlas.' }),
+      await post('/workspaces', { name, goal: 'Ship the atlas.' }),
     );
     return workspace.id;
   }
@@ -477,7 +477,7 @@ describe('owner id beside the owner name', () => {
   // PERSON author: queueable work (todo), not triage — `/next` skips triage.
   const mk = async (wsId: string, assignee: string): Promise<Task> => {
     const { task } = await jj<{ task: Task }>(
-      await post(`/api/workspaces/${wsId}/tasks`, {
+      await post(`/workspaces/${wsId}/tasks`, {
         title: `owned by ${assignee}`,
         assignee,
         author: PERSON,
@@ -527,15 +527,17 @@ describe('owner id beside the owner name', () => {
 
     // `next_tasks` by id — or by any spelling — finds all three and only them.
     const three = [byName.id, bySlug.id, byId.id].sort();
-    expect(await ids(`/api/workspaces/${wsId}/next?assignee=${LF}`)).toEqual(three);
-    expect(await ids(`/api/workspaces/${wsId}/next?assignee=Live%20Feedback`)).toEqual(three);
-    expect(await ids(`/api/workspaces/${wsId}/tasks?assignee=live-feedback`)).toEqual(three);
+    expect(await ids(`/workspaces/${wsId}/next?assignee=${LF}`)).toEqual(three);
+    expect(await ids(`/workspaces/${wsId}/next?assignee=Live%20Feedback`)).toEqual(three);
+    expect(await ids(`/workspaces/${wsId}/tasks?assignee=live-feedback&format=json`)).toEqual(
+      three,
+    );
     // The verbatim filter still works for a name the roster cannot place.
-    expect(await ids(`/api/workspaces/${wsId}/tasks?assignee=Grace%20Hopper`)).toEqual([
+    expect(await ids(`/workspaces/${wsId}/tasks?assignee=Grace%20Hopper&format=json`)).toEqual([
       stranger.id,
     ]);
     // …and a spelling nobody used and nobody is finds nothing (negative control).
-    expect(await ids(`/api/workspaces/${wsId}/next?assignee=agent-nobody`)).toEqual([]);
+    expect(await ids(`/workspaces/${wsId}/next?assignee=agent-nobody`)).toEqual([]);
   });
 
   it('a row written before the roster knew the agent resolves at read time', async () => {
@@ -543,7 +545,7 @@ describe('owner id beside the owner name', () => {
     const old = await mk(wsId, 'Cartographer');
     expect(old.assigneeId).toBeUndefined();
     expect(projected(wsId, old.id)?.assigneeId).toBeUndefined();
-    expect(await ids(`/api/workspaces/${wsId}/next?assignee=agent-cartographer`)).toEqual([]);
+    expect(await ids(`/workspaces/${wsId}/next?assignee=agent-cartographer`)).toEqual([]);
 
     await attach(wsId, 'agent-cartographer', 'Cartographer');
 
@@ -553,7 +555,7 @@ describe('owner id beside the owner name', () => {
     expect(stored.assigneeId).toBeUndefined();
     expect(projected(wsId, old.id)?.assigneeId).toBe('agent-cartographer');
     expect(projected(wsId, old.id)?.ownerKind).toBe('agent');
-    expect(await ids(`/api/workspaces/${wsId}/next?assignee=agent-cartographer`)).toEqual([old.id]);
+    expect(await ids(`/workspaces/${wsId}/next?assignee=agent-cartographer`)).toEqual([old.id]);
   });
 
   it('a merged agent’s rows follow the merge without a rewrite', async () => {
@@ -562,7 +564,7 @@ describe('owner id beside the owner name', () => {
     await attach(wsId, 'lighthouse', 'Lighthouse');
     const theirs = await mk(wsId, 'Lighthouse');
     expect(theirs.assigneeId).toBe('lighthouse');
-    expect(await ids(`/api/workspaces/${wsId}/next?assignee=${LF}`)).toEqual([]);
+    expect(await ids(`/workspaces/${wsId}/next?assignee=${LF}`)).toEqual([]);
 
     await jj(await post('/api/agents/lighthouse/merge', { into: LF, author: PERSON }));
 
@@ -572,8 +574,8 @@ describe('owner id beside the owner name', () => {
     expect(stored.assignee).toBe('Lighthouse');
     // …and every read resolves it through the merge.
     expect(projected(wsId, theirs.id)?.assigneeId).toBe(LF);
-    expect(await ids(`/api/workspaces/${wsId}/next?assignee=${LF}`)).toEqual([theirs.id]);
-    expect(await ids(`/api/workspaces/${wsId}/next?assignee=Lighthouse`)).toEqual([theirs.id]);
+    expect(await ids(`/workspaces/${wsId}/next?assignee=${LF}`)).toEqual([theirs.id]);
+    expect(await ids(`/workspaces/${wsId}/next?assignee=Lighthouse`)).toEqual([theirs.id]);
   });
 
   it('a hand-over re-resolves the id, and clears it for a name nobody knows', async () => {

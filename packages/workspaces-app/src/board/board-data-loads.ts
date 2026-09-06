@@ -95,7 +95,7 @@ export function createBoardLoads(deps: BoardLoadDeps): BoardLoads {
   async function loadReviewItems(): Promise<void> {
     await refreshReviewItems(state, () =>
       fetchJson<{ items: ReviewThreadItem[] }>(
-        `/api/workspaces/${encodeURIComponent(workspaceId)}/review-items`,
+        `/workspaces/${encodeURIComponent(workspaceId)}/review-items`,
       ),
     );
     // The task panel's review queue is handed down from this same list, so it
@@ -176,7 +176,7 @@ export function createBoardLoads(deps: BoardLoadDeps): BoardLoads {
   async function loadEvents(): Promise<void> {
     if (!eventsConsumerActive()) return;
     const res = await fetchJson<{ events: ActivityEvent[]; uptime: UptimeReport | null }>(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/events`,
+      `/workspaces/${encodeURIComponent(workspaceId)}/events`,
     );
     state.events = applyRefresh(state.events, res, (r) => r.events ?? []);
     state.uptime = applyRefresh(state.uptime, res, (r) => r.uptime ?? null);

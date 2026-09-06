@@ -55,7 +55,7 @@ describe('a legacy evidence payload on the transition route', () => {
     });
 
   const mkTask = async (title: string): Promise<Task> => {
-    const r = await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title });
+    const r = await post(`/workspaces/${wsId}/tasks`, { author: AGENT, title });
     return ((await r.json()) as { task: Task }).task;
   };
 
@@ -63,7 +63,7 @@ describe('a legacy evidence payload on the transition route', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'legacy-evidence-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
-    const r = await post('/api/workspaces', { name: 'legacy-evidence-ws' });
+    const r = await post('/workspaces', { name: 'legacy-evidence-ws' });
     wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
   });
 
@@ -90,7 +90,7 @@ describe('a legacy evidence payload on the transition route', () => {
     // Positive control on the rest of the payload: the fields that DID survive
     // the removal still land, so a green status above is not a route that
     // quietly dropped everything.
-    const listed = (await (await local(`/api/workspaces/${wsId}/tasks`)).json()) as {
+    const listed = (await (await local(`/workspaces/${wsId}/tasks?format=json`)).json()) as {
       tasks: Task[];
     };
     const stored = listed.tasks.find((x) => x.id === t.id);

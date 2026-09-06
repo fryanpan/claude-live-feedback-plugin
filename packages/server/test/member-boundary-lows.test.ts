@@ -153,21 +153,17 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
     });
 
   const createBoard = async (name: string): Promise<string> => {
-    const res = await asOwnerJson('/api/workspaces', 'POST', { name });
+    const res = await asOwnerJson('/workspaces', 'POST', { name });
     expect(res.status).toBe(200);
     return ((await res.json()) as { workspace: { id: string } }).workspace.id;
   };
 
   const createTask = async (workspaceId: string, title: string): Promise<string> => {
-    const res = await asOwnerJson(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks`,
-      'POST',
-      {
-        title,
-        assignee: 'owner',
-        author: { id: 'known-owner', name: 'Owner', kind: 'known' },
-      },
-    );
+    const res = await asOwnerJson(`/workspaces/${encodeURIComponent(workspaceId)}/tasks`, 'POST', {
+      title,
+      assignee: 'owner',
+      author: { id: 'known-owner', name: 'Owner', kind: 'known' },
+    });
     expect(res.status, await res.clone().text()).toBe(200);
     return ((await res.json()) as { task: { id: string } }).task.id;
   };
@@ -209,7 +205,7 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
     expect(doc.status).toBe(200);
     docId = ((await doc.json()) as { docId: string }).docId;
     expect(
-      (await asOwnerJson(`/api/workspaces/${encodeURIComponent(board)}/docs`, 'POST', { docId }))
+      (await asOwnerJson(`/workspaces/${encodeURIComponent(board)}/docs`, 'POST', { docId }))
         .status,
     ).toBe(200);
 
@@ -295,7 +291,7 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
       const privateDocId = ((await created.json()) as { docId: string }).docId;
       expect(
         (
-          await asOwnerJson(`/api/workspaces/${encodeURIComponent(otherBoard)}/docs`, 'POST', {
+          await asOwnerJson(`/workspaces/${encodeURIComponent(otherBoard)}/docs`, 'POST', {
             docId: privateDocId,
           })
         ).status,
@@ -312,17 +308,21 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
     });
 
     it('refuses the same ref on a CREATE, which is the other door to the field', async () => {
-      const res = await asMemberJson(`/api/workspaces/${encodeURIComponent(board)}/tasks`, 'POST', {
-        title: 'A row that points somewhere it should not',
-        assignee: 'collaborator',
-        links: [{ kind: 'task', taskId: foreignTask }],
-      });
+      const res = await asMemberJson(
+        `/workspaces/${encodeURIComponent(board)}/tasks?format=json`,
+        'POST',
+        {
+          title: 'A row that points somewhere it should not',
+          assignee: 'collaborator',
+          links: [{ kind: 'task', taskId: foreignTask }],
+        },
+      );
       expect(res.status).toBe(403);
       expect(await res.json()).toEqual({ error: 'out_of_share_scope' });
     });
 
     it('CONTROL: a create whose links stay on the board is filed', async () => {
-      const res = await asMemberJson(`/api/workspaces/${encodeURIComponent(board)}/tasks`, 'POST', {
+      const res = await asMemberJson(`/workspaces/${encodeURIComponent(board)}/tasks`, 'POST', {
         title: 'A row that points at its own board',
         assignee: 'collaborator',
         links: [{ kind: 'task', taskId: ownTask }],
@@ -331,11 +331,15 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
     });
 
     it('refuses an out-of-board `origin` on a create', async () => {
-      const res = await asMemberJson(`/api/workspaces/${encodeURIComponent(board)}/tasks`, 'POST', {
-        title: 'A row spun off somebody else’s doc',
-        assignee: 'collaborator',
-        origin: { kind: 'task', taskId: foreignTask },
-      });
+      const res = await asMemberJson(
+        `/workspaces/${encodeURIComponent(board)}/tasks?format=json`,
+        'POST',
+        {
+          title: 'A row spun off somebody else’s doc',
+          assignee: 'collaborator',
+          origin: { kind: 'task', taskId: foreignTask },
+        },
+      );
       expect(res.status).toBe(403);
     });
 
@@ -387,9 +391,9 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
   describe('B. the Home read marker belongs to whoever was verified', () => {
     // A function, not a constant: this body runs at registration time, when
     // `beforeAll` has not filed a board yet and `board` is still undefined.
-    const homeRead = () => `/api/workspaces/${encodeURIComponent(board)}/home/read`;
+    const homeRead = () => `/workspaces/${encodeURIComponent(board)}/home/read`;
     const homeOf = (person: string) =>
-      `/api/workspaces/${encodeURIComponent(board)}/home?user=${encodeURIComponent(person)}`;
+      `/workspaces/${encodeURIComponent(board)}/home?user=${encodeURIComponent(person)}&format=json`;
 
     it('records a member’s mark under their own name, not the one the body claims', async () => {
       const at = 1_700_000_000_000;
@@ -732,19 +736,17 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
 
   describe('E. retiring a board is not a revocation', () => {
     it('a member of a RETIRED board still reaches it — the comment used to say otherwise', async () => {
-      const retired = await asOwnerJson(
-        `/api/workspaces/${encodeURIComponent(board)}/retired`,
-        'PUT',
-        { retired: true, author: { id: 'known-owner', name: 'Owner', kind: 'known' } },
-      );
+      const retired = await asOwnerJson(`/workspaces/${encodeURIComponent(board)}/retired`, 'PUT', {
+        retired: true,
+        author: { id: 'known-owner', name: 'Owner', kind: 'known' },
+      });
       expect(retired.status, await retired.clone().text()).toBe(200);
-      const res = await asMember(`/api/workspaces/${encodeURIComponent(board)}`);
+      const res = await asMember(`/workspaces/${encodeURIComponent(board)}?format=json`);
       expect(res.status).toBe(200);
-      const back = await asOwnerJson(
-        `/api/workspaces/${encodeURIComponent(board)}/retired`,
-        'PUT',
-        { retired: false, author: { id: 'known-owner', name: 'Owner', kind: 'known' } },
-      );
+      const back = await asOwnerJson(`/workspaces/${encodeURIComponent(board)}/retired`, 'PUT', {
+        retired: false,
+        author: { id: 'known-owner', name: 'Owner', kind: 'known' },
+      });
       expect(back.status).toBe(200);
     });
 
@@ -758,7 +760,7 @@ describe('the member boundary, on the surfaces a path check cannot see', () => {
         method: 'DELETE',
       });
       expect(revoked.status, await revoked.clone().text()).toBe(200);
-      const res = await asMember(`/api/workspaces/${encodeURIComponent(board)}`);
+      const res = await asMember(`/workspaces/${encodeURIComponent(board)}`);
       expect(res.status).toBe(403);
     });
   });

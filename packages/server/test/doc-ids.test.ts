@@ -62,7 +62,7 @@ describe('doc ids', () => {
   // ---------------------------------------------------------------- hole (a)
   describe('a caller cannot bind a folder into the task namespace', () => {
     it('refuses a setId that would mint member docs under `task:`', async () => {
-      const r = await post('/api/workspaces', { folderPath: folder, setId: 'task' });
+      const r = await post('/workspaces', { folderPath: folder, setId: 'task' });
       expect(r.status).toBe(400);
       expect(((await r.json()) as { error: string }).error).toBe('reserved-namespace');
 
@@ -71,7 +71,7 @@ describe('doc ids', () => {
     });
 
     it('positive control: an ordinary setId still binds and still mints members', async () => {
-      const r = await post('/api/workspaces', { folderPath: folder, setId: 'notes-review' });
+      const r = await post('/workspaces', { folderPath: folder, setId: 'notes-review' });
       expect(r.status).toBe(200);
       const ids = await listDocIds();
       expect(ids.some((id) => id.startsWith('notes-review:'))).toBe(true);
@@ -81,11 +81,11 @@ describe('doc ids', () => {
   // ---------------------------------------------------------------- hole (b)
   describe('a caller cannot address a task body as a doc it creates', () => {
     it('refuses POST /api/docs for a `task:<taskId>` docId, leaving the description intact', async () => {
-      const ws = (await (await post('/api/workspaces', { name: 'doc-id-fixture' })).json()) as {
+      const ws = (await (await post('/workspaces', { name: 'doc-id-fixture' })).json()) as {
         workspace: { id: string };
       };
       const { task } = (await (
-        await post(`/api/workspaces/${ws.workspace.id}/tasks`, {
+        await post(`/workspaces/${ws.workspace.id}/tasks`, {
           author: AGENT,
           title: 'Keep this description',
           body: 'The original body, which must survive the attempted overwrite.',
@@ -104,7 +104,9 @@ describe('doc ids', () => {
       expect(((await r.json()) as { error: string }).error).toBe('reserved-namespace');
 
       // The description is untouched...
-      const listed = (await (await local(`/api/workspaces/${ws.workspace.id}/tasks`)).json()) as {
+      const listed = (await (
+        await local(`/workspaces/${ws.workspace.id}/tasks?format=json`)
+      ).json()) as {
         tasks: Task[];
       };
       expect(listed.tasks.find((t) => t.id === task.id)?.body).toContain('must survive');
@@ -314,10 +316,10 @@ describe('doc ids', () => {
       // redirects to the canonical address rather than 404ing. (The 302 branch
       // is the only one observable headlessly — the 200 branch needs a built
       // client bundle, which a unit run has no reason to have.)
-      const ws = (await (await post('/api/workspaces', { name: 'migration-board' })).json()) as {
+      const ws = (await (await post('/workspaces', { name: 'migration-board' })).json()) as {
         workspace: { id: string };
       };
-      await post(`/api/workspaces/${ws.workspace.id}/docs`, { docId: 'legacy-plan' });
+      await post(`/workspaces/${ws.workspace.id}/docs`, { docId: 'legacy-plan' });
       const review = await local('/review/legacy-plan', { redirect: 'manual' });
       expect(review.status).toBe(302);
       expect(review.headers.get('location')).toContain('legacy-plan');

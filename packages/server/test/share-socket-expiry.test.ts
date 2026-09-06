@@ -128,13 +128,13 @@ describe('expired shares lose their sockets', () => {
         workspaceId: 'ws-shared',
       }),
     });
-    const board = await local('/api/workspaces', {
+    const board = await local('/workspaces', {
       method: 'POST',
       body: JSON.stringify({ name: 'Expiry board' }),
     });
     expect(board.status).toBe(200);
     const boardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
-    const filed = await local(`/api/workspaces/${encodeURIComponent(boardId)}/docs`, {
+    const filed = await local(`/workspaces/${encodeURIComponent(boardId)}/docs`, {
       method: 'POST',
       body: JSON.stringify({ docId: 'ws-shared' }),
     });

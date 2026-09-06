@@ -13,10 +13,11 @@ First-time setup for a fresh clone of `claude-workspaces-plugin`. Walk the user 
 Brings a fresh checkout of this repo to a working state:
 
 1. Installs JS dependencies (`bun install`)
-2. Wires the shell alias that enables Claude Channels for `plugin:claude-workspaces@claude-workspaces`
-3. Registers the local repo as a Claude Code marketplace and installs the plugin at user scope
-4. (Optional) Installs the macOS launchd supervisor so the claude-workspaces server survives logout / Mac reboot / crashes
-5. (Optional on macs with home on a non-default volume) Surfaces the Full Disk Access prereq for the launchd-spawned bun
+2. Installs the git hooks that gate leaks at commit and push time
+3. Wires the shell alias that enables Claude Channels for `plugin:claude-workspaces@claude-workspaces`
+4. Registers the local repo as a Claude Code marketplace and installs the plugin at user scope
+5. (Optional) Installs the macOS launchd supervisor so the claude-workspaces server survives logout / Mac reboot / crashes
+6. (Optional on macs with home on a non-default volume) Surfaces the Full Disk Access prereq for the launchd-spawned bun
 
 ## Steps
 
@@ -39,6 +40,34 @@ bun install
 If `bun` isn't on their PATH, point them at <https://bun.sh> — don't install bun for them. Once they have it, retry.
 
 Verify: `node_modules/` exists at the repo root.
+
+### 2b. Install the git hooks — one command, do not skip it
+
+```sh
+git config core.hooksPath .githooks
+```
+
+This is what turns on the leak gate. `.githooks/pre-commit` refuses a commit
+that ADDS a private project name or a denylisted string; `.githooks/pre-push`
+re-reads the whole of every file the push publishes, as the backstop. This is a
+public repo, so a leak that reaches a commit costs a history rewrite and one
+that reaches a push is public record.
+
+Until this command is run the clone is **unprotected and indistinguishable from
+a protected one** — git reads `.git/hooks`, which is empty, so nothing fails and
+nothing prints. `bun install` warns about it (`postinstall` runs
+`scripts/check-hooks.sh`); `bun run check:hooks` answers the same question
+directly and exits non-zero when the hooks are missing.
+
+Verify:
+
+```sh
+bun run check:hooks       # prints "commit + push leak gates are installed"
+bun run check:scrub-gate  # proves the gate can still SEE a planted needle
+```
+
+The second one matters as much as the first: this scanner's real failure mode
+is scanning nothing and exiting 0, which it did undetected for weeks.
 
 ### 3. Wire the shell alias for Claude Channels
 

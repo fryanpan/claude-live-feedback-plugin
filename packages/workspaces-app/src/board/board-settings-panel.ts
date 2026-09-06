@@ -78,14 +78,14 @@ export function wireBoardSettingsPanel(deps: BoardSettingsPanelDeps): void {
     read: async () => {
       const data = await fetchJson<{
         reviewItemCriteria?: { value?: string; isDefault?: boolean };
-      }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/settings`);
+      }>(`/workspaces/${encodeURIComponent(workspaceId)}/settings`);
       const criteria = data?.reviewItemCriteria;
       return typeof criteria?.value === 'string'
         ? { value: criteria.value, isDefault: criteria.isDefault === true }
         : null;
     },
     write: async (value) => {
-      const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/settings`, 'PUT', {
+      const res = await send(`/workspaces/${encodeURIComponent(workspaceId)}/settings`, 'PUT', {
         reviewItemCriteria: value,
         author,
       });
@@ -112,7 +112,7 @@ export function wireBoardSettingsPanel(deps: BoardSettingsPanelDeps): void {
           lastChange?: { actor?: { name?: string }; ts?: number; from?: number; to?: number };
         };
         dispatchesInUse?: number;
-      }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/settings`);
+      }>(`/workspaces/${encodeURIComponent(workspaceId)}/settings`);
       const cap = data?.parallelismCap;
       const change = cap?.lastChange;
       const lastChange =
@@ -132,7 +132,7 @@ export function wireBoardSettingsPanel(deps: BoardSettingsPanelDeps): void {
         : null;
     },
     write: async (value) => {
-      const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/settings`, 'PUT', {
+      const res = await send(`/workspaces/${encodeURIComponent(workspaceId)}/settings`, 'PUT', {
         parallelismCap: value,
         author,
       });

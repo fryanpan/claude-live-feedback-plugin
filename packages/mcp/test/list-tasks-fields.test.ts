@@ -139,7 +139,7 @@ describe('list_tasks wiring', () => {
   it('sends the workspace filters as query params, not as a body', async () => {
     const res = await mcp.call('list_tasks', { workspaceId: 'w-1', status: 'todo' });
     const get = res.sent.find((r) => r.method === 'GET');
-    expect(get?.path).toBe('/api/workspaces/w-1/tasks');
+    expect(get?.path).toBe('/workspaces/w-1/tasks');
     expect(get?.query.get('status')).toBe('todo');
     // `fields` is a handler-side trim: the route never learns about it, which
     // is what keeps an old bundle's call shape unchanged.

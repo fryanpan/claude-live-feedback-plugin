@@ -98,7 +98,7 @@ navigates to every other changed file.
 - You're auto-subscribed to every file doc: comments arrive as
   `<channel source="live-feedback" doc_id="..." thread_id="...">` events.
   The `doc_id` tells you which file (`<reviewId>:<relPath with / as ~>`).
-- Prefer one poll over N: `GET /api/workspaces/<reviewId>/threads?status=open`
+- Prefer one poll over N: `GET /workspaces/<reviewId>/threads?status=open`
   returns every open thread across the whole review, each tagged with its
   `docId` + `relPath` — use it to survey a big review instead of hitting
   every file's thread route.

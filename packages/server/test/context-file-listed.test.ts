@@ -178,7 +178,7 @@ describe('the non-git listing carries its own floor', () => {
     writeFileSync(join(folder, '.npmrc'), '//registry.example/:_authToken=FIXTURE_MARKER\n');
     writeFileSync(join(folder, 'server.key'), 'FIXTURE_MARKER_KEY\n');
     writeFileSync(join(folder, 'id_ed25519'), 'FIXTURE_MARKER_SSH\n');
-    const bind = await post('/api/workspaces', { folderPath: folder });
+    const bind = await post('/workspaces', { folderPath: folder });
     expect(bind.status, await bind.clone().text()).toBe(200);
     // The GROUPING workspace id the bind returns — the id `context-file`
     // and `/files` are addressed by, not the board it is also filed under.
@@ -192,7 +192,7 @@ describe('the non-git listing carries its own floor', () => {
   });
 
   const open = (relPath: string) =>
-    post(`/api/workspaces/${encodeURIComponent(workspaceId)}/context-file`, { relPath });
+    post(`/api/reviews/${encodeURIComponent(workspaceId)}/context-file`, { relPath });
 
   it('positive control: an ordinary file in the same folder opens', async () => {
     // Without this, every refusal below could be a bind that never happened.
@@ -211,7 +211,7 @@ describe('the non-git listing carries its own floor', () => {
     // The refusal above and the listing are the same rule; a tree that still
     // advertised `.env` would be telling a visitor a path worth guessing.
     const res = await fetch(
-      `http://localhost:${handle.port}/api/workspaces/${encodeURIComponent(workspaceId)}/files`,
+      `http://localhost:${handle.port}/api/reviews/${encodeURIComponent(workspaceId)}/files`,
       { headers: { host: `localhost:${handle.port}` } },
     );
     expect(res.status).toBe(200);

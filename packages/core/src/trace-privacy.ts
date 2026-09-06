@@ -150,8 +150,8 @@ const ROUTE_TEMPLATES: readonly (readonly string[])[] = [
   ['api', 'share', 'workspace'],
   ['api', 'summaries', 'backfill'],
   ['api', 'webhooks', 'log'],
-  ['api', 'workspaces'],
   ['signin'],
+  ['workspaces'],
   ['widget-auth'],
   ['widget.esm.js'],
   ['widget.iife.js'],
@@ -160,26 +160,19 @@ const ROUTE_TEMPLATES: readonly (readonly string[])[] = [
   ['api', 'reviews', ':id'],
   ['api', 'reviews', ':id', 'archive'],
   ['api', 'reviews', ':id', 'unarchive'],
-  // reviewApi(sub): `/api/(?:reviews|workspaces)/:id/<sub>` — a review or a
-  // board workspace can be addressed under either prefix (compat for
-  // long-running sessions and open tabs; see the reviewApi comment in
-  // server.ts), so every one of these 8 subroutes needs BOTH prefixes.
+  // reviewApi(sub): `/api/reviews/:id/<sub>`, and only there. Each of these
+  // eight used to be listed twice, because a review answered under
+  // `/api/workspaces/:id/<sub>` as well — compat for sessions and tabs nobody
+  // could restart. That alias is gone: `/workspaces/:id/…` is a BOARD's
+  // address now, and a review is not a board.
   ['api', 'reviews', ':id', 'refresh'],
-  ['api', 'workspaces', ':id', 'refresh'],
   ['api', 'reviews', ':id', 'groups'],
-  ['api', 'workspaces', ':id', 'groups'],
   ['api', 'reviews', ':id', 'grouped'],
-  ['api', 'workspaces', ':id', 'grouped'],
   ['api', 'reviews', ':id', 'threads'],
-  ['api', 'workspaces', ':id', 'threads'],
   ['api', 'reviews', ':id', 'files'],
-  ['api', 'workspaces', ':id', 'files'],
   ['api', 'reviews', ':id', 'tree'],
-  ['api', 'workspaces', ':id', 'tree'],
   ['api', 'reviews', ':id', 'context-file'],
-  ['api', 'workspaces', ':id', 'context-file'],
   ['api', 'reviews', ':id', 'editable-file'],
-  ['api', 'workspaces', ':id', 'editable-file'],
   ['share', ':id'],
   ['s', ':id'],
   ['api', 'share', ':id'],
@@ -190,32 +183,6 @@ const ROUTE_TEMPLATES: readonly (readonly string[])[] = [
   ['mockup', ':id'],
   ['audio', ':id'],
   ['y', ':id'],
-  // /api/workspaces/:id/...
-  ['api', 'workspaces', ':id'],
-  ['api', 'workspaces', ':id', 'review-items'],
-  ['api', 'workspaces', ':id', 'home'],
-  ['api', 'workspaces', ':id', 'home', 'read'],
-  ['api', 'workspaces', ':id', 'home', 'instructions'],
-  ['api', 'workspaces', ':id', 'next'],
-  ['api', 'workspaces', ':id', 'load-reports'],
-  ['api', 'workspaces', ':id', 'events'],
-  ['api', 'workspaces', ':id', 'goal'],
-  ['api', 'workspaces', ':id', 'goals'],
-  ['api', 'workspaces', ':id', 'goals', 'rename'],
-  ['api', 'workspaces', ':id', 'goals', 'add'],
-  ['api', 'workspaces', ':id', 'goals', 'reorder'],
-  ['api', 'workspaces', ':id', 'retired'],
-  ['api', 'workspaces', ':id', 'settings'],
-  ['api', 'workspaces', ':id', 'rename'],
-  ['api', 'workspaces', ':id', 'lead'],
-  ['api', 'workspaces', ':id', 'voice'],
-  ['api', 'workspaces', ':id', 'docs'],
-  ['api', 'workspaces', ':id', 'import-tasks'],
-  ['api', 'workspaces', ':id', 'huddles'],
-  ['api', 'workspaces', ':id', 'tasks'],
-  ['api', 'workspaces', ':id', 'tasks', 'batch'],
-  ['api', 'workspaces', ':id', 'comment-queue', ':id', 'ack'],
-  ['api', 'workspaces', ':id', 'voice-queue', ':id', 'ack'],
   // /api/tasks/:id/...
   ['api', 'tasks', ':id', 'transition'],
   ['api', 'tasks', ':id', 'evidence'],
@@ -286,15 +253,53 @@ const ROUTE_TEMPLATES: readonly (readonly string[])[] = [
   ['api', 'docs', ':id', 'agent_anchors', ':id'],
   ['api', 'docs', ':id', 'agent_anchors', ':id', 'edit'],
   ['api', 'docs', ':id', 'agent_anchors', ':id', 'insert_blocks'],
-  // the frontend shell — /workspaces/:id and /workspaces/:id/(docs|mockups|reviews)/:id
+  // A board and everything it owns, at ONE prefix.
+  //
+  // This list used to be two: the frontend shell's `/workspaces/:id/…` pages,
+  // and a parallel `/api/workspaces/:id/…` for the data behind them. The `/api`
+  // prefix is gone, so a tab in a browser and the JSON behind it are one
+  // address distinguished by `?format=json` — and a query string is not part
+  // of a route pattern, so `''`, `home` and `tasks` each appear ONCE here and
+  // cover both. Two entries would not have been wrong; they would have been a
+  // second place to forget.
   ['workspaces', ':id'],
   ['workspaces', ':id', 'home'],
+  ['workspaces', ':id', 'home', 'read'],
+  ['workspaces', ':id', 'home', 'instructions'],
   ['workspaces', ':id', 'tasks'],
+  ['workspaces', ':id', 'tasks', 'batch'],
   ['workspaces', ':id', 'mine'],
   ['workspaces', ':id', 'activity'],
+  ['workspaces', ':id', 'docs'],
   ['workspaces', ':id', 'docs', ':id'],
   ['workspaces', ':id', 'mockups', ':id'],
   ['workspaces', ':id', 'reviews', ':id'],
+  ['workspaces', ':id', 'review-items'],
+  ['workspaces', ':id', 'next'],
+  ['workspaces', ':id', 'related-work'],
+  ['workspaces', ':id', 'load-reports'],
+  ['workspaces', ':id', 'events'],
+  ['workspaces', ':id', 'goal'],
+  ['workspaces', ':id', 'goals'],
+  ['workspaces', ':id', 'goals', 'rename'],
+  ['workspaces', ':id', 'goals', 'add'],
+  ['workspaces', ':id', 'goals', 'reorder'],
+  // A goal BAND's own verbs. They were `/api/goals/:id/<verb>` — a row that
+  // named no board — and the board in front of the id is what lets one guard
+  // check that the band is on the board the caller named.
+  ['workspaces', ':id', 'goals', ':id', 'cascade'],
+  ['workspaces', ':id', 'goals', ':id', 'archive'],
+  ['workspaces', ':id', 'goals', ':id', 'restore'],
+  ['workspaces', ':id', 'retired'],
+  ['workspaces', ':id', 'settings'],
+  ['workspaces', ':id', 'parallelism-cap'],
+  ['workspaces', ':id', 'rename'],
+  ['workspaces', ':id', 'lead'],
+  ['workspaces', ':id', 'voice'],
+  ['workspaces', ':id', 'import-tasks'],
+  ['workspaces', ':id', 'huddles'],
+  ['workspaces', ':id', 'comment-queue', ':id', 'ack'],
+  ['workspaces', ':id', 'voice-queue', ':id', 'ack'],
   // Board collections addressed the canonical way — the live event stream
   // and the agent roster, both moved off names the glossary spends elsewhere.
   ['workspaces', ':id', 'events:stream'],

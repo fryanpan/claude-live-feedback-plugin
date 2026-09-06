@@ -44,13 +44,15 @@ const IGNORED_ABS = join(REPO, IGNORED_REL);
  *
  * It used to name a stylesheet read in `packages/workspaces-app/test`, and
  * that whole class of site is gone — those tests install the sheets and read
- * a computed value now. What is left is the MCP suite's reads of the built
- * plugin bundle, which is a different subject and not on its way out. When
- * this file stops being a site, point this at another one from
- * `bun run test:audit --list` rather than deleting the assertion: it is the
- * positive control for the two negative controls below.
+ * a computed value now. It then named `channel-gate.test.ts`, whose read of
+ * the built plugin bundle has since become a frame pushed through the running
+ * bundle instead. What is left is the board's own source-contract tests,
+ * which read `board/*.ts` as text on purpose. When this file stops being a
+ * site, point this at another one from `bun run test:audit --list` rather
+ * than deleting the assertion: it is the positive control for the two
+ * negative controls below.
  */
-const TRACKED_SITE = join('packages', 'mcp', 'test', 'channel-gate.test.ts');
+const TRACKED_SITE = join('packages', 'workspaces-app', 'test', 'board-source-contract.test.ts');
 
 /** A file the sleep check must object to: one fixed wait, well over the bar. */
 const PROBE_SOURCE = `import { sleep } from 'bun';\n\nexport async function wait(): Promise<void> {\n  await sleep(2500);\n}\n`;
@@ -126,7 +128,7 @@ describe('the audit enumerates untracked files', () => {
  * closing them from swallowing the whole suite.
  *
  * Everything below is planted under one throwaway directory inside an existing
- * test tree, run through the real script once, and removed. Seven probes in a
+ * test tree, run through the real script once, and removed. Ten probes in a
  * SINGLE run on purpose: "the audit did not name the fixture reader" is worth
  * nothing unless the same run named something, and the counted and uncounted
  * probes differ by exactly the property under test.
@@ -356,6 +358,142 @@ const VIA_UNANNOTATED = [
   '',
 ].join('\n');
 
+/**
+ * A direct read carrying the per-site marker with a reason. Must NOT be
+ * counted: this is `client-release.test.ts` in miniature, where the path is a
+ * tmpdir the test itself published into and only the bare filename matches.
+ */
+const MARKED_READER = [
+  "import { readFileSync } from 'node:fs';",
+  "import { resolve } from 'node:path';",
+  "import { describe, expect, it } from 'vitest';",
+  '',
+  '// audit: not-source — stands in for a read of an artifact the test just',
+  '// produced, where the matching literal is a bare filename.',
+  `const CSS = readFileSync(resolve(import.meta.dirname, ${REAL_SOURCE}), 'utf8');`,
+  '',
+  "describe('probe', () => {",
+  "  it('asserts on a marked read', () => {",
+  "    expect(CSS).toContain(':root');",
+  '  });',
+  '});',
+  '',
+].join('\n');
+
+/**
+ * The same read under a marker with no reason. Must be counted: a bare
+ * silencer is exactly what the marker must not become, so the regex requires
+ * a dash and a word after it.
+ */
+const BARE_MARKER_READER = [
+  "import { readFileSync } from 'node:fs';",
+  "import { resolve } from 'node:path';",
+  "import { describe, expect, it } from 'vitest';",
+  '',
+  '// audit: not-source',
+  `const CSS = readFileSync(resolve(import.meta.dirname, ${REAL_SOURCE}), 'utf8');`,
+  '',
+  "describe('probe', () => {",
+  "  it('asserts on a read whose marker gives no reason', () => {",
+  "    expect(CSS).toContain(':root');",
+  '  });',
+  '});',
+  '',
+].join('\n');
+
+/**
+ * The marker over a HARNESS IMPORT. Must be counted anyway: the per-site
+ * marker reaches direct reads only. A test that gets its text from a reading
+ * module has to make its case at that module, where the claim can be checked
+ * against what the module exports rather than believed.
+ */
+const MARKED_VIA_HARNESS = [
+  "import { describe, expect, it } from 'vitest';",
+  '// audit: not-source — a claim the per-site marker is not allowed to make',
+  "import { readSheet } from './harness-text.ts';",
+  '',
+  "describe('probe', () => {",
+  "  it('reads source through a harness under a per-site marker', () => {",
+  "    expect(readSheet()).toContain(':root');",
+  '  });',
+  '});',
+  '',
+].join('\n');
+
+/**
+ * A read the formatter wrapped, so its path literal is not on the line its
+ * name is on. Must be counted: this is `walk-handoff.test.ts` in miniature.
+ *
+ * PR 718 renamed `src/hub/` to `src/board/`; the longer name pushed that
+ * file's `readFileSync(join(__dirname, '..', 'src', 'hub', …))` past biome's
+ * width, biome wrapped it, and the audit's per-line form stopped seeing a
+ * site that was still there and still grepping source. The count fell 52 to
+ * 51 and two builders on unrelated PRs read the drop as harmless drift. A
+ * ratchet a rename can lower is not a ratchet, which is what this probe is
+ * here to keep true.
+ */
+const WRAPPED_READER = [
+  "import { readFileSync } from 'node:fs';",
+  "import { resolve } from 'node:path';",
+  "import { describe, expect, it } from 'vitest';",
+  '',
+  'const CSS = readFileSync(',
+  `  resolve(import.meta.dirname, ${REAL_SOURCE}),`,
+  "  'utf8',",
+  ');',
+  '',
+  "describe('probe', () => {",
+  "  it('asserts on a read the formatter wrapped', () => {",
+  "    expect(CSS).toContain(':root');",
+  '  });',
+  '});',
+  '',
+].join('\n');
+
+/**
+ * A wrapped read whose arguments name nothing under source, with a SEPARATE
+ * statement carrying a source literal on the very next line. Must NOT be
+ * counted.
+ *
+ * This is the fixture that bounds the widening. The cheap way to see a
+ * wrapped call is to look at the next few lines, and any such window matches
+ * here — the literal sits one line past the read's closing paren. What keeps
+ * it out is that the window is the call's own PARENTHESES: the next
+ * statement can never be inside them. Without this probe, "the detector sees
+ * wrapped calls" and "the detector counts whatever is nearby" pass the same
+ * tests, and a detector that over-counts is as useless as one that
+ * under-counts.
+ *
+ * It is planted in the same run as `WRAPPED_READER`, in the same directory
+ * and with the same assertion shape, so "the audit did not name it" cannot
+ * mean the file was never enumerated.
+ */
+const SPLIT_STATEMENT_READER = [
+  "import { readFileSync } from 'node:fs';",
+  "import { resolve } from 'node:path';",
+  "import { describe, expect, it } from 'vitest';",
+  '',
+  "const PLAIN = resolve(import.meta.dirname, 'plain.txt');",
+  '',
+  "const ONE_LINE = readFileSync(PLAIN, 'utf8');",
+  `const SHEET = resolve(import.meta.dirname, ${REAL_SOURCE});`,
+  '',
+  'const WRAPPED = readFileSync(',
+  '  PLAIN,',
+  "  'utf8',",
+  ');',
+  `const SHEET_AGAIN = resolve(import.meta.dirname, ${REAL_SOURCE});`,
+  '',
+  "describe('probe', () => {",
+  "  it('keeps a neighbouring statement out of the read', () => {",
+  '    expect(ONE_LINE.length > 0).toBe(true);',
+  '    expect(WRAPPED).toBe(ONE_LINE);',
+  '    expect(SHEET).toBe(SHEET_AGAIN);',
+  '  });',
+  '});',
+  '',
+].join('\n');
+
 /** The 1-based line a probe's read or harness import sits on. */
 function lineOf(source: string, needle: string): number {
   const i = source.split('\n').findIndex((l) => l.includes(needle));
@@ -377,6 +515,12 @@ function plantSourceProbes(): void {
   writeFileSync(join(PROBE_DIR_ABS, 'via-liar.test.ts'), VIA_LIAR);
   writeFileSync(join(PROBE_DIR_ABS, 'to-be.test.ts'), TO_BE_READER);
   writeFileSync(join(PROBE_DIR_ABS, 'fixture.test.ts'), FIXTURE_READER);
+  writeFileSync(join(PROBE_DIR_ABS, 'marked.test.ts'), MARKED_READER);
+  writeFileSync(join(PROBE_DIR_ABS, 'bare-marker.test.ts'), BARE_MARKER_READER);
+  writeFileSync(join(PROBE_DIR_ABS, 'marked-via-harness.test.ts'), MARKED_VIA_HARNESS);
+  writeFileSync(join(PROBE_DIR_ABS, 'wrapped.test.ts'), WRAPPED_READER);
+  writeFileSync(join(PROBE_DIR_ABS, 'split-statement.test.ts'), SPLIT_STATEMENT_READER);
+  writeFileSync(join(PROBE_DIR_ABS, 'plain.txt'), 'not source\n');
   writeFileSync(join(PROBE_DIR_ABS, 'fixtures', 'sample.css'), '.probe { color: red; }\n');
 }
 
@@ -385,7 +529,7 @@ afterEach(() => {
 });
 
 describe('the audit sees a source read one module away', () => {
-  it('counts the five ways a test reaches source text, and neither of the two that do not', () => {
+  it('counts the eight ways a test reaches source text, and none of the four that do not', () => {
     // CONTROL: nothing from the probe directory is named before it exists, so
     // every "named" assertion below is this test's doing.
     expect(existsSync(PROBE_DIR_ABS)).toBe(false);
@@ -421,11 +565,39 @@ describe('the audit sees a source read one module away', () => {
       `${join(PROBE_DIR_REL, 'via-unannotated.test.ts')}:${lineOf(VIA_UNANNOTATED, 'harness-unannotated.ts')}`,
     );
 
-    // Not counted. Both read a real stylesheet; what keeps them out is the
-    // harness's marker line over fully annotated exports, and the
-    // `fixtures/` path.
+    // Counted, because the per-site marker carries no reason. A bare
+    // `// audit: not-source` silences nothing.
+    expect(run.stdout).toContain(
+      `${join(PROBE_DIR_REL, 'bare-marker.test.ts')}:${lineOf(BARE_MARKER_READER, 'const CSS =')}`,
+    );
+
+    // Counted, because the per-site marker does not reach the harness-import
+    // form. Text arriving through a module is that module's claim to make.
+    expect(run.stdout).toContain(
+      `${join(PROBE_DIR_REL, 'marked-via-harness.test.ts')}:${lineOf(
+        MARKED_VIA_HARNESS,
+        'harness-text.ts',
+      )}`,
+    );
+
+    // Counted, though the read's name and its path literal are on different
+    // lines. The window is the call's own parentheses, so the formatter no
+    // longer decides what the audit can see.
+    expect(run.stdout).toContain(
+      `${join(PROBE_DIR_REL, 'wrapped.test.ts')}:${lineOf(WRAPPED_READER, 'const CSS = readFileSync(')}`,
+    );
+
+    // Not counted. The first three read a real stylesheet; what keeps them out
+    // is the harness's marker line over fully annotated exports, the
+    // `fixtures/` path, and a per-site marker that gives its reason.
     expect(run.stdout).not.toContain(join(PROBE_DIR_REL, 'via-computed.test.ts'));
     expect(run.stdout).not.toContain(join(PROBE_DIR_REL, 'fixture.test.ts'));
+    expect(run.stdout).not.toContain(join(PROBE_DIR_REL, 'marked.test.ts'));
+
+    // Not counted, and this is the one that bounds the line above it: the
+    // source literal is on the line straight after the read's closing paren,
+    // so every window that is not the parentheses themselves matches it.
+    expect(run.stdout).not.toContain(join(PROBE_DIR_REL, 'split-statement.test.ts'));
   });
 
   it('holds on the real harnesses, not only on planted ones', () => {
@@ -437,5 +609,13 @@ describe('the audit sees a source read one module away', () => {
     const listed = runAudit('--list').stdout;
     expect(listed).toContain(join('packages', 'mcp', 'test', 'watch-coverage.test.ts'));
     expect(listed).not.toContain(join('packages', 'workspaces-app', 'test', 'board-island'));
+
+    // And the real wrapped read. `css-minify.test.ts` is the one to name
+    // because its ONLY read is the wrapped one — the other five files the
+    // widening added were already on the list for a read that happened to fit
+    // on a line, so naming one of those would pass against a line-based
+    // detector too. If this file's read stops being wrapped, point this at
+    // `review-item-comments.test.tsx`, the other single-site case.
+    expect(listed).toContain(join('packages', 'widget', 'test', 'css-minify.test.ts'));
   });
 });

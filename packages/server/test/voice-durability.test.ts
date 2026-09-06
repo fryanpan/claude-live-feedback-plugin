@@ -209,7 +209,7 @@ describe('the live branch is durable too', () => {
   });
 
   it('records an utterance sent to a live agent, and the ack clears exactly it', async () => {
-    const r = await fetch(`${base}/api/workspaces`, {
+    const r = await fetch(`${base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'live-durable', goal: 'Ship it.' }),
@@ -224,7 +224,7 @@ describe('the live branch is durable too', () => {
     // keep nothing.
     streams.push(await openWorkspaceStream(base, workspace.id, {}, 'worker'));
 
-    const said = await fetch(`${base}/api/workspaces/${workspace.id}/voice`, {
+    const said = await fetch(`${base}/workspaces/${workspace.id}/voice`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -243,7 +243,7 @@ describe('the live branch is durable too', () => {
 
     // And the receipt — the thing the agent's MCP sends once the frame is in
     // its hands — is what takes it off.
-    const acked = await fetch(`${base}/api/workspaces/${workspace.id}/voice-queue/${entryId}/ack`, {
+    const acked = await fetch(`${base}/workspaces/${workspace.id}/voice-queue/${entryId}/ack`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{}',

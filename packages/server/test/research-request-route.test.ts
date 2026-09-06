@@ -73,7 +73,7 @@ describe('POST /api/docs/:docId/research-request', () => {
   };
   const newHuddle = async (): Promise<string> => {
     const { docId } = await jj<{ docId: string }>(
-      await post(`/api/workspaces/${workspaceId}/huddles`, { kind: 'discussion' }),
+      await post(`/workspaces/${workspaceId}/huddles`, { kind: 'discussion' }),
     );
     const set = handle.docStore.setDocContent(docId, NOTES);
     expect(set.ok).toBe(true);
@@ -111,7 +111,7 @@ describe('POST /api/docs/:docId/research-request', () => {
     base = `http://localhost:${handle.port}`;
     workspaceId = (
       await jj<{ workspace: { id: string } }>(
-        await post('/api/workspaces', { name: 'research-request-board' }),
+        await post('/workspaces', { name: 'research-request-board' }),
       )
     ).workspace.id;
   });
@@ -159,7 +159,7 @@ describe('POST /api/docs/:docId/research-request', () => {
     expect(md.indexOf('Research:')).toBeLessThan(md.indexOf('## Next'));
     // And it filed NO task — the row was the whole complaint.
     const { tasks } = await jj<{ tasks: unknown[] }>(
-      await local(`/api/workspaces/${workspaceId}/tasks`),
+      await local(`/workspaces/${workspaceId}/tasks?format=json`),
     );
     expect(tasks).toHaveLength(0);
   });
