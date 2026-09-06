@@ -44,13 +44,15 @@ const IGNORED_ABS = join(REPO, IGNORED_REL);
  *
  * It used to name a stylesheet read in `packages/workspaces-app/test`, and
  * that whole class of site is gone — those tests install the sheets and read
- * a computed value now. What is left is the MCP suite's reads of the built
- * plugin bundle, which is a different subject and not on its way out. When
- * this file stops being a site, point this at another one from
- * `bun run test:audit --list` rather than deleting the assertion: it is the
- * positive control for the two negative controls below.
+ * a computed value now. It then named `channel-gate.test.ts`, whose read of
+ * the built plugin bundle has since become a frame pushed through the running
+ * bundle instead. What is left is the board's own source-contract tests,
+ * which read `board/*.ts` as text on purpose. When this file stops being a
+ * site, point this at another one from `bun run test:audit --list` rather
+ * than deleting the assertion: it is the positive control for the two
+ * negative controls below.
  */
-const TRACKED_SITE = join('packages', 'mcp', 'test', 'channel-gate.test.ts');
+const TRACKED_SITE = join('packages', 'workspaces-app', 'test', 'board-source-contract.test.ts');
 
 /** A file the sleep check must object to: one fixed wait, well over the bar. */
 const PROBE_SOURCE = `import { sleep } from 'bun';\n\nexport async function wait(): Promise<void> {\n  await sleep(2500);\n}\n`;
@@ -126,7 +128,7 @@ describe('the audit enumerates untracked files', () => {
  * closing them from swallowing the whole suite.
  *
  * Everything below is planted under one throwaway directory inside an existing
- * test tree, run through the real script once, and removed. Seven probes in a
+ * test tree, run through the real script once, and removed. Ten probes in a
  * SINGLE run on purpose: "the audit did not name the fixture reader" is worth
  * nothing unless the same run named something, and the counted and uncounted
  * probes differ by exactly the property under test.
@@ -356,6 +358,68 @@ const VIA_UNANNOTATED = [
   '',
 ].join('\n');
 
+/**
+ * A direct read carrying the per-site marker with a reason. Must NOT be
+ * counted: this is `client-release.test.ts` in miniature, where the path is a
+ * tmpdir the test itself published into and only the bare filename matches.
+ */
+const MARKED_READER = [
+  "import { readFileSync } from 'node:fs';",
+  "import { resolve } from 'node:path';",
+  "import { describe, expect, it } from 'vitest';",
+  '',
+  '// audit: not-source — stands in for a read of an artifact the test just',
+  '// produced, where the matching literal is a bare filename.',
+  `const CSS = readFileSync(resolve(import.meta.dirname, ${REAL_SOURCE}), 'utf8');`,
+  '',
+  "describe('probe', () => {",
+  "  it('asserts on a marked read', () => {",
+  "    expect(CSS).toContain(':root');",
+  '  });',
+  '});',
+  '',
+].join('\n');
+
+/**
+ * The same read under a marker with no reason. Must be counted: a bare
+ * silencer is exactly what the marker must not become, so the regex requires
+ * a dash and a word after it.
+ */
+const BARE_MARKER_READER = [
+  "import { readFileSync } from 'node:fs';",
+  "import { resolve } from 'node:path';",
+  "import { describe, expect, it } from 'vitest';",
+  '',
+  '// audit: not-source',
+  `const CSS = readFileSync(resolve(import.meta.dirname, ${REAL_SOURCE}), 'utf8');`,
+  '',
+  "describe('probe', () => {",
+  "  it('asserts on a read whose marker gives no reason', () => {",
+  "    expect(CSS).toContain(':root');",
+  '  });',
+  '});',
+  '',
+].join('\n');
+
+/**
+ * The marker over a HARNESS IMPORT. Must be counted anyway: the per-site
+ * marker reaches direct reads only. A test that gets its text from a reading
+ * module has to make its case at that module, where the claim can be checked
+ * against what the module exports rather than believed.
+ */
+const MARKED_VIA_HARNESS = [
+  "import { describe, expect, it } from 'vitest';",
+  '// audit: not-source — a claim the per-site marker is not allowed to make',
+  "import { readSheet } from './harness-text.ts';",
+  '',
+  "describe('probe', () => {",
+  "  it('reads source through a harness under a per-site marker', () => {",
+  "    expect(readSheet()).toContain(':root');",
+  '  });',
+  '});',
+  '',
+].join('\n');
+
 /** The 1-based line a probe's read or harness import sits on. */
 function lineOf(source: string, needle: string): number {
   const i = source.split('\n').findIndex((l) => l.includes(needle));
@@ -377,6 +441,9 @@ function plantSourceProbes(): void {
   writeFileSync(join(PROBE_DIR_ABS, 'via-liar.test.ts'), VIA_LIAR);
   writeFileSync(join(PROBE_DIR_ABS, 'to-be.test.ts'), TO_BE_READER);
   writeFileSync(join(PROBE_DIR_ABS, 'fixture.test.ts'), FIXTURE_READER);
+  writeFileSync(join(PROBE_DIR_ABS, 'marked.test.ts'), MARKED_READER);
+  writeFileSync(join(PROBE_DIR_ABS, 'bare-marker.test.ts'), BARE_MARKER_READER);
+  writeFileSync(join(PROBE_DIR_ABS, 'marked-via-harness.test.ts'), MARKED_VIA_HARNESS);
   writeFileSync(join(PROBE_DIR_ABS, 'fixtures', 'sample.css'), '.probe { color: red; }\n');
 }
 
@@ -385,7 +452,7 @@ afterEach(() => {
 });
 
 describe('the audit sees a source read one module away', () => {
-  it('counts the five ways a test reaches source text, and neither of the two that do not', () => {
+  it('counts the seven ways a test reaches source text, and none of the three that do not', () => {
     // CONTROL: nothing from the probe directory is named before it exists, so
     // every "named" assertion below is this test's doing.
     expect(existsSync(PROBE_DIR_ABS)).toBe(false);
@@ -421,11 +488,27 @@ describe('the audit sees a source read one module away', () => {
       `${join(PROBE_DIR_REL, 'via-unannotated.test.ts')}:${lineOf(VIA_UNANNOTATED, 'harness-unannotated.ts')}`,
     );
 
-    // Not counted. Both read a real stylesheet; what keeps them out is the
-    // harness's marker line over fully annotated exports, and the
-    // `fixtures/` path.
+    // Counted, because the per-site marker carries no reason. A bare
+    // `// audit: not-source` silences nothing.
+    expect(run.stdout).toContain(
+      `${join(PROBE_DIR_REL, 'bare-marker.test.ts')}:${lineOf(BARE_MARKER_READER, 'const CSS =')}`,
+    );
+
+    // Counted, because the per-site marker does not reach the harness-import
+    // form. Text arriving through a module is that module's claim to make.
+    expect(run.stdout).toContain(
+      `${join(PROBE_DIR_REL, 'marked-via-harness.test.ts')}:${lineOf(
+        MARKED_VIA_HARNESS,
+        'harness-text.ts',
+      )}`,
+    );
+
+    // Not counted. All three read a real stylesheet; what keeps them out is
+    // the harness's marker line over fully annotated exports, the `fixtures/`
+    // path, and a per-site marker that gives its reason.
     expect(run.stdout).not.toContain(join(PROBE_DIR_REL, 'via-computed.test.ts'));
     expect(run.stdout).not.toContain(join(PROBE_DIR_REL, 'fixture.test.ts'));
+    expect(run.stdout).not.toContain(join(PROBE_DIR_REL, 'marked.test.ts'));
   });
 
   it('holds on the real harnesses, not only on planted ones', () => {
