@@ -344,7 +344,7 @@ list-heavy. A refusal converts cosmetic churn into a hard workflow stop.
 **Follow-up (cheap partial, not implemented here):** at bind time, compute
 `willReflow = prose.normalizeMarkdown(diskText) !== diskText` — the exact
 comparison hydrate already performs — stash it on the file binding, and
-surface it in the `create_review_doc` response and the `doc_status` payload
+surface it in the `attach_markdown` response and the `doc_status` payload
 with a one-line note ("first write-back will reflow line wrapping; content is
 preserved"). That turns the surprise into a heads-up for the cost of one
 string compare that already runs.

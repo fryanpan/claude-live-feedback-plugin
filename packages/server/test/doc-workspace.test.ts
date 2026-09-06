@@ -73,7 +73,7 @@ describe('a doc always lands in a workspace', () => {
     // non-empty workspaceId in the other tests means something.
     const ws = await post('/workspaces', { name: 'named-ws', goal: 'Ship.' });
     const wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
-    // The body an MCP `create_review_doc` call puts on the wire, so this also
+    // The body an MCP `attach_markdown` call puts on the wire, so this also
     // covers the layer that hand-copies fields into the doc-store call.
     const r = await post('/api/docs', {
       docId: 'doc-named-ws',

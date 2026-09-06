@@ -87,13 +87,13 @@ bun run dev
 To review a markdown file from a Claude session:
 
 ```
-create_review_doc({ docId: "my-review", path: "/abs/path/to/doc.md" })
+attach_markdown({ docId: "my-review", path: "/abs/path/to/doc.md" })
 # then open: http://.../review/my-review?as=<name>
 ```
 
 ## What ships with the plugin
 
-- **MCP server** (`live-feedback-mcp`, stdio) — `list_docs`, `get_doc`, `create_review_doc`, `find_and_replace`, `create_anchor`, `edit_at_anchor`, `rewrite_thread_region`, `insert_blocks_after_thread`, `post_reply`, `resolve_thread`, `reopen_thread`, `watch_doc`, `unwatch_doc`, `reparse_from_disk`, etc.
+- **MCP server** (`live-feedback-mcp`, stdio) — `list_docs`, `get_doc`, `attach_markdown`, `find_and_replace`, `create_anchor`, `edit_at_anchor`, `rewrite_thread_region`, `insert_blocks_after_thread`, `post_reply`, `resolve_thread`, `reopen_thread`, `watch_doc`, `unwatch_doc`, `reparse_from_disk`, etc.
 - **Claude Code channel** — `notifications/claude/channel` with `experimental: { 'claude/channel': {} }` capability. Thread events push live.
 - **Skills** — `editing-review-docs` (fires before `Edit`/`Write` on `.md` files; routes through MCP if file is under review), `embedding-widget` (fires when agent generates mockups; wires `docId` + `setContext` correctly), and a "posting structured findings" pattern referenced from the UX Review case study.
 - **Slash commands** — `/feedback-serve`, `/feedback-threads`.

@@ -85,7 +85,7 @@ which carry threads.
    still exist on disk. A doc deleted via `delete_doc` took its threads with
    it; those comments will be missing from the backfill.
 5. **`producedBy.sessionId` is best-effort.** It's populated only when
-   `create_review_doc` / `attach_folder` were called with an explicit
+   `attach_markdown` / `attach_folder` were called with an explicit
    `producedBy: { sessionId }`. For all historical docs (and any created
    without it), `producedBy.sessionId` is `null` and `agentId` is derived from
    the owner cwd basename.

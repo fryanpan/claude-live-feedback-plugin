@@ -41,7 +41,7 @@ reports. Everything on that board is available to everyone the share reaches
    to "anyone."
 
 2. **Find or create the BOARD.** If the thing to review is a loose doc bound
-   via `create_review_doc`, file it on a board with `attach_doc`. A folder
+   via `attach_markdown`, file it on a board with `attach_doc`. A folder
    bind or diff review is already filed on one — `attach_folder` and
    `create_diff_review` return it as `hubWorkspaceId`. `list_docs` shows
    which workspace a doc already belongs to.

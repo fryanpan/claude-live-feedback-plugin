@@ -5,6 +5,9 @@
  * Four verbs were named by the code rather than by the product —
  * `bind_folder`, `bind_mock`, `promote_to_task`, `retire_workspace` — while
  * the UI, the docs and the skills said attach, attach, spin off and archive.
+ * Seven more said *review* for a set of docs, mockups, previews and diffs,
+ * a word the rest of the product had already given to the review ITEM a
+ * person answers; they took `attachment` instead.
  * Renaming them is cheap; the two ways it goes wrong are not. A peer running
  * last week's plugin bundle calls the old name and gets "unknown tool", which
  * costs somebody a turn to diagnose a rename they had no way to see — so the
@@ -42,6 +45,13 @@ describe('the alias table is the one place the pairs are written down', () => {
       promote_to_task: 'spin_off_task',
       retire_workspace: 'archive_workspace',
       list_attachments: 'list_agents',
+      create_review_doc: 'attach_markdown',
+      delete_review: 'delete_attachment_set',
+      archive_review: 'archive_attachment_set',
+      unarchive_review: 'unarchive_attachment_set',
+      list_archived_reviews: 'list_archived_attachments',
+      refresh_review: 'refresh_attachment_set',
+      set_review_groups: 'set_attachment_groups',
     });
   });
 
@@ -217,6 +227,98 @@ describe('both names reach the same code, not merely the same switch', () => {
     );
     expect(calls[0]?.[1]).toBe('/workspaces/w1/retired');
     expect(calls[0]?.[2]).toMatchObject({ retired: true, reason: 'superseded' });
+  });
+
+  /**
+   * The seven `review` → `attachment` verbs, each with the arguments it
+   * actually takes and the route it actually reaches. Driven from a table
+   * rather than written out seven times, and the table is checked against
+   * the alias map below so a pair added to one and not the other is a
+   * failure rather than a silence.
+   */
+  const REVIEW_WAVE: Array<{
+    alias: string;
+    now: string;
+    args: Record<string, unknown>;
+    answer: unknown;
+    route: string;
+  }> = [
+    {
+      alias: 'create_review_doc',
+      now: 'attach_markdown',
+      args: { docId: 'plan', path: '/tmp/synthetic.md' },
+      answer: { docId: 'plan' },
+      route: '/api/docs',
+    },
+    {
+      alias: 'delete_review',
+      now: 'delete_attachment_set',
+      args: { setId: 'set-1', force: true, purge: false },
+      answer: { ok: true },
+      route: '/api/reviews/set-1?force=true',
+    },
+    {
+      alias: 'archive_review',
+      now: 'archive_attachment_set',
+      args: { setId: 'set-1', reason: 'merged in #301' },
+      answer: { ok: true },
+      route: '/api/reviews/set-1/archive',
+    },
+    {
+      alias: 'unarchive_review',
+      now: 'unarchive_attachment_set',
+      args: { setId: 'set-1' },
+      answer: { ok: true },
+      route: '/api/reviews/set-1/unarchive',
+    },
+    {
+      alias: 'list_archived_reviews',
+      now: 'list_archived_attachments',
+      args: {},
+      answer: { archived: [], docs: [] },
+      route: '/api/reviews/archived',
+    },
+    {
+      alias: 'refresh_review',
+      now: 'refresh_attachment_set',
+      args: { setId: 'set-1' },
+      answer: { ok: true },
+      route: '/api/reviews/set-1/refresh',
+    },
+    {
+      alias: 'set_review_groups',
+      now: 'set_attachment_groups',
+      args: { setId: 'set-1', groups: [{ title: 'Server', paths: ['packages/server'] }] },
+      answer: { ok: true },
+      route: '/api/reviews/set-1/groups',
+    },
+  ];
+
+  it('the table below covers every verb of the review wave, and no other', () => {
+    // Without this the `it.each` under it is only as complete as whoever
+    // last edited it remembered to be: drop a row and seven assertions
+    // quietly become six, with nothing red.
+    // "review" is what the wave renamed away from, and no other alias key
+    // contains it — bind_folder, bind_mock, promote_to_task,
+    // retire_workspace and list_attachments are the earlier wave.
+    const wave = Object.keys(DEPRECATED_TOOL_ALIASES)
+      .filter((alias) => alias.includes('review'))
+      .sort();
+    expect(REVIEW_WAVE.map((r) => r.alias).sort()).toEqual(wave);
+    expect(REVIEW_WAVE).toHaveLength(7);
+    for (const row of REVIEW_WAVE) expect(DEPRECATED_TOOL_ALIASES[row.alias]).toBe(row.now);
+  });
+
+  it.each(REVIEW_WAVE)('$alias / $now make the same request', async (row) => {
+    const calls = await sameUnderBothNames(
+      handleDocsTool as never,
+      row.alias,
+      row.now,
+      row.args,
+      row.answer,
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.[1]).toBe(row.route);
   });
 });
 

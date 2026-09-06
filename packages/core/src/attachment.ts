@@ -35,7 +35,7 @@ export const attachmentIdOf = (meta: Pick<DocMeta, 'setId' | 'workspaceId'>): st
  * merely shares a `setId` with others.
  *
  * `relPath` is the discriminator, and it has to be: `setId` predates binds as
- * a batch-registration tag on `create_review_doc`, so 129 docs in the live
+ * a batch-registration tag on `attach_markdown`, so 129 docs in the live
  * data dir share a set without belonging to any folder or diff. They get a
  * sibling sidebar and nothing else — no tree, no refresh, no diff groups —
  * and surfacing them as attachment sets would invent 40-odd sets nobody made.
