@@ -623,7 +623,7 @@ export class VoiceRouter {
         );
       }
       case 'open-link': {
-        const navigate = refNavigation(plan.ref);
+        const navigate = refNavigation(workspaceId, plan.ref);
         if (!navigate) return { kind: 'defer' };
         return {
           kind: 'answered',
@@ -1015,7 +1015,7 @@ export class VoiceRouter {
     const board = `/workspaces/${encodeURIComponent(workspaceId)}`;
     if (c.kind === 'task') return sameOriginPath(`${board}?task=${encodeURIComponent(c.id)}`);
     if (c.kind === 'goal') return sameOriginPath(`${board}?goal=${encodeURIComponent(c.id)}`);
-    return sameOriginPath(`/review/${encodeURIComponent(c.id)}`);
+    return sameOriginPath(`${board}/docs/${encodeURIComponent(c.id)}`);
   }
 
   /**
@@ -1265,8 +1265,13 @@ export class VoiceRouter {
       }
     }
     if (c.target === 'doc' && c.id) {
+      // `docInWorkspace` is what makes the board-scoped address correct as
+      // well as available: the doc is confirmed to be on this board before
+      // this URL names it as the board it lives under.
       const navigate = this.docInWorkspace(workspaceId, c.id)
-        ? sameOriginPath(`/review/${encodeURIComponent(c.id)}`)
+        ? sameOriginPath(
+            `/workspaces/${encodeURIComponent(workspaceId)}/docs/${encodeURIComponent(c.id)}`,
+          )
         : undefined;
       if (navigate) {
         return {

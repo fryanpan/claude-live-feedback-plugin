@@ -50,7 +50,10 @@ async function withServer(
     for (let i = 0; i < 100 && !up; i++) {
       await new Promise((r) => setTimeout(r, 100));
       try {
-        up = (await fetch(`http://127.0.0.1:${port}/api/docs`, { headers })).ok;
+        // The board LIST, which needs no board to exist — this is a liveness
+        // probe, and a probe that first has to seed a board would report a
+        // healthy server as down for as long as the seeding failed.
+        up = (await fetch(`http://127.0.0.1:${port}/workspaces`, { headers })).ok;
       } catch {}
     }
     expect(up).toBe(true);

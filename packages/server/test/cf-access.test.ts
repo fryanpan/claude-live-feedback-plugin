@@ -7,10 +7,14 @@ import { type JSONWebKeySet, type JWK, SignJWT, exportJWK, generateKeyPair } fro
 import { activityLogPath } from '../src/activity.ts';
 import { type CfAccessOptions, createCfAccessVerifier } from '../src/middleware/cf-access.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoardOnHandle } from './workspace-seed.ts';
 
 const TEAM_DOMAIN = 'test.cloudflareaccess.com';
 const AUDIENCE = 'test-aud-tag';
 const KID = 'test-kid';
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('Cloudflare Access JWT verification', () => {
   let handle: ServerHandle;
@@ -51,6 +55,9 @@ describe('Cloudflare Access JWT verification', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'cf-access-test-'));
     handle = createServer({ port: 0, dataDir, cfAccess });
     base = `http://localhost:${handle.port}`;
+    // Through the handle: these servers gate an unauthenticated POST, which
+    // is the very thing they exist to prove.
+    WS = seedBoardOnHandle(handle);
   });
 
   afterAll(async () => {
@@ -59,7 +66,7 @@ describe('Cloudflare Access JWT verification', () => {
   });
 
   it('rejects requests without a JWT header or cookie', async () => {
-    const r = await fetch(`${base}/api/docs`);
+    const r = await fetch(`${base}/workspaces/${WS}/docs`);
     expect(r.status).toBe(401);
     const body = (await r.json()) as { error: string };
     expect(body.error).toBe('missing_jwt');
@@ -67,7 +74,7 @@ describe('Cloudflare Access JWT verification', () => {
 
   it('accepts a valid JWT in the Cf-Access-Jwt-Assertion header', async () => {
     const jwt = await signValidJwt();
-    const r = await fetch(`${base}/api/docs`, {
+    const r = await fetch(`${base}/workspaces/${WS}/docs`, {
       headers: { 'cf-access-jwt-assertion': jwt },
     });
     expect(r.status).toBe(200);
@@ -75,7 +82,7 @@ describe('Cloudflare Access JWT verification', () => {
 
   it('accepts a valid JWT in the CF_Authorization cookie', async () => {
     const jwt = await signValidJwt();
-    const r = await fetch(`${base}/api/docs`, {
+    const r = await fetch(`${base}/workspaces/${WS}/docs`, {
       headers: { cookie: `CF_Authorization=${jwt}; other=value` },
     });
     expect(r.status).toBe(200);
@@ -83,7 +90,7 @@ describe('Cloudflare Access JWT verification', () => {
 
   it('rejects a JWT signed for a different audience', async () => {
     const jwt = await signValidJwt({ aud: 'wrong-aud' });
-    const r = await fetch(`${base}/api/docs`, {
+    const r = await fetch(`${base}/workspaces/${WS}/docs`, {
       headers: { 'cf-access-jwt-assertion': jwt },
     });
     expect(r.status).toBe(401);
@@ -91,7 +98,7 @@ describe('Cloudflare Access JWT verification', () => {
 
   it('rejects a JWT with a different issuer', async () => {
     const jwt = await signValidJwt({ iss: 'https://attacker.cloudflareaccess.com' });
-    const r = await fetch(`${base}/api/docs`, {
+    const r = await fetch(`${base}/workspaces/${WS}/docs`, {
       headers: { 'cf-access-jwt-assertion': jwt },
     });
     expect(r.status).toBe(401);
@@ -99,7 +106,7 @@ describe('Cloudflare Access JWT verification', () => {
 
   it('rejects an expired JWT', async () => {
     const jwt = await signValidJwt({ expSec: Math.floor(Date.now() / 1000) - 60 });
-    const r = await fetch(`${base}/api/docs`, {
+    const r = await fetch(`${base}/workspaces/${WS}/docs`, {
       headers: { 'cf-access-jwt-assertion': jwt },
     });
     expect(r.status).toBe(401);
@@ -109,18 +116,18 @@ describe('Cloudflare Access JWT verification', () => {
     // The point of this test is the Access gate, not CORS: a preflight must
     // not require a JWT, because the browser sends it without credentials and
     // a 401 here would break every cross-origin call before it started.
-    const r = await fetch(`${base}/api/docs`, { method: 'OPTIONS' });
+    const r = await fetch(`${base}/workspaces/${WS}/docs`, { method: 'OPTIONS' });
     expect(r.status).toBe(204);
   });
 
   it('grants the preflight to an allowed origin, and nothing to a stranger', async () => {
     // CORS is no longer a blanket `*` — see middleware/browser-origin.ts.
-    const ok = await fetch(`${base}/api/docs`, {
+    const ok = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'OPTIONS',
       headers: { origin: 'http://localhost:3000' },
     });
     expect(ok.headers.get('access-control-allow-origin')).toBe('http://localhost:3000');
-    const evil = await fetch(`${base}/api/docs`, {
+    const evil = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'OPTIONS',
       headers: { origin: 'https://evil.example.com' },
     });
@@ -190,6 +197,9 @@ describe('a verified Access email mints the same identity as a code', () => {
       cfAccess: { teamDomain: TEAM, audience: AUD, jwks: { keys: [publicJwk] } },
     });
     base = `http://localhost:${handle.port}`;
+    // Through the handle: these servers gate an unauthenticated POST, which
+    // is the very thing they exist to prove.
+    WS = seedBoardOnHandle(handle);
   });
 
   afterAll(async () => {
@@ -200,13 +210,13 @@ describe('a verified Access email mints the same identity as a code', () => {
   async function commentAs(jwt: string, docId: string): Promise<void> {
     const path = join(dataDir, `${docId}.md`);
     writeFileSync(path, `# ${docId}\n\nBody.\n`);
-    const created = await fetch(`${base}/api/docs`, {
+    const created = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'cf-access-jwt-assertion': jwt },
       body: JSON.stringify({ docId, type: 'markdown', sourceUrl: path }),
     });
     expect(created.status).toBe(200);
-    const res = await fetch(`${base}/api/docs/${docId}/threads`, {
+    const res = await fetch(`${base}/workspaces/${WS}/docs/${docId}/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'cf-access-jwt-assertion': jwt },
       // Claiming to be the owner. The claim is what Access outranks.
@@ -286,6 +296,7 @@ describe('server with cfAccess unset (default)', () => {
   beforeAll(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'cf-access-noop-'));
     handle = createServer({ port: 0, dataDir });
+    WS = seedBoardOnHandle(handle);
   });
 
   afterAll(async () => {
@@ -294,7 +305,7 @@ describe('server with cfAccess unset (default)', () => {
   });
 
   it('serves requests without any auth check', async () => {
-    const r = await fetch(`http://localhost:${handle.port}/api/docs`);
+    const r = await fetch(`http://localhost:${handle.port}/workspaces/${WS}/docs`);
     expect(r.status).toBe(200);
   });
 });
@@ -320,7 +331,9 @@ describe('createCfAccessVerifier — required claims and what a refusal says', (
         .setIssuedAt(),
     ).sign(privateKey);
   const req = (token: string) =>
-    new Request('http://localhost/api/docs', { headers: { 'cf-access-jwt-assertion': token } });
+    new Request(`http://localhost/workspaces/${WS}/docs`, {
+      headers: { 'cf-access-jwt-assertion': token },
+    });
 
   beforeAll(async () => {
     const pair = await generateKeyPair('RS256');

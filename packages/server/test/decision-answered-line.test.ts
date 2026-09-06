@@ -22,6 +22,7 @@ import type { User } from '@feedback/core';
 import { type DecisionAnsweredPayload, decisionAnsweredLine } from '../../mcp/src/decision-line.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { type Task, eventsLogPath } from '../src/tasks.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON: User = { id: 'known-alex', name: 'Alex', kind: 'known', color: '#2e7dd7' };
 const AGENT: User = {
@@ -32,6 +33,9 @@ const AGENT: User = {
 };
 
 const CLAUSE = 'walk its links as the propagation checklist';
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('the decision.answered channel line only sends a reader to links that exist', () => {
   let handle: ServerHandle;
@@ -74,7 +78,7 @@ describe('the decision.answered channel line only sends a reader to links that e
     });
     expect(created.status).toBe(200);
     const task = ((await created.json()) as { task: Task }).task;
-    const answered = await post(`/api/tasks/${task.id}/answer`, {
+    const answered = await post(`/workspaces/${WS}/tasks/${task.id}/answer`, {
       text: 'Rebuild after the freeze.',
       author: PERSON,
     });
@@ -86,8 +90,10 @@ describe('the decision.answered channel line only sends a reader to links that e
     dataDir = mkdtempSync(join(tmpdir(), 'decision-answered-line-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     const ws = await post('/workspaces', { name: 'index-rebuild' });
     wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
+    WS = wsId;
   });
 
   afterAll(async () => {

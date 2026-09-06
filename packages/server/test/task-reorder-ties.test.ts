@@ -74,7 +74,7 @@ describe('placing a row among tied orders', () => {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'reorder-ties-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
@@ -168,7 +168,7 @@ describe('placing a row among tied orders', () => {
     // only say `1.5` and 1.5 sorts after both of them.
     const f = await seedTiedGoal();
     await jj(
-      await post(`/api/tasks/${f.ids.Charlie}/goal`, {
+      await post(`/workspaces/${f.wsId}/tasks/${f.ids.Charlie}/goal`, {
         author: PERSON,
         goal: f.goal,
         after: f.ids.Delta,
@@ -184,7 +184,7 @@ describe('placing a row among tied orders', () => {
     // see that, so this one asserts the two answers disagree.
     const a = await seedTiedGoal();
     await jj(
-      await post(`/api/tasks/${a.ids.Charlie}/goal`, {
+      await post(`/workspaces/${a.wsId}/tasks/${a.ids.Charlie}/goal`, {
         author: PERSON,
         goal: a.goal,
         after: a.ids.Delta,
@@ -192,7 +192,7 @@ describe('placing a row among tied orders', () => {
     );
     const b = await seedTiedGoal();
     await jj(
-      await post(`/api/tasks/${b.ids.Charlie}/goal`, {
+      await post(`/workspaces/${b.wsId}/tasks/${b.ids.Charlie}/goal`, {
         author: PERSON,
         goal: b.goal,
         after: b.ids.Echo,
@@ -205,7 +205,11 @@ describe('placing a row among tied orders', () => {
   it('`after: null` means the top of the goal', async () => {
     const f = await seedTiedGoal();
     await jj(
-      await post(`/api/tasks/${f.ids.Echo}/goal`, { author: PERSON, goal: f.goal, after: null }),
+      await post(`/workspaces/${f.wsId}/tasks/${f.ids.Echo}/goal`, {
+        author: PERSON,
+        goal: f.goal,
+        after: null,
+      }),
     );
     expect(await boardOrder(f)).toEqual(['Echo', 'Alpha', 'Bravo', 'Charlie', 'Delta']);
   });
@@ -216,7 +220,7 @@ describe('placing a row among tied orders', () => {
     // never drops into never heals.
     const f = await seedTiedGoal();
     await jj(
-      await post(`/api/tasks/${f.ids.Charlie}/goal`, {
+      await post(`/workspaces/${f.wsId}/tasks/${f.ids.Charlie}/goal`, {
         author: PERSON,
         goal: f.goal,
         after: f.ids.Delta,
@@ -235,7 +239,7 @@ describe('placing a row among tied orders', () => {
     const was = new Map((await tasksOf(f.wsId)).map((t) => [t.id, t.updatedAt]));
     await new Promise((r) => setTimeout(r, 5));
     await jj(
-      await post(`/api/tasks/${f.ids.Charlie}/goal`, {
+      await post(`/workspaces/${f.wsId}/tasks/${f.ids.Charlie}/goal`, {
         author: PERSON,
         goal: f.goal,
         after: f.ids.Delta,
@@ -283,7 +287,7 @@ describe('placing a row among tied orders', () => {
       ids[name] = task.id;
     }
     const res = await jj<{ ok: true; changed: boolean; task: Task }>(
-      await post(`/api/tasks/${ids.Solo}/goal`, {
+      await post(`/workspaces/${workspace.id}/tasks/${ids.Solo}/goal`, {
         author: PERSON,
         goal: G.loop as string,
         after: ids.Alpha,
@@ -300,7 +304,11 @@ describe('placing a row among tied orders', () => {
     // sent verbatim rather than alongside the new field.
     const f = await seedTiedGoal();
     const res = await jj<{ ok: true; changed: boolean; task: Task }>(
-      await post(`/api/tasks/${f.ids.Alpha}/goal`, { author: AGENT, goal: f.goal, position: 9 }),
+      await post(`/workspaces/${f.wsId}/tasks/${f.ids.Alpha}/goal`, {
+        author: AGENT,
+        goal: f.goal,
+        position: 9,
+      }),
     );
     expect(res.task.order).toBe(9);
     expect(await boardOrder(f)).toEqual(['Bravo', 'Charlie', 'Delta', 'Echo', 'Alpha']);
@@ -309,7 +317,7 @@ describe('placing a row among tied orders', () => {
   it('refuses an `after` that names a row in another goal', async () => {
     const f = await seedTiedGoal();
     const other = await seedTiedGoal();
-    const res = await post(`/api/tasks/${f.ids.Charlie}/goal`, {
+    const res = await post(`/workspaces/${f.wsId}/tasks/${f.ids.Charlie}/goal`, {
       author: PERSON,
       goal: f.goal,
       after: other.ids.Delta,
@@ -320,7 +328,7 @@ describe('placing a row among tied orders', () => {
     // `after` being rejected wholesale.
     expect(
       (
-        await post(`/api/tasks/${f.ids.Charlie}/goal`, {
+        await post(`/workspaces/${f.wsId}/tasks/${f.ids.Charlie}/goal`, {
           author: PERSON,
           goal: f.goal,
           after: f.ids.Delta,
@@ -332,8 +340,13 @@ describe('placing a row among tied orders', () => {
   it('refuses an `after` that is neither a string nor null', async () => {
     const f = await seedTiedGoal();
     expect(
-      (await post(`/api/tasks/${f.ids.Charlie}/goal`, { author: PERSON, goal: f.goal, after: 3 }))
-        .status,
+      (
+        await post(`/workspaces/${f.wsId}/tasks/${f.ids.Charlie}/goal`, {
+          author: PERSON,
+          goal: f.goal,
+          after: 3,
+        })
+      ).status,
     ).toBe(400);
   });
 });

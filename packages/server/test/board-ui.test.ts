@@ -19,8 +19,12 @@ import type { User } from '@feedback/core';
 import { BOARD_FEEDBACK_DOC_ID, type ServerHandle, createServer } from '../src/server.ts';
 import { workspaceDocId } from '../src/task-projection.ts';
 import type { Task } from '../src/tasks.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON: User = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('board UI routes (plan §3.12 commit 7)', () => {
   let handle: ServerHandle;
@@ -43,7 +47,8 @@ describe('board UI routes (plan §3.12 commit 7)', () => {
     const { workspace } = await jj<{ workspace: { id: string } }>(
       await post('/workspaces', { name, goal: 'Ship search v2.' }),
     );
-    return workspace.id;
+    WS = workspace.id;
+    return WS;
   }
 
   async function seedTask(workspaceId: string, title = 'Fix the ranking clause'): Promise<Task> {
@@ -53,10 +58,11 @@ describe('board UI routes (plan §3.12 commit 7)', () => {
     return task;
   }
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-board-ui-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterAll(async () => {
@@ -113,6 +119,12 @@ describe('board UI routes (plan §3.12 commit 7)', () => {
         expect(html).toContain('<claude-feedback-widget');
         expect(html).toContain(`doc-id="${BOARD_FEEDBACK_DOC_ID}"`);
       }
+      // The board in the embed is the board the READER is on, not one home
+      // for the shared doc: the feedback doc belongs to every board, and the
+      // widget refuses to run without an address. Per-board, so it is also
+      // the second control that these are two different pages.
+      expect(htmlA).toContain(`workspace-id="${a}"`);
+      expect(htmlB).toContain(`workspace-id="${b}"`);
       // The workspace name rides along as `view` so a thread reads without
       // anyone resolving an id — and it differs per board, which is the
       // positive control that these two responses aren't the same page.
@@ -137,7 +149,7 @@ describe('board UI routes (plan §3.12 commit 7)', () => {
     // The doc must be findable by an agent that never opened a board — a doc
     // conjured by the first `/y/<id>` connect has no title and no type.
     it('materializes the shared feedback doc at startup', async () => {
-      const res = await fetch(`${base}/api/docs/${BOARD_FEEDBACK_DOC_ID}`);
+      const res = await fetch(`${base}/workspaces/${WS}/docs/${BOARD_FEEDBACK_DOC_ID}?format=json`);
       expect(res.status).toBe(200);
       const meta = (await res.json()) as { meta?: { title?: string } };
       expect(meta.meta?.title ?? '').toContain('Board feedback');
@@ -160,12 +172,15 @@ describe('board UI routes (plan §3.12 commit 7)', () => {
     });
   });
 
-  describe('POST /api/tasks/:id/title', () => {
+  describe(`POST /workspaces/${WS}/tasks/:id/title`, () => {
     it('renames the task; the store AND the board projection both carry the new title', async () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId, 'Old title');
       const res = await jj<{ ok: boolean; task: Task; changed: boolean }>(
-        await post(`/api/tasks/${task.id}/title`, { title: 'New sharper title', author: PERSON }),
+        await post(`/workspaces/${wsId}/tasks/${task.id}/title`, {
+          title: 'New sharper title',
+          author: PERSON,
+        }),
       );
       expect(res.changed).toBe(true);
       expect(res.task.title).toBe('New sharper title');
@@ -187,7 +202,10 @@ describe('board UI routes (plan §3.12 commit 7)', () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId, 'Stable title');
       const res = await jj<{ changed: boolean }>(
-        await post(`/api/tasks/${task.id}/title`, { title: 'Stable title', author: PERSON }),
+        await post(`/workspaces/${wsId}/tasks/${task.id}/title`, {
+          title: 'Stable title',
+          author: PERSON,
+        }),
       );
       expect(res.changed).toBe(false);
     });
@@ -195,13 +213,19 @@ describe('board UI routes (plan §3.12 commit 7)', () => {
     it('400s on a missing/blank title and on a missing author; 404s on an unknown task', async () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId);
-      expect((await post(`/api/tasks/${task.id}/title`, { author: PERSON })).status).toBe(400);
       expect(
-        (await post(`/api/tasks/${task.id}/title`, { title: '   ', author: PERSON })).status,
+        (await post(`/workspaces/${wsId}/tasks/${task.id}/title`, { author: PERSON })).status,
       ).toBe(400);
-      expect((await post(`/api/tasks/${task.id}/title`, { title: 'x' })).status).toBe(400);
       expect(
-        (await post('/api/tasks/t-missing/title', { title: 'x', author: PERSON })).status,
+        (await post(`/workspaces/${wsId}/tasks/${task.id}/title`, { title: '   ', author: PERSON }))
+          .status,
+      ).toBe(400);
+      expect(
+        (await post(`/workspaces/${wsId}/tasks/${task.id}/title`, { title: 'x' })).status,
+      ).toBe(400);
+      expect(
+        (await post(`/workspaces/${wsId}/tasks/t-missing/title`, { title: 'x', author: PERSON }))
+          .status,
       ).toBe(404);
       // Positive control: the failed attempts really left the title alone.
       const { tasks } = await jj<{ tasks: Task[] }>(
@@ -216,7 +240,10 @@ describe('board UI routes (plan §3.12 commit 7)', () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId, 'Audited task');
       await jj(
-        await post(`/api/tasks/${task.id}/transition`, { to: 'in-progress', author: PERSON }),
+        await post(`/workspaces/${wsId}/tasks/${task.id}/transition`, {
+          to: 'in-progress',
+          author: PERSON,
+        }),
       );
       const { events } = await jj<{ events: Array<{ event: string; ts: number }> }>(
         await fetch(`${base}/workspaces/${wsId}/events`),

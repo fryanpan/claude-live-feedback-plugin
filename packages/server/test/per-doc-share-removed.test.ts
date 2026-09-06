@@ -37,10 +37,14 @@ import { type ServerHandle, createServer } from '../src/server.ts';
 import { Shares } from '../src/share/shares.ts';
 import type { Share } from '../src/share/types.ts';
 import { type AccessHarness, accessHarness, mintAccessShare } from './access-share.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 /** The hostname legacy link records on disk carry. A fixture string: link
  *  mode is retired, so nothing is served on it. */
 const PUBLIC_HOST = 'feedback.example.com';
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('per-doc sharing is removed', () => {
   let handle: ServerHandle;
@@ -77,17 +81,23 @@ describe('per-doc sharing is removed', () => {
       ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
 
     // A loose doc, filed on nothing. This is exactly what `share_doc` used to
     // take, and it is now unshareable by design.
     const soloPath = join(dataDir, `${SOLO}.md`);
     writeFileSync(soloPath, `# ${SOLO}\n\nBody.\n`);
-    const mk = await local('/api/docs', { docId: SOLO, type: 'markdown', sourceUrl: soloPath });
+    const mk = await local(`/workspaces/${WS}/docs`, {
+      docId: SOLO,
+      type: 'markdown',
+      sourceUrl: soloPath,
+    });
     expect(mk.status).toBe(200);
 
     const board = await local('/workspaces', { name: 'Per-doc removal board' });
     expect(board.status).toBe(200);
     boardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
+    WS = boardId;
     expect(boardId).toBeTruthy();
 
     const bind = await local('/workspaces', { folderPath: folder, hubWorkspaceId: boardId });
@@ -300,9 +310,12 @@ describe('per-doc sharing is removed', () => {
       mkdirSync(dir, { recursive: true });
       writeFileSync(join(dir, 'note.md'), '# Note\n\nFiled, therefore shareable.\n');
 
-      const opened = await local(`/api/reviews/${encodeURIComponent(workspaceId)}/context-file`, {
-        relPath: 'nested/note.md',
-      });
+      const opened = await local(
+        `/workspaces/${WS}/reviews/${encodeURIComponent(workspaceId)}/context-file`,
+        {
+          relPath: 'nested/note.md',
+        },
+      );
       expect(opened.status).toBe(200);
       const { docId } = (await opened.json()) as { docId: string };
       expect(docId).toBeTruthy();
@@ -316,9 +329,11 @@ describe('per-doc sharing is removed', () => {
 
       // The newly filed doc is in scope because it is a MEMBER — never
       // because anything named it.
-      expect((await asVisitor(`/api/docs/${encodeURIComponent(docId)}`)).status).toBe(200);
+      expect(
+        (await asVisitor(`/workspaces/${WS}/docs/${encodeURIComponent(docId)}?format=json`)).status,
+      ).toBe(200);
       // And the loose doc, filed on nothing, still is not.
-      expect((await asVisitor(`/api/docs/${SOLO}`)).status).toBe(403);
+      expect((await asVisitor(`/workspaces/${WS}/docs/${SOLO}?format=json`)).status).toBe(403);
     });
   });
 });

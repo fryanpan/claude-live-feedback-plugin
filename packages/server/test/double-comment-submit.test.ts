@@ -25,6 +25,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const REVIEWER = { id: 'known-reviewer', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
 const OTHER_REVIEWER = {
@@ -43,7 +44,10 @@ const anchor = (snippetText: string) => ({
   snippet: { text: snippetText },
 });
 
-describe('POST /api/docs/:id/threads dedupes a repeated requestId', () => {
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
+describe(`POST /workspaces/${WS}/docs/:id/threads dedupes a repeated requestId`, () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
@@ -64,10 +68,11 @@ describe('POST /api/docs/:id/threads dedupes a repeated requestId', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'double-comment-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     const file = join(dataDir, 'plan.md');
     writeFileSync(file, '# Plan\n\nThe sample paragraph needs a review.\n');
     const created = await jj<{ docId: string }>(
-      await post('/api/docs', { docId: 'plan', type: 'markdown', sourceUrl: file }),
+      await post(`/workspaces/${WS}/docs`, { docId: 'plan', type: 'markdown', sourceUrl: file }),
     );
     docId = created.docId;
   });
@@ -85,15 +90,15 @@ describe('POST /api/docs/:id/threads dedupes a repeated requestId', () => {
       requestId: 'req-1',
     };
     const first = await jj<{ thread: { id: string } }>(
-      await post(`/api/docs/${docId}/threads`, body),
+      await post(`/workspaces/${WS}/docs/${docId}/threads`, body),
     );
     const second = await jj<{ thread: { id: string } }>(
-      await post(`/api/docs/${docId}/threads`, body),
+      await post(`/workspaces/${WS}/docs/${docId}/threads`, body),
     );
     expect(second.thread.id).toBe(first.thread.id);
 
     const listed = await jj<{ threads: Array<{ id: string }> }>(
-      await fetch(`${base}/api/docs/${docId}/threads`),
+      await fetch(`${base}/workspaces/${WS}/docs/${docId}/threads`),
     );
     expect(listed.threads).toHaveLength(1);
   });
@@ -102,7 +107,7 @@ describe('POST /api/docs/:id/threads dedupes a repeated requestId', () => {
     // Without this, the assertion above would still pass if the route just
     // dropped every second POST regardless of content.
     const first = await jj<{ thread: { id: string } }>(
-      await post(`/api/docs/${docId}/threads`, {
+      await post(`/workspaces/${WS}/docs/${docId}/threads`, {
         author: REVIEWER,
         text: 'First comment.',
         anchor: anchor('sample paragraph'),
@@ -110,7 +115,7 @@ describe('POST /api/docs/:id/threads dedupes a repeated requestId', () => {
       }),
     );
     const second = await jj<{ thread: { id: string } }>(
-      await post(`/api/docs/${docId}/threads`, {
+      await post(`/workspaces/${WS}/docs/${docId}/threads`, {
         author: REVIEWER,
         text: 'Second, different comment.',
         anchor: anchor('review'),
@@ -120,7 +125,7 @@ describe('POST /api/docs/:id/threads dedupes a repeated requestId', () => {
     expect(second.thread.id).not.toBe(first.thread.id);
 
     const listed = await jj<{ threads: Array<{ id: string }> }>(
-      await fetch(`${base}/api/docs/${docId}/threads`),
+      await fetch(`${base}/workspaces/${WS}/docs/${docId}/threads`),
     );
     expect(listed.threads).toHaveLength(2);
   });
@@ -131,11 +136,11 @@ describe('POST /api/docs/:id/threads dedupes a repeated requestId', () => {
       text: 'No idempotency key on this one.',
       anchor: anchor('sample paragraph'),
     };
-    await jj(await post(`/api/docs/${docId}/threads`, body));
-    await jj(await post(`/api/docs/${docId}/threads`, body));
+    await jj(await post(`/workspaces/${WS}/docs/${docId}/threads`, body));
+    await jj(await post(`/workspaces/${WS}/docs/${docId}/threads`, body));
 
     const listed = await jj<{ threads: Array<{ id: string }> }>(
-      await fetch(`${base}/api/docs/${docId}/threads`),
+      await fetch(`${base}/workspaces/${WS}/docs/${docId}/threads`),
     );
     expect(listed.threads).toHaveLength(2);
   });
@@ -153,12 +158,12 @@ describe('POST /api/docs/:id/threads dedupes a repeated requestId', () => {
       review: { shape: 'review', headline: 'Cache size' },
     };
     const first = await jj<{ thread: { id: string }; reviewAdvice?: string }>(
-      await post(`/api/docs/${docId}/threads`, body),
+      await post(`/workspaces/${WS}/docs/${docId}/threads`, body),
     );
     expect(first.reviewAdvice).toContain('review.detail');
 
     const second = await jj<{ thread: { id: string }; reviewAdvice?: string }>(
-      await post(`/api/docs/${docId}/threads`, body),
+      await post(`/workspaces/${WS}/docs/${docId}/threads`, body),
     );
     expect(second.thread.id).toBe(first.thread.id);
     expect(second.reviewAdvice).toContain('review.detail');
@@ -166,7 +171,7 @@ describe('POST /api/docs/:id/threads dedupes a repeated requestId', () => {
 
   it('a reused requestId with different text is a new comment, not a collision', async () => {
     const first = await jj<{ thread: { id: string } }>(
-      await post(`/api/docs/${docId}/threads`, {
+      await post(`/workspaces/${WS}/docs/${docId}/threads`, {
         author: REVIEWER,
         text: 'First comment.',
         anchor: anchor('sample paragraph'),
@@ -174,7 +179,7 @@ describe('POST /api/docs/:id/threads dedupes a repeated requestId', () => {
       }),
     );
     const second = await jj<{ thread: { id: string } }>(
-      await post(`/api/docs/${docId}/threads`, {
+      await post(`/workspaces/${WS}/docs/${docId}/threads`, {
         author: REVIEWER,
         text: 'A completely different comment.',
         anchor: anchor('sample paragraph'),
@@ -196,13 +201,13 @@ describe('POST /api/docs/:id/threads dedupes a repeated requestId', () => {
       requestId: 'req-review-correction',
     };
     const first = await jj<{ thread: { id: string } }>(
-      await post(`/api/docs/${docId}/threads`, {
+      await post(`/workspaces/${WS}/docs/${docId}/threads`, {
         ...payloadBase,
         review: { shape: 'review', headline: 'Cache size' },
       }),
     );
     const second = await jj<{ thread: { id: string } }>(
-      await post(`/api/docs/${docId}/threads`, {
+      await post(`/workspaces/${WS}/docs/${docId}/threads`, {
         ...payloadBase,
         review: { shape: 'review', headline: 'Cache size', detail: 'Filled in after the fact.' },
       }),
@@ -210,7 +215,7 @@ describe('POST /api/docs/:id/threads dedupes a repeated requestId', () => {
     expect(second.thread.id).not.toBe(first.thread.id);
 
     const listed = await jj<{ threads: Array<{ id: string }> }>(
-      await fetch(`${base}/api/docs/${docId}/threads`),
+      await fetch(`${base}/workspaces/${WS}/docs/${docId}/threads`),
     );
     expect(listed.threads).toHaveLength(2);
   });
@@ -226,15 +231,15 @@ describe('POST /api/docs/:id/threads dedupes a repeated requestId', () => {
       requestId: 'req-shared-by-coincidence',
     };
     const first = await jj<{ thread: { id: string } }>(
-      await post(`/api/docs/${docId}/threads`, { ...body, author: REVIEWER }),
+      await post(`/workspaces/${WS}/docs/${docId}/threads`, { ...body, author: REVIEWER }),
     );
     const second = await jj<{ thread: { id: string } }>(
-      await post(`/api/docs/${docId}/threads`, { ...body, author: OTHER_REVIEWER }),
+      await post(`/workspaces/${WS}/docs/${docId}/threads`, { ...body, author: OTHER_REVIEWER }),
     );
     expect(second.thread.id).not.toBe(first.thread.id);
 
     const listed = await jj<{ threads: Array<{ id: string; createdBy: { id: string } }> }>(
-      await fetch(`${base}/api/docs/${docId}/threads`),
+      await fetch(`${base}/workspaces/${WS}/docs/${docId}/threads`),
     );
     expect(listed.threads).toHaveLength(2);
     expect(listed.threads.find((t) => t.id === first.thread.id)?.createdBy.id).toBe(REVIEWER.id);
@@ -275,6 +280,7 @@ describe('a requestId retry on a review-item anchor is deduped before the waitin
     dataDir = mkdtempSync(join(tmpdir(), 'double-comment-review-item-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterEach(async () => {
@@ -286,6 +292,7 @@ describe('a requestId retry on a review-item anchor is deduped before the waitin
     const { workspace } = await jj<{ workspace: { id: string } }>(
       await post('/workspaces', { name: 'index-rebuild', goal: 'Rebuild the index nightly.' }),
     );
+    WS = workspace.id;
     const { task } = await jj<{ task: { id: string } }>(
       await post(`/workspaces/${workspace.id}/tasks`, {
         title: 'Rebuild the index nightly',
@@ -294,7 +301,7 @@ describe('a requestId retry on a review-item anchor is deduped before the waitin
       }),
     );
     const { item } = await jj<{ item: { id: string } }>(
-      await post(`/api/tasks/${task.id}/review-items`, {
+      await post(`/workspaces/${workspace.id}/tasks/${task.id}/review-items`, {
         review: { shape: 'review', headline: 'Cache size', detail: DETAIL },
         author: REVIEWER,
       }),
@@ -307,18 +314,18 @@ describe('a requestId retry on a review-item anchor is deduped before the waitin
       requestId: 'req-retry-1',
     };
     const first = await jj<{ thread: { id: string } }>(
-      await post(`/api/docs/task:${task.id}/threads`, body),
+      await post(`/workspaces/${workspace.id}/docs/task:${task.id}/threads`, body),
     );
     // Without the fix this second call hits the review-item branch's
     // waiting-state check (the item is now `waiting`, set by the first
     // call) and 409s before dedup ever runs.
-    const second = await post(`/api/docs/task:${task.id}/threads`, body);
+    const second = await post(`/workspaces/${workspace.id}/docs/task:${task.id}/threads`, body);
     expect(second.status, `${second.status} ${await second.clone().text()}`).toBe(200);
     const secondBody = (await second.json()) as { thread: { id: string } };
     expect(secondBody.thread.id).toBe(first.thread.id);
 
     const { threads } = await jj<{ threads: Array<{ id: string }> }>(
-      await fetch(`${base}/api/docs/task:${task.id}/threads`),
+      await fetch(`${base}/workspaces/${WS}/docs/task:${task.id}/threads`),
     );
     expect(threads).toHaveLength(1);
   });

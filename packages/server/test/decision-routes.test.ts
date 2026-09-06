@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import type { Task, TaskStoreEvent } from '../src/tasks.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
 const AGENT = {
@@ -28,6 +29,9 @@ const AGENT = {
 
 const DECISION_BODY =
   'Ship now or wait for the index rebuild? Waiting costs a week and removes the stale-results risk. Blocked until answered: the launch note.';
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('decision routes', () => {
   let handle: ServerHandle;
@@ -49,7 +53,8 @@ describe('decision routes', () => {
     const { workspace } = await jj<{ workspace: { id: string } }>(
       await post('/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
     );
-    return workspace.id;
+    WS = workspace.id;
+    return WS;
   }
   async function getTasks(workspaceId: string): Promise<Task[]> {
     const { tasks } = await jj<{ tasks: Task[] }>(
@@ -73,10 +78,11 @@ describe('decision routes', () => {
     return task;
   }
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'decision-routes-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
   afterAll(async () => {
     await handle.stop();
@@ -171,10 +177,10 @@ describe('decision routes', () => {
       // promote route reads its docId straight off the path, so the canonical
       // one is what the paths below carry.
       const { docId } = await jj<{ docId: string }>(
-        await post('/api/docs', { docId: name, type: 'markdown', sourceUrl: file }),
+        await post(`/workspaces/${wsId}/docs`, { docId: name, type: 'markdown', sourceUrl: file }),
       );
       const { thread } = await jj<{ thread: { id: string } }>(
-        await post(`/api/docs/${docId}/threads`, {
+        await post(`/workspaces/${wsId}/docs/${docId}/threads`, {
           author: PERSON,
           text: 'Round 5 delivered 133 candidates.',
           // An ELEMENT anchor: a text-range one carries encoded Yjs relative
@@ -187,18 +193,24 @@ describe('decision routes', () => {
           },
         }),
       );
-      const asDecision = await post(`/api/docs/${docId}/threads/${thread.id}/promote`, {
-        workspaceId: wsId,
-        needs: 'decision',
-        author: PERSON,
-      });
+      const asDecision = await post(
+        `/workspaces/${wsId}/docs/${docId}/threads/${thread.id}/promote`,
+        {
+          workspaceId: wsId,
+          needs: 'decision',
+          author: PERSON,
+        },
+      );
       expect(asDecision.status).toBe(400);
       // Positive control: the SAME promote without needs:'decision' succeeds,
       // so the refusal is the gate and not a broken promote.
-      const asAction = await post(`/api/docs/${docId}/threads/${thread.id}/promote`, {
-        workspaceId: wsId,
-        author: PERSON,
-      });
+      const asAction = await post(
+        `/workspaces/${wsId}/docs/${docId}/threads/${thread.id}/promote`,
+        {
+          workspaceId: wsId,
+          author: PERSON,
+        },
+      );
       expect(asAction.status).toBe(200);
     });
   });
@@ -219,7 +231,7 @@ describe('decision routes', () => {
       const off = handle.tasks.onEvent((e) => events.push(e));
       try {
         await jj(
-          await post(`/api/tasks/${task.id}/answer`, {
+          await post(`/workspaces/${wsId}/tasks/${task.id}/answer`, {
             text: picked.label,
             optionId: picked.id,
             author: PERSON,
@@ -239,7 +251,7 @@ describe('decision routes', () => {
     it('400s an optionId the decision does not carry, and writes nothing', async () => {
       const wsId = await seedWorkspace();
       const task = await seedDecision(wsId, { options: [{ label: 'Ship now' }] });
-      const r = await post(`/api/tasks/${task.id}/answer`, {
+      const r = await post(`/workspaces/${wsId}/tasks/${task.id}/answer`, {
         text: 'Ship now',
         optionId: 'o-ghost',
         author: PERSON,
@@ -253,7 +265,7 @@ describe('decision routes', () => {
       const wsId = await seedWorkspace();
       const task = await seedDecision(wsId, { options: [{ label: 'Ship now' }] });
       await jj(
-        await post(`/api/tasks/${task.id}/answer`, {
+        await post(`/workspaces/${wsId}/tasks/${task.id}/answer`, {
           text: 'neither — split it in two',
           author: PERSON,
         }),
@@ -273,14 +285,14 @@ describe('decision routes', () => {
       const task = await seedDecision(wsId, { options: [{ label: 'Ship now' }] });
       const picked = task.options?.[0];
       await jj(
-        await post(`/api/tasks/${task.id}/answer`, {
+        await post(`/workspaces/${wsId}/tasks/${task.id}/answer`, {
           text: 'Ship now',
           optionId: picked?.id,
           author: PERSON,
         }),
       );
       await jj(
-        await post(`/api/tasks/${task.id}/answer`, {
+        await post(`/workspaces/${wsId}/tasks/${task.id}/answer`, {
           text: 'Wait for the rebuild',
           author: { id: 'known-sam', name: 'Sam', kind: 'known', color: '#888888' },
         }),
@@ -297,7 +309,7 @@ describe('decision routes', () => {
       expect(stored?.answerHistory?.[0]?.withdrawnBy).toBe('Sam');
       expect(stored?.answerHistory?.[0]?.withdrawnAt).toBeGreaterThan(0);
       // Undo after the race recovers round by round: first the second answer…
-      await jj(await post(`/api/tasks/${task.id}/answer/undo`, { author: PERSON }));
+      await jj(await post(`/workspaces/${WS}/tasks/${task.id}/answer/undo`, { author: PERSON }));
       const undone = (await getTasks(wsId)).find((t) => t.id === task.id);
       expect(undone?.answer).toBeUndefined();
       expect(undone?.answerHistory?.map((a) => a.text)).toEqual([
@@ -309,7 +321,7 @@ describe('decision routes', () => {
 
   // ── POST /api/tasks/:id/answer/undo ─────────────────────────────────────
 
-  describe('POST /api/tasks/:id/answer/undo', () => {
+  describe(`POST /workspaces/${WS}/tasks/:id/answer/undo`, () => {
     it('reopens the decision and KEEPS the withdrawn words', async () => {
       const wsId = await seedWorkspace();
       const task = await seedDecision(wsId, { options: [{ label: 'Ship now' }] });
@@ -317,7 +329,7 @@ describe('decision routes', () => {
       expect(picked).toBeDefined();
       if (!picked) return;
       await jj(
-        await post(`/api/tasks/${task.id}/answer`, {
+        await post(`/workspaces/${wsId}/tasks/${task.id}/answer`, {
           text: picked.label,
           optionId: picked.id,
           author: PERSON,
@@ -330,7 +342,9 @@ describe('decision routes', () => {
       const events: TaskStoreEvent[] = [];
       const off = handle.tasks.onEvent((e) => events.push(e));
       try {
-        await jj(await post(`/api/tasks/${task.id}/answer/undo`, { author: PERSON }));
+        await jj(
+          await post(`/workspaces/${wsId}/tasks/${task.id}/answer/undo`, { author: PERSON }),
+        );
       } finally {
         off();
       }
@@ -357,10 +371,14 @@ describe('decision routes', () => {
     it('lets the decision be answered again, and keeps both rounds', async () => {
       const wsId = await seedWorkspace();
       const task = await seedDecision(wsId);
-      await jj(await post(`/api/tasks/${task.id}/answer`, { text: 'wait', author: PERSON }));
-      await jj(await post(`/api/tasks/${task.id}/answer/undo`, { author: PERSON }));
-      await jj(await post(`/api/tasks/${task.id}/answer`, { text: 'ship', author: PERSON }));
-      await jj(await post(`/api/tasks/${task.id}/answer/undo`, { author: PERSON }));
+      await jj(
+        await post(`/workspaces/${wsId}/tasks/${task.id}/answer`, { text: 'wait', author: PERSON }),
+      );
+      await jj(await post(`/workspaces/${wsId}/tasks/${task.id}/answer/undo`, { author: PERSON }));
+      await jj(
+        await post(`/workspaces/${wsId}/tasks/${task.id}/answer`, { text: 'ship', author: PERSON }),
+      );
+      await jj(await post(`/workspaces/${wsId}/tasks/${task.id}/answer/undo`, { author: PERSON }));
       const stored = (await getTasks(wsId)).find((t) => t.id === task.id);
       expect(stored?.answerHistory?.map((a) => a.text)).toEqual(['wait', 'ship']);
     });
@@ -371,28 +389,35 @@ describe('decision routes', () => {
       const { task: plain } = await jj<{ task: Task }>(
         await post(`/workspaces/${wsId}/tasks`, { author: AGENT, title: 'plain' }),
       );
-      expect((await post('/api/tasks/t-missing/answer/undo', { author: PERSON })).status).toBe(404);
-      expect((await post(`/api/tasks/${task.id}/answer/undo`, {})).status).toBe(400);
+      expect(
+        (await post(`/workspaces/${wsId}/tasks/t-missing/answer/undo`, { author: PERSON })).status,
+      ).toBe(404);
+      expect((await post(`/workspaces/${wsId}/tasks/${task.id}/answer/undo`, {})).status).toBe(400);
       // Nothing to withdraw is a refusal, not a vacuous success — two readers
       // racing the same undo must not both be told they took something back.
-      const none = await post(`/api/tasks/${task.id}/answer/undo`, { author: PERSON });
+      const none = await post(`/workspaces/${wsId}/tasks/${task.id}/answer/undo`, {
+        author: PERSON,
+      });
       expect(none.status).toBe(400);
       expect(((await none.json()) as { error: string }).error).toBe('no-answer');
-      expect((await post(`/api/tasks/${plain.id}/answer/undo`, { author: PERSON })).status).toBe(
-        400,
-      );
+      expect(
+        (await post(`/workspaces/${wsId}/tasks/${plain.id}/answer/undo`, { author: PERSON }))
+          .status,
+      ).toBe(400);
       // Positive control: the same route on the same task DOES work once
       // there is an answer to take back.
-      await jj(await post(`/api/tasks/${task.id}/answer`, { text: 'ship', author: PERSON }));
-      expect((await post(`/api/tasks/${task.id}/answer/undo`, { author: PERSON })).status).toBe(
-        200,
+      await jj(
+        await post(`/workspaces/${wsId}/tasks/${task.id}/answer`, { text: 'ship', author: PERSON }),
       );
+      expect(
+        (await post(`/workspaces/${wsId}/tasks/${task.id}/answer/undo`, { author: PERSON })).status,
+      ).toBe(200);
     });
   });
 
   // ── POST /api/tasks/:id/more-info ───────────────────────────────────────
 
-  describe('POST /api/tasks/:id/more-info', () => {
+  describe(`POST /workspaces/${WS}/tasks/:id/more-info`, () => {
     it('records the question and leaves the decision unanswered', async () => {
       const wsId = await seedWorkspace();
       const task = await seedDecision(wsId);
@@ -400,7 +425,7 @@ describe('decision routes', () => {
       const off = handle.tasks.onEvent((e) => events.push(e));
       try {
         await jj(
-          await post(`/api/tasks/${task.id}/more-info`, {
+          await post(`/workspaces/${wsId}/tasks/${task.id}/more-info`, {
             question: 'what breaks if we wait?',
             author: PERSON,
           }),
@@ -425,19 +450,33 @@ describe('decision routes', () => {
         await post(`/workspaces/${wsId}/tasks`, { author: AGENT, title: 'plain' }),
       );
       expect(
-        (await post('/api/tasks/t-missing/more-info', { question: 'x', author: PERSON })).status,
+        (
+          await post(`/workspaces/${wsId}/tasks/t-missing/more-info`, {
+            question: 'x',
+            author: PERSON,
+          })
+        ).status,
       ).toBe(404);
-      expect((await post(`/api/tasks/${task.id}/more-info`, { author: PERSON })).status).toBe(400);
-      expect((await post(`/api/tasks/${task.id}/more-info`, { question: 'x' })).status).toBe(400);
       expect(
-        (await post(`/api/tasks/${plain.id}/more-info`, { question: 'x', author: PERSON })).status,
+        (await post(`/workspaces/${wsId}/tasks/${task.id}/more-info`, { author: PERSON })).status,
+      ).toBe(400);
+      expect(
+        (await post(`/workspaces/${wsId}/tasks/${task.id}/more-info`, { question: 'x' })).status,
+      ).toBe(400);
+      expect(
+        (
+          await post(`/workspaces/${wsId}/tasks/${plain.id}/more-info`, {
+            question: 'x',
+            author: PERSON,
+          })
+        ).status,
       ).toBe(400);
     });
   });
 
   // ── POST /api/tasks/:id/after ───────────────────────────────────────────
 
-  describe('POST /api/tasks/:id/after', () => {
+  describe(`POST /workspaces/${WS}/tasks/:id/after`, () => {
     it('forwards after + afterEnforce, proved by the transition gate refusing', async () => {
       const wsId = await seedWorkspace();
       const gate = await seedDecision(wsId);
@@ -446,13 +485,17 @@ describe('decision routes', () => {
       );
       // Presence first: with no edge, the transition goes through.
       expect(
-        (await post(`/api/tasks/${work.id}/transition`, { to: 'in-progress', author: AGENT }))
-          .status,
+        (
+          await post(`/workspaces/${wsId}/tasks/${work.id}/transition`, {
+            to: 'in-progress',
+            author: AGENT,
+          })
+        ).status,
       ).toBe(200);
-      await post(`/api/tasks/${work.id}/transition`, { to: 'todo', author: AGENT });
+      await post(`/workspaces/${wsId}/tasks/${work.id}/transition`, { to: 'todo', author: AGENT });
 
       await jj(
-        await post(`/api/tasks/${work.id}/after`, {
+        await post(`/workspaces/${wsId}/tasks/${work.id}/after`, {
           after: [gate.id],
           afterEnforce: [gate.id],
           author: AGENT,
@@ -462,7 +505,7 @@ describe('decision routes', () => {
       expect(stored?.after).toEqual([gate.id]);
       expect(stored?.afterEnforce).toEqual([gate.id]);
 
-      const refused = await post(`/api/tasks/${work.id}/transition`, {
+      const refused = await post(`/workspaces/${WS}/tasks/${work.id}/transition`, {
         to: 'in-progress',
         author: AGENT,
       });
@@ -475,9 +518,16 @@ describe('decision routes', () => {
       const { task: work } = await jj<{ task: Task }>(
         await post(`/workspaces/${wsId}/tasks`, { author: AGENT, title: 'Open the PR' }),
       );
-      await jj(await post(`/api/tasks/${work.id}/after`, { after: [gate.id], author: AGENT }));
+      await jj(
+        await post(`/workspaces/${wsId}/tasks/${work.id}/after`, {
+          after: [gate.id],
+          author: AGENT,
+        }),
+      );
       expect((await getTasks(wsId)).find((t) => t.id === work.id)?.after).toEqual([gate.id]);
-      await jj(await post(`/api/tasks/${work.id}/after`, { after: [], author: AGENT }));
+      await jj(
+        await post(`/workspaces/${wsId}/tasks/${work.id}/after`, { after: [], author: AGENT }),
+      );
       expect((await getTasks(wsId)).find((t) => t.id === work.id)?.after).toEqual([]);
     });
 
@@ -486,18 +536,26 @@ describe('decision routes', () => {
       const { task: work } = await jj<{ task: Task }>(
         await post(`/workspaces/${wsId}/tasks`, { author: AGENT, title: 'Open the PR' }),
       );
-      expect((await post('/api/tasks/t-missing/after', { after: [], author: AGENT })).status).toBe(
-        404,
+      expect(
+        (await post(`/workspaces/${wsId}/tasks/t-missing/after`, { after: [], author: AGENT }))
+          .status,
+      ).toBe(404);
+      expect((await post(`/workspaces/${wsId}/tasks/${work.id}/after`, { after: [] })).status).toBe(
+        400,
       );
-      expect((await post(`/api/tasks/${work.id}/after`, { after: [] })).status).toBe(400);
-      expect((await post(`/api/tasks/${work.id}/after`, { author: AGENT })).status).toBe(400);
-      const ghost = await post(`/api/tasks/${work.id}/after`, {
+      expect(
+        (await post(`/workspaces/${wsId}/tasks/${work.id}/after`, { author: AGENT })).status,
+      ).toBe(400);
+      const ghost = await post(`/workspaces/${wsId}/tasks/${work.id}/after`, {
         after: ['t-ghost'],
         author: AGENT,
       });
       expect(ghost.status).toBe(400);
       expect(((await ghost.json()) as { error: string }).error).toBe('unknown-after');
-      const self = await post(`/api/tasks/${work.id}/after`, { after: [work.id], author: AGENT });
+      const self = await post(`/workspaces/${wsId}/tasks/${work.id}/after`, {
+        after: [work.id],
+        author: AGENT,
+      });
       expect(self.status).toBe(400);
       expect(((await self.json()) as { error: string }).error).toBe('self-dependency');
     });
@@ -538,7 +596,7 @@ describe('decision routes', () => {
       const events: TaskStoreEvent[] = [];
       const off = handle.tasks.onEvent((e) => events.push(e));
       try {
-        const answered = await post(`/api/tasks/${task.id}/answer`, {
+        const answered = await post(`/workspaces/${wsId}/tasks/${task.id}/answer`, {
           text: 'Wait',
           optionId: picked.id,
           author: PERSON,
@@ -561,10 +619,10 @@ describe('decision routes', () => {
       const file = join(dataDir, `${name}.md`);
       writeFileSync(file, '# Doc\n\nthe rollout clause\n');
       const { docId } = await jj<{ docId: string }>(
-        await post('/api/docs', { docId: name, type: 'markdown', sourceUrl: file }),
+        await post(`/workspaces/${wsId}/docs`, { docId: name, type: 'markdown', sourceUrl: file }),
       );
       const { thread } = await jj<{ thread: { id: string } }>(
-        await post(`/api/docs/${docId}/threads`, {
+        await post(`/workspaces/${wsId}/docs/${docId}/threads`, {
           author: PERSON,
           text: 'Should the rollout wait for the rebuild?',
           anchor: {
@@ -575,7 +633,7 @@ describe('decision routes', () => {
         }),
       );
       const { task } = await jj<{ task: Task }>(
-        await post(`/api/docs/${docId}/threads/${thread.id}/promote`, {
+        await post(`/workspaces/${wsId}/docs/${docId}/threads/${thread.id}/promote`, {
           workspaceId: wsId,
           author: PERSON,
           needs: 'decision',
@@ -590,7 +648,7 @@ describe('decision routes', () => {
       const events: TaskStoreEvent[] = [];
       const off = handle.tasks.onEvent((e) => events.push(e));
       try {
-        const answered = await post(`/api/tasks/${task.id}/answer`, {
+        const answered = await post(`/workspaces/${wsId}/tasks/${task.id}/answer`, {
           text: 'Ship now',
           optionId: picked.id,
           author: PERSON,

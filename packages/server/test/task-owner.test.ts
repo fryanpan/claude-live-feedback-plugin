@@ -20,9 +20,13 @@ import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { GENERIC_ASSIGNEE, resolveAssignee } from '../src/task-owner.ts';
 import type { Task } from '../src/tasks.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
 const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known', color: '#888888' };
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('resolveAssignee (pure)', () => {
   it('prefers an explicitly named assignee over the caller', () => {
@@ -66,7 +70,8 @@ describe('task creation records a real owner', () => {
     const { workspace } = await jj<{ workspace: { id: string } }>(
       await post('/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
     );
-    return workspace.id;
+    WS = workspace.id;
+    return WS;
   }
   async function getTasks(workspaceId: string): Promise<Task[]> {
     const { tasks } = await jj<{ tasks: Task[] }>(
@@ -75,10 +80,11 @@ describe('task creation records a real owner', () => {
     return tasks;
   }
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'task-owner-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterAll(async () => {
@@ -152,7 +158,8 @@ describe('task creation records a real owner', () => {
           leadAgentId: LEAD,
         }),
       );
-      return workspace.id;
+      WS = workspace.id;
+      return WS;
     }
     const RESEARCH = { title: 'Research: does Access cover the mockup route', author: PERSON };
 
@@ -199,7 +206,7 @@ describe('task creation records a real owner', () => {
     });
   });
 
-  describe('re-assign (POST /api/tasks/<id>/assignee)', () => {
+  describe(`re-assign (POST /workspaces/${WS}/tasks/<id>/assignee)`, () => {
     // The create routes refuse an owner that resolves to the generic word, but
     // ownership can also be SET after the fact — and that route took any
     // non-empty string. So a board whose every create was gated could still be
@@ -215,7 +222,7 @@ describe('task creation records a real owner', () => {
     it('refuses a hand-over to the generic word, and leaves the owner alone', async () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId, 'Rebuild the index');
-      const r = await post(`/api/tasks/${task.id}/assignee`, {
+      const r = await post(`/workspaces/${wsId}/tasks/${task.id}/assignee`, {
         assignee: GENERIC_ASSIGNEE,
         author: PERSON,
       });
@@ -231,7 +238,7 @@ describe('task creation records a real owner', () => {
     it('hands the task to a named agent', async () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId, 'Write the launch note');
-      const ok = await post(`/api/tasks/${task.id}/assignee`, {
+      const ok = await post(`/workspaces/${wsId}/tasks/${task.id}/assignee`, {
         assignee: 'Index Rebuild',
         author: PERSON,
       });
@@ -242,7 +249,7 @@ describe('task creation records a real owner', () => {
     it("hands the task to a person — 'human' is an answer", async () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId, 'Decide the ranking rule');
-      const ok = await post(`/api/tasks/${task.id}/assignee`, {
+      const ok = await post(`/workspaces/${wsId}/tasks/${task.id}/assignee`, {
         assignee: 'human',
         author: PERSON,
       });
@@ -258,10 +265,10 @@ describe('task creation records a real owner', () => {
       const file = join(dataDir, `${name}.md`);
       writeFileSync(file, '# Doc\n\nthe ranking clause\n');
       const { docId } = await jj<{ docId: string }>(
-        await post('/api/docs', { docId: name, type: 'markdown', sourceUrl: file }),
+        await post(`/workspaces/${WS}/docs`, { docId: name, type: 'markdown', sourceUrl: file }),
       );
       const { thread } = await jj<{ thread: { id: string } }>(
-        await post(`/api/docs/${docId}/threads`, {
+        await post(`/workspaces/${WS}/docs/${docId}/threads`, {
           author: PERSON,
           text: 'This should be a task.',
           anchor: {
@@ -278,7 +285,7 @@ describe('task creation records a real owner', () => {
       const wsId = await seedWorkspace();
       const { docId, threadId } = await seedThread('promote-owned');
       const { task } = await jj<{ task: Task }>(
-        await post(`/api/docs/${docId}/threads/${threadId}/promote`, {
+        await post(`/workspaces/${wsId}/docs/${docId}/threads/${threadId}/promote`, {
           workspaceId: wsId,
           author: AGENT,
         }),
@@ -289,7 +296,7 @@ describe('task creation records a real owner', () => {
     it('refuses a promote with no owner and no promoter', async () => {
       const wsId = await seedWorkspace();
       const { docId, threadId } = await seedThread('promote-unowned');
-      const r = await post(`/api/docs/${docId}/threads/${threadId}/promote`, {
+      const r = await post(`/workspaces/${wsId}/docs/${docId}/threads/${threadId}/promote`, {
         workspaceId: wsId,
       });
       expect(r.status).toBe(400);

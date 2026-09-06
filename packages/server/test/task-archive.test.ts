@@ -27,6 +27,7 @@ import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { TaskStore, type TaskStoreEvent, eventsLogPath } from '../src/tasks.ts';
 import type { Task } from '../src/tasks.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' };
 const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known', color: '#888888' };
@@ -39,6 +40,9 @@ function readAudit(dataDir: string, workspaceId: string): Array<Record<string, u
     .filter((line) => line.trim().length > 0)
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('archiving a task (store)', () => {
   let dataDir: string;
@@ -256,8 +260,10 @@ describe('archive + restore routes', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'task-archive-routes-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     const r = await post('/workspaces', { name: 'search-revamp' });
     wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+    WS = wsId;
   });
 
   afterAll(async () => {
@@ -267,20 +273,28 @@ describe('archive + restore routes', () => {
 
   it('400s without an author on both routes', async () => {
     const task = await makeTask('Needs an author');
-    expect((await post(`/api/tasks/${task.id}/archive`, { reason: 'x' })).status).toBe(400);
-    expect((await post(`/api/tasks/${task.id}/restore`, {})).status).toBe(400);
+    expect((await post(`/workspaces/${WS}/tasks/${task.id}/archive`, { reason: 'x' })).status).toBe(
+      400,
+    );
+    expect((await post(`/workspaces/${WS}/tasks/${task.id}/restore`, {})).status).toBe(400);
     // Positive control: with an author the same call lands.
-    expect((await post(`/api/tasks/${task.id}/archive`, { author: PERSON })).status).toBe(200);
+    expect(
+      (await post(`/workspaces/${WS}/tasks/${task.id}/archive`, { author: PERSON })).status,
+    ).toBe(200);
   });
 
   it('404s an unknown task', async () => {
-    expect((await post('/api/tasks/t-nope/archive', { author: PERSON })).status).toBe(404);
-    expect((await post('/api/tasks/t-nope/restore', { author: PERSON })).status).toBe(404);
+    expect((await post(`/workspaces/${WS}/tasks/t-nope/archive`, { author: PERSON })).status).toBe(
+      404,
+    );
+    expect((await post(`/workspaces/${WS}/tasks/t-nope/restore`, { author: PERSON })).status).toBe(
+      404,
+    );
   });
 
   it('archives with a reason and reads the stamps back', async () => {
     const task = await makeTask('Archive me');
-    const r = await post(`/api/tasks/${task.id}/archive`, {
+    const r = await post(`/workspaces/${WS}/tasks/${task.id}/archive`, {
       author: PERSON,
       reason: 'duplicate of the index row',
     });
@@ -295,7 +309,7 @@ describe('archive + restore routes', () => {
   it('drops the row from the task list and from the queue, both directions', async () => {
     const gone = await makeTask('Archive this one');
     const kept = await makeTask('Keep this one');
-    await post(`/api/tasks/${gone.id}/archive`, { author: PERSON });
+    await post(`/workspaces/${WS}/tasks/${gone.id}/archive`, { author: PERSON });
 
     const listed = await listIds();
     expect(listed).not.toContain(gone.id);
@@ -310,7 +324,7 @@ describe('archive + restore routes', () => {
     expect(await nextIds('?includeArchived=true')).toContain(gone.id);
 
     // Restore, and it is back in both without the flag.
-    const back = await post(`/api/tasks/${gone.id}/restore`, { author: PERSON });
+    const back = await post(`/workspaces/${WS}/tasks/${gone.id}/restore`, { author: PERSON });
     expect(back.status).toBe(200);
     const restored = (await back.json()) as { task: Task };
     expect(restored.task.archivedAt).toBeUndefined();
@@ -321,9 +335,12 @@ describe('archive + restore routes', () => {
 
   it('an archived row keeps its body doc and its threads resolving', async () => {
     const task = await makeTask('Still readable');
-    await post(`/api/tasks/${task.id}/archive`, { author: PERSON, reason: 'obsolete' });
+    await post(`/workspaces/${WS}/tasks/${task.id}/archive`, {
+      author: PERSON,
+      reason: 'obsolete',
+    });
     // The task's own body doc — the surface every comment thread hangs off.
-    const doc = await local(`/api/docs/task:${task.id}`);
+    const doc = await local(`/workspaces/${WS}/docs/task:${task.id}?format=json`);
     expect(doc.status).toBe(200);
   });
 });

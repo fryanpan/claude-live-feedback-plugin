@@ -230,9 +230,14 @@ export function sameOriginPath(path: string): string | undefined {
  * agent. `task` and `diff` refs have their own surfaces and are left to the
  * agent too rather than guessed at here.
  */
-export function refNavigation(ref: Ref): string | undefined {
+export function refNavigation(workspaceId: string, ref: Ref): string | undefined {
   if (ref.kind !== 'doc' && ref.kind !== 'thread') return undefined;
-  return sameOriginPath(`/review/${encodeURIComponent(ref.docId)}`);
+  // Under the board this utterance was spoken on. A doc has no address of its
+  // own any more, so the board is not decoration here — without it there is
+  // no URL to navigate to at all.
+  return sameOriginPath(
+    `/workspaces/${encodeURIComponent(workspaceId)}/docs/${encodeURIComponent(ref.docId)}`,
+  );
 }
 
 function renderReviewItems(lines: string[], items: VoiceReviewItem[]): void {

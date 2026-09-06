@@ -17,6 +17,8 @@
 import type { ChatAudit } from '../chat-audit.ts';
 import { isSharedAgentName, localDay } from '../chat-audit.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
+import { type WorkspaceScope, matchRest, restIs } from '../middleware/workspace-scope.ts';
+import type { BoardWorkspace } from '../tasks.ts';
 
 /** The long-lived collaborators these routes need, built once per server. */
 export interface ChatAuditRoutesContext {
@@ -32,6 +34,11 @@ export interface ChatAuditRoutesContext {
 
 /** What only this request knows. */
 export interface ChatAuditRouteRequest {
+  /**
+   * The board this canonical path named, and the remainder under it —
+   * resolved once by `middleware/workspace-scope.ts`.
+   */
+  scope?: WorkspaceScope<BoardWorkspace>;
   req: Request;
   pathname: string;
   /** The share target this request resolved to, or null for a member. */
@@ -47,7 +54,7 @@ export async function handleChatAuditRoutes(
   rq: ChatAuditRouteRequest,
 ): Promise<Response | undefined> {
   const { chatAudit, j, safeJson } = ctx;
-  const { req, pathname, visitor } = rq;
+  const { req, scope, visitor } = rq;
 
   // --- REST: chat-audit counters ---
   // The daily chat audit publishes per-agent unfiled-ask counts here
@@ -55,7 +62,7 @@ export async function handleChatAuditRoutes(
   // server stores the audit's number rather than measuring anything —
   // it cannot see chat — so the count a session queries and the count
   // the audit reports are the same row. See chat-audit.ts.
-  if (pathname === '/api/chat-audit') {
+  if (restIs(scope, 'chat-audit')) {
     // Same defense-in-depth posture as the agent-watches route: no
     // share host reaches here today, and this keeps a later
     // allowlisting from exposing fleet discipline numbers to an
@@ -83,7 +90,7 @@ export async function handleChatAuditRoutes(
     }
     return j(405, { error: 'method not allowed' });
   }
-  const chatAuditMatch = pathname.match(/^\/api\/chat-audit\/([^/]+)$/);
+  const chatAuditMatch = matchRest(scope, /^chat-audit\/([^/]+)$/);
   if (chatAuditMatch) {
     if (visitor) return j(403, { error: 'not available to share visitors' });
     if (req.method !== 'GET') return j(405, { error: 'method not allowed' });

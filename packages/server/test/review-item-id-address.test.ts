@@ -29,6 +29,7 @@ import { join } from 'node:path';
 import { type TaskReviewItem, threadReviewItemId } from '@feedback/core';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import type { Task } from '../src/tasks.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const AGENT = {
   id: 'agent-index-keeper',
@@ -58,6 +59,9 @@ interface ReviewRow {
   ask?: string;
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('reviewItemId as a universal address', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -78,7 +82,8 @@ describe('reviewItemId as a universal address', () => {
     const { workspace } = await jj<{ workspace: { id: string } }>(
       await post('/workspaces', { name: 'index-rebuild', goal: 'Rebuild the index nightly.' }),
     );
-    return workspace.id;
+    WS = workspace.id;
+    return WS;
   }
   async function seedTask(workspaceId: string): Promise<Task> {
     const { task } = await jj<{ task: Task }>(
@@ -92,7 +97,10 @@ describe('reviewItemId as a universal address', () => {
   }
   async function seedItem(taskId: string): Promise<{ id: string }> {
     const { item } = await jj<{ item: { id: string } }>(
-      await post(`/api/tasks/${taskId}/review-items`, { review: DECISION, author: AGENT }),
+      await post(`/workspaces/${WS}/tasks/${taskId}/review-items`, {
+        review: DECISION,
+        author: AGENT,
+      }),
     );
     return item;
   }
@@ -119,11 +127,15 @@ describe('reviewItemId as a universal address', () => {
     const file = join(dataDir, `${slug}.md`);
     writeFileSync(file, '# Mockup notes\n\nThe phone layout holds together.\n');
     const created = await jj<{ docId: string }>(
-      await post('/api/docs', { docId: slug, type: 'markdown', sourceUrl: file }),
+      await post(`/workspaces/${workspaceId}/docs`, {
+        docId: slug,
+        type: 'markdown',
+        sourceUrl: file,
+      }),
     );
-    await jj(await post(`/workspaces/${workspaceId}/docs`, { docId: created.docId }));
+    await jj(await post(`/workspaces/${workspaceId}/docs:attach`, { docId: created.docId }));
     const opened = await jj<{ thread: { id: string; comments: Array<{ id: string }> } }>(
-      await post(`/api/docs/${created.docId}/threads/by_find`, {
+      await post(`/workspaces/${workspaceId}/docs/${created.docId}/threads/by_find`, {
         find: 'The phone layout holds together.',
         text: 'Checked this at 430px.',
         author: AGENT,
@@ -142,10 +154,11 @@ describe('reviewItemId as a universal address', () => {
     };
   }
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'review-item-id-address-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
   afterAll(async () => {
     await handle.stop();
@@ -183,7 +196,7 @@ describe('reviewItemId as a universal address', () => {
       const task = await seedTask(wsId);
       const item = await seedItem(task.id);
       const res = await jj<{ kind: string; taskId: string; workspaceId: string }>(
-        await fetch(`${base}/api/review-items/${encodeURIComponent(item.id)}`),
+        await fetch(`${base}/workspaces/${WS}/review-items/${encodeURIComponent(item.id)}`),
       );
       expect(res.kind).toBe('task-item');
       expect(res.taskId).toBe(task.id);
@@ -200,7 +213,7 @@ describe('reviewItemId as a universal address', () => {
         threadId: string;
         commentId: string;
         workspaceId?: string;
-      }>(await fetch(`${base}/api/review-items/${encodeURIComponent(id)}`));
+      }>(await fetch(`${base}/workspaces/${wsId}/review-items/${encodeURIComponent(id)}`));
       expect(res.kind).toBe('doc-thread');
       expect(res.docId).toBe(address.docId);
       expect(res.threadId).toBe(address.threadId);
@@ -212,19 +225,32 @@ describe('reviewItemId as a universal address', () => {
       const wsId = await seedWorkspace();
       const address = await seedThreadItem(wsId);
       const forged = threadReviewItemId(address.docId, address.threadId, 'c-never-existed');
-      const res = await fetch(`${base}/api/review-items/${encodeURIComponent(forged)}`);
+      const res = await fetch(
+        `${base}/workspaces/${wsId}/review-items/${encodeURIComponent(forged)}`,
+      );
       expect(res.status).toBe(404);
     });
 
-    it('refuses r-legacy by name — it is on every legacy-decision ticket at once', async () => {
-      const res = await fetch(`${base}/api/review-items/r-legacy`);
-      expect(res.status).toBe(400);
-      const body = (await res.json()) as { error: string };
-      expect(body.error).toBe('ambiguous');
+    it('404s r-legacy by name — it is on every legacy-decision ticket at once', async () => {
+      // It used to answer 400 `ambiguous` from inside the route. That check
+      // ran BEFORE the id was held against a board, and it is one of the
+      // per-route workspace checks this cutover deletes: `r-legacy` is the
+      // same derived string on every legacy ticket, so it names no member of
+      // the board in the path and gets the same 404 any other foreign id does.
+      const wsId = await seedWorkspace();
+      const res = await fetch(`${base}/workspaces/${wsId}/review-items/r-legacy`);
+      expect(res.status).toBe(404);
+      // Positive control in the same pass: a real item on this board answers,
+      // so the 404 is the id rather than the route or the board.
+      const address = await seedThreadItem(wsId);
+      const real = threadReviewItemId(address.docId, address.threadId, address.commentId);
+      expect(
+        (await fetch(`${base}/workspaces/${wsId}/review-items/${encodeURIComponent(real)}`)).status,
+      ).toBe(200);
     });
 
     it('404s an id nothing minted', async () => {
-      const res = await fetch(`${base}/api/review-items/r-neverminted00`);
+      const res = await fetch(`${base}/workspaces/${WS}/review-items/r-neverminted00`);
       expect(res.status).toBe(404);
     });
   });
@@ -239,7 +265,7 @@ describe('reviewItemId as a universal address', () => {
       expect((await queueRows(wsId)).some((r) => r.reviewItemId === item.id)).toBe(true);
 
       await jj(
-        await post(`/api/tasks/${task.id}/review-items/${item.id}/withdraw`, {
+        await post(`/workspaces/${wsId}/tasks/${task.id}/review-items/${item.id}/withdraw`, {
           author: AGENT,
           reason: 'Duplicate of the tunnel decision above.',
         }),
@@ -262,12 +288,14 @@ describe('reviewItemId as a universal address', () => {
       const task = await seedTask(wsId);
       const item = await seedItem(task.id);
       await jj(
-        await post(`/api/tasks/${task.id}/review-items/${item.id}/withdraw`, { author: AGENT }),
+        await post(`/workspaces/${wsId}/tasks/${task.id}/review-items/${item.id}/withdraw`, {
+          author: AGENT,
+        }),
       );
       expect((await queueRows(wsId)).some((r) => r.reviewItemId === item.id)).toBe(false);
 
       await jj(
-        await post(`/api/tasks/${task.id}/review-items/${item.id}/withdraw/undo`, {
+        await post(`/workspaces/${wsId}/tasks/${task.id}/review-items/${item.id}/withdraw/undo`, {
           author: AGENT,
         }),
       );
@@ -282,16 +310,19 @@ describe('reviewItemId as a universal address', () => {
       const task = await seedTask(wsId);
       const item = await seedItem(task.id);
       await jj(
-        await post(`/api/tasks/${task.id}/review-items/${item.id}/answer`, {
+        await post(`/workspaces/${wsId}/tasks/${task.id}/review-items/${item.id}/answer`, {
           text: 'Keep it',
           answeredWith: 'o-7f3a',
           author: PERSON,
         }),
       );
-      const res = await post(`/api/tasks/${task.id}/review-items/${item.id}/withdraw`, {
-        author: AGENT,
-        reason: 'Too late.',
-      });
+      const res = await post(
+        `/workspaces/${wsId}/tasks/${task.id}/review-items/${item.id}/withdraw`,
+        {
+          author: AGENT,
+          reason: 'Too late.',
+        },
+      );
       expect(res.status).toBe(409);
       const body = (await res.json()) as { error: string };
       expect(body.error).toBe('answered');
@@ -304,9 +335,12 @@ describe('reviewItemId as a universal address', () => {
     it("refuses r-legacy — the ticket's own decision has no stored item to stamp", async () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId);
-      const res = await post(`/api/tasks/${task.id}/review-items/r-legacy/withdraw`, {
-        author: AGENT,
-      });
+      const res = await post(
+        `/workspaces/${wsId}/tasks/${task.id}/review-items/r-legacy/withdraw`,
+        {
+          author: AGENT,
+        },
+      );
       expect(res.status).toBe(400);
       const body = (await res.json()) as { error: string };
       expect(body.error).toBe('not-withdrawable');
@@ -315,9 +349,12 @@ describe('reviewItemId as a universal address', () => {
     it('404s an item the ticket does not hold', async () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId);
-      const res = await post(`/api/tasks/${task.id}/review-items/r-neverminted00/withdraw`, {
-        author: AGENT,
-      });
+      const res = await post(
+        `/workspaces/${wsId}/tasks/${task.id}/review-items/r-neverminted00/withdraw`,
+        {
+          author: AGENT,
+        },
+      );
       expect(res.status).toBe(404);
     });
   });

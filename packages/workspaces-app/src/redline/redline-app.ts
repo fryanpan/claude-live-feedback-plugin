@@ -2,6 +2,7 @@ import { type FeedbackClient, connect, suggestOps } from '@feedback/core';
 import { mountCode } from '../code/code-app.ts';
 import { isEditableRedlineMember } from '../code/editable-policy.ts';
 import { renderDiffNav, wireDiffNavRefresh } from '../diff-nav.ts';
+import { api, docSocketUrl } from '../doc-path.ts';
 import type { ChromeSelection } from '../doc/anchor-body.ts';
 import { el } from '../doc/chrome-dom.ts';
 import { wireThreadRangeClicks } from '../doc/chrome-panels.ts';
@@ -117,7 +118,7 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
   // the surface boots straight into the redline.
   let diffInfo: DiffInfo | null = null;
   try {
-    const res = await fetch(`/api/docs/${encodeURIComponent(docId)}/diff`);
+    const res = await fetch(api(`docs/${encodeURIComponent(docId)}/diff`));
     if (res.ok) diffInfo = (await res.json()) as DiffInfo;
   } catch {
     // fall through — handled below
@@ -410,7 +411,7 @@ export async function openCompanionDoc(ctx: MountContext): Promise<CompanionDoc 
     // that braces: a 401 arriving for any other reason must still not
     // interrupt somebody who is only reading.
     const res = await asBackgroundWrite(() =>
-      fetch(`/api/reviews/${encodeURIComponent(ctx.workspaceId)}/editable-file`, {
+      fetch(api(`reviews/${encodeURIComponent(ctx.workspaceId)}/editable-file`), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ relPath: ctx.relPath }),
@@ -422,7 +423,7 @@ export async function openCompanionDoc(ctx: MountContext): Promise<CompanionDoc 
     return null;
   }
   if (ctx.scope.disposed) return null; // navigated away — don't open a socket
-  const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/y/${encodeURIComponent(opened.docId)}?type=markdown`;
+  const wsUrl = docSocketUrl(location, opened.docId, 'markdown');
   const client = connect(wsUrl);
   ctx.scope.onCleanup(() => client.close());
   return { docId: opened.docId, client, sourceUrl: opened.meta?.sourceUrl ?? '' };

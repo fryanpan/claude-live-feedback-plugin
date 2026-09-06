@@ -15,8 +15,12 @@ import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import type { Task } from '../src/tasks.ts';
 import { writeLegacyYdoc } from './doc-id-fixture.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const AGENT = { id: 'agent-fixture', name: 'Fixture Agent', kind: 'known', color: '#888888' };
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('doc ids', () => {
   let handle: ServerHandle;
@@ -39,13 +43,14 @@ describe('doc ids', () => {
       body: JSON.stringify(body),
     });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'docid-data-'));
     folder = mkdtempSync(join(tmpdir(), 'docid-src-'));
     writeFileSync(join(folder, 'README.md'), '# Entry\n\nRead me.\n');
     writeFileSync(join(folder, 'notes.md'), '# Notes\n\nSome notes.\n');
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterEach(async () => {
@@ -54,7 +59,7 @@ describe('doc ids', () => {
   });
 
   const listDocIds = async (): Promise<string[]> => {
-    const r = await local('/api/docs');
+    const r = await local(`/workspaces/${WS}/docs`);
     const { docs } = (await r.json()) as { docs: Array<{ docId: string }> };
     return docs.map((d) => d.docId);
   };
@@ -62,7 +67,11 @@ describe('doc ids', () => {
   // ---------------------------------------------------------------- hole (a)
   describe('a caller cannot bind a folder into the task namespace', () => {
     it('refuses a setId that would mint member docs under `task:`', async () => {
-      const r = await post('/workspaces', { folderPath: folder, setId: 'task' });
+      const r = await post('/workspaces', {
+        folderPath: folder,
+        setId: 'task',
+        hubWorkspaceId: WS,
+      });
       expect(r.status).toBe(400);
       expect(((await r.json()) as { error: string }).error).toBe('reserved-namespace');
 
@@ -71,7 +80,11 @@ describe('doc ids', () => {
     });
 
     it('positive control: an ordinary setId still binds and still mints members', async () => {
-      const r = await post('/workspaces', { folderPath: folder, setId: 'notes-review' });
+      const r = await post('/workspaces', {
+        folderPath: folder,
+        setId: 'notes-review',
+        hubWorkspaceId: WS,
+      });
       expect(r.status).toBe(200);
       const ids = await listDocIds();
       expect(ids.some((id) => id.startsWith('notes-review:'))).toBe(true);
@@ -80,7 +93,7 @@ describe('doc ids', () => {
 
   // ---------------------------------------------------------------- hole (b)
   describe('a caller cannot address a task body as a doc it creates', () => {
-    it('refuses POST /api/docs for a `task:<taskId>` docId, leaving the description intact', async () => {
+    it('refuses POST /workspaces/<ws>/docs for a `task:<taskId>` docId, leaving the description intact', async () => {
       const ws = (await (await post('/workspaces', { name: 'doc-id-fixture' })).json()) as {
         workspace: { id: string };
       };
@@ -95,7 +108,7 @@ describe('doc ids', () => {
       const decoy = join(folder, 'decoy.md');
       writeFileSync(decoy, '# Replaced\n\nThe attacker-supplied body.\n');
 
-      const r = await post('/api/docs', {
+      const r = await post(`/workspaces/${WS}/docs`, {
         docId: `task:${task.id}`,
         type: 'markdown',
         sourceUrl: decoy,
@@ -114,13 +127,13 @@ describe('doc ids', () => {
       // ...and the body doc was never bound to the decoy file, which is the
       // half that would have kept writing after the request returned.
       const status = (await (
-        await local(`/api/docs/${encodeURIComponent(`task:${task.id}`)}/status`)
+        await local(`/workspaces/${WS}/docs/${encodeURIComponent(`task:${task.id}`)}/status`)
       ).json()) as { path?: string };
       expect(status.path).toBeUndefined();
     });
 
     it('positive control: an ordinary docId still binds and still accepts content', async () => {
-      const r = await post('/api/docs', {
+      const r = await post(`/workspaces/${WS}/docs`, {
         docId: 'ordinary-doc',
         type: 'markdown',
         sourceUrl: join(folder, 'notes.md'),
@@ -128,7 +141,7 @@ describe('doc ids', () => {
       expect(r.status).toBe(200);
       const { docId } = (await r.json()) as { docId: string };
 
-      const content = await local(`/api/docs/${encodeURIComponent(docId)}/content`);
+      const content = await local(`/workspaces/${WS}/docs/${encodeURIComponent(docId)}/content`);
       expect(content.status).toBe(200);
       expect(((await content.json()) as { plainText: string }).plainText).toContain('Some notes');
     });
@@ -137,7 +150,7 @@ describe('doc ids', () => {
   // ------------------------------------------------------------------ minting
   describe('the server mints a doc id and the caller names an alias', () => {
     it('mints an opaque id; the requested docId is not the doc id', async () => {
-      const r = await post('/api/docs', {
+      const r = await post(`/workspaces/${WS}/docs`, {
         docId: 'my-readable-plan',
         type: 'markdown',
         sourceUrl: join(folder, 'notes.md'),
@@ -150,14 +163,14 @@ describe('doc ids', () => {
 
     it('resolves the readable alias to the minted doc', async () => {
       const created = (await (
-        await post('/api/docs', {
+        await post(`/workspaces/${WS}/docs`, {
           docId: 'aliased-plan',
           type: 'markdown',
           sourceUrl: join(folder, 'notes.md'),
         })
       ).json()) as { docId: string };
 
-      const viaAlias = await local('/api/docs/aliased-plan');
+      const viaAlias = await local(`/workspaces/${WS}/docs/aliased-plan?format=json`);
       expect(viaAlias.status).toBe(200);
       // The canonical id comes back, not the alias that was used to ask.
       expect(((await viaAlias.json()) as { meta: { docId: string } }).meta.docId).toBe(
@@ -167,14 +180,14 @@ describe('doc ids', () => {
 
     it('is idempotent: re-creating under the same alias reuses the same doc', async () => {
       const first = (await (
-        await post('/api/docs', {
+        await post(`/workspaces/${WS}/docs`, {
           docId: 'stable-alias',
           type: 'markdown',
           sourceUrl: join(folder, 'notes.md'),
         })
       ).json()) as { docId: string };
       const second = (await (
-        await post('/api/docs', {
+        await post(`/workspaces/${WS}/docs`, {
           docId: 'stable-alias',
           type: 'markdown',
           sourceUrl: join(folder, 'README.md'),
@@ -187,7 +200,7 @@ describe('doc ids', () => {
 
     it('never repoints an alias: a second doc cannot claim a taken name', async () => {
       const first = (await (
-        await post('/api/docs', {
+        await post(`/workspaces/${WS}/docs`, {
           docId: 'contested-name',
           type: 'markdown',
           sourceUrl: join(folder, 'notes.md'),
@@ -196,7 +209,7 @@ describe('doc ids', () => {
 
       // Same alias, different source file — the only shape that could repoint.
       const second = (await (
-        await post('/api/docs', {
+        await post(`/workspaces/${WS}/docs`, {
           docId: 'contested-name',
           type: 'markdown',
           sourceUrl: join(folder, 'README.md'),
@@ -205,7 +218,7 @@ describe('doc ids', () => {
       expect(second.docId).toBe(first.docId);
 
       // And the alias still names the doc it was minted with.
-      const viaAlias = await local('/api/docs/contested-name');
+      const viaAlias = await local(`/workspaces/${WS}/docs/contested-name?format=json`);
       expect(((await viaAlias.json()) as { meta: { docId: string } }).meta.docId).toBe(first.docId);
     });
 
@@ -224,20 +237,20 @@ describe('doc ids', () => {
      */
     it('a doc returning from the archive does not take back a name someone else now holds', async () => {
       const first = (await (
-        await post('/api/docs', {
+        await post(`/workspaces/${WS}/docs`, {
           docId: 'reclaimed-name',
           type: 'markdown',
           sourceUrl: join(folder, 'notes.md'),
         })
       ).json()) as { docId: string };
 
-      await post(`/api/docs/${encodeURIComponent(first.docId)}/archive`, {
+      await post(`/workspaces/${WS}/docs/${encodeURIComponent(first.docId)}/archive`, {
         author: { id: 'known-t', name: 'Tester', kind: 'known', color: '#2e7dd7' },
       });
 
       // With the first doc away, the name is free and a NEW doc takes it.
       const second = (await (
-        await post('/api/docs', {
+        await post(`/workspaces/${WS}/docs`, {
           docId: 'reclaimed-name',
           type: 'markdown',
           sourceUrl: join(folder, 'README.md'),
@@ -245,13 +258,15 @@ describe('doc ids', () => {
       ).json()) as { docId: string };
       expect(second.docId).not.toBe(first.docId);
 
-      await post(`/api/docs/${encodeURIComponent(first.docId)}/unarchive`, {
+      await post(`/workspaces/${WS}/docs/${encodeURIComponent(first.docId)}/unarchive`, {
         author: { id: 'known-t', name: 'Tester', kind: 'known', color: '#2e7dd7' },
       });
 
       // Both docs exist and both carry the alias in their meta. It resolves
       // to the one that holds it, not to the one that just came back.
-      const resolved = (await (await local('/api/docs/reclaimed-name')).json()) as {
+      const resolved = (await (
+        await local(`/workspaces/${WS}/docs/reclaimed-name?format=json`)
+      ).json()) as {
         meta: { docId: string };
       };
       expect(resolved.meta.docId).toBe(second.docId);
@@ -260,7 +275,9 @@ describe('doc ids', () => {
       // Positive control: the returning doc is genuinely back and reachable
       // by its own id — so the assertion above is about the NAME, not about
       // the unarchive having failed.
-      const byOwnId = await local(`/api/docs/${encodeURIComponent(first.docId)}`);
+      const byOwnId = await local(
+        `/workspaces/${WS}/docs/${encodeURIComponent(first.docId)}?format=json`,
+      );
       expect(byOwnId.status).toBe(200);
     });
 
@@ -270,7 +287,7 @@ describe('doc ids', () => {
       // resolves elsewhere. The primary wins — it is the older address, and
       // the one already written down in links people saved.
       const aliased = (await (
-        await post('/api/docs', {
+        await post(`/workspaces/${WS}/docs`, {
           docId: 'taken-name',
           type: 'markdown',
           sourceUrl: join(folder, 'notes.md'),
@@ -281,21 +298,34 @@ describe('doc ids', () => {
       writeLegacyYdoc(dataDir, 'taken-name', join(folder, 'README.md'));
       handle = createServer({ port: 0, dataDir });
       base = `http://localhost:${handle.port}`;
+      WS = await seedBoard(base);
+      // The hydrated doc is filed nowhere until a board claims it — see the
+      // migration block below for why that is the doc's whole address now.
+      await post(`/workspaces/${WS}/docs:attach`, { docId: 'taken-name' });
+      // …and so is the alias doc, which was filed on the board the PREVIOUS
+      // server seeded. The restart is a new board; a doc's board link is a
+      // fact about the board, and this file's board did not survive.
+      await post(`/workspaces/${WS}/docs:attach`, { docId: aliased.docId });
 
-      const resolved = (await (await local('/api/docs/taken-name')).json()) as {
+      const resolved = (await (
+        await local(`/workspaces/${WS}/docs/taken-name?format=json`)
+      ).json()) as {
         meta: { docId: string };
       };
       expect(resolved.meta.docId).toBe('taken-name');
       expect(resolved.meta.docId).not.toBe(aliased.docId);
 
       // Positive control: the aliased doc is still there under its own id.
-      expect((await local(`/api/docs/${encodeURIComponent(aliased.docId)}`)).status).toBe(200);
+      expect(
+        (await local(`/workspaces/${WS}/docs/${encodeURIComponent(aliased.docId)}?format=json`))
+          .status,
+      ).toBe(200);
     });
   });
 
   // ---------------------------------------------------------------- migration
-  describe('a review URL captured before the migration still resolves', () => {
-    it('resolves /review/<caller-chosen-id> for a doc that predates minting', async () => {
+  describe('a doc that predates id minting is addressed like any other', () => {
+    it('reads a pre-migration doc under the board that holds it', async () => {
       // A doc whose PRIMARY id is a caller-chosen string is exactly what every
       // pre-migration `.ydoc` on disk is. Write one, then bring a server up
       // over that data dir the way a restart would.
@@ -303,41 +333,35 @@ describe('doc ids', () => {
       writeLegacyYdoc(dataDir, 'legacy-plan', join(folder, 'notes.md'));
       handle = createServer({ port: 0, dataDir });
       base = `http://localhost:${handle.port}`;
+      WS = await seedBoard(base);
+      // A hydrated `.ydoc` is filed nowhere — the board link lives in the
+      // board's own record, not in the doc — so the board has to claim it
+      // before it has an address at all.
+      await post(`/workspaces/${WS}/docs:attach`, { docId: 'legacy-plan' });
 
       // The id the captured URL carries still names the doc, and still reads.
-      const meta = await local('/api/docs/legacy-plan');
+      const meta = await local(`/workspaces/${WS}/docs/legacy-plan?format=json`);
       expect(meta.status).toBe(200);
       expect(((await meta.json()) as { meta: { docId: string } }).meta.docId).toBe('legacy-plan');
-      const content = await local('/api/docs/legacy-plan/content');
+      const content = await local(`/workspaces/${WS}/docs/legacy-plan/content`);
       expect(content.status).toBe(200);
       expect(((await content.json()) as { plainText: string }).plainText).toContain('Some notes');
-
-      // And the review URL itself resolves: filed on a board, `/review/<id>`
-      // redirects to the canonical address rather than 404ing. (The 302 branch
-      // is the only one observable headlessly — the 200 branch needs a built
-      // client bundle, which a unit run has no reason to have.)
-      const ws = (await (await post('/workspaces', { name: 'migration-board' })).json()) as {
-        workspace: { id: string };
-      };
-      await post(`/workspaces/${ws.workspace.id}/docs`, { docId: 'legacy-plan' });
-      const review = await local('/review/legacy-plan', { redirect: 'manual' });
-      expect(review.status).toBe(302);
-      expect(review.headers.get('location')).toContain('legacy-plan');
     });
 
-    it('resolves /review/<alias> for a doc created after minting', async () => {
-      const created = (await (
-        await post('/api/docs', {
-          docId: 'post-migration-plan',
-          type: 'markdown',
-          sourceUrl: join(folder, 'notes.md'),
-        })
-      ).json()) as { docId: string; hubWorkspaceId?: string };
-
-      const review = await local('/review/post-migration-plan', { redirect: 'manual' });
-      expect(review.status).toBe(302);
-      // The redirect lands on the CANONICAL id, not the alias it was asked by.
-      expect(review.headers.get('location')).toContain(created.docId);
+    it('404s the address that doc used to have — no redirect, no compat page', async () => {
+      // `/review/<docId>` was where every doc lived, and the cutover deletes
+      // it rather than redirecting: a redirect keeps the old shape working, so
+      // nothing that emits it is ever rewritten. Asserted rather than assumed,
+      // because this is the half of the change people feel.
+      await post(`/workspaces/${WS}/docs`, {
+        docId: 'post-migration-plan',
+        type: 'markdown',
+        sourceUrl: join(folder, 'notes.md'),
+      });
+      const gone = await local('/review/post-migration-plan', { redirect: 'manual' });
+      expect(gone.status).toBe(404);
+      const goneMock = await local('/mockup/post-migration-plan', { redirect: 'manual' });
+      expect(goneMock.status).toBe(404);
     });
   });
 
@@ -345,7 +369,7 @@ describe('doc ids', () => {
   describe('no API path changes an existing doc id', () => {
     it('keeps the minted id when the same doc is re-created under a new alias', async () => {
       const first = (await (
-        await post('/api/docs', {
+        await post(`/workspaces/${WS}/docs`, {
           docId: 'first-name',
           type: 'markdown',
           sourceUrl: join(folder, 'notes.md'),
@@ -355,14 +379,16 @@ describe('doc ids', () => {
       // Binding the same FILE under a different requested name is the closest
       // thing the API has to a rename. It must not move the existing doc.
       const renamed = (await (
-        await post('/api/docs', {
+        await post(`/workspaces/${WS}/docs`, {
           docId: 'second-name',
           type: 'markdown',
           sourceUrl: join(folder, 'notes.md'),
         })
       ).json()) as { docId: string };
 
-      const stillThere = await local(`/api/docs/${encodeURIComponent(first.docId)}`);
+      const stillThere = await local(
+        `/workspaces/${WS}/docs/${encodeURIComponent(first.docId)}?format=json`,
+      );
       expect(stillThere.status).toBe(200);
       expect(((await stillThere.json()) as { meta: { docId: string } }).meta.docId).toBe(
         first.docId,

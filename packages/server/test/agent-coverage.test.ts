@@ -31,6 +31,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { type AgentStream, openWorkspaceStream } from './agent-stream.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-reviewer', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
 const AGENT = 'agent-coverage';
@@ -67,6 +68,9 @@ interface Coverage {
   unattachedBoards: UnattachedBoard[];
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('watch coverage — what an agent is missing, not what it holds', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -87,11 +91,12 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
   /** Event streams opened by `attach`, hung up after each test. */
   const streams: AgentStream[] = [];
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'agent-coverage-'));
     srcDir = mkdtempSync(join(tmpdir(), 'agent-coverage-src-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterEach(async () => {
@@ -124,6 +129,9 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
   const makeBoard = async (name: string): Promise<string> => {
     const r = await post('/workspaces', { name, goal: 'Ship the index.' });
     expect(r.status).toBe(200);
+    // Deliberately does NOT reassign `WS`. Several of these tests mint two
+    // boards and then file a doc on each; a helper that moved the file's
+    // default would put both docs on whichever board was created last.
     return ((await r.json()) as { workspace: { id: string } }).workspace.id;
   };
 
@@ -135,11 +143,11 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
   const makeDoc = async (docId: string, hubWorkspaceId?: string): Promise<string> => {
     const path = join(srcDir, `${docId}.md`);
     writeFileSync(path, `# ${docId}\n\nFirst paragraph.\n`);
-    const res = await post('/api/docs', {
+    // The board is in the PATH now, so the destination is the path's board.
+    const res = await post(`/workspaces/${hubWorkspaceId ?? WS}/docs`, {
       docId,
       sourceUrl: path,
       title: docId,
-      ...(hubWorkspaceId ? { hubWorkspaceId } : {}),
     });
     expect(res.status).toBe(200);
     return ((await res.json()) as { docId: string }).docId;
@@ -353,7 +361,7 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
       return json.coverage;
     };
 
-    beforeEach(() => {
+    beforeEach(async () => {
       tightDir = mkdtempSync(join(tmpdir(), 'agent-coverage-tight-'));
       // Short freshness on both clocks, so an attachment made at the top of a
       // test can be aged into `away` and past the delivery window inside the
@@ -372,6 +380,7 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
         observedWorkFreshMs: 40,
       });
       tightBase = `http://localhost:${tight.port}`;
+      WS = await seedBoard(tightBase);
     });
     afterEach(async () => {
       for (const s of tightStreams.splice(0)) await s.close();
@@ -404,7 +413,8 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
 
     const seedBoard = async (name: string): Promise<string> => {
       const r = await tpost('/workspaces', { name, goal: 'Ship the index.' });
-      return ((await r.json()) as { workspace: { id: string } }).workspace.id;
+      WS = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+      return WS;
     };
 
     /** The queue, produced the way it actually happens. Deliberately called
@@ -512,6 +522,7 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
         observedWorkFreshMs: 30_000,
       });
       const sbase = `http://localhost:${split.port}`;
+      WS = await seedBoard(sbase);
       const shost = { host: `localhost:${split.port}`, 'content-type': 'application/json' };
       try {
         const r = await fetch(`${sbase}/workspaces`, {
@@ -520,6 +531,7 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
           body: JSON.stringify({ name: 'busy-but-quiet', goal: 'Ship it.' }),
         });
         const boardId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+        WS = boardId;
         await fetch(`${sbase}/workspaces/${boardId}/agents`, {
           method: 'POST',
           headers: shost,
@@ -585,11 +597,10 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
       writeFileSync(path, '# doc-shared\n\nBody.\n');
       const sharedDoc = (
         (await (
-          await tpost('/api/docs', {
+          await tpost(`/workspaces/${boardId}/docs`, {
             docId: 'doc-shared',
             sourceUrl: path,
             title: 'doc-shared',
-            hubWorkspaceId: boardId,
           })
         ).json()) as { docId: string }
       ).docId;

@@ -46,9 +46,19 @@ const escapeAttr = (v: string): string =>
  * its socket to the origin the bundle came from, which is this server however
  * the reader reached it (loopback, tailnet, LAN, tunnel). A literal host would
  * be wrong for every reader who arrived by a different route.
+ *
+ * `workspace-id` is NOT omitted and cannot be: the widget refuses to run
+ * without it, because every resource it addresses lives under the board that
+ * owns it. This server knows the board — it is the one in the URL the reader
+ * opened — so the embed it writes always carries it. A hand-written embed on
+ * someone else's page has to say it itself.
  */
-export function widgetEmbed(docId: string): string {
-  return `<claude-feedback-widget doc-id="${escapeAttr(docId)}"></claude-feedback-widget><script src="/widget.iife.js"></script>`;
+export function widgetEmbed(docId: string, workspaceId: string): string {
+  return (
+    `<claude-feedback-widget workspace-id="${escapeAttr(workspaceId)}" ` +
+    `doc-id="${escapeAttr(docId)}"></claude-feedback-widget>` +
+    `<script src="/widget.iife.js"></script>`
+  );
 }
 
 /**
@@ -56,9 +66,9 @@ export function widgetEmbed(docId: string): string {
  * already carries one. Appends when there is no `</body>` — a fragment or a
  * hand-written page without one is still a page a reviewer wants to comment on.
  */
-export function injectWidget(html: string, docId: string): string {
+export function injectWidget(html: string, docId: string, workspaceId: string): string {
   if (ALREADY_EMBEDDED.test(html)) return html;
-  const embed = widgetEmbed(docId);
+  const embed = widgetEmbed(docId, workspaceId);
   if (BODY_CLOSE.test(html)) return html.replace(BODY_CLOSE, `${embed}$&`);
   return `${html}${embed}`;
 }

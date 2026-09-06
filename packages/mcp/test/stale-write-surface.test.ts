@@ -44,7 +44,7 @@ describe('stale-write guard MCP surface', () => {
   });
 
   it('get_doc identifies its reader so the server can track staleness per session', async () => {
-    const res = await h.call('get_doc', { docId: 'doc-1' });
+    const res = await h.call('get_doc', { workspaceId: 'w-1', docId: 'doc-1' });
     const get = res.sent.find((r) => r.method === 'GET' && r.path.includes('/docs/doc-1'));
     expect(get, `no get_doc GET; sent ${JSON.stringify(res.sent)}`).toBeDefined();
     // A named reader, not the empty string a dropped identity would send.
@@ -56,6 +56,7 @@ describe('stale-write guard MCP surface', () => {
     expect(Object.keys(props)).toContain('confirmOverwriteHumanEdits');
 
     const res = await h.call('set_doc_content', {
+      workspaceId: 'w-1',
       docId: 'doc-1',
       markdown: '# rewritten',
       confirmOverwriteHumanEdits: true,
@@ -70,7 +71,11 @@ describe('stale-write guard MCP surface', () => {
   it('CONTROL: the confirm flag is absent, not defaulted, when the caller omits it', async () => {
     // A handler that hard-coded it would pass the assertion above while
     // turning the guard off for every caller that never asked.
-    const res = await h.call('set_doc_content', { docId: 'doc-1', markdown: '# rewritten' });
+    const res = await h.call('set_doc_content', {
+      workspaceId: 'w-1',
+      docId: 'doc-1',
+      markdown: '# rewritten',
+    });
     const post = res.sent.find((r) => r.method === 'POST' && r.path.endsWith('/content'));
     expect(
       (post?.body as { confirmOverwriteHumanEdits?: unknown }).confirmOverwriteHumanEdits,

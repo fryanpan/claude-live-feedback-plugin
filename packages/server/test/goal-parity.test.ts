@@ -39,11 +39,15 @@ import { join } from 'node:path';
 
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { seedGoalsOverHttp } from './goal-seed.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known' };
 const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known' };
 
 const settle = (ms = 450) => new Promise((r) => setTimeout(r, ms));
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('a goal is at parity with a task: description + comments', () => {
   let dir: string;
@@ -56,12 +60,14 @@ describe('a goal is at parity with a task: description + comments', () => {
     dir = mkdtempSync(join(tmpdir(), 'goal-parity-'));
     handle = await createServer({ dataDir: dir, port: 0 });
     base = `http://127.0.0.1:${handle.port}`;
+    WS = await seedBoard(base);
     const ws = await fetch(`${base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'Board', author: PERSON }),
     });
     workspaceId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
+    WS = workspaceId;
     const ids = await seedGoalsOverHttp(
       base,
       workspaceId,
@@ -102,7 +108,7 @@ describe('a goal is at parity with a task: description + comments', () => {
   });
 
   it('serves the goal body doc, so a description can be written to it', async () => {
-    const res = await fetch(`${base}/api/docs/${bodyDoc()}/content`, {
+    const res = await fetch(`${base}/workspaces/${WS}/docs/${bodyDoc()}/content`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ markdown: 'Ten teams using it weekly, unprompted.', author: AGENT }),
@@ -111,7 +117,7 @@ describe('a goal is at parity with a task: description + comments', () => {
   });
 
   it('flushes the goal description back to the store, so it survives a restart', async () => {
-    await fetch(`${base}/api/docs/${bodyDoc()}/content`, {
+    await fetch(`${base}/workspaces/${WS}/docs/${bodyDoc()}/content`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ markdown: 'Ten teams using it weekly, unprompted.', author: AGENT }),
@@ -132,7 +138,7 @@ describe('a goal is at parity with a task: description + comments', () => {
   });
 
   it('projects the goal description onto the board, so the panel can draw it', async () => {
-    await fetch(`${base}/api/docs/${bodyDoc()}/content`, {
+    await fetch(`${base}/workspaces/${WS}/docs/${bodyDoc()}/content`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ markdown: 'Ten teams using it weekly, unprompted.', author: AGENT }),
@@ -151,7 +157,7 @@ describe('a goal is at parity with a task: description + comments', () => {
   });
 
   it('takes a comment on a goal and counts it on the board, so a band says it has one', async () => {
-    const res = await fetch(`${base}/api/docs/${bodyDoc()}/threads`, {
+    const res = await fetch(`${base}/workspaces/${WS}/docs/${bodyDoc()}/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -170,7 +176,7 @@ describe('a goal is at parity with a task: description + comments', () => {
   });
 
   it('puts a declared review item on a goal into the Home queue', async () => {
-    const filed = await fetch(`${base}/api/docs/${bodyDoc()}/threads`, {
+    const filed = await fetch(`${base}/workspaces/${WS}/docs/${bodyDoc()}/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({

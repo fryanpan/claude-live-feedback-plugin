@@ -369,7 +369,7 @@ hearing.
 
 ```mermaid
 flowchart LR
-  Doc["Doc: paste a meeting link"] -->|POST /api/docs/&lt;id&gt;/meeting-bot| API[RecallMeetingRelay]
+  Doc["Doc: paste a meeting link"] -->|POST /workspaces/&lt;ws&gt;/docs/&lt;id&gt;/meeting-bot| API[RecallMeetingRelay]
   API -->|POST /api/v1/bot| Recall[Recall.ai]
   Recall -->|joins| Call["Zoom / Meet call"]
   Call --> Recall
@@ -1121,7 +1121,7 @@ recording device gets around to the names. So: every pill carries a pencil
 line becomes the CAST — "Tap a voice to name it:", every label the meeting
 showed, not just the three turns still on the window — seeded from the
 meeting record on a doc opened after its meeting ended; and a tap with the
-socket gone posts to `POST /api/docs/:docId/meetings/:meetingId/speakers`,
+socket gone posts to `POST /workspaces/:workspaceId/docs/:docId/meetings/:meetingId/speakers`,
 which validates the label against what the meeting carried
 (`MeetingStore.nameSpeakerLater`), appends the same index line a live rename
 writes, and routes the same `NotesRelabel` through the same sink. A LIVE
@@ -1463,7 +1463,7 @@ it:
 
 **The pointer pill's Research is a section in the doc, not a task**
 (2026-09-01, after Bryan pressed it on prod: *"it just creates a task — does
-not follow the flow in the mockups"*). `POST /api/docs/:id/research-request`
+not follow the flow in the mockups"*). `POST /workspaces/:workspaceId/docs/:id/research-request`
 files an anchored thread on the selected line from the presser — the same
 comment channel Make Plan and Review ride — and inserts `## Research:
 <topic>` with a *Researching — in progress.* line as a top-level block after
@@ -1796,7 +1796,7 @@ held AND its holder is deliverable (a stream open on `ws~<id>`, or observed
 within the delivery window), the same read the board's presence strip and
 `hasLiveLeadAttachment` make. Merely connected is not enough, for the reason
 that predicate exists. The page asks once (`GET
-/api/docs/:docId/lead-presence`, which also registers the doc) and then
+/workspaces/:workspaceId/docs/:docId/lead-presence`, which also registers the doc) and then
 hears changes on the doc's event stream as a `lead.presence` transient —
 change-only on the one bit the banner shows, pushed only to docs a page has
 asked about, on store attach/detach/heartbeat/seat events plus the board's

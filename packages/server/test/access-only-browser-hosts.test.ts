@@ -34,6 +34,7 @@ import { join } from 'node:path';
 import { type JSONWebKeySet, type JWK, SignJWT, exportJWK, generateKeyPair } from 'jose';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { ACCESS_SHARE_CONFIG, mockCfApi } from './access-share.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const TEAM_DOMAIN = 'test.cloudflareaccess.com';
 const KID = 'access-only-kid';
@@ -74,6 +75,11 @@ beforeAll(async () => {
       .setSubject('cf-access-operator')
       .sign(privateKey);
 });
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+/** The same, on the rule-off control server, which has its own data dir. */
+let LEGACY_WS = '';
 
 describe('access-only browser hosts', () => {
   let handle: ServerHandle;
@@ -168,6 +174,11 @@ describe('access-only browser hosts', () => {
       accessOnlyBrowserHosts: false,
     });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
+    // `legacy` is a whole second server on its own data dir. A board seeded
+    // on `handle` does not exist there, and the controls below address it by
+    // path — so it gets its own.
+    LEGACY_WS = await seedBoard(`http://localhost:${legacy.port}`);
     jwt = await signJwt(OPERATOR_AUD);
 
     const board = await local('/workspaces', {
@@ -176,13 +187,14 @@ describe('access-only browser hosts', () => {
     });
     expect(board.status).toBe(200);
     boardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
+    WS = boardId;
 
     const docPath = join(dataDir, 'note.md');
     writeFileSync(docPath, '# Note\n\nBody.\n');
     docId = 'note';
     expect(
       (
-        await local('/api/docs', {
+        await local(`/workspaces/${WS}/docs`, {
           method: 'POST',
           body: JSON.stringify({ docId, type: 'markdown', sourceUrl: docPath }),
         })
@@ -190,7 +202,7 @@ describe('access-only browser hosts', () => {
     ).toBe(200);
     expect(
       (
-        await local(`/workspaces/${boardId}/docs`, {
+        await local(`/workspaces/${boardId}/docs:attach`, {
           method: 'POST',
           body: JSON.stringify({ docId }),
         })
@@ -204,7 +216,7 @@ describe('access-only browser hosts', () => {
     expect(bind.status).toBe(200);
     treeId = ((await bind.json()) as { workspaceId: string }).workspaceId;
 
-    const diff = await local('/api/diffs', {
+    const diff = await local(`/workspaces/${WS}/reviews`, {
       method: 'POST',
       body: JSON.stringify({ repo, base: 'main', hubWorkspaceId: boardId }),
     });
@@ -226,12 +238,15 @@ describe('access-only browser hosts', () => {
   const surfaces = (): Array<[string, string]> => [
     ['the board page', `/workspaces/${boardId}?format=json`],
     ['the board record', `/workspaces/${boardId}?format=json`],
-    ['a doc', `/api/docs/${docId}`],
-    ['its comment threads', `/api/docs/${docId}/threads`],
+    ['a doc', `/workspaces/${WS}/docs/${docId}?format=json`],
+    ['its comment threads', `/workspaces/${WS}/docs/${docId}/threads`],
     ['the board attachments', `/workspaces/${boardId}/agents`],
-    ['a bound folder tree', `/api/reviews/${treeId}/tree`],
-    ['a diff review file', `/api/docs/${encodeURIComponent(diffMemberDocId)}`],
-    ['the doc SSE stream', `/events/${encodeURIComponent(docId)}`],
+    ['a bound folder tree', `/workspaces/${WS}/reviews/${treeId}/tree`],
+    [
+      'a diff review file',
+      `/workspaces/${WS}/docs/${encodeURIComponent(diffMemberDocId)}?format=json`,
+    ],
+    ['the doc SSE stream', `/workspaces/${WS}/docs/${encodeURIComponent(docId)}/events:stream`],
   ];
 
   describe('a proxied browser host: no token, no content', () => {
@@ -255,7 +270,7 @@ describe('access-only browser hosts', () => {
 
     it('refuses the Yjs websocket without a token, and completes it with one', async () => {
       const upgrade = (withToken: boolean) =>
-        fetch(`${base}/y/${encodeURIComponent(docId)}`, {
+        fetch(`${base}/workspaces/${WS}/docs/${encodeURIComponent(docId)}/y`, {
           headers: {
             host: OPERATOR_HOST,
             ...CF_RAY,
@@ -286,7 +301,7 @@ describe('access-only browser hosts', () => {
       // The declaration still works — what changed is that a declaration is
       // no longer a sign-in. Without this control the 403s above would be
       // indistinguishable from a trusted-host list that stopped being read.
-      const r = await onLan(legacy, '/api/docs');
+      const r = await onLan(legacy, `/workspaces/${LEGACY_WS}/docs`);
       expect(r.status).toBe(200);
     });
   });
@@ -309,7 +324,7 @@ describe('access-only browser hosts', () => {
         return;
       }
       const from = addrs[0] as string;
-      const r = await fetch(`http://${from}:${handle.port}/api/docs`, {
+      const r = await fetch(`http://${from}:${handle.port}/workspaces/${WS}/docs`, {
         // The spoof IS the test: the header says loopback, the socket does not.
         headers: { host: `localhost:${handle.port}` },
       });
@@ -317,7 +332,7 @@ describe('access-only browser hosts', () => {
 
       // POSITIVE CONTROL on the same address and the same build: with the
       // rule off, that spoof is exactly what used to work.
-      const before = await fetch(`http://${from}:${legacy.port}/api/docs`, {
+      const before = await fetch(`http://${from}:${legacy.port}/workspaces/${LEGACY_WS}/docs`, {
         headers: { host: `localhost:${legacy.port}` },
       });
       expect(before.status).toBe(200);
@@ -381,7 +396,7 @@ describe('access-only browser hosts', () => {
 
   describe('a signed-in visitor writes under their proven email', () => {
     it('posts a comment attributed to the Access identity, not the body', async () => {
-      const r = await fetch(`${base}/api/docs/${docId}/threads/by_find`, {
+      const r = await fetch(`${base}/workspaces/${WS}/docs/${docId}/threads/by_find`, {
         method: 'POST',
         headers: {
           host: OPERATOR_HOST,

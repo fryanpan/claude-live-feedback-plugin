@@ -22,12 +22,13 @@
 import { attachmentIdOf } from '@feedback/core';
 import type { DocStore } from '../doc-store.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
+import { type WorkspaceScope, matchRest, restIs } from '../middleware/workspace-scope.ts';
 import { listArchivedDocs, listArchivedReviews } from '../review-archive.ts';
 import type { TaskProjection } from '../task-projection.ts';
-import type { TaskStore } from '../tasks.ts';
+import type { BoardWorkspace, TaskStore } from '../tasks.ts';
 
 /** Review-only delete. `DELETE /workspaces/<id>` still fronts both. */
-const REVIEW_DELETE = /^\/api\/reviews\/([^/]+)$/;
+const REVIEW_DELETE = /^reviews\/([^/]+)$/;
 
 /** The long-lived collaborators these routes need. */
 export interface ArchiveRoutesContext {
@@ -55,6 +56,13 @@ export interface ArchiveRoutesContext {
 
 /** What only this request knows. */
 export interface ArchiveRouteRequest {
+  /**
+   * The board this canonical path named, and the remainder under it —
+   * resolved once by `middleware/workspace-scope.ts`. `undefined` when the
+   * path is not under `/workspaces/<id>/…`; a resource route matches through
+   * `matchRest`, so with no scope it has no remainder to match.
+   */
+  scope?: WorkspaceScope<BoardWorkspace>;
   req: Request;
   pathname: string;
   url: URL;
@@ -150,7 +158,7 @@ export function createArchiveRoutes(ctx: ArchiveRoutesContext): {
     return j(res.error === 'has-open-threads' ? 409 : 404, res);
   };
   const handleArchiveRoutes = async (rq: ArchiveRouteRequest): Promise<Response | undefined> => {
-    const { req, pathname, url, visitor } = rq;
+    const { req, url, scope, visitor } = rq;
     // Everything currently parked in `data/_archive/` with a manifest.
     // Read-only, and the answer to "what can I bring back".
     //
@@ -162,14 +170,33 @@ export function createArchiveRoutes(ctx: ArchiveRoutesContext): {
     // because the two manifests genuinely differ (a review has `docIds`
     // and a `root`; a doc is one id) and a caller almost always wants one
     // kind or the other.
-    if (pathname === '/api/reviews/archived' && req.method === 'GET') {
+    //
+    // `GET /workspaces/<ws>/reviews?archived=true`, and the query string is
+    // load-bearing rather than decoration: `reviews` is a collection, and
+    // `archived` was a WORD standing where a review id goes. Left as a path
+    // segment it would have been the one member of that collection nothing
+    // could tell from an id — the exact ambiguity the collection table's verb
+    // list exists to make a decision instead of an accident.
+    //
+    // Scoped to the board that asked. The archive is a directory of manifests
+    // for the whole server, and each manifest remembers the boards its review
+    // was on; answering the unfiltered list under one board's path would name
+    // every other board's finished work to whoever opened this one.
+    if (
+      restIs(scope, 'reviews') &&
+      req.method === 'GET' &&
+      url.searchParams.get('archived') === 'true'
+    ) {
       if (visitor) return j(403, { error: 'not available to share visitors' });
+      const board = scope?.workspaceId;
+      const onThisBoard = <T extends { linkedWorkspaces: string[] }>(m: T): boolean =>
+        board !== undefined && m.linkedWorkspaces.includes(board);
       return j(200, {
-        archived: listArchivedReviews(dataDir),
-        docs: listArchivedDocs(dataDir),
+        archived: listArchivedReviews(dataDir).filter(onThisBoard),
+        docs: listArchivedDocs(dataDir).filter(onThisBoard),
       });
     }
-    const reviewArchiveMatch = pathname.match(/^\/api\/reviews\/([^/]+)\/archive$/);
+    const reviewArchiveMatch = matchRest(scope, /^reviews\/([^/]+)\/archive$/);
     if (reviewArchiveMatch && req.method === 'POST') {
       if (visitor) return j(403, { error: 'not available to share visitors' });
       const setId = decodeURIComponent(reviewArchiveMatch[1] ?? '');
@@ -178,7 +205,7 @@ export function createArchiveRoutes(ctx: ArchiveRoutesContext): {
       const reason = typeof body?.reason === 'string' ? (body.reason as string) : undefined;
       return archiveReview(setId, author?.name ?? 'unknown', reason);
     }
-    const reviewUnarchiveMatch = pathname.match(/^\/api\/reviews\/([^/]+)\/unarchive$/);
+    const reviewUnarchiveMatch = matchRest(scope, /^reviews\/([^/]+)\/unarchive$/);
     if (reviewUnarchiveMatch && req.method === 'POST') {
       if (visitor) return j(403, { error: 'not available to share visitors' });
       const setId = decodeURIComponent(reviewUnarchiveMatch[1] ?? '');
@@ -197,7 +224,7 @@ export function createArchiveRoutes(ctx: ArchiveRoutesContext): {
     // `docStore.get(docId)` and 404s without a doc — which is precisely the
     // state an archived doc is in, so an unarchive route inside it could
     // never be reached.
-    const docArchiveMatch = pathname.match(/^\/api\/docs\/([^/]+)\/archive$/);
+    const docArchiveMatch = matchRest(scope, /^docs\/([^/]+)\/archive$/);
     if (docArchiveMatch && req.method === 'POST') {
       if (visitor) return j(403, { error: 'not available to share visitors' });
       const docId = canonicalDocId(decodeURIComponent(docArchiveMatch[1] ?? ''));
@@ -216,7 +243,7 @@ export function createArchiveRoutes(ctx: ArchiveRoutesContext): {
       unlinkFromEveryBoardWorkspace(docId);
       return j(200, res);
     }
-    const docUnarchiveMatch = pathname.match(/^\/api\/docs\/([^/]+)\/unarchive$/);
+    const docUnarchiveMatch = matchRest(scope, /^docs\/([^/]+)\/unarchive$/);
     if (docUnarchiveMatch && req.method === 'POST') {
       if (visitor) return j(403, { error: 'not available to share visitors' });
       // Deliberately NOT canonicalized: an archived doc has no doc, so
@@ -234,7 +261,7 @@ export function createArchiveRoutes(ctx: ArchiveRoutesContext): {
       }
       return j(200, res);
     }
-    const reviewDeleteMatch = pathname.match(REVIEW_DELETE);
+    const reviewDeleteMatch = matchRest(scope, REVIEW_DELETE);
     if (reviewDeleteMatch && req.method === 'DELETE') {
       // Review-only, and that is the point of the separate verb: a BOARD
       // id here answers not-found rather than being destroyed by a call

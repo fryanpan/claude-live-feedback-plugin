@@ -11,6 +11,7 @@ import { DocStore } from '../src/doc-store.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { SseBus } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 /**
  * Regression suite for the 2026-08-26 stale-rewrite incident: an agent
@@ -114,7 +115,10 @@ Keep this sentence intact.
 
 const AGENT = { id: 'agent-guard-1', name: 'Guard Agent', color: '#123456', kind: 'known' };
 
-describe('stale-write guard on POST /api/docs/:id/content', () => {
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
+describe(`stale-write guard on POST /workspaces/${WS}/docs/:id/content`, () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
@@ -129,8 +133,9 @@ describe('stale-write guard on POST /api/docs/:id/content', () => {
     writeFileSync(path, DOC);
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     wsBase = `ws://localhost:${handle.port}`;
-    const create = await fetch(`${base}/api/docs`, {
+    const create = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'g1', type: 'markdown', sourceUrl: path }),
@@ -146,7 +151,7 @@ describe('stale-write guard on POST /api/docs/:id/content', () => {
 
   /** Type into the doc over a real websocket, as the browser editor does. */
   async function humanEdit(text = 'Human addition.'): Promise<void> {
-    const client = connectDoc(`${wsBase}/y/g1`);
+    const client = connectDoc(`${wsBase}/workspaces/${WS}/docs/g1/y`);
     await waitForOpen(client.ws);
     await client.ready;
     const frag = getProseFragment(client.ydoc);
@@ -170,7 +175,7 @@ describe('stale-write guard on POST /api/docs/:id/content', () => {
   async function setContent(
     body: Record<string, unknown>,
   ): Promise<{ status: number; json: Record<string, unknown> }> {
-    const res = await fetch(`${base}/api/docs/g1/content`, {
+    const res = await fetch(`${base}/workspaces/${WS}/docs/g1/content`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -181,7 +186,7 @@ describe('stale-write guard on POST /api/docs/:id/content', () => {
   it('no intervening human edits: the existing payload still lands (old bundles keep working)', async () => {
     const res = await setContent({ markdown: '# Rewritten\n\nFresh body.\n' });
     expect(res.status).toBe(200);
-    const read = await fetch(`${base}/api/docs/g1/content`);
+    const read = await fetch(`${base}/workspaces/${WS}/docs/g1/content`);
     expect(await read.text()).toContain('Fresh body.');
   });
 
@@ -195,7 +200,7 @@ describe('stale-write guard on POST /api/docs/:id/content', () => {
     expect(message).toContain('get_doc');
     expect(message).toContain('confirmOverwriteHumanEdits');
     // And the human's words are still there.
-    const read = await fetch(`${base}/api/docs/g1/content`);
+    const read = await fetch(`${base}/workspaces/${WS}/docs/g1/content`);
     const text = await read.text();
     expect(text).toContain('Human addition.');
     expect(text).not.toContain('Stale rewrite.');
@@ -208,7 +213,7 @@ describe('stale-write guard on POST /api/docs/:id/content', () => {
       confirmOverwriteHumanEdits: true,
     });
     expect(res.status).toBe(200);
-    const read = await fetch(`${base}/api/docs/g1/content`);
+    const read = await fetch(`${base}/workspaces/${WS}/docs/g1/content`);
     expect(await read.text()).toContain('Deliberate rewrite.');
   });
 
@@ -222,7 +227,7 @@ describe('stale-write guard on POST /api/docs/:id/content', () => {
     handle.docStore.noteHumanEdit('g1', Date.now() - 60_000);
     const refused = await setContent({ markdown: '# Pre-read\n\nStale.\n', author: AGENT });
     expect(refused.status).toBe(409);
-    const read = await fetch(`${base}/api/docs/g1/content?reader=${AGENT.id}`);
+    const read = await fetch(`${base}/workspaces/${WS}/docs/g1/content?reader=${AGENT.id}`);
     expect(read.ok).toBe(true);
     const res = await setContent({
       markdown: '# Re-read\n\nRe-applied onto current content.\n',
@@ -251,7 +256,7 @@ describe('stale-write guard on POST /api/docs/:id/content', () => {
   });
 
   it("agent edits through the MCP tools don't trip the guard", async () => {
-    const far = await fetch(`${base}/api/docs/g1/find_and_replace`, {
+    const far = await fetch(`${base}/workspaces/${WS}/docs/g1/find_and_replace`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ find: 'Intro paragraph.', replace: 'Intro paragraph, edited.' }),

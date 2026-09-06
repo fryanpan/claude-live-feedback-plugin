@@ -326,12 +326,15 @@ export async function fetchQueueRows(
  */
 export async function fetchQueueThreads(
   base: string,
+  workspaceId: string,
   rows: { docId: string; threadId: string }[],
 ): Promise<{ docId: string; threads: Thread[] }[]> {
   const docIds = [...new Set(rows.map((r) => r.docId))];
   const out: { docId: string; threads: Thread[] }[] = [];
   for (const docId of docIds) {
-    const payload = (await getJson(`${base}/api/docs/${encodeURIComponent(docId)}/threads`)) as {
+    const payload = (await getJson(
+      `${base}/workspaces/${encodeURIComponent(workspaceId)}/docs/${encodeURIComponent(docId)}/threads`,
+    )) as {
       threads?: Thread[];
     };
     out.push({ docId, threads: payload.threads ?? [] });
@@ -348,13 +351,14 @@ export async function fetchQueueThreads(
  */
 export async function resolveReceipts(
   base: string,
+  workspaceId: string,
   author: string,
   rows: ThreadTriage[],
 ): Promise<{ resolved: ThreadTriage[]; failed: { row: ThreadTriage; error: string }[] }> {
   const resolved: ThreadTriage[] = [];
   const failed: { row: ThreadTriage; error: string }[] = [];
   for (const row of rows) {
-    const url = `${base}/api/docs/${encodeURIComponent(row.docId)}/threads/${encodeURIComponent(row.threadId)}/resolve`;
+    const url = `${base}/workspaces/${encodeURIComponent(workspaceId)}/docs/${encodeURIComponent(row.docId)}/threads/${encodeURIComponent(row.threadId)}/resolve`;
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

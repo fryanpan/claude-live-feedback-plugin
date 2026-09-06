@@ -14,6 +14,7 @@ import type { ElementAnchor, User } from '@feedback/core';
 import { decideReconcile } from '../src/doc-store.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { waitFor, waitForFile } from './wait-for.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const bryan: User = { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' };
 // A NAMED agent: the shared `known-agent` category is refused as an author.
@@ -32,6 +33,9 @@ const fakeAnchor: ElementAnchor = {
   snippet: { text: 'Go' },
 };
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('server REST', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -41,10 +45,11 @@ describe('server REST', () => {
   // doc by the id it actually lives at.
   let unitId: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'feedback-test-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterAll(async () => {
@@ -57,8 +62,8 @@ describe('server REST', () => {
     return res.json() as Promise<T>;
   }
 
-  it('creates a doc via POST /api/docs', async () => {
-    const r = await fetch(`${base}/api/docs`, {
+  it(`creates a doc via POST /workspaces/${WS}/docs`, async () => {
+    const r = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'unit-1', type: 'mockup', title: 'Mock Test' }),
@@ -77,17 +82,19 @@ describe('server REST', () => {
     expect(meta.title).toBe('Mock Test');
 
     // …and the readable name still addresses the same doc.
-    const byName = await j<{ meta: { docId: string } }>(await fetch(`${base}/api/docs/unit-1`));
+    const byName = await j<{ meta: { docId: string } }>(
+      await fetch(`${base}/workspaces/${WS}/docs/unit-1?format=json`),
+    );
     expect(byName.meta.docId).toBe(unitId);
   });
 
   it('lists docs', async () => {
-    const r = await fetch(`${base}/api/docs`);
+    const r = await fetch(`${base}/workspaces/${WS}/docs`);
     const { docs } = await j<{ docs: { docId: string }[] }>(r);
     expect(docs.map((d) => d.docId)).toContain(unitId);
   });
 
-  it('serves a bound mockup HTML at /mockup/<docId> with reviewUrl in meta', async () => {
+  it('serves a bound mockup HTML at /workspaces/<ws>/mockups/<docId> with reviewUrl in meta', async () => {
     // Reproduces a partner team's friction report: pre-bind_mock-serve, agents had to
     // symlink each new HTML into the plugin's demos/ to make the URL serve.
     // With the route the symlink dance disappears.
@@ -96,7 +103,7 @@ describe('server REST', () => {
       file,
       '<!doctype html><html><body><h1>Mock body</h1><claude-feedback-widget doc-id="mock-served-1"></claude-feedback-widget></body></html>',
     );
-    const created = await fetch(`${base}/api/docs`, {
+    const created = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'mock-served-1', type: 'mockup', sourceUrl: file }),
@@ -108,31 +115,31 @@ describe('server REST', () => {
     );
     const mockId = created.docId;
     expect(created.meta.docId).toBe(mockId);
-    // The decorated meta should now carry a reviewUrl pointing at /mockup/ —
+    // The decorated meta should now carry a reviewUrl under the board —
     // addressed by the MINTED id, which is the doc's own address.
     expect(created.meta.reviewUrl).toBeDefined();
     expect(created.meta.reviewUrl).toContain(`/mockups/${encodeURIComponent(mockId)}`);
 
     // GET the served URL — should be the HTML body the agent wrote.
-    const served = await fetch(`${base}/mockup/mock-served-1`);
+    const served = await fetch(`${base}/workspaces/${WS}/mockups/mock-served-1`);
     expect(served.status).toBe(200);
     expect(served.headers.get('content-type')).toContain('text/html');
     const body = await served.text();
     expect(body).toContain('Mock body');
     expect(body).toContain('claude-feedback-widget');
 
-    // `.html` suffix should also work — agents may share whichever form
-    // feels natural.
-    const servedSuffixed = await fetch(`${base}/mockup/mock-served-1.html`);
-    expect(servedSuffixed.status).toBe(200);
+    // The `.html` twin is GONE with the cutover: `/mockup/<id>.html` was a
+    // second spelling of one resource, and one resource has one address.
+    const servedSuffixed = await fetch(`${base}/workspaces/${WS}/mockups/mock-served-1.html`);
+    expect(servedSuffixed.status).toBe(404);
 
     // Unbound docId → 404.
-    const missing = await fetch(`${base}/mockup/never-bound`);
+    const missing = await fetch(`${base}/workspaces/${WS}/mockups/never-bound`);
     expect(missing.status).toBe(404);
   });
 
   it('rejects bad docId', async () => {
-    const r = await fetch(`${base}/api/docs`, {
+    const r = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'bad id with spaces' }),
@@ -141,50 +148,50 @@ describe('server REST', () => {
   });
 
   it('creates and fetches a thread', async () => {
-    const created = await fetch(`${base}/api/docs/unit-1/threads`, {
+    const created = await fetch(`${base}/workspaces/${WS}/docs/unit-1/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ author: bryan, text: 'first comment', anchor: fakeAnchor }),
     }).then((r) => j<{ thread: { id: string; comments: { text: string }[] } }>(r));
     expect(created.thread.comments[0]?.text).toBe('first comment');
 
-    const list = await fetch(`${base}/api/docs/unit-1/threads`).then((r) =>
+    const list = await fetch(`${base}/workspaces/${WS}/docs/unit-1/threads`).then((r) =>
       j<{ threads: { id: string }[] }>(r),
     );
     expect(list.threads.map((t) => t.id)).toContain(created.thread.id);
 
     const one = await fetch(
-      `${base}/api/docs/unit-1/threads/${encodeURIComponent(created.thread.id)}`,
+      `${base}/workspaces/${WS}/docs/unit-1/threads/${encodeURIComponent(created.thread.id)}`,
     ).then((r) => j<{ thread: { comments: { text: string }[] } }>(r));
     expect(one.thread.comments).toHaveLength(1);
   });
 
   it('posts a reply and filters by status', async () => {
-    const created = await fetch(`${base}/api/docs/unit-1/threads`, {
+    const created = await fetch(`${base}/workspaces/${WS}/docs/unit-1/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ author: bryan, text: 'pls fix', anchor: fakeAnchor }),
     }).then((r) => j<{ thread: { id: string } }>(r));
 
-    await fetch(`${base}/api/docs/unit-1/threads/${created.thread.id}/comments`, {
+    await fetch(`${base}/workspaces/${WS}/docs/unit-1/threads/${created.thread.id}/comments`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ author: agent, text: 'on it' }),
     }).then((r) => j(r));
 
-    await fetch(`${base}/api/docs/unit-1/threads/${created.thread.id}/resolve`, {
+    await fetch(`${base}/workspaces/${WS}/docs/unit-1/threads/${created.thread.id}/resolve`, {
       method: 'POST',
     }).then((r) => j(r));
 
-    const resolved = await fetch(`${base}/api/docs/unit-1/threads?status=resolved`).then((r) =>
-      j<{ threads: { id: string; status: string; commentCount: number }[] }>(r),
-    );
+    const resolved = await fetch(
+      `${base}/workspaces/${WS}/docs/unit-1/threads?status=resolved`,
+    ).then((r) => j<{ threads: { id: string; status: string; commentCount: number }[] }>(r));
     const match = resolved.threads.find((t) => t.id === created.thread.id);
     expect(match?.status).toBe('resolved');
     expect(match?.commentCount).toBe(2);
 
-    const openOnly = await fetch(`${base}/api/docs/unit-1/threads?status=open`).then((r) =>
-      j<{ threads: { id: string }[] }>(r),
+    const openOnly = await fetch(`${base}/workspaces/${WS}/docs/unit-1/threads?status=open`).then(
+      (r) => j<{ threads: { id: string }[] }>(r),
     );
     expect(openOnly.threads.find((t) => t.id === created.thread.id)).toBeUndefined();
   });
@@ -192,7 +199,7 @@ describe('server REST', () => {
   it('creates a file-backed markdown doc and edits via find_and_replace', async () => {
     const file = join(dataDir, 'edit-test.md');
     writeFileSync(file, 'Hello, world!\n');
-    const created = await fetch(`${base}/api/docs`, {
+    const created = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'md-1', type: 'markdown', sourceUrl: file }),
@@ -200,18 +207,18 @@ describe('server REST', () => {
     expect(created.attached?.ok).toBe(true);
     expect(created.attached?.seeded).toBe(true);
 
-    const loaded = await fetch(`${base}/api/docs/md-1/content`).then((r) =>
+    const loaded = await fetch(`${base}/workspaces/${WS}/docs/md-1/content`).then((r) =>
       j<{ blocks: { text: string }[] }>(r),
     );
     expect(loaded.blocks[0]?.text).toBe('Hello, world!');
 
-    await fetch(`${base}/api/docs/md-1/find_and_replace`, {
+    await fetch(`${base}/workspaces/${WS}/docs/md-1/find_and_replace`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ find: 'world', replace: 'Bryan' }),
     }).then((r) => j(r));
 
-    const edited = await fetch(`${base}/api/docs/md-1/content`).then((r) =>
+    const edited = await fetch(`${base}/workspaces/${WS}/docs/md-1/content`).then((r) =>
       j<{ blocks: { text: string }[] }>(r),
     );
     expect(edited.blocks[0]?.text).toBe('Hello, Bryan!');
@@ -220,13 +227,13 @@ describe('server REST', () => {
   it('find_and_replace no-match 409 carries the near-miss hint through unchanged', async () => {
     const file = join(dataDir, 'hint-test.md');
     writeFileSync(file, 'Deploy pinned to SHA a1B2c3D4 since Monday.\n');
-    await fetch(`${base}/api/docs`, {
+    await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'md-hint', type: 'markdown', sourceUrl: file }),
     }).then((r) => j(r));
 
-    const res = await fetch(`${base}/api/docs/md-hint/find_and_replace`, {
+    const res = await fetch(`${base}/workspaces/${WS}/docs/md-hint/find_and_replace`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ find: 'sha A1b2C3d4', replace: 'sha e5F6a7B8' }),
@@ -241,7 +248,7 @@ describe('server REST', () => {
     expect(body.hint?.preview).toContain('SHA a1B2c3D4');
 
     // Genuinely absent text: still a bare no-match, no hint key at all.
-    const absent = await fetch(`${base}/api/docs/md-hint/find_and_replace`, {
+    const absent = await fetch(`${base}/workspaces/${WS}/docs/md-hint/find_and_replace`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ find: 'entirely elsewhere', replace: 'x' }),
@@ -263,7 +270,7 @@ describe('server REST', () => {
     const file = join(dataDir, 'rearm-test.md');
     writeFileSync(file, 'one\n');
     await j(
-      await fetch(`${base}/api/docs`, {
+      await fetch(`${base}/workspaces/${WS}/docs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ docId: 'rearm-1', type: 'markdown', sourceUrl: file }),
@@ -291,7 +298,7 @@ describe('server REST', () => {
       // Generous budget: server polls every 500ms + 150ms debounce, and CI
       // runners are slow. Returns as soon as it matches.
       for (let i = 0; i < 80; i++) {
-        const doc = await fetch(`${base}/api/docs/rearm-1/content`).then((r) =>
+        const doc = await fetch(`${base}/workspaces/${WS}/docs/rearm-1/content`).then((r) =>
           j<{ blocks: { text: string }[] }>(r),
         );
         if (doc.blocks[0]?.text === want) return;
@@ -314,14 +321,14 @@ describe('server REST', () => {
   it('creates a thread via threads/by_find with shared anchor resolution', async () => {
     const file = join(dataDir, 'thread-by-find.md');
     writeFileSync(file, 'The cat sat on the mat.\n');
-    await fetch(`${base}/api/docs`, {
+    await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'thread-by-find-1', type: 'markdown', sourceUrl: file }),
     }).then((r) => j(r));
 
     // Happy path: unique match resolves to an anchor and a thread is created.
-    const created = await fetch(`${base}/api/docs/thread-by-find-1/threads/by_find`, {
+    const created = await fetch(`${base}/workspaces/${WS}/docs/thread-by-find-1/threads/by_find`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -359,17 +366,17 @@ describe('server REST', () => {
     expect(created.thread.anchor.endRel.length).toBeGreaterThan(0);
 
     // The new thread shows up in the same listing the editor uses.
-    const list = await fetch(`${base}/api/docs/thread-by-find-1/threads`).then((r) =>
+    const list = await fetch(`${base}/workspaces/${WS}/docs/thread-by-find-1/threads`).then((r) =>
       j<{ threads: { id: string }[] }>(r),
     );
     expect(list.threads.map((t) => t.id)).toContain(created.thread.id);
 
     // Ambiguous match → 409 with candidates (same shape as find_and_replace).
     writeFileSync(file, 'cat cat cat\n');
-    await fetch(`${base}/api/docs/thread-by-find-1/reparse_from_disk`, { method: 'POST' }).then(
-      (r) => j(r),
-    );
-    const ambig = await fetch(`${base}/api/docs/thread-by-find-1/threads/by_find`, {
+    await fetch(`${base}/workspaces/${WS}/docs/thread-by-find-1/reparse_from_disk`, {
+      method: 'POST',
+    }).then((r) => j(r));
+    const ambig = await fetch(`${base}/workspaces/${WS}/docs/thread-by-find-1/threads/by_find`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ author: agent, text: 'which cat?', find: 'cat' }),
@@ -383,7 +390,7 @@ describe('server REST', () => {
     expect(ambigBody.candidates).toHaveLength(3);
 
     // Rejects missing required fields.
-    const bad = await fetch(`${base}/api/docs/thread-by-find-1/threads/by_find`, {
+    const bad = await fetch(`${base}/workspaces/${WS}/docs/thread-by-find-1/threads/by_find`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ author: agent, text: 'no find' }),
@@ -391,8 +398,8 @@ describe('server REST', () => {
     expect(bad.status).toBe(400);
   });
 
-  it('rejects POST /api/docs for markdown without sourceUrl', async () => {
-    const r = await fetch(`${base}/api/docs`, {
+  it(`rejects POST /workspaces/${WS}/docs for markdown without sourceUrl`, async () => {
+    const r = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'md-no-source', type: 'markdown' }),
@@ -406,20 +413,20 @@ describe('server REST', () => {
   it('insert_blocks_at_anchor parses markdown into sibling blocks', async () => {
     const file = join(dataDir, 'blocks-at-anchor.md');
     writeFileSync(file, 'First paragraph.\n\nSecond paragraph.\n');
-    await fetch(`${base}/api/docs`, {
+    await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'md-blocks', type: 'markdown', sourceUrl: file }),
     }).then((r) => j(r));
 
-    const anchor = await fetch(`${base}/api/docs/md-blocks/agent_anchors`, {
+    const anchor = await fetch(`${base}/workspaces/${WS}/docs/md-blocks/agent_anchors`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ find: 'First paragraph.' }),
     }).then((r) => j<{ anchorId: string }>(r));
 
     const res = await fetch(
-      `${base}/api/docs/md-blocks/agent_anchors/${encodeURIComponent(anchor.anchorId)}/insert_blocks`,
+      `${base}/workspaces/${WS}/docs/md-blocks/agent_anchors/${encodeURIComponent(anchor.anchorId)}/insert_blocks`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -430,7 +437,7 @@ describe('server REST', () => {
     );
     expect(res.status).toBe(200);
 
-    const content = await fetch(`${base}/api/docs/md-blocks/content`).then((r) =>
+    const content = await fetch(`${base}/workspaces/${WS}/docs/md-blocks/content`).then((r) =>
       j<{ blocks: { type: string | null; text: string; headingLevel?: number }[] }>(r),
     );
     // The inserted markdown should produce sibling blocks: heading, paragraph, table.
@@ -448,18 +455,18 @@ describe('server REST', () => {
   it('insert_blocks placement top-level escapes the list item; unknown placement is a 400', async () => {
     const file = join(dataDir, 'blocks-placement.md');
     writeFileSync(file, '- alpha\n- beta\n\nAfter paragraph.\n');
-    await fetch(`${base}/api/docs`, {
+    await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'md-placement', type: 'markdown', sourceUrl: file }),
     }).then((r) => j(r));
 
-    const anchor = await fetch(`${base}/api/docs/md-placement/agent_anchors`, {
+    const anchor = await fetch(`${base}/workspaces/${WS}/docs/md-placement/agent_anchors`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ find: 'alpha' }),
     }).then((r) => j<{ anchorId: string }>(r));
-    const route = `${base}/api/docs/md-placement/agent_anchors/${encodeURIComponent(anchor.anchorId)}/insert_blocks`;
+    const route = `${base}/workspaces/${WS}/docs/md-placement/agent_anchors/${encodeURIComponent(anchor.anchorId)}/insert_blocks`;
 
     // Unknown placement → 400 before any write.
     const bad = await fetch(route, {
@@ -478,7 +485,7 @@ describe('server REST', () => {
       body: JSON.stringify({ markdown: '## New section\n\nBody.', placement: 'top-level' }),
     });
     expect(res.status).toBe(200);
-    const content = await fetch(`${base}/api/docs/md-placement/content`).then((r) =>
+    const content = await fetch(`${base}/workspaces/${WS}/docs/md-placement/content`).then((r) =>
       j<{ blocks: { type: string | null; text: string }[] }>(r),
     );
     expect(content.blocks.map((b) => b.type)).toEqual([
@@ -492,20 +499,27 @@ describe('server REST', () => {
   it('threads insert_blocks_after forwards placement top-level too', async () => {
     const file = join(dataDir, 'blocks-placement-thread.md');
     writeFileSync(file, '- alpha\n- beta\n\nAfter paragraph.\n');
-    await fetch(`${base}/api/docs`, {
+    await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'md-placement-thread', type: 'markdown', sourceUrl: file }),
     }).then((r) => j(r));
 
-    const created = await fetch(`${base}/api/docs/md-placement-thread/threads/by_find`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ author: agent, text: 'add a section after this list', find: 'beta' }),
-    }).then((r) => j<{ thread: { id: string } }>(r));
+    const created = await fetch(
+      `${base}/workspaces/${WS}/docs/md-placement-thread/threads/by_find`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          author: agent,
+          text: 'add a section after this list',
+          find: 'beta',
+        }),
+      },
+    ).then((r) => j<{ thread: { id: string } }>(r));
 
     const res = await fetch(
-      `${base}/api/docs/md-placement-thread/threads/${encodeURIComponent(created.thread.id)}/insert_blocks_after`,
+      `${base}/workspaces/${WS}/docs/md-placement-thread/threads/${encodeURIComponent(created.thread.id)}/insert_blocks_after`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -513,8 +527,8 @@ describe('server REST', () => {
       },
     );
     expect(res.status).toBe(200);
-    const content = await fetch(`${base}/api/docs/md-placement-thread/content`).then((r) =>
-      j<{ blocks: { type: string | null }[] }>(r),
+    const content = await fetch(`${base}/workspaces/${WS}/docs/md-placement-thread/content`).then(
+      (r) => j<{ blocks: { type: string | null }[] }>(r),
     );
     expect(content.blocks.map((b) => b.type)).toEqual(['bulletList', 'heading', 'paragraph']);
   });
@@ -526,23 +540,23 @@ describe('server REST', () => {
     writeFileSync(f1, '# A\n');
     writeFileSync(f2, '# B\n');
     writeFileSync(f3, '# Other\n');
-    const { docId: setAId } = await fetch(`${base}/api/docs`, {
+    const { docId: setAId } = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'set-a', type: 'markdown', sourceUrl: f1, setId: 's1' }),
     }).then((r) => j<{ docId: string }>(r));
-    const { docId: setBId } = await fetch(`${base}/api/docs`, {
+    const { docId: setBId } = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'set-b', type: 'markdown', sourceUrl: f2, setId: 's1' }),
     }).then((r) => j<{ docId: string }>(r));
-    const { docId: otherId } = await fetch(`${base}/api/docs`, {
+    const { docId: otherId } = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'other', type: 'markdown', sourceUrl: f3 }),
     }).then((r) => j<{ docId: string }>(r));
 
-    const list = await fetch(`${base}/api/docs`).then((r) =>
+    const list = await fetch(`${base}/workspaces/${WS}/docs`).then((r) =>
       j<{ docs: Array<{ docId: string; setId?: string }> }>(r),
     );
     const inSet = list.docs.filter((d) => d.setId === 's1').map((d) => d.docId);
@@ -552,9 +566,9 @@ describe('server REST', () => {
   });
 
   it('returns 404 for endpoints on a doc that does not exist', async () => {
-    const r1 = await fetch(`${base}/api/docs/nonexistent/content`);
+    const r1 = await fetch(`${base}/workspaces/${WS}/docs/nonexistent/content`);
     expect(r1.status).toBe(404);
-    const r2 = await fetch(`${base}/events/nonexistent`);
+    const r2 = await fetch(`${base}/workspaces/${WS}/docs/nonexistent/events:stream`);
     expect(r2.status).toBe(404);
   });
 
@@ -573,7 +587,7 @@ describe('server REST', () => {
       const file = join(dataDir, 'hooked.md');
       writeFileSync(file, '# hooked\n');
       const { docId: hookedId } = await j<{ docId: string }>(
-        await fetch(`${base}/api/docs`, {
+        await fetch(`${base}/workspaces/${WS}/docs`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
@@ -586,7 +600,7 @@ describe('server REST', () => {
       );
       // Addressed by the readable alias — the payload must still name the
       // doc's own id, or a webhook consumer sees two identities for one doc.
-      await fetch(`${base}/api/docs/hooked-1/threads`, {
+      await fetch(`${base}/workspaces/${WS}/docs/hooked-1/threads`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ author: bryan, text: 'hook me', anchor: fakeAnchor }),
@@ -614,7 +628,7 @@ describe('server REST', () => {
     // the user visited read every doc. Now the origin is reflected, and only
     // when it's the server's own, a loopback dev server (the widget), or
     // explicitly configured. See middleware/browser-origin.ts.
-    const res = await fetch(`${base}/api/docs`, {
+    const res = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'GET',
       headers: { origin: 'http://localhost:3000' },
     });
@@ -625,7 +639,7 @@ describe('server REST', () => {
   });
 
   it('returns no CORS headers to an unknown origin', async () => {
-    const res = await fetch(`${base}/api/docs`, {
+    const res = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'GET',
       headers: { origin: 'https://evil.example.com' },
     });
@@ -633,7 +647,7 @@ describe('server REST', () => {
   });
 
   it('handles OPTIONS preflight', async () => {
-    const res = await fetch(`${base}/api/docs`, {
+    const res = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'OPTIONS',
       headers: {
         origin: 'http://localhost:4321',
@@ -648,7 +662,7 @@ describe('server REST', () => {
 
   it('hydrates persisted docs into list_docs after a supervisor restart', async () => {
     const created = await j<{ docId: string }>(
-      await fetch(`${base}/api/docs`, {
+      await fetch(`${base}/workspaces/${WS}/docs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ docId: 'hydrate-test', type: 'mockup' }),
@@ -668,17 +682,23 @@ describe('server REST', () => {
     // Spin up a second server pointed at the same dataDir — simulates a
     // bun --watch reload. The new instance starts with an empty doc map
     // and must hydrate from disk so list_docs is accurate.
+    // Board writes are debounced, and the doc's ADDRESS is now the board
+    // holding it — so a second server that boots before the board lands on
+    // disk cannot answer for it. Flushed rather than slept on.
+    handle.tasks.flush();
     const second = createServer({ port: 0, dataDir });
     try {
       const list = await j<{ docs: { docId: string }[] }>(
-        await fetch(`http://localhost:${second.port}/api/docs`),
+        await fetch(`http://localhost:${second.port}/workspaces/${WS}/docs`),
       );
       const ids = list.docs.map((d) => d.docId);
       expect(ids).toContain(hydrateId);
       // The alias came back off disk with it, so the readable name still
       // resolves on a server that never saw the create call.
       const byName = await j<{ meta: { docId: string } }>(
-        await fetch(`http://localhost:${second.port}/api/docs/hydrate-test`),
+        await fetch(
+          `http://localhost:${second.port}/workspaces/${WS}/docs/hydrate-test?format=json`,
+        ),
       );
       expect(byName.meta.docId).toBe(hydrateId);
     } finally {
@@ -695,7 +715,7 @@ describe('server REST', () => {
     const mdPath = join(dataDir, 'rebind-test.md');
     writeFileSync(mdPath, '# initial\n');
     const created = await j<{ docId: string }>(
-      await fetch(`${base}/api/docs`, {
+      await fetch(`${base}/workspaces/${WS}/docs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -714,14 +734,16 @@ describe('server REST', () => {
     expect(existsSync(ydocPath)).toBe(true);
 
     // Simulate a supervisor restart: spin up a second server on the same
-    // dataDir without re-calling attach_markdown.
+    // dataDir without re-calling attach_markdown. The board write is
+    // debounced and the doc is addressed under its board, so flush first.
+    handle.tasks.flush();
     const second = createServer({ port: 0, dataDir });
     try {
       // Trigger a Yjs mutation via find_and_replace. With the bug, the
       // observeDeep listener wouldn't be wired, so this would land in
       // memory but never reach disk.
       const fr = await fetch(
-        `http://localhost:${second.port}/api/docs/rebind-test/find_and_replace`,
+        `http://localhost:${second.port}/workspaces/${WS}/docs/rebind-test/find_and_replace`,
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -793,10 +815,11 @@ describe('delete_doc', () => {
   let dataDir: string;
   let base: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'feedback-del-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
   afterAll(async () => {
     await handle.stop();
@@ -804,7 +827,7 @@ describe('delete_doc', () => {
   });
   // Returns the id the server MINTED — the name passed in is only the alias.
   const mk = async (docId: string) => {
-    const r = await fetch(`${base}/api/docs`, {
+    const r = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId, type: 'mockup', title: docId }),
@@ -812,7 +835,7 @@ describe('delete_doc', () => {
     return ((await r.json()) as { docId: string }).docId;
   };
   const addThread = (docId: string) =>
-    fetch(`${base}/api/docs/${docId}/threads`, {
+    fetch(`${base}/workspaces/${WS}/docs/${docId}/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ author: bryan, text: 'keep?', anchor: fakeAnchor }),
@@ -821,13 +844,15 @@ describe('delete_doc', () => {
   it('refuses to delete a doc with open threads (guardrail)', async () => {
     const guardId = await mk('del-guard');
     await addThread('del-guard');
-    const r = await fetch(`${base}/api/docs/del-guard`, { method: 'DELETE' });
+    const r = await fetch(`${base}/workspaces/${WS}/docs/del-guard?format=json`, {
+      method: 'DELETE',
+    });
     expect(r.status).toBe(409);
     const body = (await r.json()) as { error: string; openThreads: number };
     expect(body.error).toBe('has-open-threads');
     expect(body.openThreads).toBe(1);
     // still present
-    const list = await fetch(`${base}/api/docs`).then(
+    const list = await fetch(`${base}/workspaces/${WS}/docs`).then(
       (r) => r.json() as Promise<{ docs: { docId: string }[] }>,
     );
     expect(list.docs.map((d) => d.docId)).toContain(guardId);
@@ -841,33 +866,41 @@ describe('delete_doc', () => {
       await new Promise((r) => setTimeout(r, 25));
     expect(existsSync(ydocPath)).toBe(true);
 
-    const r = await fetch(`${base}/api/docs/del-ok`, { method: 'DELETE' });
+    const r = await fetch(`${base}/workspaces/${WS}/docs/del-ok?format=json`, { method: 'DELETE' });
     expect(r.status).toBe(200);
     expect(((await r.json()) as { ok: boolean }).ok).toBe(true);
     expect(existsSync(ydocPath)).toBe(false);
 
-    const list = await fetch(`${base}/api/docs`).then(
+    const list = await fetch(`${base}/workspaces/${WS}/docs`).then(
       (r) => r.json() as Promise<{ docs: { docId: string }[] }>,
     );
     expect(list.docs.map((d) => d.docId)).not.toContain(okId);
     // Gone by both spellings: the alias must not outlive the doc it named.
-    expect(await fetch(`${base}/api/docs/del-ok`).then((x) => x.status)).toBe(404);
-    expect(await fetch(`${base}/api/docs/${okId}`).then((x) => x.status)).toBe(404);
+    expect(
+      await fetch(`${base}/workspaces/${WS}/docs/del-ok?format=json`).then((x) => x.status),
+    ).toBe(404);
+    expect(
+      await fetch(`${base}/workspaces/${WS}/docs/${okId}?format=json`).then((x) => x.status),
+    ).toBe(404);
   });
 
   it('force-deletes a doc despite open threads', async () => {
     const forceId = await mk('del-force');
     await addThread('del-force');
-    const r = await fetch(`${base}/api/docs/del-force?force=true`, { method: 'DELETE' });
+    const r = await fetch(`${base}/workspaces/${WS}/docs/del-force?force=true`, {
+      method: 'DELETE',
+    });
     expect(r.status).toBe(200);
-    const list = await fetch(`${base}/api/docs`).then(
+    const list = await fetch(`${base}/workspaces/${WS}/docs`).then(
       (r) => r.json() as Promise<{ docs: { docId: string }[] }>,
     );
     expect(list.docs.map((d) => d.docId)).not.toContain(forceId);
   });
 
   it('returns 404 when deleting a nonexistent doc', async () => {
-    const r = await fetch(`${base}/api/docs/does-not-exist`, { method: 'DELETE' });
+    const r = await fetch(`${base}/workspaces/${WS}/docs/does-not-exist?format=json`, {
+      method: 'DELETE',
+    });
     expect(r.status).toBe(404);
   });
 });
@@ -876,24 +909,25 @@ describe('doc owner + lastActivityAt', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'feedback-owner-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
   afterAll(async () => {
     await handle.stop();
     rmSync(dataDir, { recursive: true, force: true });
   });
   const getMeta = async (docId: string) => {
-    const { docs } = (await fetch(`${base}/api/docs`).then((r) => r.json())) as {
+    const { docs } = (await fetch(`${base}/workspaces/${WS}/docs`).then((r) => r.json())) as {
       docs: { docId: string; owner?: string; lastActivityAt?: number; createdAt: number }[];
     };
     return docs.find((d) => d.docId === docId);
   };
 
   it('records the owner passed at creation and surfaces it in list_docs', async () => {
-    const { docId: ownId } = (await fetch(`${base}/api/docs`, {
+    const { docId: ownId } = (await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'own-1', type: 'mockup', owner: '/Volumes/x/dev/agent-foo' }),
@@ -907,7 +941,7 @@ describe('doc owner + lastActivityAt', () => {
   it('advances lastActivityAt when the doc is edited', async () => {
     const file = join(dataDir, 'activity.md');
     writeFileSync(file, 'before\n');
-    const { docId: actId } = (await fetch(`${base}/api/docs`, {
+    const { docId: actId } = (await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'act-1', type: 'markdown', sourceUrl: file }),
@@ -922,7 +956,7 @@ describe('doc owner + lastActivityAt', () => {
     const backdated = new Date(Date.now() - 5000);
     utimesSync(ydoc, backdated, backdated);
     const before = (await getMeta(actId))!.lastActivityAt!;
-    await fetch(`${base}/api/docs/${actId}/find_and_replace`, {
+    await fetch(`${base}/workspaces/${WS}/docs/${actId}/find_and_replace`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ find: 'before', replace: 'after' }),
@@ -939,17 +973,18 @@ describe('read-only code docs', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'feedback-code-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
   afterAll(async () => {
     await handle.stop();
     rmSync(dataDir, { recursive: true, force: true });
   });
   const content = async (docId: string) =>
-    fetch(`${base}/api/docs/${docId}/content`).then(
+    fetch(`${base}/workspaces/${WS}/docs/${docId}/content`).then(
       (r) =>
         r.json() as Promise<{ plainText: string; blocks: { type: string | null; text: string }[] }>,
     );
@@ -957,7 +992,7 @@ describe('read-only code docs', () => {
   it('binds a source file read-only and serves its raw text', async () => {
     const file = join(dataDir, 'sample.ts');
     writeFileSync(file, 'const x: number = 1;\n');
-    const r = await fetch(`${base}/api/docs`, {
+    const r = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'code-1', type: 'code', sourceUrl: file }),
@@ -976,7 +1011,7 @@ describe('read-only code docs', () => {
   it('reconciles an external edit into the code doc (no write-back)', async () => {
     const file = join(dataDir, 'live.ts');
     writeFileSync(file, 'first\n');
-    await fetch(`${base}/api/docs`, {
+    await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'code-2', type: 'code', sourceUrl: file }),

@@ -15,6 +15,7 @@ import {
   parseHuddleKind,
   parseHuddleTopic,
 } from '../huddle.ts';
+import { restIs } from '../middleware/workspace-scope.ts';
 import { browserCannotBindBody, isBrowserRequest } from '../middleware/write-gate.ts';
 import { redactMetaForVisitor, relativeReviewUrl } from '../share/redact-meta.ts';
 import { boundFiles } from '../slow-fs.ts';
@@ -50,11 +51,27 @@ export async function handleWorkspaceContent(
     unfileFromDefault,
     workspacesOfDoc,
   } = ctx;
-  const { req, pathname, authorFor, visitor } = rq;
-  // attach_doc: link an existing doc or review to a board workspace.
-  const wsAttachMatch = pathname.match(/^\/workspaces\/([^/]+)\/docs$/);
-  if (wsAttachMatch && req.method === 'POST') {
-    const workspaceId = decodeURIComponent(wsAttachMatch[1] ?? '');
+  const { req, pathname, scope, authorFor, visitor } = rq;
+  /**
+   * attach_doc: link an existing doc or review to a board — `POST
+   * /workspaces/<ws>/docs:attach`.
+   *
+   * It used to be `POST /workspaces/<ws>/docs`, which is where a CREATE
+   * belongs, and the create had nowhere else to go once `/api/docs` was
+   * retired. Attach is a custom method on the collection rather than a
+   * create, so it gets the colon spelling this server already uses for
+   * `events:stream`.
+   *
+   * It could not have been nested under the doc instead. The whole subject of
+   * this verb is a doc that is NOT on this board yet, so
+   * `docs/<docId>:attach` would be refused by the membership check in
+   * `middleware/workspace-scope.ts` before the handler ever ran — the guard
+   * would be protecting the board from the one call whose job is to add to
+   * it. At the collection root there is no member id to check, and the
+   * target's reachability is judged below, where it always was.
+   */
+  if (restIs(scope, 'docs:attach') && req.method === 'POST') {
+    const workspaceId = scope?.workspaceId ?? '';
     const body = await safeJson(req);
     const addressed = body?.docId as string | undefined;
     if (!addressed || typeof addressed !== 'string') return j(400, { error: 'docId required' });
@@ -122,11 +139,14 @@ export async function handleWorkspaceContent(
   // with a banner + board link so the old tracker can't quietly stay a
   // second source of truth (a stamped file refuses re-import).
   const wsImportMatch = pathname.match(/^\/workspaces\/([^/]+)\/import-tasks$/);
-  if (wsImportMatch && req.method === 'POST') {
+  if (wsImportMatch && scope && req.method === 'POST') {
     // Reads a markdown file off disk by path. Agents only — see
     // browserCannotBindBody.
     if (isBrowserRequest(req.headers)) return j(403, browserCannotBindBody());
-    const workspaceId = decodeURIComponent(wsImportMatch[1] ?? '');
+    // The board comes off the scope — `middleware/workspace-scope.ts`
+    // resolved it once above every handler, so the lookup and the 404 that
+    // stood further down are DELETED rather than left dormant.
+    const { workspaceId, board: workspace } = scope;
     const body = await safeJson(req);
     const path = body?.path;
     if (typeof path !== 'string' || path.length === 0) {
@@ -134,8 +154,6 @@ export async function handleWorkspaceContent(
     }
     const author = authorFor(body?.author);
     if (!author) return j(400, { error: 'author required' });
-    const workspace = taskStore.getWorkspace(workspaceId);
-    if (!workspace) return j(404, { error: 'workspace not found' });
     // Off the main thread, under a deadline. The path here is whatever the
     // caller typed, so it can be in a cloud-sync folder that has stopped
     // answering — and a synchronous read of one of those parks the whole
@@ -234,11 +252,12 @@ export async function handleWorkspaceContent(
   // a share link means full access), which is why the reply's doc metadata
   // below is redacted rather than returned raw.
   const wsHuddlesMatch = pathname.match(/^\/workspaces\/([^/]+)\/huddles$/);
-  if (wsHuddlesMatch && req.method === 'POST') {
-    const workspaceId = decodeURIComponent(wsHuddlesMatch[1] ?? '');
+  if (wsHuddlesMatch && scope && req.method === 'POST') {
+    // The board comes off the scope — one resolution, above every handler.
+    // The RETIRED check below stays: that is board state this route reads,
+    // not a second answer to "does this board exist".
+    const { workspaceId, board: targetBoard } = scope;
     const body = await safeJson(req);
-    const targetBoard = taskStore.getWorkspace(workspaceId);
-    if (!targetBoard) return j(404, { error: 'workspace-not-found' });
     if (isRetired(targetBoard)) {
       return j(409, { error: 'workspace-retired', message: retiredRefusal(targetBoard) });
     }

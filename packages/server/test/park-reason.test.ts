@@ -30,6 +30,9 @@ import { makeFifo, releaseFifosIn } from './fifo.ts';
 const DOC_ID = 'parked-with-a-reason';
 const LEAD = { id: 'agent-cartographer', name: 'Cartographer', kind: 'agent' };
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('a doc parked because its file would not answer', () => {
   let dataDir: string;
   let scratch: string;
@@ -56,10 +59,22 @@ describe('a doc parked because its file would not answer', () => {
       });
     const ws = await post('/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id });
     workspaceId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
+    WS = workspaceId;
     expect(
-      (await post('/api/docs', { docId: DOC_ID, type: 'markdown', sourceUrl: boundPath })).status,
+      (
+        await post(`/workspaces/${WS}/docs`, {
+          docId: DOC_ID,
+          type: 'markdown',
+          sourceUrl: boundPath,
+        })
+      ).status,
     ).toBe(200);
-    expect((await post(`/workspaces/${workspaceId}/docs`, { docId: DOC_ID })).status).toBe(200);
+    expect((await post(`/workspaces/${workspaceId}/docs:attach`, { docId: DOC_ID })).status).toBe(
+      200,
+    );
+    // Board writes are debounced; the rounds below boot a fresh server on
+    // this same data dir and read the board back off disk.
+    first.tasks.flush();
     await first.stop();
 
     unlinkSync(boundPath);
@@ -79,7 +94,7 @@ describe('a doc parked because its file would not answer', () => {
     handle = createServer({ port: 0, dataDir, ...access.serverOptions });
     const base = `http://localhost:${handle.port}`;
 
-    const res = await fetch(`${base}/api/docs/${DOC_ID}/status`);
+    const res = await fetch(`${base}/workspaces/${WS}/docs/${DOC_ID}/status`);
     expect(res.status).toBe(200);
     const parked = (await res.json()) as {
       bound: boolean;
@@ -105,14 +120,16 @@ describe('a doc parked because its file would not answer', () => {
     unlinkSync(boundPath);
     writeFileSync(boundPath, '# Design\n\nBack from the dead.\n');
     boundFiles.reset();
-    const rebind = await fetch(`${base}/api/docs`, {
+    const rebind = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: DOC_ID, type: 'markdown', sourceUrl: boundPath }),
     });
     expect(rebind.status).toBe(200);
 
-    const healthy = (await (await fetch(`${base}/api/docs/${DOC_ID}/status`)).json()) as {
+    const healthy = (await (
+      await fetch(`${base}/workspaces/${WS}/docs/${DOC_ID}/status`)
+    ).json()) as {
       bound: boolean;
       sourceParked?: unknown;
     };
@@ -126,13 +143,17 @@ describe('a doc parked because its file would not answer', () => {
     const share = await mintAccessShare(base, access, workspaceId);
 
     // The owner sees it...
-    const owner = (await (await fetch(`${base}/api/docs/${DOC_ID}/status`)).json()) as {
+    const owner = (await (
+      await fetch(`${base}/workspaces/${WS}/docs/${DOC_ID}/status`)
+    ).json()) as {
       sourceParked?: { reason: string };
     };
     expect(owner.sourceParked?.reason).toBeDefined();
 
     // ...the visitor sees the doc, but not where it lives on this machine.
-    const res = await fetch(`${base}/api/docs/${DOC_ID}/status`, { headers: share.headers });
+    const res = await fetch(`${base}/workspaces/${WS}/docs/${DOC_ID}/status`, {
+      headers: share.headers,
+    });
     expect(res.status).toBe(200);
     const seen = (await res.json()) as Record<string, unknown>;
     expect(seen.bound).toBe(false);

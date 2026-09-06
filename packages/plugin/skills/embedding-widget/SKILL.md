@@ -62,7 +62,10 @@ If the page already carries its own embed, the server leaves it alone.
 One element + one script tag, in a file git does not track:
 
 ```html
-<claude-feedback-widget doc-id="<DOC_ID>"></claude-feedback-widget>
+<claude-feedback-widget
+  workspace-id="<WORKSPACE_ID>"
+  doc-id="<DOC_ID>"
+></claude-feedback-widget>
 <script src="http://<workspaces-server-host>:8787/widget.iife.js"></script>
 ```
 
@@ -74,6 +77,13 @@ One element + one script tag, in a file git does not track:
   the server without a `server-url` attribute.
 - `docId` names the review session. One `docId` per conceptual project,
   shared across all pages of that project.
+- **`workspace-id` is required, and a missing one fails loudly.** Every
+  resource is addressed under the board that owns it, so a doc id on its own
+  is not an address. An embed without it renders a red box where the launcher
+  would be, opens no socket and posts nothing — deliberately, because the
+  quiet alternative was a comment landing on a board nobody chose, invisible
+  until someone went looking for feedback that never arrived. `get_workspace`
+  names the board you are attached to.
 - **No `user` attribute.** The widget resolves the reviewer from the browser
   it is running in. A name in the markup does not identify the reader — it
   re-brands them, seeding whoever opens the page as that person. See the
@@ -129,7 +139,10 @@ If you need to derive `docId` at runtime — e.g. from a query parameter — cal
 <script>
   (function () {
     var params = new URLSearchParams(location.search);
-    window.FeedbackWidget.init({ docId: params.get('doc') || '<DOC_ID>' });
+    window.FeedbackWidget.init({
+      workspaceId: '<WORKSPACE_ID>',
+      docId: params.get('doc') || '<DOC_ID>',
+    });
   })();
 </script>
 ```
@@ -138,6 +151,7 @@ If you need to derive `docId` at runtime — e.g. from a query parameter — cal
 
 | Attribute | Maps to opt | Notes |
 |---|---|---|
+| `workspace-id` | `workspaceId` | **required.** The board the doc is on. Missing → a visible error instead of the widget. |
 | `doc-id` | `docId` | required |
 | `server-url` | `serverUrl` | optional; defaults to bundle origin |
 | `view` | `context.view` | optional; SPA modal/tab state |

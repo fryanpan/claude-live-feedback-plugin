@@ -32,6 +32,7 @@ import * as Y from 'yjs';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { BODY_PROJECTION_LIMIT, taskBodyDocId, workspaceDocId } from '../src/task-projection.ts';
 import { eventsLogPath } from '../src/tasks.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' };
 const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known', color: '#888888' };
@@ -155,6 +156,9 @@ type ProjectedTask = {
   }>;
 };
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('ydoc projection + workspace doc', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -177,7 +181,8 @@ describe('ydoc projection + workspace doc', () => {
     const r = await post('/workspaces', { name });
     expect(r.status).toBe(200);
     const body = (await r.json()) as { workspace: { id: string } };
-    return body.workspace.id;
+    WS = body.workspace.id;
+    return WS;
   }
 
   async function makeTask(wsId: string, opts: Record<string, unknown>): Promise<string> {
@@ -187,10 +192,11 @@ describe('ydoc projection + workspace doc', () => {
     return body.task.id;
   }
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'projection-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     wsBase = `ws://localhost:${handle.port}`;
   });
 
@@ -217,7 +223,10 @@ describe('ydoc projection + workspace doc', () => {
     expect(projected.status).toBe('triage');
     expect(projected.bodyDocId).toBe(taskBodyDocId(taskId));
 
-    const t = await post(`/api/tasks/${taskId}/transition`, { to: 'in-progress', author: AGENT });
+    const t = await post(`/workspaces/${wsId}/tasks/${taskId}/transition`, {
+      to: 'in-progress',
+      author: AGENT,
+    });
     expect(t.status).toBe(200);
     const after = doc.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
     expect(after.status).toBe('in-progress');
@@ -253,7 +262,7 @@ describe('ydoc projection + workspace doc', () => {
     // Declare the goal done through the one transition gate; the projection
     // re-reads the row and the band arrives marked, with the §3.3 contract
     // intact — attribution is a display name and kind, never an actor id.
-    const gt = await post(`/api/tasks/${band.id}/transition`, {
+    const gt = await post(`/workspaces/${wsId}/tasks/${band.id}/transition`, {
       to: 'done',
       author: PERSON,
       note: 'shipped enough of it',
@@ -297,7 +306,7 @@ describe('ydoc projection + workspace doc', () => {
     const doc = handle.docStore.get(workspaceDocId(wsId));
     if (!doc) throw new Error('ws doc was not created');
     const taskId = await makeTask(wsId, { title: 'Fix the ranking' });
-    await post(`/api/tasks/${taskId}/transition`, {
+    await post(`/workspaces/${wsId}/tasks/${taskId}/transition`, {
       to: 'done',
       author: AGENT,
       note: 'merged as #402',
@@ -321,7 +330,7 @@ describe('ydoc projection + workspace doc', () => {
     expect(sseRes.status).toBe(200);
     const sse = listen(sseRes);
 
-    const client = connectDoc(`${wsBase}/y/${workspaceDocId(wsId)}`);
+    const client = connectDoc(`${wsBase}/workspaces/${wsId}/docs/${workspaceDocId(wsId)}/y`);
     try {
       await waitForOpen(client.ws);
       await client.ready;
@@ -359,7 +368,10 @@ describe('ydoc projection + workspace doc', () => {
       expect(auditLines(dataDir, wsId)).toBe(auditBefore);
 
       // POSITIVE CONTROL: the same stream and log DO see a legitimate change.
-      const t = await post(`/api/tasks/${taskId}/transition`, { to: 'in-progress', author: AGENT });
+      const t = await post(`/workspaces/${wsId}/tasks/${taskId}/transition`, {
+        to: 'in-progress',
+        author: AGENT,
+      });
       expect(t.status).toBe(200);
       await settle(300);
       expect(sse.events).toContain('task.transitioned');
@@ -390,7 +402,7 @@ describe('ydoc projection + workspace doc', () => {
 
     // A live edit through the doc surface flows back into the store snapshot
     // (search/export), debounced.
-    const r = await post(`/api/docs/${taskBodyDocId(taskId)}/content`, {
+    const r = await post(`/workspaces/${wsId}/docs/${taskBodyDocId(taskId)}/content`, {
       markdown: '## Steps\n\nRevised: verify on a phone as well.\n',
     });
     expect(r.status).toBe(200);
@@ -422,7 +434,7 @@ describe('ydoc projection + workspace doc', () => {
     expect(projected.body).toContain('pick it up cold');
     expect(projected.bodyTruncated).toBeUndefined();
 
-    const r = await post(`/api/docs/${taskBodyDocId(taskId)}/content`, {
+    const r = await post(`/workspaces/${wsId}/docs/${taskBodyDocId(taskId)}/content`, {
       markdown: 'Agent can read the revised description so that it stays current.\n',
     });
     expect(r.status).toBe(200);
@@ -455,7 +467,7 @@ describe('ydoc projection + workspace doc', () => {
       body: 'The importer must anchor me here so review threads stick.\n',
     });
     const docId = taskBodyDocId(taskId);
-    const tr = await post(`/api/docs/${docId}/threads/by_find`, {
+    const tr = await post(`/workspaces/${wsId}/docs/${docId}/threads/by_find`, {
       find: 'anchor me here',
       author: PERSON,
       text: 'Does this hold across restarts?',
@@ -475,7 +487,10 @@ describe('ydoc projection + workspace doc', () => {
 
     // Force a projection refresh (a real task event rewrites the projection
     // entry) plus an explicit reassert — neither may touch the body doc.
-    await post(`/api/tasks/${taskId}/transition`, { to: 'in-progress', author: AGENT });
+    await post(`/workspaces/${WS}/tasks/${taskId}/transition`, {
+      to: 'in-progress',
+      author: AGENT,
+    });
     handle.projection.refresh(wsId);
     expect(resolves(handle)).toBe(true);
 
@@ -485,6 +500,7 @@ describe('ydoc projection + workspace doc', () => {
     await handle.stop();
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     wsBase = `ws://localhost:${handle.port}`;
     expect(resolves(handle)).toBe(true);
     const doc = handle.docStore.get(docId);
@@ -515,6 +531,7 @@ describe('ydoc projection + workspace doc', () => {
 
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     wsBase = `ws://localhost:${handle.port}`;
     const doc = handle.docStore.get(workspaceDocId(wsId));
     if (!doc) throw new Error('ws doc missing after restart');

@@ -33,6 +33,7 @@ import {
   meetingPlatformOf,
   parseMeetingTranscriptEvent,
 } from '@feedback/core';
+import { api } from './doc-path.ts';
 
 /** The two things the doc's stream tells this client. One subscription
  *  carries both — the point is that there is exactly one stream. */
@@ -117,7 +118,7 @@ export function createMeetingBotClient(opts: MeetingBotClientOpts): MeetingBotCl
   const { docId } = opts;
   const fetchJson = opts.fetchJson ?? defaultFetchJson;
   const subscribe = opts.subscribe ?? defaultSubscribe;
-  const base = `/api/docs/${encodeURIComponent(docId)}/meeting-bot`;
+  const base = api(`docs/${encodeURIComponent(docId)}/meeting-bot`);
 
   let current: MeetingBotStatus | null = null;
   let isConfigured = false;

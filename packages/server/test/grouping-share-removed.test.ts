@@ -51,6 +51,9 @@ import { ACCESS_BASE_HOSTNAME, type AccessHarness, accessHarness } from './acces
 const PUBLIC_HOST = 'feedback.example.test';
 const BASE_HOST = ACCESS_BASE_HOSTNAME;
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('a grouping cannot be shared on its own', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -115,6 +118,7 @@ describe('a grouping cannot be shared on its own', () => {
     const board = await local('/workspaces', { name: 'Partner review' });
     expect(board.status).toBe(200);
     boardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
+    WS = boardId;
     expect(boardId).toBeTruthy();
 
     // A folder bind — a GROUPING. Filed onto the board, so the only thing
@@ -126,7 +130,10 @@ describe('a grouping cannot be shared on its own', () => {
     expect(bindGroupingId).not.toBe(boardId);
 
     // A diff review — also a GROUPING, filed on the same board.
-    const diff = await local('/api/diffs', { repo, base: 'main', hubWorkspaceId: boardId });
+    const diff = await local(`/workspaces/${boardId}/reviews`, {
+      repo,
+      base: 'main',
+    });
     expect(diff.status).toBe(200);
     const review = (await diff.json()) as {
       reviewId: string;
@@ -196,6 +203,10 @@ describe('a grouping cannot be shared on its own', () => {
       ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
+    // No re-seed: the restart is on the SAME data dir, so `boardId` — the
+    // board every fixture here is filed on and every share is scoped to —
+    // comes back with it. A fresh board would be an empty one, and the
+    // visitor controls below would 403 for the wrong reason.
   };
 
   describe('an older bundle calling the shared routes', () => {
@@ -409,25 +420,41 @@ describe('a grouping cannot be shared on its own', () => {
       // 401 is Access saying "you presented no token" — the cookie is not
       // read at all any more, which is the whole point.
       expect(
-        (await withCookie('legacy02', `/api/docs/${encodeURIComponent(diffMemberDocId)}`)).status,
+        (
+          await withCookie(
+            'legacy02',
+            `/workspaces/${WS}/docs/${encodeURIComponent(diffMemberDocId)}?format=json`,
+          )
+        ).status,
       ).toBe(401);
       expect(
-        (await withCookie('legacy02', `/api/reviews/${encodeURIComponent(diffGroupingId)}/tree`))
-          .status,
+        (
+          await withCookie(
+            'legacy02',
+            `/workspaces/${WS}/reviews/${encodeURIComponent(diffGroupingId)}/tree`,
+          )
+        ).status,
       ).toBe(401);
       // …and a cookie for the LIVE board share is no better: the credential
       // itself is retired, not just this record.
       expect(
-        (await withCookie(board.shareId, `/api/docs/${encodeURIComponent(diffMemberDocId)}`))
-          .status,
+        (
+          await withCookie(
+            board.shareId,
+            `/workspaces/${WS}/docs/${encodeURIComponent(diffMemberDocId)}?format=json`,
+          )
+        ).status,
       ).toBe(401);
 
       // Positive control, same server and same transport: that board share's
       // own Access token reaches the member, so the refusals above are the
       // retirement rather than a server refusing everything.
-      const asVisitor = await fetch(`${base}/api/docs/${encodeURIComponent(diffMemberDocId)}`, {
-        headers: board.headers,
-      });
+      const asVisitor = await fetch(
+        `${base}/workspaces/${WS}/docs/${encodeURIComponent(diffMemberDocId)}?format=json`,
+        {
+          headers: board.headers,
+        },
+      );
       expect(asVisitor.status).toBe(200);
     });
 
@@ -476,7 +503,9 @@ describe('a grouping cannot be shared on its own', () => {
       ]);
 
       const onHost = (host: string) =>
-        fetch(`${base}/api/docs/${encodeURIComponent(diffMemberDocId)}`, { headers: { host } });
+        fetch(`${base}/workspaces/${WS}/docs/${encodeURIComponent(diffMemberDocId)}?format=json`, {
+          headers: { host },
+        });
 
       // Positive control FIRST: the BOARD's share hostname still resolves, so
       // the registry survived the restart and hostname lookup works at all.
@@ -514,12 +543,17 @@ describe('a grouping cannot be shared on its own', () => {
       ).toBe(200);
       // A changed file of the diff review, reachable because the review is
       // FILED on the shared board — never because anything named the doc.
-      expect((await asVisitor(`/api/docs/${encodeURIComponent(diffMemberDocId)}`)).status).toBe(
-        200,
-      );
+      expect(
+        (
+          await asVisitor(
+            `/workspaces/${WS}/docs/${encodeURIComponent(diffMemberDocId)}?format=json`,
+          )
+        ).status,
+      ).toBe(200);
       // And the review's own tree, through the grouping→board hop.
       expect(
-        (await asVisitor(`/api/reviews/${encodeURIComponent(diffGroupingId)}/tree`)).status,
+        (await asVisitor(`/workspaces/${WS}/reviews/${encodeURIComponent(diffGroupingId)}/tree`))
+          .status,
       ).toBe(200);
     });
 

@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CreateBotArgs, RecallBot, RecallClient, RecallConfig } from '../src/recall.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 type Frame = { event: string; id?: string; data?: Record<string, unknown> };
 
@@ -114,6 +115,9 @@ function vendorFrame(args: { final: boolean; id: number; name: string; text: str
   });
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe("a bot meeting's live turns on the doc's own event stream", () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -125,9 +129,10 @@ describe("a bot meeting's live turns on the doc's own event stream", () => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-recall-stream-'));
     handle = createServer({ port: 0, dataDir, meetingBot: vendor });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     const path = join(dataDir, 'standup.md');
     writeFileSync(path, '# Standup\n\nAgenda.\n');
-    const res = await fetch(`${base}/api/docs`, {
+    const res = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'standup', sourceUrl: path, title: 'Standup' }),
@@ -143,9 +148,11 @@ describe("a bot meeting's live turns on the doc's own event stream", () => {
 
   it('a replayed partial then final land on /events/<docId> as turn/text/final/speaker, unbuffered', async () => {
     // A viewer already on the doc — the stream the bot client subscribes to.
-    const viewer = listenFrames(await fetch(`${base}/events/${docId}`));
+    const viewer = listenFrames(
+      await fetch(`${base}/workspaces/${WS}/docs/${docId}/events:stream`),
+    );
 
-    const invited = await fetch(`${base}/api/docs/${docId}/meeting-bot`, {
+    const invited = await fetch(`${base}/workspaces/${WS}/docs/${docId}/meeting-bot`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ meetingUrl: 'https://example.zoom.us/j/1234567890' }),
@@ -202,7 +209,9 @@ describe("a bot meeting's live turns on the doc's own event stream", () => {
     // The words never entered the replay window: a tab reconnecting at the
     // last real event's id gets a clean, empty catch-up — no gap, no words.
     const back = listenFrames(
-      await fetch(`${base}/events/${docId}`, { headers: { 'last-event-id': last.id as string } }),
+      await fetch(`${base}/workspaces/${WS}/docs/${docId}/events:stream`, {
+        headers: { 'last-event-id': last.id as string },
+      }),
     );
     await new Promise((r) => setTimeout(r, 300));
     expect(back.frames.filter((f) => f.event === 'replay.gap')).toHaveLength(0);

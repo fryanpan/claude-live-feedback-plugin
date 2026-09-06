@@ -24,6 +24,7 @@ import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { type ReplayMarks, claimReplayMarks, saveReplayMarks } from '../src/sse-marks.ts';
 import { REPLAY_MAX_AGE_MS, REPLAY_MAX_EVENTS, SseBus, openSseStream } from '../src/sse.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-reviewer', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
 const settle = (ms = 400) => new Promise((r) => setTimeout(r, ms));
@@ -80,6 +81,9 @@ const commentText = (f: Frame): string =>
   ((f.data?.thread as { comments?: Array<{ text?: string }> } | undefined)?.comments?.[0]?.text ??
     '') as string;
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('SSE Last-Event-ID replay', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -100,9 +104,14 @@ describe('SSE Last-Event-ID replay', () => {
     srcDir = mkdtempSync(join(tmpdir(), 'sse-replay-src-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
     const path = join(srcDir, 'doc-replay.md');
     writeFileSync(path, '# doc-replay\n\nBody.\n');
-    await post('/api/docs', { docId: 'doc-replay', sourceUrl: path, title: 'doc-replay' });
+    await post(`/workspaces/${WS}/docs`, {
+      docId: 'doc-replay',
+      sourceUrl: path,
+      title: 'doc-replay',
+    });
   });
 
   afterEach(async () => {
@@ -112,11 +121,15 @@ describe('SSE Last-Event-ID replay', () => {
   });
 
   const comment = (text: string) =>
-    post('/api/docs/doc-replay/threads', { author: PERSON, text, anchor: { kind: 'subject' } });
+    post(`/workspaces/${WS}/docs/doc-replay/threads`, {
+      author: PERSON,
+      text,
+      anchor: { kind: 'subject' },
+    });
 
   it('replays events broadcast during a disconnect, in order, then resumes live', async () => {
     // Connected: see one event and remember its wire id.
-    const first = listenFrames(await get('/events/doc-replay'));
+    const first = listenFrames(await get(`/workspaces/${WS}/docs/doc-replay/events:stream`));
     await settle(150);
     await comment('Seen live.');
     await settle();
@@ -137,7 +150,9 @@ describe('SSE Last-Event-ID replay', () => {
     // Reconnect presenting Last-Event-ID (the header, because that is what a
     // native EventSource sends automatically).
     const second = listenFrames(
-      await get('/events/doc-replay', { 'Last-Event-ID': lastId as string }),
+      await get(`/workspaces/${WS}/docs/doc-replay/events:stream`, {
+        'Last-Event-ID': lastId as string,
+      }),
     );
     await settle();
     const replayed = second.frames.filter((f) => f.event === 'thread.created');
@@ -161,7 +176,11 @@ describe('SSE Last-Event-ID replay', () => {
     await settle();
     // An id minted by a previous server epoch: same shape, never issued by
     // this process. The server cannot know what it missed, so it must say so.
-    const s = listenFrames(await get('/events/doc-replay', { 'Last-Event-ID': 'deadbeef:42' }));
+    const s = listenFrames(
+      await get(`/workspaces/${WS}/docs/doc-replay/events:stream`, {
+        'Last-Event-ID': 'deadbeef:42',
+      }),
+    );
     await settle();
     expect(s.frames.some((f) => f.event === 'replay.gap')).toBe(true);
     // And NO partial replay — a half-answer would read as a whole one.
@@ -176,7 +195,7 @@ describe('SSE Last-Event-ID replay', () => {
   });
 
   it('accepts the id as a query param too (for hand-rolled consumers)', async () => {
-    const first = listenFrames(await get('/events/doc-replay'));
+    const first = listenFrames(await get(`/workspaces/${WS}/docs/doc-replay/events:stream`));
     await settle(150);
     await comment('Anchor.');
     await settle();
@@ -185,7 +204,9 @@ describe('SSE Last-Event-ID replay', () => {
     await comment('Missed via query.');
     await settle();
     const second = listenFrames(
-      await get(`/events/doc-replay?lastEventId=${encodeURIComponent(lastId)}`),
+      await get(
+        `/workspaces/${WS}/docs/doc-replay/events:stream?lastEventId=${encodeURIComponent(lastId)}`,
+      ),
     );
     await settle();
     expect(second.frames.filter((f) => f.event === 'thread.created').map(commentText)).toEqual([
@@ -203,7 +224,7 @@ describe('SSE Last-Event-ID replay', () => {
   // if `replayAfter` misclassifies the newest id as evicted; this one is
   // what goes red.
   it('reconnecting with the current id is a clean no-op: no replay, no gap, live continues', async () => {
-    const first = listenFrames(await get('/events/doc-replay'));
+    const first = listenFrames(await get(`/workspaces/${WS}/docs/doc-replay/events:stream`));
     await settle(150);
     await comment('Nothing after this.');
     await settle();
@@ -212,7 +233,9 @@ describe('SSE Last-Event-ID replay', () => {
     await first.stop();
 
     // No broadcasts in the gap — the reconnect has nothing to catch up on.
-    const second = listenFrames(await get('/events/doc-replay', { 'Last-Event-ID': lastId }));
+    const second = listenFrames(
+      await get(`/workspaces/${WS}/docs/doc-replay/events:stream`, { 'Last-Event-ID': lastId }),
+    );
     await settle();
     expect(second.frames.filter((f) => f.event === 'thread.created').length).toBe(0);
     expect(second.frames.some((f) => f.event === 'replay.gap')).toBe(false);
@@ -670,7 +693,7 @@ describe('vacuous replay gaps — an addressed frame is not a bystander gap', ()
  */
 describe('replay marks across a restart', () => {
   let dir: string;
-  beforeEach(() => {
+  beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), 'sse-marks-'));
   });
   afterEach(() => {
@@ -719,20 +742,30 @@ describe('a restart is silent when nothing was missed', () => {
   const get = (path: string, headers: Record<string, string> = {}) =>
     fetch(`${base}${path}`, { headers: { host: `localhost:${handle.port}`, ...headers } });
   const comment = (text: string) =>
-    post('/api/docs/doc-boot/threads', { author: PERSON, text, anchor: { kind: 'subject' } });
+    post(`/workspaces/${WS}/docs/doc-boot/threads`, {
+      author: PERSON,
+      text,
+      anchor: { kind: 'subject' },
+    });
 
+  // The restart below boots a fresh process on the SAME data dir, so the
+  // board comes back with it. Seeding again would mint a second board that
+  // `doc-boot` is not filed on, and the reconnect this file is about would
+  // then be refused for the wrong reason.
   const boot = async () => {
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    if (!WS) WS = await seedBoard(base);
   };
 
   beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'sse-boot-'));
     srcDir = mkdtempSync(join(tmpdir(), 'sse-boot-src-'));
+    WS = '';
     await boot();
     const path = join(srcDir, 'doc-boot.md');
     writeFileSync(path, '# doc-boot\n\nBody.\n');
-    await post('/api/docs', { docId: 'doc-boot', sourceUrl: path, title: 'doc-boot' });
+    await post(`/workspaces/${WS}/docs`, { docId: 'doc-boot', sourceUrl: path, title: 'doc-boot' });
   });
 
   afterEach(async () => {
@@ -742,7 +775,7 @@ describe('a restart is silent when nothing was missed', () => {
   });
 
   it('a reconnect at the pre-restart cursor gets no gap and no duplicate', async () => {
-    const first = listenFrames(await get('/events/doc-boot'));
+    const first = listenFrames(await get(`/workspaces/${WS}/docs/doc-boot/events:stream`));
     await settle(150);
     await comment('Before the deploy.');
     await settle();
@@ -753,10 +786,14 @@ describe('a restart is silent when nothing was missed', () => {
     // The deploy: clean shutdown, fresh process, same data dir. Event ids are
     // stamped with a per-process boot nonce, so `cursor` is now from an epoch
     // this server never issued — the case that used to be an automatic gap.
+    // Board writes are debounced; the next process reads this dir off disk.
+    handle.tasks.flush();
     await handle.stop();
     await boot();
 
-    const second = listenFrames(await get('/events/doc-boot', { 'Last-Event-ID': cursor }));
+    const second = listenFrames(
+      await get(`/workspaces/${WS}/docs/doc-boot/events:stream`, { 'Last-Event-ID': cursor }),
+    );
     await settle();
     expect(second.frames.some((f) => f.event === 'replay.gap')).toBe(false);
     expect(second.frames.filter((f) => f.event === 'thread.created').length).toBe(0);
@@ -771,7 +808,7 @@ describe('a restart is silent when nothing was missed', () => {
   });
 
   it('POSITIVE CONTROL: an event missed across the restart still produces exactly one gap', async () => {
-    const first = listenFrames(await get('/events/doc-boot'));
+    const first = listenFrames(await get(`/workspaces/${WS}/docs/doc-boot/events:stream`));
     await settle(150);
     await comment('Seen.');
     await settle();
@@ -782,10 +819,14 @@ describe('a restart is silent when nothing was missed', () => {
     // behind by one event that no buffer survives — a real hole.
     await comment('Missed, then the deploy.');
     await settle();
+    // Board writes are debounced; the next process reads this dir off disk.
+    handle.tasks.flush();
     await handle.stop();
     await boot();
 
-    const second = listenFrames(await get('/events/doc-boot', { 'Last-Event-ID': cursor }));
+    const second = listenFrames(
+      await get(`/workspaces/${WS}/docs/doc-boot/events:stream`, { 'Last-Event-ID': cursor }),
+    );
     await settle();
     expect(second.frames.filter((f) => f.event === 'replay.gap').length).toBe(1);
     // Still no partial replay — a half-answer would read as a whole one.

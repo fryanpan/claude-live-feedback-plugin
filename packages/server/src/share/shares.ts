@@ -169,9 +169,12 @@ export class Shares {
     const shareId = randomHex(8);
     const slug = req.name ?? `${dateSlug(new Date())}-${randomHex(3)}`;
     const hostname = `share-${slug}.${this.config.baseHostname}`;
-    // A board workspace share (empty docId) opens the board page directly.
+    // A board workspace share (empty docId) opens the board page directly; a
+    // doc share opens the doc UNDER the board it was shared with, which is
+    // the only address a doc has and also the only one this visitor's own
+    // scope will accept.
     const url = req.docId
-      ? `https://${hostname}/review/${encodeURIComponent(req.docId)}`
+      ? `https://${hostname}/workspaces/${encodeURIComponent(req.workspaceId)}/docs/${encodeURIComponent(req.docId)}`
       : `https://${hostname}/workspaces/${encodeURIComponent(req.workspaceId)}`;
     const ttl = req.ttlSeconds ?? this.config.defaultTtlSeconds ?? DEFAULT_TTL_SECONDS;
     const expiresAt = Date.now() + ttl * 1000;

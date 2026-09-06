@@ -3,7 +3,7 @@ import type { BackTarget } from './back-link.ts';
 import type { MountScope } from './mount-scope.ts';
 
 /**
- * Per-document metadata resolved from `/api/docs/<id>` before a surface mounts.
+ * Per-document metadata resolved from /workspaces/<ws>/docs/<id> before a surface mounts.
  * `docType` picks which surface renders (markdown → Tiptap; code/diff →
  * CodeMirror; a `.md` diff → the Word-style redline).
  */

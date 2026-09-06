@@ -1,3 +1,10 @@
+import { reviewItemBodyMarkdown } from '@feedback/core';
+import { judgeReasonClause } from '@feedback/core';
+import type { EffortCalibration } from '@feedback/core/goal-effort';
+import { signal } from '@preact/signals';
+import { type ComponentChildren, Fragment, type RefObject, render } from 'preact';
+import { type MutableRef, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { renderCommentMarkdown, renderCommentMarkdownInline } from '../comment-markdown.ts';
 /**
  * The task detail panel — the ticket a reader opens to answer something — as a
  * Preact island.
@@ -51,13 +58,7 @@
  *     `<input>` mid-rename. Same trick, same reason: an element with no vnode
  *     children is an element Preact never reaches into.
  */
-import { reviewItemBodyMarkdown } from '@feedback/core';
-import { judgeReasonClause } from '@feedback/core';
-import type { EffortCalibration } from '@feedback/core/goal-effort';
-import { signal } from '@preact/signals';
-import { type ComponentChildren, Fragment, type RefObject, render } from 'preact';
-import { type MutableRef, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { renderCommentMarkdown, renderCommentMarkdownInline } from '../comment-markdown.ts';
+import { currentWorkspaceId, docHref } from '../doc-path.ts';
 import { SPACE_HOLD_PAGE_ATTR } from '../voice-capture.ts';
 import { ageShort } from './activity-model.ts';
 import { type PanelReviewItem, renderTaskLinks } from './board-detail-render.ts';
@@ -1003,7 +1004,7 @@ function ActivityTab(props: { task: BoardTask; handlers: DetailHandlers; hidden:
       <p class="board-detail-body-link">
         {/* A secondary way in, not the way to edit: the same doc in the full
             review surface, for anchored comments and the wider page. */}
-        <a href={`/review/${encodeURIComponent(task.bodyDocId)}`}>Open in the full editor</a>
+        <a href={docHref(task.bodyDocId, currentWorkspaceId())}>Open in the full editor</a>
       </p>
     </div>
   );

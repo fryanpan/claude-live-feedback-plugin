@@ -25,6 +25,7 @@ import { join } from 'node:path';
 import type { ElementAnchor, Thread, User } from '@feedback/core';
 import type * as Y from 'yjs';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const reviewer: User = { id: 'known-reviewer', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
 const visitor: User = { id: 'anon-7f3', name: 'Sam', kind: 'anon', color: '#7a5' };
@@ -70,14 +71,14 @@ async function seedThread(): Promise<{ docId: string; threadId: string }> {
   const file = join(dataDir, `${docId}.md`);
   writeFileSync(file, '# Doc\n\nsome text\n');
   await j(
-    await fetch(`${base}/api/docs`, {
+    await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId, type: 'markdown', sourceUrl: file }),
     }),
   );
   const { thread } = await j<{ thread: Thread }>(
-    await fetch(`${base}/api/docs/${docId}/threads`, {
+    await fetch(`${base}/workspaces/${WS}/docs/${docId}/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ author: reviewer, text: 'drop this line from the PR body', anchor }),
@@ -88,7 +89,7 @@ async function seedThread(): Promise<{ docId: string; threadId: string }> {
 
 async function resolve(docId: string, threadId: string): Promise<void> {
   await j(
-    await fetch(`${base}/api/docs/${docId}/threads/${threadId}/resolve`, {
+    await fetch(`${base}/workspaces/${WS}/docs/${docId}/threads/${threadId}/resolve`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ author: agent }),
@@ -98,7 +99,7 @@ async function resolve(docId: string, threadId: string): Promise<void> {
 
 async function reply(docId: string, threadId: string, author: User, text: string): Promise<Thread> {
   const { thread } = await j<{ thread: Thread }>(
-    await fetch(`${base}/api/docs/${docId}/threads/${threadId}/comments`, {
+    await fetch(`${base}/workspaces/${WS}/docs/${docId}/threads/${threadId}/comments`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ author, text }),
@@ -116,11 +117,15 @@ function syncedStatus(docId: string, threadId: string): unknown {
   return threads?.get(threadId)?.get('status');
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('a reply to a resolved thread', () => {
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'feedback-reply-reopen-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterAll(async () => {
@@ -192,7 +197,7 @@ describe('a reply to a resolved thread', () => {
     const { docId, threadId } = await seedThread();
     await resolve(docId, threadId);
 
-    const res = await fetch(`${base}/events/${docId}`);
+    const res = await fetch(`${base}/workspaces/${WS}/docs/${docId}/events:stream`);
     expect(res.ok).toBe(true);
     const reader = res.body?.getReader();
     if (!reader) throw new Error('no sse body');

@@ -64,9 +64,14 @@ function payload(reply: Reply): Record<string, unknown> {
  * The listing GETs only. The recorder already drops the child's background
  * traffic (`background-requests.ts`); this narrows to the verb as well.
  */
+/** The board every listing here is addressed under. */
+const WS = 'w-1';
+
 function lastListing(): URL {
-  const r = seen.filter((x) => x.method === 'GET' && x.path.startsWith('/api/docs')).at(-1);
-  expect(r, 'the stub received no GET /api/docs').toBeTruthy();
+  const r = seen
+    .filter((x) => x.method === 'GET' && x.path.startsWith(`/workspaces/${WS}/docs`))
+    .at(-1);
+  expect(r, `the stub received no GET /workspaces/${WS}/docs`).toBeTruthy();
   return new URL(`http://stub${(r as Recorded).path}`);
 }
 
@@ -78,7 +83,9 @@ beforeAll(async () => {
       const rec = { method: req.method ?? '', path };
       if (!isBackgroundRequest(rec)) seen.push(rec);
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify(path.startsWith('/api/docs?') ? PAGE_REPLY : { ok: true }));
+      res.end(
+        JSON.stringify(/^\/workspaces\/[^/]+\/docs\?/.test(path) ? PAGE_REPLY : { ok: true }),
+      );
     });
   });
   await new Promise<void>((r) => stub.listen(0, '127.0.0.1', r));
@@ -121,9 +128,9 @@ afterAll(async () => {
 
 describe('list_docs — a page, never the server', () => {
   it('asks for a 50-row page by default and hands the page back untouched', async () => {
-    const out = payload(await call('list_docs', {}));
+    const out = payload(await call('list_docs', { workspaceId: WS }));
     const url = lastListing();
-    expect(url.pathname).toBe('/api/docs');
+    expect(url.pathname).toBe(`/workspaces/${WS}/docs`);
     expect(url.searchParams.get('limit')).toBe('50');
     expect(url.searchParams.has('full')).toBe(false);
     expect(url.searchParams.has('cursor')).toBe(false);
@@ -133,7 +140,7 @@ describe('list_docs — a page, never the server', () => {
   it('puts every filter, the cursor and full on the wire', async () => {
     payload(
       await call('list_docs', {
-        workspaceId: 'w-1',
+        workspaceId: WS,
         kind: 'diff',
         query: 'plan.md',
         sourcePrefix: '/repo/docs',
@@ -143,7 +150,9 @@ describe('list_docs — a page, never the server', () => {
       }),
     );
     const p = lastListing().searchParams;
-    expect(p.get('workspaceId')).toBe('w-1');
+    // The board is the PATH now, not a filter beside the others — asserted
+    // by `lastListing` itself, which only matches this board's collection.
+    expect(p.has('workspaceId')).toBe(false);
     expect(p.get('kind')).toBe('diff');
     expect(p.get('query')).toBe('plan.md');
     expect(p.get('sourcePrefix')).toBe('/repo/docs');
@@ -153,9 +162,9 @@ describe('list_docs — a page, never the server', () => {
   });
 
   it('clamps a limit above 500 and ignores a non-positive one', async () => {
-    payload(await call('list_docs', { limit: 9999 }));
+    payload(await call('list_docs', { workspaceId: WS, limit: 9999 }));
     expect(lastListing().searchParams.get('limit')).toBe('500');
-    payload(await call('list_docs', { limit: 0 }));
+    payload(await call('list_docs', { workspaceId: WS, limit: 0 }));
     expect(lastListing().searchParams.get('limit')).toBe('50');
   });
 

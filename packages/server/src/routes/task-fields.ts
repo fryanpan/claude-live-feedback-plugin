@@ -1,10 +1,11 @@
+import { parseSchedule } from '@feedback/core/task-schedule';
 /**
  * The fields of a row that are edited one at a time, plus its soft delete.
  *
  * Lifted verbatim out of `createServer`'s request closure; the handlers
  * read their collaborators off `TaskRoutesContext` instead of the scope.
  */
-import { parseSchedule } from '@feedback/core/task-schedule';
+import { matchRest } from '../middleware/workspace-scope.ts';
 import { parkNoteText } from '../park-note.ts';
 import { OUT_OF_SHARE_SCOPE, firstTaskIdOutOfScope } from '../share/ref-scope.ts';
 import {
@@ -34,7 +35,7 @@ export async function handleTaskFields(
     rewriteTaskBody,
     workspacesOfDoc,
   } = ctx;
-  const { req, pathname, authorFor, visitor } = rq;
+  const { req, scope, authorFor, visitor } = rq;
   // set_task_dependencies: edit `after` / `afterEnforce` on a task that
   // already exists. Until this route, `after` could only be set at
   // creation — so a decision filed after the work it gates could never
@@ -42,7 +43,7 @@ export async function handleTaskFields(
   // and "is this blocking anything" was underivable. Replaces the whole
   // edge set (an edge has to be removable), and emits no store event, so
   // the projection is refreshed by hand — the renameTask contract.
-  const taskAfterMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/after$/);
+  const taskAfterMatch = matchRest(scope, /^tasks\/([^/]+)\/after$/);
   if (taskAfterMatch && req.method === 'POST') {
     const taskId = decodeURIComponent(taskAfterMatch[1] ?? '');
     const body = await safeJson(req);
@@ -84,7 +85,7 @@ export async function handleTaskFields(
   // task.retitled when the title actually moves; the hand refresh
   // below stays because a no-op rename ("changed: false") emits
   // nothing. `reason` is optional and rides the audit row verbatim.
-  const taskTitleMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/title$/);
+  const taskTitleMatch = matchRest(scope, /^tasks\/([^/]+)\/title$/);
   if (taskTitleMatch && req.method === 'POST') {
     const taskId = decodeURIComponent(taskTitleMatch[1] ?? '');
     const body = await safeJson(req);
@@ -113,7 +114,7 @@ export async function handleTaskFields(
   // create the doc on a workspace this process hasn't served yet,
   // flush the snapshot the board and next_tasks read, and put an
   // attributed row in the audit log.
-  const taskBodyMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/body$/);
+  const taskBodyMatch = matchRest(scope, /^tasks\/([^/]+)\/body$/);
   if (taskBodyMatch && req.method === 'POST') {
     const taskId = decodeURIComponent(taskBodyMatch[1] ?? '');
     const body = await safeJson(req);
@@ -150,7 +151,7 @@ export async function handleTaskFields(
   // the agent (or a named identity). Status is untouched — a hand-off
   // is not progress, and routing it through the transition gate would
   // make "you take this" require evidence.
-  const taskAssigneeMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/assignee$/);
+  const taskAssigneeMatch = matchRest(scope, /^tasks\/([^/]+)\/assignee$/);
   if (taskAssigneeMatch && req.method === 'POST') {
     const taskId = decodeURIComponent(taskAssigneeMatch[1] ?? '');
     const body = await safeJson(req);
@@ -201,7 +202,7 @@ export async function handleTaskFields(
   // writable only at creation, so the detail panel rendered a date
   // nobody could correct. Bryan, 2026-08-18: "All fields must be human
   // editable."
-  const taskDueMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/due$/);
+  const taskDueMatch = matchRest(scope, /^tasks\/([^/]+)\/due$/);
   if (taskDueMatch && req.method === 'POST') {
     const taskId = decodeURIComponent(taskDueMatch[1] ?? '');
     const body = await safeJson(req);
@@ -235,7 +236,7 @@ export async function handleTaskFields(
   // about to send with the SAME function that decides whether to store it, so
   // a chip the browser accepted can never be a rule the server refuses to
   // compute.
-  const taskScheduleMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/schedule$/);
+  const taskScheduleMatch = matchRest(scope, /^tasks\/([^/]+)\/schedule$/);
   if (taskScheduleMatch && req.method === 'POST') {
     const taskId = decodeURIComponent(taskScheduleMatch[1] ?? '');
     const body = await safeJson(req);
@@ -293,7 +294,7 @@ export async function handleTaskFields(
   // 200 and does nothing, and says so. Parking with no date is spelled
   // by omitting the field, which no old caller does: the old MCP schema
   // required it.
-  const taskParkMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/park$/);
+  const taskParkMatch = matchRest(scope, /^tasks\/([^/]+)\/park$/);
   if (taskParkMatch && req.method === 'POST') {
     const taskId = decodeURIComponent(taskParkMatch[1] ?? '');
     const body = await safeJson(req);
@@ -406,7 +407,7 @@ export async function handleTaskFields(
   // archive is often a one-tap "not this" from a keyboard, and refusing
   // it for want of a sentence would push people back to leaving dead
   // rows on the board, which is the thing being fixed.
-  const taskArchiveMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/archive$/);
+  const taskArchiveMatch = matchRest(scope, /^tasks\/([^/]+)\/archive$/);
   if (taskArchiveMatch && req.method === 'POST') {
     const taskId = decodeURIComponent(taskArchiveMatch[1] ?? '');
     const body = await safeJson(req);
@@ -420,7 +421,7 @@ export async function handleTaskFields(
     if (!res.changed) taskProjection.ensureWorkspace(res.task.workspaceId);
     return j(200, res);
   }
-  const taskRestoreMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/restore$/);
+  const taskRestoreMatch = matchRest(scope, /^tasks\/([^/]+)\/restore$/);
   if (taskRestoreMatch && req.method === 'POST') {
     const taskId = decodeURIComponent(taskRestoreMatch[1] ?? '');
     const body = await safeJson(req);

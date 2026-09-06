@@ -108,7 +108,7 @@ describe('the queue says who is already on a row', () => {
         author: { id: 'agent-dispatcher', name: 'Dispatcher', kind: 'agent' },
       }),
     );
-    await post(`/api/tasks/${created.task.id}/transition`, {
+    await post(`/workspaces/${workspaceId}/tasks/${created.task.id}/transition`, {
       to: 'todo',
       author: { id: 'known-bryan', name: 'Bryan', kind: 'person' },
     });
@@ -150,7 +150,7 @@ describe('the queue says who is already on a row', () => {
     const contested = await mkTask(wsId, 'two sessions, one row');
 
     await jj(
-      await post(`/api/tasks/${contested.task.id}/transition`, {
+      await post(`/workspaces/${wsId}/tasks/${contested.task.id}/transition`, {
         to: 'in-progress',
         author: { id: 'agent-first-taker', name: 'First Taker', kind: 'agent' },
       }),
@@ -179,7 +179,7 @@ describe('the queue says who is already on a row', () => {
     const contested = await mkTask(wsId, 'two sessions, one row');
 
     await jj(
-      await post(`/api/tasks/${contested.task.id}/transition`, {
+      await post(`/workspaces/${wsId}/tasks/${contested.task.id}/transition`, {
         to: 'in-progress',
         author: { id: 'agent-first-taker', name: 'First Taker', kind: 'agent' },
       }),
@@ -188,12 +188,12 @@ describe('the queue says who is already on a row', () => {
     // that changes nothing), so it does what a real second taker does: works
     // the row and reports. The claim it can make is the next transition, and
     // the queue must follow the LATEST claim rather than the first.
-    const second = await post(`/api/tasks/${contested.task.id}/transition`, {
+    const second = await post(`/workspaces/${wsId}/tasks/${contested.task.id}/transition`, {
       to: 'todo',
       author: { id: 'agent-second-taker', name: 'Second Taker', kind: 'agent' },
     });
     expect(second.ok).toBe(true);
-    const reclaim = await post(`/api/tasks/${contested.task.id}/transition`, {
+    const reclaim = await post(`/workspaces/${wsId}/tasks/${contested.task.id}/transition`, {
       to: 'in-progress',
       author: { id: 'agent-second-taker', name: 'Second Taker', kind: 'agent' },
     });
@@ -213,7 +213,7 @@ describe('the queue says who is already on a row', () => {
     await attach(wsId, 'agent-quiet-one');
     const taken = await mkTask(wsId, 'silently mid-pipeline', 'Quiet One');
     await jj(
-      await post(`/api/tasks/${taken.task.id}/transition`, {
+      await post(`/workspaces/${wsId}/tasks/${taken.task.id}/transition`, {
         to: 'in-progress',
         author: { id: 'agent-quiet-one', name: 'Quiet One', kind: 'agent' },
       }),
@@ -256,7 +256,7 @@ describe('the queue says who is already on a row', () => {
     );
     const taken = await mkTask(wsId, 'redline the atlas', 'Cartographer');
     await jj(
-      await post(`/api/tasks/${taken.task.id}/transition`, {
+      await post(`/workspaces/${wsId}/tasks/${taken.task.id}/transition`, {
         to: 'in-progress',
         author: { id: 'agent-cartographer', name: 'Cartographer', kind: 'agent' },
       }),

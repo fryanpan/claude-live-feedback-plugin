@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { fetchDocMeta } from '../src/doc-meta.ts';
 
 /**
@@ -13,7 +13,13 @@ import { fetchDocMeta } from '../src/doc-meta.ts';
  * diff review, not the board that holds it).
  */
 
+/** The board the page is standing on — every resource route is under it. */
+const WS = 'w-1';
+
 const realFetch = globalThis.fetch;
+beforeEach(() => {
+  history.replaceState(null, '', `/workspaces/${WS}/docs/d1`);
+});
 afterEach(() => {
   globalThis.fetch = realFetch;
 });
@@ -38,7 +44,7 @@ describe('fetchDocMeta', () => {
       backTo: { workspaceId: 'w-abc', name: 'search-revamp' },
     });
     const meta = await fetchDocMeta('d1');
-    expect(seen.urls[0]).toBe('/api/docs/d1');
+    expect(seen.urls[0]).toBe(`/workspaces/${WS}/docs/d1`);
     // Presence of the neighbouring fields, so "backTo arrived" is not the only
     // thing this run proves — a mapping that returned the fallback object would
     // otherwise satisfy nothing but the absence cases below.

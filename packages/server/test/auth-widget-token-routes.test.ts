@@ -64,6 +64,9 @@ function boot(options: { requireEmailAuth?: boolean; dataDir?: string } = {}): {
   base: string;
   dataDir: string;
   handle: ServerHandle;
+  /** This server's board — every doc it holds is addressed under it, and
+   *  each `boot()` is a server of its own. */
+  ws: string;
 } {
   const dataDir = options.dataDir ?? mkdtempSync(join(tmpdir(), 'widget-token-routes-'));
   // emailCodeSignIn: the server's own emailed-code sign-in is off by default now
@@ -79,7 +82,10 @@ function boot(options: { requireEmailAuth?: boolean; dataDir?: string } = {}): {
     await handle.stop();
     rmSync(dataDir, { recursive: true, force: true });
   });
-  return { base: `http://localhost:${handle.port}`, dataDir, handle };
+  // Minted through the store: this helper is synchronous, and half these
+  // servers are booted with the write gate on, where an HTTP seed is a 401.
+  const ws = handle.tasks.createWorkspace('Test board').id;
+  return { base: `http://localhost:${handle.port}`, dataDir, handle, ws };
 }
 
 async function signIn(base: string, email: string): Promise<string> {
@@ -141,19 +147,20 @@ function bearer(token: string, origin: string | null = DEV_ORIGIN): Record<strin
 async function postComment(
   base: string,
   dataDir: string,
+  ws: string,
   docId: string,
   token?: string,
   origin: string | null = DEV_ORIGIN,
 ): Promise<Response> {
   const file = join(dataDir, `${docId}.md`);
   writeFileSync(file, '# Heading\n\nSome prose to comment on.\n');
-  const created = await fetch(`${base}/api/docs`, {
+  const created = await fetch(`${base}/workspaces/${ws}/docs`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ docId, type: 'markdown', sourceUrl: file }),
   });
   expect(created.status).toBe(200);
-  return await fetch(`${base}/api/docs/${docId}/threads`, {
+  return await fetch(`${base}/workspaces/${ws}/docs/${docId}/threads`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -273,9 +280,9 @@ describe('comment attribution', () => {
     // Presenting the token is itself the opt-in: unlike the cookie rung
     // (which stays behind CW_REQUIRE_EMAIL_AUTH), a caller who volunteers a
     // verified token gets the verified attribution today.
-    const { base, dataDir } = boot();
+    const { base, dataDir, ws } = boot();
     const { token } = await signInAndMint(base, 'reviewer@example.com');
-    const res = await postComment(base, dataDir, 'token-doc', token);
+    const res = await postComment(base, dataDir, ws, 'token-doc', token);
     expect(res.status).toBe(200);
     const [row] = commentRows(dataDir);
     expect(row?.actorId).toBe(emailIdentityId('reviewer@example.com'));
@@ -283,16 +290,16 @@ describe('comment attribution', () => {
   });
 
   it('control: the same comment with no token stays the claimed body', async () => {
-    const { base, dataDir } = boot();
+    const { base, dataDir, ws } = boot();
     await signInAndMint(base, 'reviewer@example.com');
-    const res = await postComment(base, dataDir, 'anon-doc');
+    const res = await postComment(base, dataDir, ws, 'anon-doc');
     expect(res.status).toBe(200);
     expect(commentRows(dataDir)[0]?.actorId).toBe('known-bryan');
   });
 
   it('refuses — not downgrades — a comment carrying an invalid token', async () => {
-    const { base, dataDir } = boot();
-    const res = await postComment(base, dataDir, 'forged-doc', 'wt1.user-x.sid.1.9.forged');
+    const { base, dataDir, ws } = boot();
+    const res = await postComment(base, dataDir, ws, 'forged-doc', 'wt1.user-x.sid.1.9.forged');
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ error: 'widget_token_invalid' });
     expect(commentRows(dataDir).length).toBe(0);
@@ -301,7 +308,7 @@ describe('comment attribution', () => {
 
 describe('revocation kills the token', () => {
   it('logout revokes the session, and the token dies with it', async () => {
-    const { base, dataDir } = boot();
+    const { base, dataDir, ws } = boot();
     const { cookie, token } = await signInAndMint(base, 'reviewer@example.com');
 
     // Positive control first: the token works while the session lives.
@@ -318,7 +325,7 @@ describe('revocation kills the token', () => {
     });
     expect(dead.status).toBe(401);
     // And a write is refused outright, not attributed to anyone.
-    const write = await postComment(base, dataDir, 'revoked-doc', token);
+    const write = await postComment(base, dataDir, ws, 'revoked-doc', token);
     expect(write.status).toBe(401);
     expect(commentRows(dataDir).length).toBe(0);
   });
@@ -366,7 +373,7 @@ describe('the denylist failing closed at runtime', () => {
     // revoked. Load-bearing check: `isRevoked` itself answers true while
     // failed closed; the explicit `failedClosed()` guard ahead of it in
     // widgetTokenIdentityFor is belt-and-braces (see its comment).
-    const { base, dataDir } = boot();
+    const { base, dataDir, ws } = boot();
     const { token } = await signInAndMint(base, 'reviewer@example.com');
     const alive = await fetch(`${base}/api/auth/widget-session`, { headers: bearer(token) });
     expect(alive.status).toBe(200);
@@ -375,7 +382,7 @@ describe('the denylist failing closed at runtime', () => {
 
     const dead = await fetch(`${base}/api/auth/widget-session`, { headers: bearer(token) });
     expect(dead.status).toBe(401);
-    const write = await postComment(base, dataDir, 'denylist-gone-doc', token);
+    const write = await postComment(base, dataDir, ws, 'denylist-gone-doc', token);
     expect(write.status).toBe(401);
     expect(commentRows(dataDir).length).toBe(0);
   });
@@ -424,14 +431,14 @@ describe('the token is bound to the origin it was minted for', () => {
   // token lifted out of a dev server's localStorage is worthless from curl,
   // from another origin, or from an opaque (`null`) one.
   it('accepts the token from the origin it was minted for (positive control)', async () => {
-    const { base, dataDir } = boot();
+    const { base, dataDir, ws } = boot();
     const { token } = await signInAndMint(base, 'reviewer@example.com');
     const probe = await fetch(`${base}/api/auth/widget-session`, {
       headers: bearer(token, DEV_ORIGIN),
     });
     expect(probe.status).toBe(200);
     expect(((await probe.json()) as { authenticated: boolean }).authenticated).toBe(true);
-    const write = await postComment(base, dataDir, 'bound-doc', token, DEV_ORIGIN);
+    const write = await postComment(base, dataDir, ws, 'bound-doc', token, DEV_ORIGIN);
     expect(write.status).toBe(200);
     expect(commentRows(dataDir)[0]?.actorId).toBe(emailIdentityId('reviewer@example.com'));
   });
@@ -441,14 +448,14 @@ describe('the token is bound to the origin it was minted for', () => {
     ['no Origin header at all (curl, a server-side replay)', null],
     ['an opaque origin', 'null'],
   ])('refuses the token presented from %s', async (_label, origin) => {
-    const { base, dataDir } = boot();
+    const { base, dataDir, ws } = boot();
     const { token } = await signInAndMint(base, 'reviewer@example.com');
     const probe = await fetch(`${base}/api/auth/widget-session`, {
       headers: bearer(token, origin),
     });
     expect(probe.status).toBe(401);
     expect(await probe.json()).toEqual({ error: 'widget_token_invalid' });
-    const write = await postComment(base, dataDir, 'unbound-doc', token, origin);
+    const write = await postComment(base, dataDir, ws, 'unbound-doc', token, origin);
     // An opaque-origin write is refused one wall earlier, by the browser-
     // origin policy (403); the probe above is what pins the token gate.
     expect([401, 403]).toContain(write.status);

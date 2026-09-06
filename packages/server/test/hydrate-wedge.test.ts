@@ -22,8 +22,12 @@ import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { boundFiles } from '../src/slow-fs.ts';
 import { makeFifo, releaseFifosIn } from './fifo.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const DOC_ID = 'stalled-source-doc';
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('a bound file that never answers', () => {
   let dataDir: string;
@@ -41,12 +45,18 @@ describe('a bound file that never answers', () => {
     // Round one: an ordinary readable file, bound and persisted. This is the
     // state the machine is in before the sync folder goes bad.
     const first = createServer({ port: 0, dataDir, requireSignInToWrite: false });
-    const created = await fetch(`http://localhost:${first.port}/api/docs`, {
+    // The board is seeded on THIS server and outlives it: the rounds below
+    // boot fresh servers on the same data dir, so re-seeding would give them
+    // a second board that the doc under test is not filed on.
+    WS = await seedBoard(`http://localhost:${first.port}`);
+    const created = await fetch(`http://localhost:${first.port}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: DOC_ID, type: 'markdown', sourceUrl: boundPath }),
     });
     expect(created.status).toBe(200);
+    // Board writes are debounced; the next server reads this dir from disk.
+    first.tasks.flush();
     await first.stop();
 
     // The folder goes bad. `open` on this path now blocks forever; everything
@@ -74,13 +84,13 @@ describe('a bound file that never answers', () => {
 
     // The request that wedged production: an SSE subscribe on a doc that is
     // not resident, so answering it means hydrating from disk.
-    const subscribe = fetch(`${base}/events/${DOC_ID}`);
+    const subscribe = fetch(`${base}/workspaces/${WS}/docs/${DOC_ID}/events:stream`);
 
     // While that is in flight, an UNRELATED route — the doc listing, which
     // reads the index and hydrates nothing — has to answer. A race, not
     // an elapsed-time assertion: what matters is that the response beats the
     // window, not how many milliseconds it took.
-    const unrelated = fetch(`${base}/api/docs`).then((r) => `answered:${r.status}`);
+    const unrelated = fetch(`${base}/workspaces/${WS}/docs`).then((r) => `answered:${r.status}`);
     const tooSlow = new Promise<string>((resolve) => setTimeout(() => resolve('wedged'), 1_000));
     expect(await Promise.race([unrelated, tooSlow])).toBe('answered:200');
 
@@ -118,8 +128,8 @@ describe('a bound file that never answers', () => {
     handle = createServer({ port: 0, dataDir, requireSignInToWrite: false });
     const base = `http://localhost:${handle.port}`;
 
-    const viaApi = fetch(`${base}/api/docs/${DOC_ID}`);
-    const unrelated = fetch(`${base}/api/docs`).then((r) => `answered:${r.status}`);
+    const viaApi = fetch(`${base}/workspaces/${WS}/docs/${DOC_ID}?format=json`);
+    const unrelated = fetch(`${base}/workspaces/${WS}/docs`).then((r) => `answered:${r.status}`);
     const tooSlow = new Promise<string>((resolve) => setTimeout(() => resolve('wedged'), 1_000));
     expect(await Promise.race([unrelated, tooSlow])).toBe('answered:200');
 
@@ -140,7 +150,7 @@ describe('a bound file that never answers', () => {
 
     handle = createServer({ port: 0, dataDir, requireSignInToWrite: false });
     const base = `http://localhost:${handle.port}`;
-    const res = await fetch(`${base}/events/${DOC_ID}`);
+    const res = await fetch(`${base}/workspaces/${WS}/docs/${DOC_ID}/events:stream`);
     expect(res.status).toBeLessThan(500);
     await res.body?.cancel();
 

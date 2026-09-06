@@ -39,6 +39,19 @@ describe('the MCP tools file a doc in a workspace, through the real bundle', () 
   };
 
   /** The tool's own JSON payload, unwrapped from the MCP content envelope. */
+  /** The raw result, so a REFUSAL can be read rather than parsed as JSON. */
+  const callToolRaw = async (
+    name: string,
+    args: unknown,
+  ): Promise<{ isError?: boolean; content?: Array<{ text?: string }> }> => {
+    const reply = (await call('tools/call', { name, arguments: args })) as {
+      result?: { isError?: boolean; content?: Array<{ text?: string }> };
+      error?: unknown;
+    };
+    expect(reply.error).toBeUndefined();
+    return reply.result ?? {};
+  };
+
   const callTool = async (name: string, args: unknown): Promise<Record<string, unknown>> => {
     const reply = (await call('tools/call', { name, arguments: args })) as {
       result?: { content?: Array<{ text?: string }> };
@@ -109,7 +122,7 @@ describe('the MCP tools file a doc in a workspace, through the real bundle', () 
     const res = (await callTool('attach_markdown', {
       docId: 'mcp-doc-named',
       path,
-      hubWorkspaceId: wsId,
+      workspaceId: wsId,
     })) as { docId?: string; hubWorkspaceId?: string };
 
     // The server MINTS the id; `mcp-doc-named` is the readable alias for it.
@@ -121,20 +134,18 @@ describe('the MCP tools file a doc in a workspace, through the real bundle', () 
     expect(handle.docStore.get('mcp-doc-named')?.docId).toBe(docId);
   });
 
-  it('attach_markdown with no workspace still lands the doc in one, in a single call', async () => {
+  it('attach_markdown with NO workspace is refused, and says which argument', async () => {
+    // The old behaviour was a default board: a call that named none landed on
+    // "Unfiled". Under the canonical shape a doc is created AT an address —
+    // `POST /workspaces/<ws>/docs` — so a call with no board is not a call
+    // that gets a default, it is a call that named no place to create.
     const path = join(dataDir, 'mcp-unfiled.md');
     writeFileSync(path, '# Unfiled\n\nBody.\n');
-    const res = (await callTool('attach_markdown', {
-      docId: 'mcp-doc-unfiled',
-      path,
-    })) as { docId?: string; hubWorkspaceId?: string; meta?: { reviewUrl?: string } };
-
-    // One call: the review URL a human gets AND the workspace it landed in.
-    expect(res.meta?.reviewUrl).toBeTruthy();
-    expect(res.hubWorkspaceId).toBeTruthy();
-    expect(res.docId).toBeTruthy();
-    expect(handle.tasks.workspaceOfDoc(res.docId as string)).toBe(res.hubWorkspaceId as string);
-    expect(handle.docStore.get('mcp-doc-unfiled')?.docId).toBe(res.docId as string);
+    const refused = await callToolRaw('attach_markdown', { docId: 'mcp-doc-unfiled', path });
+    expect(refused.isError).toBe(true);
+    expect(refused.content?.[0]?.text ?? '').toContain('workspaceId');
+    // ...and nothing was created behind the refusal.
+    expect(handle.docStore.peek('mcp-doc-unfiled')).toBeUndefined();
   });
 
   it('bind_mock forwards it too — two tools reach the one route', async () => {
@@ -149,7 +160,7 @@ describe('the MCP tools file a doc in a workspace, through the real bundle', () 
     const res = (await callTool('bind_mock', {
       docId: 'mcp-mock-named',
       sourceHtmlPath: html,
-      hubWorkspaceId: wsId,
+      workspaceId: wsId,
     })) as { docId?: string; hubWorkspaceId?: string };
 
     const docId = res.docId as string;

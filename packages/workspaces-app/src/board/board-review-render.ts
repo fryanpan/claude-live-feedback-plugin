@@ -1,3 +1,5 @@
+import { reviewAnswered } from '@feedback/core';
+import { renderCommentMarkdown } from '../comment-markdown.ts';
 /**
  * The review surface's renderers (plan §3.9): a ticket-borne review item drawn
  * as a row of the comment history, the question a decision task is asking
@@ -9,8 +11,7 @@
  * `board-detail-render.ts` and a comment row's badge from
  * `board-discussion-render.ts`, and neither reads back.
  */
-import { reviewAnswered } from '@feedback/core';
-import { renderCommentMarkdown } from '../comment-markdown.ts';
+import { api } from '../doc-path.ts';
 import { focusMarkdownComposer } from '../md-composer.ts';
 import { type PanelReviewItem, type TaskDiscussion } from './board-detail-render.ts';
 import { answeredRecord, optionLabel, reviewBadge } from './board-discussion-render.ts';
@@ -337,8 +338,8 @@ export function panelReviewQueue(
  * the caller adds. The sibling of `reviewReplyRequest` (Home queue), for the
  * panel's own row shape, and one spelling for the same reason: `board-app`
  * built the two thread routes inline, which is exactly how a ticket-borne
- * card would have posted its answer at `/api/docs/<task doc>/threads/
- * undefined/…` — a write that lands nowhere while the card says "posted".
+ * card would have posted its answer at api(`docs/<task doc>/threads/
+ * undefined/…`) — a write that lands nowhere while the card says "posted".
  *
  * - a `task-review` card → the task review-item answer route. `answeredWith`
  *   is that entity's spelling of the tapped candidate's id.
@@ -358,7 +359,9 @@ export function panelAnswerRequest(
   if (item.source === 'task-review') {
     if (!item.reviewItemId) return null;
     return {
-      path: `/api/tasks/${encodeURIComponent(task.id)}/review-items/${encodeURIComponent(item.reviewItemId)}/answer`,
+      path: api(
+        `tasks/${encodeURIComponent(task.id)}/review-items/${encodeURIComponent(item.reviewItemId)}/answer`,
+      ),
       body: { text, ...(optionId !== undefined ? { answeredWith: optionId } : {}) },
     };
   }
@@ -367,14 +370,14 @@ export function panelAnswerRequest(
   const thread = encodeURIComponent(item.threadId);
   return item.declared && item.commentId !== undefined
     ? {
-        path: `/api/docs/${doc}/threads/${thread}/answer`,
+        path: api(`docs/${doc}/threads/${thread}/answer`),
         body: {
           text,
           commentId: item.commentId,
           ...(optionId !== undefined ? { optionId } : {}),
         },
       }
-    : { path: `/api/docs/${doc}/threads/${thread}/comments`, body: { text } };
+    : { path: api(`docs/${doc}/threads/${thread}/comments`), body: { text } };
 }
 
 /**

@@ -25,6 +25,7 @@ import type { Thread, User } from '@feedback/core';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import type { Task } from '../src/tasks.ts';
 import { type GoalIds, seedGoalsOverHttp } from './goal-seed.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON: User = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
 const AGENT: User = {
@@ -36,6 +37,9 @@ const AGENT: User = {
 
 /** 2026-09-02, the date the old park fixtures used. */
 const UNTIL = Date.UTC(2026, 8, 2, 19, 0, 0);
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('park_task moves a row to triage and comments', () => {
   let handle: ServerHandle;
@@ -58,6 +62,7 @@ describe('park_task moves a row to triage and comments', () => {
     const { workspace } = await jj<{ workspace: { id: string } }>(
       await post('/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
     );
+    WS = workspace.id;
     const G = await seedGoalsOverHttp(
       base,
       workspace.id,
@@ -78,7 +83,12 @@ describe('park_task moves a row to triage and comments', () => {
         goal,
       }),
     );
-    await jj(await post(`/api/tasks/${task.id}/transition`, { to: 'todo', author: PERSON }));
+    await jj(
+      await post(`/workspaces/${workspaceId}/tasks/${task.id}/transition`, {
+        to: 'todo',
+        author: PERSON,
+      }),
+    );
     return task;
   }
 
@@ -94,15 +104,16 @@ describe('park_task moves a row to triage and comments', () => {
   /** Every comment on the task's own body doc, oldest first. */
   async function taskComments(taskId: string): Promise<string[]> {
     const { threads } = await jj<{ threads: Thread[] }>(
-      await fetch(`${base}/api/docs/${encodeURIComponent(`task:${taskId}`)}/threads`),
+      await fetch(`${base}/workspaces/${WS}/docs/${encodeURIComponent(`task:${taskId}`)}/threads`),
     );
     return threads.flatMap((t) => t.comments.map((c) => c.text));
   }
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'park-triage-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterAll(async () => {
@@ -119,7 +130,7 @@ describe('park_task moves a row to triage and comments', () => {
     expect(await taskComments(task.id)).toEqual([]);
 
     const res = await jj<{ ok: true; task: Task; changed: boolean; commented: boolean }>(
-      await post(`/api/tasks/${task.id}/park`, {
+      await post(`/workspaces/${wsId}/tasks/${task.id}/park`, {
         parkedUntil: UNTIL,
         reason: 'waiting on the index rebuild',
         author: PERSON,
@@ -149,7 +160,7 @@ describe('park_task moves a row to triage and comments', () => {
     const { wsId, G } = await seedWorkspace();
     const task = await seedTodoTask(wsId, G.g1);
     const res = await jj<{ task: Task; changed: boolean; commented: boolean }>(
-      await post(`/api/tasks/${task.id}/park`, {
+      await post(`/workspaces/${wsId}/tasks/${task.id}/park`, {
         reason: 'below the main flow until goal 1 closes',
         author: PERSON,
       }),
@@ -175,7 +186,7 @@ describe('park_task moves a row to triage and comments', () => {
     );
     expect(task.status).toBe('triage'); // control: already where a park lands
     const res = await jj<{ changed: boolean; commented: boolean }>(
-      await post(`/api/tasks/${task.id}/park`, {
+      await post(`/workspaces/${wsId}/tasks/${task.id}/park`, {
         parkedUntil: UNTIL,
         reason: 'still waiting on the index rebuild',
         author: PERSON,
@@ -191,7 +202,10 @@ describe('park_task moves a row to triage and comments', () => {
     const { wsId, G } = await seedWorkspace();
     const task = await seedTodoTask(wsId, G.g1);
     const res = await jj<{ ok: true; changed: boolean; commented: boolean; message?: string }>(
-      await post(`/api/tasks/${task.id}/park`, { parkedUntil: null, author: PERSON }),
+      await post(`/workspaces/${wsId}/tasks/${task.id}/park`, {
+        parkedUntil: null,
+        author: PERSON,
+      }),
     );
     expect(res.changed).toBe(false);
     expect(res.commented).toBe(false);
@@ -205,14 +219,24 @@ describe('park_task moves a row to triage and comments', () => {
     const { wsId, G } = await seedWorkspace();
     const task = await seedTodoTask(wsId, G.g1);
     for (const bad of ['2026-09-02', {}, true, 'null']) {
-      const r = await post(`/api/tasks/${task.id}/park`, { parkedUntil: bad, author: PERSON });
+      const r = await post(`/workspaces/${wsId}/tasks/${task.id}/park`, {
+        parkedUntil: bad,
+        author: PERSON,
+      });
       expect(r.status, `parkedUntil: ${JSON.stringify(bad)}`).toBe(400);
     }
     // Nothing was written by any of those refusals.
     expect((await getTask(wsId, task.id)).status).toBe('todo');
-    expect((await post(`/api/tasks/${task.id}/park`, { parkedUntil: UNTIL })).status).toBe(400);
     expect(
-      (await post('/api/tasks/t-missing/park', { parkedUntil: UNTIL, author: PERSON })).status,
+      (await post(`/workspaces/${wsId}/tasks/${task.id}/park`, { parkedUntil: UNTIL })).status,
+    ).toBe(400);
+    expect(
+      (
+        await post(`/workspaces/${wsId}/tasks/t-missing/park`, {
+          parkedUntil: UNTIL,
+          author: PERSON,
+        })
+      ).status,
     ).toBe(404);
   });
 
@@ -230,7 +254,12 @@ describe('park_task moves a row to triage and comments', () => {
     // Control: nothing is waiting on anything yet.
     expect((await getTask(wsId, held.id)).after).toEqual([]);
 
-    await jj(await post(`/api/tasks/${held.id}/park`, { blockedBy: blocker.id, author: PERSON }));
+    await jj(
+      await post(`/workspaces/${wsId}/tasks/${held.id}/park`, {
+        blockedBy: blocker.id,
+        author: PERSON,
+      }),
+    );
 
     const stored = await getTask(wsId, held.id);
     expect(stored.after).toEqual([blocker.id]);
@@ -247,8 +276,18 @@ describe('park_task moves a row to triage and comments', () => {
     const second = await seedTodoTask(wsId, G.g1);
     const held = await seedTodoTask(wsId, G.g1);
 
-    await jj(await post(`/api/tasks/${held.id}/park`, { blockedBy: [first.id], author: PERSON }));
-    await jj(await post(`/api/tasks/${held.id}/park`, { blockedBy: [second.id], author: PERSON }));
+    await jj(
+      await post(`/workspaces/${wsId}/tasks/${held.id}/park`, {
+        blockedBy: [first.id],
+        author: PERSON,
+      }),
+    );
+    await jj(
+      await post(`/workspaces/${wsId}/tasks/${held.id}/park`, {
+        blockedBy: [second.id],
+        author: PERSON,
+      }),
+    );
 
     expect((await getTask(wsId, held.id)).after.sort()).toEqual([first.id, second.id].sort());
   });
@@ -257,9 +296,17 @@ describe('park_task moves a row to triage and comments', () => {
     const { wsId, G } = await seedWorkspace();
     const blocker = await seedTodoTask(wsId, G.g1);
     const held = await seedTodoTask(wsId, G.g1);
-    await jj(await post(`/api/tasks/${held.id}/park`, { blockedBy: blocker.id, author: PERSON }));
+    await jj(
+      await post(`/workspaces/${wsId}/tasks/${held.id}/park`, {
+        blockedBy: blocker.id,
+        author: PERSON,
+      }),
+    );
     const again = await jj<{ changed: boolean; after: string[] }>(
-      await post(`/api/tasks/${held.id}/park`, { blockedBy: blocker.id, author: PERSON }),
+      await post(`/workspaces/${wsId}/tasks/${held.id}/park`, {
+        blockedBy: blocker.id,
+        author: PERSON,
+      }),
     );
     expect(again.changed).toBe(false);
     expect(again.after).toEqual([blocker.id]);
@@ -269,8 +316,13 @@ describe('park_task moves a row to triage and comments', () => {
     const { wsId, G } = await seedWorkspace();
     const a = await seedTodoTask(wsId, G.g1);
     const b = await seedTodoTask(wsId, G.g1);
-    await jj(await post(`/api/tasks/${b.id}/park`, { blockedBy: a.id, author: PERSON }));
-    const r = await post(`/api/tasks/${a.id}/park`, { blockedBy: b.id, author: PERSON });
+    await jj(
+      await post(`/workspaces/${wsId}/tasks/${b.id}/park`, { blockedBy: a.id, author: PERSON }),
+    );
+    const r = await post(`/workspaces/${wsId}/tasks/${a.id}/park`, {
+      blockedBy: b.id,
+      author: PERSON,
+    });
     expect(r.status).toBe(400);
     const said = (await r.json()) as { error: string; cycle?: string[]; message?: string };
     expect(said.error).toBe('cycle');
@@ -287,7 +339,7 @@ describe('park_task moves a row to triage and comments', () => {
     const { wsId, G } = await seedWorkspace();
     const held = await seedTodoTask(wsId, G.g1);
     for (const bad of [{ blockedBy: 't-nope' }, { blockedBy: held.id }, { blockedBy: [] }]) {
-      const r = await post(`/api/tasks/${held.id}/park`, { ...bad, author: PERSON });
+      const r = await post(`/workspaces/${wsId}/tasks/${held.id}/park`, { ...bad, author: PERSON });
       expect(r.status, JSON.stringify(bad)).toBe(400);
     }
     // Nothing was written by any of those refusals.
@@ -342,11 +394,11 @@ describe('rows still carrying the removed parked state', () => {
     );
   };
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'park-migrate-'));
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
@@ -385,7 +437,7 @@ describe('rows still carrying the removed parked state', () => {
       expect('parkedReason' in (byId.get('t-dated') as object)).toBe(false);
 
       const { threads } = (await (
-        await fetch(`${at}/api/docs/${encodeURIComponent('task:t-dated')}/threads`)
+        await fetch(`${at}/workspaces/w-legacy/docs/${encodeURIComponent('task:t-dated')}/threads`)
       ).json()) as { threads: Thread[] };
       const note = threads.flatMap((t) => t.comments.map((c) => c.text)).join('\n');
       // The date this row comes back is the thing a reader must not lose.
@@ -407,7 +459,7 @@ describe('rows still carrying the removed parked state', () => {
       // every note on the board at every restart.
       const { threads } = (await (
         await fetch(
-          `http://localhost:${handle.port}/api/docs/${encodeURIComponent('task:t-dated')}/threads`,
+          `http://localhost:${handle.port}/workspaces/w-legacy/docs/${encodeURIComponent('task:t-dated')}/threads`,
         )
       ).json()) as { threads: Thread[] };
       expect(threads.flatMap((t) => t.comments).length).toBe(1);

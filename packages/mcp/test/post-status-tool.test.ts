@@ -44,7 +44,7 @@ let pending = '';
 const waiters = new Map<number, (value: unknown) => void>();
 
 function replyFor(path: string): unknown {
-  if (/^\/api\/tasks\/[^/]+\/notes$/.test(path)) {
+  if (/^\/workspaces\/[^/]+\/tasks\/[^/]+\/notes$/.test(path)) {
     return { ok: true, taskId: 't-1', workspaceId: 'w-1' };
   }
   // The hook route with no current claim: recorded on the ring, no row.
@@ -149,16 +149,20 @@ afterAll(async () => {
   await new Promise<void>((r) => stub?.close(() => r()));
 });
 
+/** The board the named row is on. */
+const WS = 'w-board';
+
 describe('post_status — where the work stands, as a note', () => {
   it('lands on the named row as a status note under this session name', async () => {
     const before = notePosts().length;
     const reply = await call('post_status', {
+      workspaceId: WS,
       taskId: 't-1',
       text: 'Tests green; opening the PR.',
     });
     const out = payload(reply);
     expect(notePosts().length).toBe(before + 1);
-    expect(last().path).toBe('/api/tasks/t-1/notes');
+    expect(last().path).toBe(`/workspaces/${WS}/tasks/t-1/notes`);
     expect(last().body).toEqual({
       agent: AGENT,
       kind: 'status',
@@ -188,14 +192,22 @@ describe('post_status — where the work stands, as a note', () => {
 
   it('refuses empty text and over-cap text before anything leaves the process', async () => {
     const before = notePosts().length;
-    const empty = await call('post_status', { taskId: 't-1', text: '   ' });
+    const empty = await call('post_status', { workspaceId: WS, taskId: 't-1', text: '   ' });
     expect(empty.result?.isError).toBe(true);
-    const long = await call('post_status', { taskId: 't-1', text: 'x'.repeat(4001) });
+    const long = await call('post_status', {
+      workspaceId: WS,
+      taskId: 't-1',
+      text: 'x'.repeat(4001),
+    });
     expect(long.result?.isError).toBe(true);
     expect(long.result?.content?.[0]?.text).toContain('4000');
     expect(notePosts().length).toBe(before);
     // Positive control for the cap: exactly 4000 goes through.
-    const atCap = await call('post_status', { taskId: 't-1', text: 'x'.repeat(4000) });
+    const atCap = await call('post_status', {
+      workspaceId: WS,
+      taskId: 't-1',
+      text: 'x'.repeat(4000),
+    });
     payload(atCap);
     expect(notePosts().length).toBe(before + 1);
   });
@@ -215,6 +227,13 @@ describe('post_status — where the work stands, as a note', () => {
     expect(tool?.description).toMatch(/Activity tab/);
     expect(tool?.description).toMatch(/never as a comment/);
     expect(tool?.inputSchema.required).toEqual(['text']);
-    expect(Object.keys(tool?.inputSchema.properties ?? {}).sort()).toEqual(['taskId', 'text']);
+    // `workspaceId` is a property but NOT required: the note is addressed
+    // under a board only when it names a row, and the no-taskId form goes to
+    // the current claim, which the server resolves.
+    expect(Object.keys(tool?.inputSchema.properties ?? {}).sort()).toEqual([
+      'taskId',
+      'text',
+      'workspaceId',
+    ]);
   });
 });

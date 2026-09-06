@@ -30,6 +30,9 @@ export interface ThreadCreateRequest {
 export function threadCreateRequest(
   input: ThreadCreateInput,
   author: unknown,
+  /** `/workspaces/<id>` — the board the doc is filed on. Both addresses are
+   *  under it now, which is why this is an argument and not a default. */
+  board: string,
 ): ThreadCreateRequest {
   const doc = encodeURIComponent(input.docId);
   // Deliberately `=== undefined` rather than falsy: omitting `find` is a
@@ -38,7 +41,7 @@ export function threadCreateRequest(
   // comment on the whole document.
   if (input.find === undefined) {
     return {
-      path: `/api/docs/${doc}/threads`,
+      path: `${board}/docs/${doc}/threads`,
       body: {
         author,
         text: input.text,
@@ -48,7 +51,7 @@ export function threadCreateRequest(
     };
   }
   return {
-    path: `/api/docs/${doc}/threads/by_find`,
+    path: `${board}/docs/${doc}/threads/by_find`,
     body: {
       author,
       text: input.text,

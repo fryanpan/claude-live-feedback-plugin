@@ -421,7 +421,7 @@ describe('POST /workspaces/:id/goals/reorder', () => {
   let dataDir: string;
   let base: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'goal-reorder-http-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
@@ -620,7 +620,7 @@ describe('POST /workspaces/:id/goals/reorder', () => {
       );
       for (const to of ['in-progress', 'done']) {
         await jj(
-          await post(`/api/tasks/${task.id}/transition`, {
+          await post(`/workspaces/${wsId}/tasks/${task.id}/transition`, {
             author: AGENT,
             to,
           }),

@@ -20,6 +20,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { waitFor } from './wait-for.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 interface Metrics {
   rssMb: number;
@@ -32,6 +33,9 @@ interface Metrics {
   activations: { tag: string; count: number }[];
   activationsTotal: number;
 }
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('GET /api/metrics', () => {
   let handle: ServerHandle;
@@ -48,11 +52,12 @@ describe('GET /api/metrics', () => {
       },
     });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'metrics-route-'));
     srcDir = mkdtempSync(join(tmpdir(), 'metrics-route-src-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterEach(async () => {
@@ -73,7 +78,7 @@ describe('GET /api/metrics', () => {
     for (let i = 0; i < 5; i++) {
       const path = join(srcDir, `m-${i}.md`);
       writeFileSync(path, `# Doc ${i}\n\nbody\n`);
-      const res = await local('/api/docs', {
+      const res = await local(`/workspaces/${WS}/docs`, {
         method: 'POST',
         body: JSON.stringify({ docId: `metrics-${i}`, type: 'markdown', sourceUrl: path }),
       });
@@ -123,7 +128,7 @@ describe('GET /api/metrics', () => {
   it('is counts only — no doc ids, paths or titles', async () => {
     const path = join(srcDir, 'secret-name.md');
     writeFileSync(path, '# Confidential heading\n\nbody\n');
-    await local('/api/docs', {
+    await local(`/workspaces/${WS}/docs`, {
       method: 'POST',
       body: JSON.stringify({ docId: 'metrics-leak-probe', type: 'markdown', sourceUrl: path }),
     });
@@ -132,7 +137,7 @@ describe('GET /api/metrics', () => {
     const body = await res.text();
     // Control first: the doc really is on this server, so a body that leaked
     // would have something to leak.
-    const docs = await (await local('/api/docs')).text();
+    const docs = await (await local(`/workspaces/${WS}/docs`)).text();
     expect(docs).toContain('metrics-leak-probe');
 
     expect(body).not.toContain('metrics-leak-probe');
@@ -158,7 +163,7 @@ describe('GET /api/metrics', () => {
   it('names the caller that put a binding in the fast lane', async () => {
     const path = join(srcDir, 'attributed.md');
     writeFileSync(path, '# Doc\n\nbody\n');
-    await local('/api/docs', {
+    await local(`/workspaces/${WS}/docs`, {
       method: 'POST',
       body: JSON.stringify({ docId: 'metrics-attributed', type: 'markdown', sourceUrl: path }),
     });
@@ -169,7 +174,7 @@ describe('GET /api/metrics', () => {
     // it lives in routes/docs.ts — so that is the file the tag must name.
     // (It read `server.ts` until the doc routes were extracted; the tag
     // follows the route, which is the whole point of attributing by file.)
-    expect((await local('/api/docs/metrics-attributed')).status).toBe(200);
+    expect((await local(`/workspaces/${WS}/docs/metrics-attributed?format=json`)).status).toBe(200);
     const after = await metrics();
 
     // Positive control: the read really did activate something. Without it,

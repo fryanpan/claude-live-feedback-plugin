@@ -17,8 +17,12 @@ import { mountPlanGate } from '../src/plan-gate.ts';
 
 const JORDAN: User = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#336699' };
 
+/** The board the page is standing on — every resource route is under it. */
+const WS = 'w-1';
+
 let root: HTMLElement;
 beforeEach(() => {
+  history.replaceState(null, '', `/workspaces/${WS}/docs/d-gate`);
   root = document.createElement('div');
   document.body.replaceChildren(root);
 });
@@ -187,7 +191,7 @@ describe('mountPlanGate', () => {
     approveBtn()?.click();
     await vi.waitFor(() => expect(gate.planState()).toBe('approved'));
     const post = stub.calls.find((c) => c.init?.method === 'POST');
-    expect(post?.url).toBe('/api/docs/d-gate/plan');
+    expect(post?.url).toBe(`/workspaces/${WS}/docs/d-gate/plan`);
     expect(JSON.parse(String(post?.init?.body))).toEqual({ state: 'approved', author: JORDAN });
 
     // The receipt, naming what the release reported and claiming no goal —
@@ -320,7 +324,7 @@ describe('mountPlanGate', () => {
     const post = stub.calls.find((c) => c.init?.method === 'POST');
     // The ask goes to plan-request — NOT to the plan gate, which would
     // approve a plan that does not exist yet.
-    expect(post?.url).toBe('/api/docs/d-ask/plan-request');
+    expect(post?.url).toBe(`/workspaces/${WS}/docs/d-ask/plan-request`);
     expect(JSON.parse(String(post?.init?.body))).toEqual({ author: JORDAN });
     expect(label()).toBe('Plan requested');
     expect(sub()).toBe('Waiting for Workspaces');

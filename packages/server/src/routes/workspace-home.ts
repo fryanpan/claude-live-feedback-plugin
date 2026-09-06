@@ -1,4 +1,5 @@
 import { parseThreadReviewItemId } from '@feedback/core';
+import { matchRest } from '../middleware/workspace-scope.ts';
 /**
  * The Home queue: where a review item lives, what is waiting on a person, and the instructions above it.
  *
@@ -24,7 +25,7 @@ export async function handleWorkspaceHome(
     reviewItemsFor,
     resolveWorkspaceForDoc,
   } = ctx;
-  const { req, pathname, url, visitor, authorFor } = rq;
+  const { req, pathname, scope, url, visitor, authorFor } = rq;
   /**
    * WHOSE marker this request may move or read.
    *
@@ -74,7 +75,7 @@ export async function handleWorkspaceHome(
   // found on whichever ticket holds it. The fixed r-legacy id is on
   // every legacy-decision ticket at once, so alone it addresses
   // nothing and is refused by name.
-  const reviewItemResolveMatch = pathname.match(/^\/api\/review-items\/([^/]+)$/);
+  const reviewItemResolveMatch = matchRest(scope, /^review-items\/([^/]+)$/);
   if (reviewItemResolveMatch && req.method === 'GET') {
     if (visitor) return j(403, { error: 'not available to share visitors' });
     const reviewItemId = decodeURIComponent(reviewItemResolveMatch[1] ?? '');
@@ -114,10 +115,12 @@ export async function handleWorkspaceHome(
     });
   }
   const wsReviewMatch = pathname.match(/^\/workspaces\/([^/]+)\/review-items$/);
-  if (wsReviewMatch && req.method === 'GET') {
-    const workspaceId = decodeURIComponent(wsReviewMatch[1] ?? '');
-    const workspace = taskStore.getWorkspace(workspaceId);
-    if (!workspace) return j(404, { error: 'workspace not found' });
+  if (wsReviewMatch && scope && req.method === 'GET') {
+    // The board itself comes off the scope. `middleware/workspace-scope.ts`
+    // resolved it once, above every handler, so the lookup and the 404 that
+    // used to open this block are DELETED rather than left dormant — there
+    // is no second copy of "does this board exist" here to drift.
+    const { workspaceId, board: workspace } = scope;
     return j(200, { workspaceId, items: reviewItemsFor(workspace) });
   }
   // ── Home pane (§ approved home-pane design) ──────────────────────
@@ -127,10 +130,12 @@ export async function handleWorkspaceHome(
   const wsHomeMatch = pathname.match(/^\/workspaces\/([^/]+)\/home$/);
   // `?format=json`, for the reason `GET /workspaces/<id>` carries the same
   // gate: `home` is one of the board's four page tabs.
-  if (wsHomeMatch && req.method === 'GET' && wantsJson(url)) {
-    const workspaceId = decodeURIComponent(wsHomeMatch[1] ?? '');
-    const workspace = taskStore.getWorkspace(workspaceId);
-    if (!workspace) return j(404, { error: 'workspace not found' });
+  if (wsHomeMatch && scope && req.method === 'GET' && wantsJson(url)) {
+    // The board itself comes off the scope. `middleware/workspace-scope.ts`
+    // resolved it once, above every handler, so the lookup and the 404 that
+    // used to open this block are DELETED rather than left dormant — there
+    // is no second copy of "does this board exist" here to drift.
+    const workspace = scope.board;
     const person = verifiedPerson(undefined) || (url.searchParams.get('user') ?? '').trim();
     if (person === '') {
       return j(400, { error: 'user is required — the read marker and brief are per person' });
@@ -141,10 +146,12 @@ export async function handleWorkspaceHome(
   // the response names what it replaced, and posting that value back
   // restores it (0 = never read). A removal must be reversible.
   const wsHomeReadMatch = pathname.match(/^\/workspaces\/([^/]+)\/home\/read$/);
-  if (wsHomeReadMatch && req.method === 'POST') {
-    const workspaceId = decodeURIComponent(wsHomeReadMatch[1] ?? '');
-    const workspace = taskStore.getWorkspace(workspaceId);
-    if (!workspace) return j(404, { error: 'workspace not found' });
+  if (wsHomeReadMatch && scope && req.method === 'POST') {
+    // The board itself comes off the scope. `middleware/workspace-scope.ts`
+    // resolved it once, above every handler, so the lookup and the 404 that
+    // used to open this block are DELETED rather than left dormant — there
+    // is no second copy of "does this board exist" here to drift.
+    const { workspaceId } = scope;
     const body = await safeJson(req);
     const person =
       verifiedPerson(body?.author) ||
@@ -163,10 +170,12 @@ export async function handleWorkspaceHome(
   // `generating` true when a summarizer is wired, because the drop
   // makes every brief stale by construction.
   const wsHomeInstrMatch = pathname.match(/^\/workspaces\/([^/]+)\/home\/instructions$/);
-  if (wsHomeInstrMatch && req.method === 'PUT') {
-    const workspaceId = decodeURIComponent(wsHomeInstrMatch[1] ?? '');
-    const workspace = taskStore.getWorkspace(workspaceId);
-    if (!workspace) return j(404, { error: 'workspace not found' });
+  if (wsHomeInstrMatch && scope && req.method === 'PUT') {
+    // The board itself comes off the scope. `middleware/workspace-scope.ts`
+    // resolved it once, above every handler, so the lookup and the 404 that
+    // used to open this block are DELETED rather than left dormant — there
+    // is no second copy of "does this board exist" here to drift.
+    const { workspaceId, board: workspace } = scope;
     const body = await safeJson(req);
     // The instructions are the BOARD's, not this person's — `person` only
     // decides whose payload comes back — but it is read from the same place

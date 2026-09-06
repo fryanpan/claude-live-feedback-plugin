@@ -19,13 +19,16 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const dataDirs: string[] = [];
 
-function boot(): ServerHandle {
+async function boot(): Promise<ServerHandle> {
   const dataDir = mkdtempSync(join(tmpdir(), 'cw-stop-sockets-'));
   dataDirs.push(dataDir);
-  return createServer({ port: 0, dataDir });
+  const handle = createServer({ port: 0, dataDir });
+  WS = await seedBoard(`http://localhost:${handle.port}`);
+  return handle;
 }
 
 afterEach(() => {
@@ -43,9 +46,12 @@ async function within(ms: number, done: () => boolean): Promise<boolean> {
   return done();
 }
 
+/** The board this file's docs are filed under. */
+let WS = '';
+
 describe('stopping the server closes its open connections', () => {
   it('a keep-alive HTTP connection is closed, not left to idle out', async () => {
-    const handle = boot();
+    const handle = await boot();
     let closed = false;
     const received: string[] = [];
     const sock = await Bun.connect({
@@ -78,10 +84,12 @@ describe('stopping the server closes its open connections', () => {
   });
 
   it('an open websocket is closed', async () => {
-    const handle = boot();
+    const handle = await boot();
     // Mockup docs are the one type a socket may create, which is why this
     // reaches an open doc without an API call first.
-    const ws = new WebSocket(`ws://localhost:${handle.port}/y/stop-sockets-mock?type=mockup`);
+    const ws = new WebSocket(
+      `ws://localhost:${handle.port}/workspaces/${WS}/docs/stop-sockets-mock/y?type=mockup`,
+    );
     let closed = false;
     ws.addEventListener('close', () => {
       closed = true;
@@ -110,9 +118,11 @@ describe('stopping the server closes its open connections', () => {
     // It is the property `socket-handlers.ts` would lose first if `close`
     // ever became async — the promise would resolve after `docStore.flush()`,
     // and nothing would be waiting for it.
-    const handle = boot();
+    const handle = await boot();
     const docId = 'stop-sockets-handler-mock';
-    const ws = new WebSocket(`ws://localhost:${handle.port}/y/${docId}?type=mockup`);
+    const ws = new WebSocket(
+      `ws://localhost:${handle.port}/workspaces/${WS}/docs/${docId}/y?type=mockup`,
+    );
     await new Promise<void>((resolve, reject) => {
       ws.addEventListener('open', () => resolve());
       ws.addEventListener('error', () => reject(new Error('socket never opened')));

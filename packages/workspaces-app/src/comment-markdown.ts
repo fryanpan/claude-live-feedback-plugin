@@ -87,15 +87,20 @@ function inline(escaped: string): string {
 
 /**
  * A bare-URL candidate in ESCAPED text: an absolute http(s) URL, or a
- * root-relative path in one of the workspace shapes. Whitespace and parens
- * end a URL (raw `<>"'` cannot appear — they are entities by now).
+ * root-relative path under a board. Whitespace and parens end a URL (raw
+ * `<>"'` cannot appear — they are entities by now).
+ *
+ * `/review/` and `/mockup/` used to be alternatives here. `parseWorkspaceLink`
+ * stopped accepting them with the rest of the cutover, so matching them only
+ * bought a candidate that was rejected one call later — and left the deleted
+ * spellings looking live to the next reader.
  */
-const BARE_URL = /(?:https?:\/\/[^\s()]+|(?<=^|[\s(])\/(?:workspaces|review|mockup)\/[^\s()]+)/g;
+const BARE_URL = /(?:https?:\/\/[^\s()]+|(?<=^|[\s(])\/workspaces\/[^\s()]+)/g;
 
 /**
  * Only a link to THIS page's own server may earn a trusted title. A foreign
  * origin whose path merely matches a workspace shape must stay raw text:
- * `https://attacker.example/review/<real-doc-id>` would otherwise render as
+ * `https://attacker.example/workspaces/<ws>/docs/<id>` would otherwise render as
  * the real doc's title while navigating to the attacker — a trusted label on
  * a phishing href. Relative paths are same-origin by definition. The cost of
  * strictness is that a URL pasted under one advertised host (tailnet) and
@@ -139,7 +144,7 @@ function trimUrlTail(s: string): string {
  * markup, and the text segments are still escape-first.
  */
 function linkifyWorkspaceUrls(html: string): string {
-  if (!/https?:\/\/|\/(?:workspaces|review|mockup)\//.test(html)) return html;
+  if (!/https?:\/\/|\/workspaces\//.test(html)) return html;
   let anchorDepth = 0;
   let codeDepth = 0;
   let sawPending = false;

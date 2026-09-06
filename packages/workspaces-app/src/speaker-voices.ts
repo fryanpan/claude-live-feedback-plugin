@@ -14,6 +14,7 @@
  */
 
 import { type RosterVoice, speakerRoster } from '@feedback/core';
+import { api } from './doc-path.ts';
 
 interface MeetingSummary {
   meetingId: string;
@@ -36,7 +37,7 @@ export async function loadDocSpeakers(
   docId: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<DocSpeakers | null> {
-  const listed = await fetchImpl(`/api/docs/${encodeURIComponent(docId)}/meetings`);
+  const listed = await fetchImpl(api(`docs/${encodeURIComponent(docId)}/meetings`));
   if (!listed.ok) throw new Error(`meetings ${listed.status}`);
   const body = (await listed.json()) as { meetings?: MeetingSummary[] };
   const meetings = body.meetings ?? [];
@@ -47,7 +48,7 @@ export async function loadDocSpeakers(
     (m.startedAt ?? 0) >= (best.startedAt ?? 0) ? m : best,
   );
   const detail = await fetchImpl(
-    `/api/docs/${encodeURIComponent(docId)}/meetings/${encodeURIComponent(latest.meetingId)}`,
+    api(`docs/${encodeURIComponent(docId)}/meetings/${encodeURIComponent(latest.meetingId)}`),
   );
   if (!detail.ok) throw new Error(`meeting ${detail.status}`);
   const record = (await detail.json()) as {
@@ -79,7 +80,9 @@ export async function postSpeakerName(
   fetchImpl: typeof fetch = fetch,
 ): Promise<boolean> {
   const res = await fetchImpl(
-    `/api/docs/${encodeURIComponent(args.docId)}/meetings/${encodeURIComponent(args.meetingId)}/speakers`,
+    api(
+      `docs/${encodeURIComponent(args.docId)}/meetings/${encodeURIComponent(args.meetingId)}/speakers`,
+    ),
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

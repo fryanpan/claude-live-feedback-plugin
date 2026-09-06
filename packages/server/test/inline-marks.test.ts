@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { waitForFile } from './wait-for.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 /**
  * The layer no unit test covers: `POST /api/docs/:id/find_and_replace` is what
@@ -12,15 +13,19 @@ import { waitForFile } from './wait-for.ts';
  * So this asserts on the `**` markers in the FILE, which is exactly how the
  * loss was caught in the field, plus the report field on the HTTP response.
  */
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('find_and_replace over HTTP keeps the marks on a bound file', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'feedback-marks-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterAll(async () => {
@@ -31,7 +36,7 @@ describe('find_and_replace over HTTP keeps the marks on a bound file', () => {
   async function bind(docId: string, markdown: string): Promise<string> {
     const path = join(dataDir, `${docId}.md`);
     writeFileSync(path, markdown);
-    const res = await fetch(`${base}/api/docs`, {
+    const res = await fetch(`${base}/workspaces/${WS}/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId, type: 'markdown', sourceUrl: path }),
@@ -41,7 +46,7 @@ describe('find_and_replace over HTTP keeps the marks on a bound file', () => {
   }
 
   const replace = (docId: string, body: Record<string, unknown>) =>
-    fetch(`${base}/api/docs/${docId}/find_and_replace`, {
+    fetch(`${base}/workspaces/${WS}/docs/${docId}/find_and_replace`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),

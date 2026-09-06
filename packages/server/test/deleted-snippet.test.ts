@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as Y from 'yjs';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 /**
  * `deletedSnippet` round-trips through the REAL REST routes.
@@ -25,6 +26,9 @@ import { type ServerHandle, createServer } from '../src/server.ts';
  * content is the `content` Y.Text, so the anchor shape here is the one the
  * redline surface will actually produce.
  */
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('deletedSnippet anchor hint (HTTP)', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -37,6 +41,7 @@ describe('deletedSnippet anchor hint (HTTP)', () => {
     folder = mkdtempSync(join(tmpdir(), 'delsnip-src-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
 
     mkdirSync(join(folder, 'src'));
     writeFileSync(join(folder, 'README.md'), '# Project\n');
@@ -45,14 +50,14 @@ describe('deletedSnippet anchor hint (HTTP)', () => {
     const r = await fetch(`${base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ folderPath: folder, owner: '/cwd' }),
+      body: JSON.stringify({ folderPath: folder, owner: '/cwd', hubWorkspaceId: WS }),
     });
     const bind = (await r.json()) as { ok: boolean; workspaceId: string };
     if (!bind.ok) throw new Error(`bind failed: ${JSON.stringify(bind)}`);
 
     // The bind is lazy — open the code file the way the all-files tree does.
     const cr = await fetch(
-      `${base}/api/reviews/${encodeURIComponent(bind.workspaceId)}/context-file`,
+      `${base}/workspaces/${WS}/reviews/${encodeURIComponent(bind.workspaceId)}/context-file`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -93,7 +98,7 @@ describe('deletedSnippet anchor hint (HTTP)', () => {
   }
 
   it('survives a round trip through the REST thread routes', async () => {
-    const post = await fetch(`${base}/api/docs/${encodeURIComponent(docId)}/threads`, {
+    const post = await fetch(`${base}/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -111,7 +116,7 @@ describe('deletedSnippet anchor hint (HTTP)', () => {
     expect(created.thread.anchor.deletedSnippet).toBe('the removed words');
 
     // And it must still be there when read back out of the CRDT via the route.
-    const get = await fetch(`${base}/api/docs/${encodeURIComponent(docId)}/threads`);
+    const get = await fetch(`${base}/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads`);
     const listed = (await get.json()) as {
       threads: Array<{ id: string; anchor: { deletedSnippet?: string } }>;
     };
@@ -120,7 +125,7 @@ describe('deletedSnippet anchor hint (HTTP)', () => {
   });
 
   it('omits deletedSnippet on an ordinary comment', async () => {
-    const post = await fetch(`${base}/api/docs/${encodeURIComponent(docId)}/threads`, {
+    const post = await fetch(`${base}/workspaces/${WS}/docs/${encodeURIComponent(docId)}/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({

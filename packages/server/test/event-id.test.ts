@@ -26,6 +26,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { bootNonce, newEventId } from '../src/event-id.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const PERSON = { id: 'known-reviewer', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
 const settle = (ms = 400) => new Promise((r) => setTimeout(r, ms));
@@ -59,6 +60,9 @@ function listenData(res: Response): { frames: Array<Record<string, unknown>>; st
   };
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('broadcast event ids', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -74,11 +78,12 @@ describe('broadcast event ids', () => {
   const get = (path: string) =>
     fetch(`${base}${path}`, { headers: { host: `localhost:${handle.port}` } });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'event-id-'));
     srcDir = mkdtempSync(join(tmpdir(), 'event-id-src-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
   });
 
   afterEach(async () => {
@@ -90,23 +95,28 @@ describe('broadcast event ids', () => {
   it('stamps the SAME eid on both channels of one broadcast, and a new one per event', async () => {
     const w = await post('/workspaces', { name: 'Event Id Board', goal: 'Ship it.' });
     const { workspace } = (await w.json()) as { workspace: { id: string } };
+    WS = workspace.id;
     const path = join(srcDir, 'doc-one.md');
     writeFileSync(path, '# doc-one\n\nBody.\n');
-    await post('/api/docs', {
+    await post(`/workspaces/${workspace.id}/docs`, {
       docId: 'doc-one',
       sourceUrl: path,
       title: 'doc-one',
       hubWorkspaceId: workspace.id,
     });
 
-    const docStream = await get('/events/doc-one');
+    const docStream = await get(`/workspaces/${workspace.id}/docs/doc-one/events:stream`);
     const boardStream = await get(`/workspaces/${encodeURIComponent(workspace.id)}/events:stream`);
     const onDoc = listenData(docStream);
     const onBoard = listenData(boardStream);
     await settle(150);
 
     const comment = (text: string) =>
-      post('/api/docs/doc-one/threads', { author: PERSON, text, anchor: { kind: 'subject' } });
+      post(`/workspaces/${WS}/docs/doc-one/threads`, {
+        author: PERSON,
+        text,
+        anchor: { kind: 'subject' },
+      });
     await comment('First.');
     await settle();
     await comment('Second.');

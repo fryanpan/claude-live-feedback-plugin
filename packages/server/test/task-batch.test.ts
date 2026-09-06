@@ -78,7 +78,7 @@ describe('POST /workspaces/<id>/tasks/batch', () => {
     return tasks;
   }
 
-  beforeAll(() => {
+  beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'task-batch-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
@@ -278,7 +278,7 @@ describe('POST /workspaces/<id>/tasks/batch', () => {
       expect(serve?.after).toEqual([warm?.id as string]);
       expect(serve?.afterEnforce).toEqual([warm?.id as string]);
       // The surface a person reads: one blocker, named once.
-      const blocked = await post(`/api/tasks/${serve?.id}/transition`, {
+      const blocked = await post(`/workspaces/${wsId}/tasks/${serve?.id}/transition`, {
         to: 'in-progress',
         author: AGENT,
       });

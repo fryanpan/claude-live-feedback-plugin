@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { type SetDoc, selectSetSiblings, setDocsUrl } from '../src/set-nav.ts';
 
 /**
@@ -6,10 +6,13 @@ import { type SetDoc, selectSetSiblings, setDocsUrl } from '../src/set-nav.ts';
  * so they can be measured: what it ASKS the server for, and what it keeps.
  *
  * Both used to be one expression inside the render closure, and the cost was
- * invisible there — the client fetched `/api/docs` whole (4,205,683 bytes for
+ * invisible there — the client fetched the whole listing (4,205,683 bytes for
  * 4,062 rows, measured 2026-08-21) and filtered 6 out of it in a `.filter`
  * nobody could see the size of.
  */
+
+/** The board the page is standing on — every resource route is under it. */
+const WS = 'w-1';
 
 const doc = (docId: string, extra: Partial<SetDoc> = {}): SetDoc => ({
   docId,
@@ -18,12 +21,16 @@ const doc = (docId: string, extra: Partial<SetDoc> = {}): SetDoc => ({
 });
 
 describe('setDocsUrl', () => {
+  beforeEach(() => {
+    history.replaceState(null, '', `/workspaces/${WS}/docs/d-1`);
+  });
+
   it('asks the server for one set, not for every doc', () => {
-    expect(setDocsUrl('qb-4128')).toBe('/api/docs?setId=qb-4128');
+    expect(setDocsUrl('qb-4128')).toBe(`/workspaces/${WS}/docs?setId=qb-4128`);
   });
 
   it('escapes an id that would otherwise change the query', () => {
-    expect(setDocsUrl('a&b=c')).toBe('/api/docs?setId=a%26b%3Dc');
+    expect(setDocsUrl('a&b=c')).toBe(`/workspaces/${WS}/docs?setId=a%26b%3Dc`);
   });
 });
 

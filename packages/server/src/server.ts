@@ -7,6 +7,7 @@ import {
   agentIdForName,
   attachmentIdOf,
   contentKind,
+  parseThreadReviewItemId,
 } from '@feedback/core';
 import { createAccessDeps } from './access-deps.ts';
 import { releaseActivityLock } from './activity-lock.ts';
@@ -37,7 +38,7 @@ import { MeetingRelay } from './meeting-protocol.ts';
 import { MEETING_CAPTURE_ACTOR } from './meeting-task-capture.ts';
 import { MeetingStore } from './meetings.ts';
 import { isAllowedBrowserOrigin } from './middleware/browser-origin.ts';
-import { resolveWorkspaceScope } from './middleware/workspace-scope.ts';
+import { type WorkspaceScope, resolveWorkspaceScope } from './middleware/workspace-scope.ts';
 import { isGatedWrite, signInRequiredBody } from './middleware/write-gate.ts';
 import { spokenLinkRef } from './notes-link-intent.ts';
 import {
@@ -56,7 +57,11 @@ import { unreachableCallbackReason } from './recall.ts';
 import { scanSettledDocRefs } from './refs-backfill.ts';
 import { createOriginPolicy, createRequestAdmission } from './request-admission.ts';
 import { createRequestAttribution } from './request-attribution.ts';
-import { listArchivedReviews, readDocArchiveManifest } from './review-archive.ts';
+import {
+  listArchivedReviews,
+  readArchiveManifest,
+  readDocArchiveManifest,
+} from './review-archive.ts';
 import { createReviewGate } from './review-gate.ts';
 import type { ReviewThreadItem } from './review-queue.ts';
 import {
@@ -114,6 +119,7 @@ import { createStallWiring } from './stall-wiring.ts';
 import { TaskProjection, taskBodyDocId } from './task-projection.ts';
 import { type FiredOccurrence, createTaskScheduler } from './task-scheduler.ts';
 import {
+  type BoardWorkspace,
   DEFAULT_PARALLELISM_CAP,
   type ParallelismCapChange,
   type Task,
@@ -144,9 +150,11 @@ import {
   appCacheControl,
   readAppAssetManifest,
   renderBoardShell,
+  renderReviewNotFound,
   renderSigninShell,
   serveStaticUnder,
 } from './shells.ts';
+import { taskIdOfBodyDoc } from './task-row.ts';
 
 /**
  * Re-exported: these were declared in this file until the HTML shells moved
@@ -1243,6 +1251,157 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const resolveWorkspaceForDoc = (docId: string): string | null =>
     backTargetFor(docId, attachmentIdOf(docStore.peekMeta(docId) ?? {}))?.id ?? null;
 
+  /**
+   * Which boards hold this member, addressed through this collection — the
+   * one lookup `middleware/workspace-scope.ts` runs for every canonical
+   * `/workspaces/<id>/<collection>/<memberId>` request, and therefore the one
+   * place the mapping from a collection to the store that answers for it is
+   * written down.
+   *
+   * FOUR id spaces behind seven collections, and they are genuinely not one
+   * space, which is why the middleware asks with the collection rather than
+   * guessing from the shape of an id:
+   *
+   *   goals, tasks, dispatches   a ROW, in the store's own `workspaceId`
+   *                              field. A dispatch is keyed BY its task id,
+   *                              so it is the same question asked of the same
+   *                              row — closing a dispatch on a task another
+   *                              board holds is refused by the row, and there
+   *                              is no separate dispatch-to-board record for
+   *                              the two to disagree about.
+   *   docs, mockups, reviews     an ATTACHMENT, which is LINKED to boards and
+   *                              genuinely belongs to more than one: its
+   *                              review, and the board that review is filed
+   *                              on. `shareWorkspacesOf` is the resolver the
+   *                              share guard already reads for exactly this
+   *                              question, and reading the same one here is
+   *                              the point — two membership rules agree the
+   *                              day they are written and the one that drifts
+   *                              open is a breach.
+   *   review-items               a filed ask, which has no board of its own:
+   *                              it is carried by a ticket, or derived from a
+   *                              doc thread. Both halves answer through the
+   *                              row or the doc that carries it.
+   *
+   * An empty array is the answer for every id nothing holds, and the
+   * middleware turns that into the same 404 an unknown board gets — a
+   * separate "no such member" would tell a caller which ids are real.
+   */
+  const workspacesOfMember = (collection: string, memberId: string): readonly string[] => {
+    switch (collection) {
+      case 'goals':
+      case 'tasks': {
+        const row =
+          taskStore.getGoalRow(memberId)?.workspaceId ?? taskStore.getTask(memberId)?.workspaceId;
+        return row === undefined ? [] : [row];
+      }
+      case 'dispatches': {
+        // A dispatch is addressed by the TASK it is on, so its board is that
+        // task's board — and a dispatch whose task this store has no record of
+        // (soft-deleted, or a stray id) belongs to none. `dispatchesInWorkspace`
+        // already drops those from every board view for the same reason, and
+        // the registry prunes a record whose worktree has gone, so nothing is
+        // stranded by refusing to reach one through a board it is not on.
+        const row = taskStore.getTask(memberId)?.workspaceId;
+        return row === undefined ? [] : [row];
+      }
+      case 'docs':
+      case 'mockups':
+      case 'reviews': {
+        // The board-feedback doc belongs to EVERY board, and that is what it
+        // is for: one place feedback about the product lands, reachable from
+        // whichever board the person is looking at. It is filed on none of
+        // them — it is minted at startup, before any board exists — so the
+        // ordinary membership answer is "nowhere", which under the canonical
+        // shape would make it unaddressable from the very pages that embed
+        // its widget. Named here rather than by filing it on the default
+        // board, because filing it there would give it exactly one address
+        // and every other board's widget would 404.
+        if (memberId === BOARD_FEEDBACK_DOC_ID) {
+          return taskStore.listWorkspaces().map((w) => w.id);
+        }
+        // The two BOARD-OWNED families carry their board in the id itself
+        // (`ws:<workspaceId>`, `task:<taskId>`). They are never filed as
+        // attachments — the server mints them, the projection writes them —
+        // so the attachment resolver below answers "nowhere" for every one
+        // of them, which would 404 the board's own ydoc socket and every
+        // task body. Reading the id is not trusting it: the workspace still
+        // has to be the one in the path, and a `task:` id whose task this
+        // store has no record of belongs to no board at all.
+        if (memberId.startsWith('ws:')) {
+          const owning = memberId.slice('ws:'.length);
+          return taskStore.getWorkspace(owning) === undefined ? [] : [owning];
+        }
+        const bodyOf = taskIdOfBodyDoc(memberId);
+        if (bodyOf !== null) {
+          // BOTH stores, for the reason the `goals`/`tasks` case above reads
+          // them both: a goal band's body doc is spelled `task:<goalId>` too —
+          // one id space, two kinds of row — and asking only `getTask` here
+          // 404'd every goal description (goal-parity.test.ts caught it).
+          const row =
+            taskStore.getTask(bodyOf)?.workspaceId ?? taskStore.getGoalRow(bodyOf)?.workspaceId;
+          return row === undefined ? [] : [row];
+        }
+        // Through the doc store's alias table first. A caller NAMES a doc
+        // (`create_review_doc('my-plan', …)`) and the server mints the id it
+        // actually stores it under, so the name in the URL is very often the
+        // alias rather than the canonical id — and every board link is
+        // recorded against the canonical one. Asking the membership question
+        // about the alias answers "nowhere", which would have made the
+        // readable name the product hands out a 404 on its own board.
+        //
+        // `resolveDocId`, not `get`: this runs on EVERY scoped doc request,
+        // before the route does, and `get` activates the binding — hydrating
+        // the doc, and putting the membership check at the top of the
+        // fast-lane activation table (metrics-route.test.ts caught it there).
+        // The question here is only which name this one is; `resolveDocId`
+        // answers it off the alias table without making anything resident.
+        const canonical = docStore.resolveDocId(memberId);
+        const live = shareWorkspacesOf(canonical);
+        if (live.length > 0) return live;
+        // ARCHIVED, and this fallback is what makes `unarchive` addressable
+        // at all. Archiving unlinks the attachment from every board it was
+        // on — that is the point of it, a board row pointing at something
+        // that no longer loads is a dead end — so the live resolver above
+        // answers nothing for exactly the ids the restore verb takes, and
+        // without this every `POST …/docs/<id>/unarchive` would be refused
+        // by the guard that is meant to protect it.
+        //
+        // The manifest is the record of where it was, written so that
+        // unarchive can put it back; reading it here means "which board may
+        // restore this" and "which boards does restoring it return it to"
+        // are one answer rather than two that can disagree.
+        const manifest =
+          readDocArchiveManifest(dataDir, canonical) ?? readArchiveManifest(dataDir, canonical);
+        // An ORPHAN — filed on no board and archived from none — has NO
+        // address, and that is the answer rather than a gap. Its old one was
+        // `/review/<id>`, which named no board and is deleted with the rest of
+        // the pre-cutover paths; answering "every board" here would be
+        // reinstating that compatibility under another name, and would make
+        // this middleware unable to refuse for a whole class of member. The
+        // 404 is the prompt to file it, which the caller has to do anyway
+        // before handing the link to a person. (`BOARD_FEEDBACK_DOC_ID` above
+        // is not this case: it belongs to every board by design.)
+        return manifest?.linkedWorkspaces ?? [];
+      }
+      case 'review-items': {
+        // A derived `rt-…` id encodes the doc thread it came from; a minted
+        // `r-…` id is found on whichever ticket holds it. A decodable id is a
+        // CLAIM — the doc it names is asked for, not assumed — which is the
+        // same posture the resolve route takes on the same two families.
+        const thread = parseThreadReviewItemId(memberId);
+        if (thread) {
+          const board = resolveWorkspaceForDoc(thread.docId);
+          return board === null ? [] : [board];
+        }
+        const found = taskStore.findReviewItem(memberId);
+        return found === undefined ? [] : [found.workspaceId];
+      }
+      default:
+        return [];
+    }
+  };
+
   // Browser push, and the review-item quality gate that decides whether an
   // item may be announced at all. Built HERE rather than beside the other
   // stores because the gate needs `resolveWorkspaceForDoc` and the task
@@ -1435,7 +1594,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     j,
     isValidDocId,
     redirectTo,
-    resolveWorkspaceForDoc,
     withReviewUrl,
     reviewItemsFor,
     homeQueueTotal,
@@ -1479,6 +1637,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     isValidDocId,
     canonicalDocId,
     fileUnderBoardWorkspace,
+    workspacesOfMember,
     j,
     requestAddress: (req) => server.requestIP(req)?.address,
     agentTokenKey: agentTokenKeyFor,
@@ -1533,7 +1692,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     unlinkFromEveryBoardWorkspace,
     canonicalDocId,
   };
-  const { deleteReview, handleArchiveRoutes } = createArchiveRoutes(archiveRoutesCtx);
+  const { handleArchiveRoutes } = createArchiveRoutes(archiveRoutesCtx);
 
   /** What the two agent-id-keyed routes read instead of this closure's
    *  scope — the watch set, the roster and the store a merge moves. */
@@ -1950,17 +2109,32 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // `pass` means the path is not its business: not under `/workspaces/`,
         // or one of the board's HTML pages, which the shell at the tail of the
         // chain serves with its own not-found.
+        //
+        // What it hands DOWN is the other half. `scope` travels on every
+        // resource route's request and is what those routes match against —
+        // see `matchRest`. A handler with no scope has no remainder to match,
+        // so "the workspace was resolved" stops being something each route
+        // remembers to check and becomes the condition of it answering at
+        // all.
+        let scope: WorkspaceScope<BoardWorkspace> | undefined;
         {
           const scoped = resolveWorkspaceScope(
             {
-              workspaceExists: (id) => taskStore.getWorkspace(id) !== undefined,
-              workspaceOfRow: (rowId) =>
-                taskStore.getGoalRow(rowId)?.workspaceId ?? taskStore.getTask(rowId)?.workspaceId,
+              workspaceRecord: (id: string) => taskStore.getWorkspace(id),
+              workspacesOfMember,
               j,
+              // A browser asked for a page; answer it with one. The same
+              // shell the review route renders when a review has no members.
+              notFoundPage: () =>
+                new Response(renderReviewNotFound(pathname), {
+                  status: 404,
+                  headers: { 'content-type': 'text/html; charset=utf-8' },
+                }),
             },
             { pathname, method: req.method, url },
           );
           if (scoped.kind === 'refused') return scoped.response;
+          if (scoped.kind === 'scope') scope = scoped.scope;
         }
 
         // --- REST: run the summary backfill on request --- see
@@ -2001,6 +2175,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // --- REST: docs, created and listed — ./routes/docs.ts ---
         {
           const handled = await handleDocCreateListRoutes(docRoutesCtx, {
+            scope,
             req,
             url,
             pathname,
@@ -2021,6 +2196,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // and `routes/workspaces.ts` keeps it.
         {
           const handled = await handleWorkspaceRoutes(workspaceRoutesCtx, {
+            scope,
             req,
             pathname,
             url,
@@ -2039,6 +2215,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // `routes/tasks.ts` keeps it.
         {
           const handled = await handleTaskRoutes(taskRoutesCtx, {
+            scope,
             req,
             pathname,
             url,
@@ -2053,6 +2230,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // split: below the task routes, above the thread promote.
         {
           const handled = await handleWorkspaceGoalRoutes(workspaceRoutesCtx, {
+            scope,
             req,
             pathname,
             url,
@@ -2064,6 +2242,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // --- REST: promote a thread to a task — ./routes/docs.ts ---
         {
           const handled = await handleDocPromoteRoute(docRoutesCtx, {
+            scope,
             req,
             url,
             pathname,
@@ -2092,6 +2271,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // as before the split: after the agent merge route, before chat-audit.
         {
           const handled = await handleDispatchAndNoteRoutes(taskRoutesCtx, {
+            scope,
             req,
             pathname,
             url,
@@ -2106,6 +2286,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // dispatches, before the operator routes.
         {
           const handled = await handleChatAuditRoutes(chatAuditRoutesCtx, {
+            scope,
             req,
             pathname,
             visitor,
@@ -2129,6 +2310,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // the split: after the deploy routes, before the archive pair.
         {
           const handled = await handleWorkspaceAttachmentRoutes(workspaceRoutesCtx, {
+            scope,
             req,
             pathname,
             url,
@@ -2141,22 +2323,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // see ./routes/archive.ts. Same chain position as before the split:
         // after the agent attachments, before the board delete.
         {
-          const handled = await handleArchiveRoutes({ req, pathname, url, visitor });
+          const handled = await handleArchiveRoutes({ req, pathname, url, visitor, scope });
           if (handled) return handled;
         }
         // --- REST: the board delete --- see ./routes/workspace-delete.ts.
-        // It stays BELOW `DELETE /api/reviews/:id`, which is the whole reason
-        // that route exists: a board id reaching the review-only verb must
-        // answer not-found rather than being destroyed. `deleteReview` rides
-        // along on the request because it is built here, not in the context.
+        // It stays BELOW the archive family, which serves `DELETE
+        // /workspaces/<ws>/reviews/<setId>`. The order used to be load-bearing
+        // because one path meant either store; now the two verbs have two
+        // addresses and cannot be confused, and the order is kept because
+        // nothing is gained by moving it.
         {
           const handled = await handleWorkspaceDeleteRoute(workspaceRoutesCtx, {
+            scope,
             req,
             pathname,
             url,
             visitor,
             authorFor,
-            deleteReview,
           });
           if (handled) return handled;
         }
@@ -2165,6 +2348,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // before the meeting and calendar routes.
         {
           const handled = await handleReviewFileRoutes(reviewFileRoutesCtx, {
+            scope,
             req,
             url,
             pathname,
@@ -2180,6 +2364,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // doc catch-all below, which would otherwise swallow all of them.
         {
           const handled = await handleMeetingCalendarRoutes(meetingCalendarRoutesCtx, {
+            scope,
             req,
             url,
             pathname,
@@ -2190,6 +2375,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // --- REST: one doc and its threads — ./routes/docs.ts ---
         {
           const handled = await handleDocResourceRoutes(docRoutesCtx, {
+            scope,
             req,
             url,
             pathname,
@@ -2319,19 +2505,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       const taskId = docId.slice('task:'.length);
       return `${externalBaseUrl()}${taskDeepLink(workspaceId, taskId)}`;
     }
-    // Reuse `withReviewUrl` rather than rebuild the /review/ path here: it
-    // already branches on doc type (a mockup is not served from /review/),
-    // and one builder is the same reason `externalBaseUrl` is one function.
+    // Reuse `withReviewUrl` rather than rebuild the doc path here: it already
+    // branches on doc type (a mockup answers under `mockups/`, not `docs/`)
+    // and it resolves the board the doc is on, which the address now needs.
+    // One builder, the same reason `externalBaseUrl` is one function.
     const meta = docStore.peekMeta(docId);
     return meta ? withReviewUrl(meta).reviewUrl : undefined;
   }
 
   // Decorate doc metadata with a `reviewUrl` that's actually reachable from
-  // other devices on the tailnet / LAN. Markdown docs render at /review/...;
-  // mockup docs bound to a file on disk render at /mockup/<docId> — same
-  // one-call-one-URL contract as markdown. Mockup docs without a sourceUrl
-  // (e.g. dev-server surfaces hosted elsewhere) get no URL — there's nothing
-  // for us to serve.
+  // other devices on the tailnet / LAN. Markdown docs render at
+  // /workspaces/<ws>/docs/<docId>; mockup docs bound to a file on disk render
+  // at /workspaces/<ws>/mockups/<docId> — same one-call-one-URL contract as
+  // markdown. Both need the BOARD, which is why this resolves one: a doc id
+  // on its own stopped being an address in the canonical-routes cutover, so a
+  // doc no board holds gets no URL, exactly like a mockup without a sourceUrl
+  // (e.g. dev-server surfaces hosted elsewhere) — there's nothing to serve.
   function withReviewUrl<T extends { docId: string; type: DocType; sourceUrl?: string }>(
     meta: T,
     /**
@@ -2346,21 +2535,25 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   ): T & { reviewUrl?: string } {
     const base = externalBaseUrl();
     // The ONE place a resource URL is minted, which is why the whole fleet's
-    // addresses move with this function. A doc is addressed under the
-    // workspace holding it; a doc nothing holds keeps the old address, which
-    // still answers — better a working legacy URL than a link into a
-    // workspace that does not exist.
+    // addresses move with this function. A doc is addressed under the board
+    // holding it, and there is no other address: `/review/<id>` and
+    // `/mockup/<id>` are gone, so a doc no board holds gets NO `reviewUrl`
+    // rather than a link that 404s. That silence is the useful answer — it
+    // says "file this on a board before you hand it to anyone", which is the
+    // thing the caller has to do, where a legacy URL let them skip it and
+    // find out later in front of the reviewer.
     const home =
       precomputedHome !== undefined ? precomputedHome : resolveWorkspaceForDoc(meta.docId);
-    const ws = home ? `${base}/workspaces/${encodeURIComponent(home)}` : null;
+    if (!home) return meta;
+    const ws = `${base}/workspaces/${encodeURIComponent(home)}`;
     const id = encodeURIComponent(meta.docId);
     if (contentKind(meta.type) !== 'none') {
       // Every doc kind with server-held content (markdown/code/diff) shares
       // the SPA route; the app branches the editor on the doc's type at boot.
-      return { ...meta, reviewUrl: ws ? `${ws}/docs/${id}` : `${base}/review/${id}` };
+      return { ...meta, reviewUrl: `${ws}/docs/${id}` };
     }
     if (meta.type === 'mockup' && meta.sourceUrl) {
-      return { ...meta, reviewUrl: ws ? `${ws}/mockups/${id}` : `${base}/mockup/${id}` };
+      return { ...meta, reviewUrl: `${ws}/mockups/${id}` };
     }
     return meta;
   }

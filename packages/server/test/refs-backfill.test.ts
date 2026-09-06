@@ -35,6 +35,9 @@ interface Stats {
   workspacesTouched: string[];
 }
 
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
+
 describe('refs backfill (route + settle scan)', () => {
   let handle: ServerHandle;
   let dataDir: string;
@@ -90,6 +93,7 @@ describe('refs backfill (route + settle scan)', () => {
 
     const ws = await post('/workspaces', { name: 'refs-backfill-ws', goal: 'Mine the links.' });
     wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
+    WS = wsId;
     const goals = await local(`/workspaces/${wsId}/goals`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
@@ -105,7 +109,11 @@ describe('refs backfill (route + settle scan)', () => {
     // Doc B first — its id appears in fixtures for the other sources.
     const mdB = join(dataDir, 'refs-doc-b.md');
     writeFileSync(mdB, '# Doc B\n\nSupporting notes.\n');
-    const docB = await post('/api/docs', { docId: 'refs-doc-b', type: 'markdown', sourceUrl: mdB });
+    const docB = await post(`/workspaces/${WS}/docs`, {
+      docId: 'refs-doc-b',
+      type: 'markdown',
+      sourceUrl: mdB,
+    });
     docBId = ((await docB.json()) as { docId: string }).docId;
 
     // Doc A's prose links the plain task and the goal — the ALIAS is what a
@@ -121,7 +129,11 @@ describe('refs backfill (route + settle scan)', () => {
         '',
       ].join('\n'),
     );
-    const docA = await post('/api/docs', { docId: 'refs-doc-a', type: 'markdown', sourceUrl: mdA });
+    const docA = await post(`/workspaces/${WS}/docs`, {
+      docId: 'refs-doc-a',
+      type: 'markdown',
+      sourceUrl: mdA,
+    });
     docAId = ((await docA.json()) as { docId: string }).docId;
 
     // A row filed FROM doc A: its origin already ties it — the backfill must
@@ -133,13 +145,16 @@ describe('refs backfill (route + settle scan)', () => {
     expect(batch.status).toBe(200);
     originTaskId = ((await batch.json()) as { tasks: Array<{ id: string }> }).tasks[0]?.id ?? '';
 
-    // bodyTask's body carries a bare legacy link to doc B, BY ALIAS.
-    expect(handle.tasks.updateBodySnapshot(bodyTaskId, 'Details in /review/refs-doc-b now.')).toBe(
-      true,
-    );
+    // bodyTask's body carries a bare link to doc B, BY ALIAS.
+    expect(
+      handle.tasks.updateBodySnapshot(
+        bodyTaskId,
+        `Details in /workspaces/${WS}/docs/refs-doc-b now.`,
+      ),
+    ).toBe(true);
     // urlRefTask holds doc B only as a pasted-URL ref — the untraversable
     // spelling the ticket measured at 25-of-36.
-    const link = await post(`/api/tasks/${urlRefTaskId}/links`, {
+    const link = await post(`/workspaces/${WS}/tasks/${urlRefTaskId}/links`, {
       ref: { kind: 'url', url: `${base}/workspaces/${wsId}/docs/${docBId}` },
     });
     expect(link.status).toBe(200);
@@ -223,7 +238,10 @@ describe('refs backfill (route + settle scan)', () => {
     expect(docRefsOf(handle.tasks.getTask(proseTaskId)?.links)).toEqual([]); // control
     doc?.ydoc.transact(() => {
       const frag = prose.getProseFragment(doc.ydoc);
-      frag.insert(0, prose.parseMarkdownBlocks('Background in /review/refs-doc-b here.'));
+      frag.insert(
+        0,
+        prose.parseMarkdownBlocks(`Background in /workspaces/${WS}/docs/refs-doc-b here.`),
+      );
     }, 'agent');
     handle.docStore.settledContentRevision(bodyDocId);
     expect(docRefsOf(handle.tasks.getTask(proseTaskId)?.links)).toEqual([docBId]);
@@ -235,6 +253,8 @@ describe('refs backfill (route + settle scan)', () => {
     await handle.stop();
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
+    // No re-seed: same data dir, so `WS` — the board every fixture above is
+    // filed on and every prose link names — comes back with it.
     expect(docRefsOf(handle.tasks.getGoalRow(goalId)?.links)).toEqual([docAId]);
     expect(docRefsOf(handle.tasks.getTask(plainTaskId)?.links)).toEqual([docAId]);
   });

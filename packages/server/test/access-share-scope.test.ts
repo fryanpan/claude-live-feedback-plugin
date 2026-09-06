@@ -37,6 +37,10 @@ import {
   accessHarness,
   mintAccessShare,
 } from './access-share.ts';
+import { seedBoard } from './workspace-seed.ts';
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('Access-mode shares over HTTP', () => {
   let handle: ServerHandle;
@@ -111,6 +115,7 @@ describe('Access-mode shares over HTTP', () => {
       ...access.serverOptions,
     });
     base = `http://localhost:${handle.port}`;
+    WS = await seedBoard(base);
 
     // PRIVATE is deliberately NOT bound into either workspace: it lands on the
     // default "Unfiled" board, which no share below covers.
@@ -118,7 +123,7 @@ describe('Access-mode shares over HTTP', () => {
     writeFileSync(privatePath, `# ${PRIVATE}\n\nBody.\n`);
     expect(
       (
-        await local('/api/docs', {
+        await local(`/workspaces/${WS}/docs`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ docId: PRIVATE, type: 'markdown', sourceUrl: privatePath }),
@@ -387,10 +392,10 @@ describe('Access-mode shares over HTTP', () => {
   describe('the Access token is required', () => {
     it('refuses every other path on a share host without one', async () => {
       for (const p of [
-        `/review/${soloPath}`,
-        `/api/docs/${soloPath}`,
-        '/api/docs',
-        `/y/${soloPath}`,
+        `/workspaces/${soloBoardId}/docs/${soloPath}`,
+        `/workspaces/${soloBoardId}/docs/${soloPath}?format=json`,
+        `/workspaces/${WS}/docs`,
+        `/workspaces/${soloBoardId}/docs/${soloPath}/y`,
       ]) {
         const r = await pub(p);
         expect(r.status, p).toBe(401);
@@ -402,12 +407,18 @@ describe('Access-mode shares over HTTP', () => {
       // share is refused here even though it is validly signed by the same
       // Access team.
       const wrongShare = { ...soloShare, jwt: wsShare.jwt };
-      expect((await pub(`/api/docs/${soloPath}`, wrongShare)).status).toBe(401);
+      expect(
+        (await pub(`/workspaces/${soloBoardId}/docs/${soloPath}?format=json`, wrongShare)).status,
+      ).toBe(401);
       const garbage = { ...soloShare, jwt: 'not.a.jwt' };
-      expect((await pub(`/api/docs/${soloPath}`, garbage)).status).toBe(401);
+      expect(
+        (await pub(`/workspaces/${soloBoardId}/docs/${soloPath}?format=json`, garbage)).status,
+      ).toBe(401);
       // Positive control: the share's OWN token reads that doc, so the
       // refusals above are the token and not the path.
-      expect((await pub(`/api/docs/${soloPath}`, soloShare)).status).toBe(200);
+      expect(
+        (await pub(`/workspaces/${soloBoardId}/docs/${soloPath}?format=json`, soloShare)).status,
+      ).toBe(200);
     });
   });
 
@@ -424,15 +435,21 @@ describe('Access-mode shares over HTTP', () => {
     });
 
     it('reaches the doc filed on its board', async () => {
-      expect((await pub(`/api/docs/${soloPath}`, cookie)).status).toBe(200);
-      expect((await pub(`/review/${soloPath}`, cookie)).status).not.toBe(403);
-      expect((await pub(`/api/docs/${soloPath}/threads`, cookie)).status).toBe(200);
+      expect(
+        (await pub(`/workspaces/${soloBoardId}/docs/${soloPath}?format=json`, cookie)).status,
+      ).toBe(200);
+      expect((await pub(`/workspaces/${soloBoardId}/docs/${soloPath}`, cookie)).status).not.toBe(
+        403,
+      );
+      expect(
+        (await pub(`/workspaces/${soloBoardId}/docs/${soloPath}/threads`, cookie)).status,
+      ).toBe(200);
     });
 
     it('CANNOT reach another doc or enumerate', async () => {
-      expect((await pub(`/api/docs/${PRIVATE}`, cookie)).status).toBe(403);
-      expect((await pub(`/review/${PRIVATE}`, cookie)).status).toBe(403);
-      expect((await pub('/api/docs', cookie)).status).toBe(403);
+      expect((await pub(`/workspaces/${WS}/docs/${PRIVATE}?format=json`, cookie)).status).toBe(403);
+      expect((await pub(`/workspaces/${WS}/docs/${PRIVATE}`, cookie)).status).toBe(403);
+      expect((await pub(`/workspaces/${WS}/docs`, cookie)).status).toBe(403);
       expect((await pub('/workspaces', cookie)).status).toBe(403);
     });
 
@@ -457,8 +474,14 @@ describe('Access-mode shares over HTTP', () => {
     });
 
     it('CANNOT delete or wholesale-replace the doc it was given', async () => {
-      expect((await pub(`/api/docs/${soloPath}`, cookie, { method: 'DELETE' })).status).toBe(403);
-      const rewrite = await pub(`/api/docs/${soloPath}/content`, cookie, {
+      expect(
+        (
+          await pub(`/workspaces/${soloBoardId}/docs/${soloPath}?format=json`, cookie, {
+            method: 'DELETE',
+          })
+        ).status,
+      ).toBe(403);
+      const rewrite = await pub(`/workspaces/${soloBoardId}/docs/${soloPath}/content`, cookie, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ markdown: '# Wiped\n' }),
@@ -474,15 +497,27 @@ describe('Access-mode shares over HTTP', () => {
     });
 
     it('opens the entry doc and lists the tree', async () => {
-      expect((await pub(`/api/docs/${encodeURIComponent(entryDocId)}`, cookie)).status).toBe(200);
       expect(
-        (await pub(`/api/reviews/${encodeURIComponent(workspaceId)}/tree`, cookie)).status,
+        (
+          await pub(
+            `/workspaces/${boardId}/docs/${encodeURIComponent(entryDocId)}?format=json`,
+            cookie,
+          )
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await pub(
+            `/workspaces/${boardId}/reviews/${encodeURIComponent(workspaceId)}/tree`,
+            cookie,
+          )
+        ).status,
       ).toBe(200);
     });
 
     it('opens a sibling lazily and can then read it', async () => {
       const opened = await pub(
-        `/api/reviews/${encodeURIComponent(workspaceId)}/editable-file`,
+        `/workspaces/${boardId}/reviews/${encodeURIComponent(workspaceId)}/editable-file`,
         cookie,
         {
           method: 'POST',
@@ -492,11 +527,14 @@ describe('Access-mode shares over HTTP', () => {
       );
       expect(opened.status).toBe(200);
       const { docId } = (await opened.json()) as { docId: string };
-      expect((await pub(`/api/docs/${encodeURIComponent(docId)}`, cookie)).status).toBe(200);
+      expect(
+        (await pub(`/workspaces/${boardId}/docs/${encodeURIComponent(docId)}?format=json`, cookie))
+          .status,
+      ).toBe(200);
     });
 
     it('still cannot reach a doc outside the workspace', async () => {
-      expect((await pub(`/api/docs/${PRIVATE}`, cookie)).status).toBe(403);
+      expect((await pub(`/workspaces/${WS}/docs/${PRIVATE}?format=json`, cookie)).status).toBe(403);
     });
   });
 
@@ -543,7 +581,10 @@ describe('Access-mode shares over HTTP', () => {
     });
 
     it('the workspace link carries the id the sidebar needs, and the routes to use it', async () => {
-      const res = await pub(`/api/docs/${encodeURIComponent(entryDocId)}`, wsCookie);
+      const res = await pub(
+        `/workspaces/${boardId}/docs/${encodeURIComponent(entryDocId)}?format=json`,
+        wsCookie,
+      );
       expect(res.status).toBe(200);
       const { meta } = (await res.json()) as { meta: Record<string, unknown> };
       expect(meta.docId).toBe(entryDocId);
@@ -551,7 +592,12 @@ describe('Access-mode shares over HTTP', () => {
       // The id is only worth handing over because the nav routes are open to
       // this visitor — the pairing the doc-scoped link could never have.
       expect(
-        (await pub(`/api/reviews/${encodeURIComponent(workspaceId)}/tree`, wsCookie)).status,
+        (
+          await pub(
+            `/workspaces/${boardId}/reviews/${encodeURIComponent(workspaceId)}/tree`,
+            wsCookie,
+          )
+        ).status,
       ).toBe(200);
     });
 
@@ -559,30 +605,41 @@ describe('Access-mode shares over HTTP', () => {
       // Positive control is the test above: this same cookie reads its own
       // tree. The one-file workspace is a different set, so it is refused.
       expect(
-        (await pub(`/api/reviews/${encodeURIComponent(soloWorkspaceId)}/tree`, wsCookie)).status,
+        (
+          await pub(
+            `/workspaces/${WS}/reviews/${encodeURIComponent(soloWorkspaceId)}/tree`,
+            wsCookie,
+          )
+        ).status,
       ).toBe(403);
-      expect((await pub(`/api/docs/${soloPath}`, wsCookie)).status).toBe(403);
+      expect(
+        (await pub(`/workspaces/${soloBoardId}/docs/${soloPath}?format=json`, wsCookie)).status,
+      ).toBe(403);
     });
   });
 
   describe('revocation and expiry are immediate', () => {
     it('a revoked share kills a visitor already in a browser', async () => {
       const share = await mintAccessShare(base, access, soloBoardId);
-      expect((await pub(`/api/docs/${soloPath}`, share)).status).toBe(200);
+      expect(
+        (await pub(`/workspaces/${soloBoardId}/docs/${soloPath}?format=json`, share)).status,
+      ).toBe(200);
 
       const del = await local(`/api/share/${share.shareId}`, { method: 'DELETE' });
       expect(del.status).toBe(200);
 
       // Same token, same browser — refused on the very next request, because
       // the hostname no longer resolves to a share at all.
-      const after = await pub(`/api/docs/${soloPath}`, share);
+      const after = await pub(`/workspaces/${soloBoardId}/docs/${soloPath}?format=json`, share);
       expect(after.status).toBe(403);
       expect(((await after.json()) as { error: string }).error).toBe('unknown_host');
     });
 
     it('an expired share stops working without anyone touching the browser', async () => {
       const share = await mintAccessShare(base, access, soloBoardId, { ttlSeconds: 60 });
-      expect((await pub(`/api/docs/${soloPath}`, share)).status).toBe(200);
+      expect(
+        (await pub(`/workspaces/${soloBoardId}/docs/${soloPath}?format=json`, share)).status,
+      ).toBe(200);
 
       // Wind the expiry into the past via the TTL route's own validation
       // path — negative TTLs are refused, so expire it by re-issuing at 1s
@@ -593,7 +650,9 @@ describe('Access-mode shares over HTTP', () => {
       expect(live).toBeDefined();
       if (live) live.expiresAt = Date.now() - 1000;
 
-      expect((await pub(`/api/docs/${soloPath}`, share)).status).toBe(403);
+      expect(
+        (await pub(`/workspaces/${soloBoardId}/docs/${soloPath}?format=json`, share)).status,
+      ).toBe(403);
     });
   });
 
@@ -610,18 +669,22 @@ describe('Access-mode shares over HTTP', () => {
       });
       expect(r.status).toBe(404);
       // …and the hostname stays dead for the visitor holding its token.
-      expect((await pub(`/api/docs/${soloPath}`, share)).status).toBe(403);
+      expect(
+        (await pub(`/workspaces/${soloBoardId}/docs/${soloPath}?format=json`, share)).status,
+      ).toBe(403);
     });
   });
 
   describe('the public host is still default-deny for everything else', () => {
     it('refuses an unrelated hostname', async () => {
-      const r = await fetch(`${base}/api/docs`, { headers: { host: 'attacker.example.com' } });
+      const r = await fetch(`${base}/workspaces/${WS}/docs`, {
+        headers: { host: 'attacker.example.com' },
+      });
       expect(r.status).toBe(403);
     });
 
     it('still serves the local agent unauthenticated', async () => {
-      expect((await local('/api/docs')).status).toBe(200);
+      expect((await local(`/workspaces/${WS}/docs`)).status).toBe(200);
       expect((await local('/api/share')).status).toBe(200);
     });
   });
@@ -634,9 +697,12 @@ describe('Access-mode shares over HTTP', () => {
       // WRITABLE after unshare while HTTP correctly returned 401.
       const share = await mintAccessShare(base, access, soloBoardId);
 
-      const ws = new WebSocket(`ws://localhost:${handle.port}/y/${soloPath}`, {
-        headers: share.headers,
-      } as unknown as string[]);
+      const ws = new WebSocket(
+        `ws://localhost:${handle.port}/workspaces/${soloBoardId}/docs/${soloPath}/y`,
+        {
+          headers: share.headers,
+        } as unknown as string[],
+      );
       const opened = await new Promise<boolean>((resolve) => {
         ws.addEventListener('open', () => resolve(true));
         ws.addEventListener('error', () => resolve(false));
@@ -664,7 +730,9 @@ describe('Access-mode shares over HTTP', () => {
       // hung up on because someone else's invitation was revoked.
       const share = await mintAccessShare(base, access, soloBoardId);
 
-      const ws = new WebSocket(`ws://localhost:${handle.port}/y/${soloPath}`);
+      const ws = new WebSocket(
+        `ws://localhost:${handle.port}/workspaces/${soloBoardId}/docs/${soloPath}/y`,
+      );
       const opened = await new Promise<boolean>((resolve) => {
         ws.addEventListener('open', () => resolve(true));
         ws.addEventListener('error', () => resolve(false));
@@ -693,7 +761,7 @@ describe('Access-mode shares over HTTP', () => {
       const ids: string[] = [];
       for (const label of ['first', 'second']) {
         const share = await mintAccessShare(base, access, soloBoardId, { label });
-        const r = await pub(`/api/docs/${soloPath}/threads/by_find`, share, {
+        const r = await pub(`/workspaces/${soloBoardId}/docs/${soloPath}/threads/by_find`, share, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({

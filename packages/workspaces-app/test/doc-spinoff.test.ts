@@ -25,7 +25,11 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
+/** The board the page is standing on — every resource route is under it. */
+const WS = 'w-1';
+
 beforeEach(() => {
+  history.replaceState(null, '', `/workspaces/${WS}/docs/d-1`);
   document.body.innerHTML = '<div id="toast" class="hidden"></div><div id="editor"></div>';
 });
 
@@ -124,7 +128,7 @@ describe('creating a task from a selection', () => {
     await vi.waitFor(() => expect(toastText()).toBe('Undone.'));
     const archive = calls.find((c) => c.url.includes('/archive'));
     // Archived, never deleted — the row may already have been read or ranked.
-    expect(archive?.url).toBe('/api/tasks/t-9/archive');
+    expect(archive?.url).toBe(`/workspaces/${WS}/tasks/t-9/archive`);
     expect(document.querySelector('a[href*="t-9"]')).toBeNull();
   });
 

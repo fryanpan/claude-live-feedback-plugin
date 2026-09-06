@@ -180,7 +180,7 @@ describe('yjs websocket compression', () => {
       });
       expect(r.status).toBe(200);
     }
-    const path = `/y/${encodeURIComponent(workspaceDocId(workspace.id))}?type=workspace`;
+    const path = `/workspaces/${workspace.id}/docs/${encodeURIComponent(workspaceDocId(workspace.id))}/y?type=workspace`;
 
     const offered = await handshakeAndSync(path, 'permessage-deflate; client_max_window_bits');
     expect(offered.status).toBe(101);

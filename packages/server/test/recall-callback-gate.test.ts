@@ -29,6 +29,10 @@ const TOKEN = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
 const BOTH = { relayConfigured: true, webhookSecretSet: true };
 const NEITHER = { relayConfigured: false, webhookSecretSet: false };
 
+/** The board this file's docs, tasks and reviews are filed under. */
+// A board id, spelled out: this file tests the predicate, not a server.
+const WS = 'w-recall';
+
 describe('the two callbacks, when their credentials are configured', () => {
   it('admits the websocket upgrade Recall dials', () => {
     expect(recallCallbackAllows(`/recall/${TOKEN}`, 'GET', BOTH)).toBe(true);
@@ -138,11 +142,11 @@ describe('near-misses fail closed', () => {
 
   it('refuses the rest of the product, which is the whole point', () => {
     // The routes an unauthenticated tunnel visitor would most want.
-    expect(recallCallbackAllows('/api/docs', 'GET', BOTH)).toBe(false);
+    expect(recallCallbackAllows(`/workspaces/${WS}/docs`, 'GET', BOTH)).toBe(false);
     expect(recallCallbackAllows('/api/deploy', 'POST', BOTH)).toBe(false);
     expect(recallCallbackAllows('/', 'GET', BOTH)).toBe(false);
-    expect(recallCallbackAllows('/y/some-doc', 'GET', BOTH)).toBe(false);
-    expect(recallCallbackAllows('/audio/some-doc', 'GET', BOTH)).toBe(false);
+    expect(recallCallbackAllows(`/workspaces/${WS}/docs/some-doc/y`, 'GET', BOTH)).toBe(false);
+    expect(recallCallbackAllows(`/workspaces/${WS}/docs/some-doc/audio`, 'GET', BOTH)).toBe(false);
     expect(recallCallbackAllows('', 'GET', BOTH)).toBe(false);
   });
 });

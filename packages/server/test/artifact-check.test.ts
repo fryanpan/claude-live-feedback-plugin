@@ -484,7 +484,7 @@ describe('server wiring: REST done-transition triggers the check', () => {
       links: [{ kind: 'url', url: PR_URL }],
     });
     const { task } = (await created.json()) as { task: { id: string } };
-    const moved = await post(`/api/tasks/${task.id}/transition`, {
+    const moved = await post(`/workspaces/${workspace.id}/tasks/${task.id}/transition`, {
       to: 'done',
       author: REST_PERSON,
     });

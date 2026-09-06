@@ -66,6 +66,8 @@ interface StoredThread {
  */
 const SAME_ORIGIN = /^\/[^/]/;
 
+/** The board this file's docs, tasks and reviews are filed under. */
+
 describe('voice actions (§3.8): status and assignee, on the speaker’s authority', () => {
   let handle: ServerHandle;
   /** The agent's event stream, held the way the MCP holds it after attaching. */
@@ -160,17 +162,23 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
   const newDoc = async (docId: string): Promise<string> => {
     const file = join(dataDir, `${docId}.md`);
     writeFileSync(file, '# Ranking\n\nthe ranking clause\n');
-    const made = await post('/api/docs', { docId, type: 'markdown', sourceUrl: file });
+    const made = await post(`/workspaces/${boardId}/docs`, {
+      docId,
+      type: 'markdown',
+      sourceUrl: file,
+    });
     expect(made.status).toBe(200);
     const mintedId = ((await made.json()) as { docId: string }).docId;
-    expect((await post(`/workspaces/${boardId}/docs`, { docId: mintedId })).status).toBe(200);
+    expect((await post(`/workspaces/${boardId}/docs:attach`, { docId: mintedId })).status).toBe(
+      200,
+    );
     return mintedId;
   };
 
   /** An open review item: an AGENT declares, so the run is unanswered and the
    *  thread is genuinely in the queue rather than merely present. */
   const declare = async (docId: string, headline: string): Promise<string> => {
-    const r = await post(`/api/docs/${docId}/threads`, {
+    const r = await post(`/workspaces/${boardId}/docs/${docId}/threads`, {
       author: AGENT,
       text: `${headline} — both paths are built either way.`,
       anchor: { kind: 'subject' },
@@ -189,7 +197,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
 
   /** Threads read back off the store, never out of a write's response body. */
   const threadsOf = async (docId: string): Promise<StoredThread[]> => {
-    const r = await local(`/api/docs/${docId}/threads`);
+    const r = await local(`/workspaces/${boardId}/docs/${docId}/threads`);
     expect(r.status).toBe(200);
     return ((await r.json()) as { threads: StoredThread[] }).threads;
   };
@@ -220,7 +228,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
     blockedTaskId = await newTask(boardId, { title: 'Cut over the read path' });
     expect(
       (
-        await post(`/api/tasks/${blockedTaskId}/after`, {
+        await post(`/workspaces/${boardId}/tasks/${blockedTaskId}/after`, {
           after: [blockerTaskId],
           afterEnforce: [blockerTaskId],
           author: PERSON,
@@ -456,7 +464,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
       // 'fast-path', not 'fast-path-action': nothing was written, and the MCP
       // suppresses exactly "a lookup the server already answered".
       expect(body.route).toBe('fast-path');
-      expect(body.navigate).toBe(`/review/${linkedDocId}`);
+      expect(body.navigate).toBe(`/workspaces/${boardId}/docs/${linkedDocId}`);
       expect(body.navigate).toMatch(SAME_ORIGIN);
     });
 
@@ -518,7 +526,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
       const body = await say(boardId, 'the ranking notes doc', { surface: 'board' });
 
       expect(body.route).toBe('fast-path');
-      expect(body.navigate).toBe(`/review/${noItemDocId}`);
+      expect(body.navigate).toBe(`/workspaces/${boardId}/docs/${noItemDocId}`);
       expect(body.navigate).toMatch(SAME_ORIGIN);
     });
   });

@@ -37,6 +37,7 @@
  */
 
 import type { LeadPresence, User } from '@feedback/core';
+import { api } from './doc-path.ts';
 import { floatDock } from './float-dock.ts';
 import { leadReceiptSuffix } from './lead-banner.ts';
 
@@ -149,7 +150,7 @@ export function mountPlanGate(opts: PlanGateOpts): PlanGateHandle {
   const subscribe = opts.subscribe ?? defaultSubscribe;
   const setTimer = opts.setTimer ?? ((fn, ms) => setTimeout(fn, ms) as unknown as number);
   const clearTimer = opts.clearTimer ?? ((h) => clearTimeout(h));
-  const docUrl = `/api/docs/${encodeURIComponent(docId)}`;
+  const docUrl = api(`docs/${encodeURIComponent(docId)}`);
 
   const float = document.createElement('button');
   float.type = 'button';

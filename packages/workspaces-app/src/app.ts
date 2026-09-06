@@ -2,6 +2,7 @@ import type { FeedbackClient, User } from '@feedback/core';
 import type { BootLocation, BootStorage, BootWindow } from './boot-env.ts';
 import { mountCode } from './code/code-app.ts';
 import { fetchDocMeta } from './doc-meta.ts';
+import { docSocketUrl, workspaceIdFromPath } from './doc-path.ts';
 import { el, showToast } from './doc/chrome-dom.ts';
 import { wireThreadRangeClicks } from './doc/chrome-panels.ts';
 import { type CommentPillHandle, mountCommentPill } from './doc/doc-comment-pill.ts';
@@ -64,9 +65,6 @@ export interface AppBootEnv {
  */
 export async function bootApp(env: AppBootEnv): Promise<() => void> {
   const { document, location, localStorage, window, connect } = env;
-
-  const DEFAULT_WS_PATH = (docId: string, type: string) =>
-    `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/y/${encodeURIComponent(docId)}?type=${encodeURIComponent(type)}`;
 
   /**
    * Wire the topbar doc-switcher dropdown ONCE (shell-level, doc-independent).
@@ -139,7 +137,8 @@ export async function bootApp(env: AppBootEnv): Promise<() => void> {
     canWrite: writeAccess.canWrite,
     fetchMeta: fetchDocMeta,
     connectFor: (docId, docType) => {
-      const client = connect(DEFAULT_WS_PATH(docId, docType));
+      const board = workspaceIdFromPath(location.pathname + location.search);
+      const client = connect(docSocketUrl(location, docId, docType, board));
       installStaleClientNotice(client);
       return client;
     },

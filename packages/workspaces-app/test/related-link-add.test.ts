@@ -59,6 +59,7 @@ function actions() {
 const toastText = () => document.getElementById('board-toast')?.textContent ?? '';
 
 beforeEach(() => {
+  history.replaceState(null, '', `/workspaces/${WS}/tasks/t-me`);
   sent = [];
   reply = { status: 200, body: { ok: true } };
   const toast = document.createElement('div');
@@ -83,7 +84,7 @@ describe('what the add box writes', () => {
   it('makes a ticket link into a blocking edge', async () => {
     await actions().addRelatedLink(task(), `/workspaces/${WS}?task=t-gate`);
     expect(sent).toHaveLength(1);
-    expect(sent[0]?.path).toBe('/api/tasks/t-me/park');
+    expect(sent[0]?.path).toBe(`/workspaces/${WS}/tasks/t-me/park`);
     expect(sent[0]?.body.blockedBy).toEqual(['t-gate']);
   });
 
@@ -93,7 +94,7 @@ describe('what the add box writes', () => {
     // It used to go to /park with a goal id, which the store refuses because
     // goal rows are not in its task map: the paste could only ever fail, and
     // the reader was told the ticket-block had failed.
-    expect(sent[0]?.path).toBe('/api/tasks/t-me/links');
+    expect(sent[0]?.path).toBe(`/workspaces/${WS}/tasks/t-me/links`);
     expect(sent[0]?.body.ref).toEqual({ kind: 'url', url: `/workspaces/${WS}?goal=g-board` });
     expect(toastText()).toBe('');
     // Control: this address IS recognised as a goal on this workspace, so the

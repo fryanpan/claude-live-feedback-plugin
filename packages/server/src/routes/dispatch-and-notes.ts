@@ -1,13 +1,14 @@
+import { parseAgentNote, resolveNoteTarget } from '../agent-notes.ts';
+import { SHARED_IDENTITY_ERROR, SHARED_IDENTITY_MESSAGE } from '../agent-watches.ts';
+import { isSharedAgentName } from '../chat-audit.ts';
+import { isValidDispatchTaskId } from '../dispatch-registry.ts';
 /**
  * Builder dispatches, and the notes a session writes onto the row it holds.
  *
  * Lifted verbatim out of `createServer`'s request closure; the handlers
  * read their collaborators off `TaskRoutesContext` instead of the scope.
  */
-import { parseAgentNote, resolveNoteTarget } from '../agent-notes.ts';
-import { SHARED_IDENTITY_ERROR, SHARED_IDENTITY_MESSAGE } from '../agent-watches.ts';
-import { isSharedAgentName } from '../chat-audit.ts';
-import { isValidDispatchTaskId } from '../dispatch-registry.ts';
+import { matchRest, restIs } from '../middleware/workspace-scope.ts';
 import type { TaskRouteRequest, TaskRoutesContext } from './task-routes-context.ts';
 
 /** Answers the routes below, or `undefined` when the path is none of them. */
@@ -25,15 +26,15 @@ export async function handleDispatchAndNoteRoutes(
     parallelismCapView,
     proposeAllowRule,
   } = ctx;
-  const { req, pathname, visitor } = rq;
+  const { req, pathname, scope, visitor } = rq;
   // --- REST: builder dispatches ---
   // The lead's statement that a builder is working a task in a private
   // worktree, so the stall loop can read worktree churn as the row
   // moving. POST registers {taskId, worktreePath} (re-POST replaces);
-  // DELETE /api/dispatches/<taskId> closes on terminal. The registry
+  // DELETE /workspaces/<ws>/dispatches/<taskId> closes on terminal. The registry
   // validates paths and prunes dispatches whose worktree is gone. See
   // dispatch-registry.ts.
-  if (pathname === '/api/dispatches') {
+  if (restIs(scope, 'dispatches')) {
     // Same defense-in-depth posture as the agent-watches route: no
     // share host reaches here today, and this keeps a later
     // allowlisting from exposing host filesystem paths to an external
@@ -79,7 +80,7 @@ export async function handleDispatchAndNoteRoutes(
     }
     return j(405, { error: 'method not allowed' });
   }
-  const dispatchCloseMatch = pathname.match(/^\/api\/dispatches\/([^/]+)$/);
+  const dispatchCloseMatch = matchRest(scope, /^dispatches\/([^/]+)$/);
   if (dispatchCloseMatch) {
     if (visitor) return j(403, { error: 'not available to share visitors' });
     if (req.method === 'DELETE') {
@@ -95,7 +96,7 @@ export async function handleDispatchAndNoteRoutes(
   // body rules as the hook route — `parseAgentNote`, so a shared agent
   // name is refused identically — same append, same per-agent ring.
   // 202 to match: a status is fire-and-forget for the poster too.
-  const taskNotesMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/notes$/);
+  const taskNotesMatch = matchRest(scope, /^tasks\/([^/]+)\/notes$/);
   if (taskNotesMatch) {
     if (visitor) return j(403, { error: 'not available to share visitors' });
     if (req.method !== 'POST') return j(405, { error: 'method not allowed' });

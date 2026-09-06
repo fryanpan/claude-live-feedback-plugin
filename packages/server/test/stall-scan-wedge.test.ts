@@ -37,9 +37,13 @@ import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { boundFiles } from '../src/slow-fs.ts';
 import { makeFifo, releaseFifosIn } from './fifo.ts';
+import { seedBoard } from './workspace-seed.ts';
 
 const DOC_ID = 'board-doc-that-stopped-answering';
 const LEAD = { id: 'agent-cartographer', name: 'Cartographer', kind: 'agent' };
+
+/** The board this file's docs, tasks and reviews are filed under. */
+let WS = '';
 
 describe('the stall scan over a board holding an unreadable doc', () => {
   let dataDir: string;
@@ -58,6 +62,7 @@ describe('the stall scan over a board holding an unreadable doc', () => {
 
     const first = createServer({ port: 0, dataDir, requireSignInToWrite: false });
     const base = `http://localhost:${first.port}`;
+    WS = await seedBoard(base);
     const post = (path: string, body: unknown) =>
       fetch(`${base}${path}`, {
         method: 'POST',
@@ -68,14 +73,23 @@ describe('the stall scan over a board holding an unreadable doc', () => {
     const created = await post('/workspaces', { name: 'search-revamp', leadAgentId: LEAD.id });
     expect(created.status).toBe(200);
     workspaceId = ((await created.json()) as { workspace: { id: string } }).workspace.id;
+    WS = workspaceId;
 
     expect(
-      (await post('/api/docs', { docId: DOC_ID, type: 'markdown', sourceUrl: boundPath })).status,
+      (
+        await post(`/workspaces/${WS}/docs`, {
+          docId: DOC_ID,
+          type: 'markdown',
+          sourceUrl: boundPath,
+        })
+      ).status,
     ).toBe(200);
     // Onto the board itself: `heldThreadReviewItems` walks `workspace.docIds`,
     // which is the loop this test is about. A doc merely LINKED to a row is
     // reached by a different walk.
-    expect((await post(`/workspaces/${workspaceId}/docs`, { docId: DOC_ID })).status).toBe(200);
+    expect((await post(`/workspaces/${workspaceId}/docs:attach`, { docId: DOC_ID })).status).toBe(
+      200,
+    );
     await first.stop();
 
     // The folder goes bad. Everything else about the path is unchanged — it
