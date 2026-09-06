@@ -6,7 +6,7 @@
 [test]
 preload = [
   # Ordered: the timing scale must be in the environment before any test file
-  # imports the server, because the room cadences resolve at module load.
+  # imports the server, because the doc cadences resolve at module load.
   "./packages/server/test/timing.preload.ts",
   "./packages/server/test/fd-contention.preload.ts",
 ]
