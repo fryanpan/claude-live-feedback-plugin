@@ -1365,7 +1365,7 @@ export class DocStore {
     const fresh = boundFiles.takeFresh(path);
     if (fresh) {
       return fresh.exists
-        ? { exists: true, text: fresh.text, mtimeMs: fresh.mtimeMs }
+        ? { exists: true, text: fresh.text, mtimeMs: fresh.mtimeMs, size: fresh.size }
         : { exists: false };
     }
     if (boundFiles.quarantined(path)) {
