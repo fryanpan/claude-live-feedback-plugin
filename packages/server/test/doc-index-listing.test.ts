@@ -1,6 +1,6 @@
 /**
  * The listing served from `<docId>.index.json` must equal the listing served
- * from hydrated rooms, field for field.
+ * from hydrated docs, field for field.
  *
  * This is the load-bearing test of the index. Every other benefit — a board
  * that renders without loading 5,600 CRDTs, and later a server that does not
@@ -122,9 +122,9 @@ describe('an index-backed listing equals the hydrated listing', () => {
       } else if (shape === 6) {
         docStore.getOrCreate(docId, { type: 'mockup', title: `Mock ${i}` });
       } else {
-        const room = docStore.getOrCreate(docId, { type: 'markdown', title: `Threaded ${i}` });
-        addThread(room.ydoc, `${docId}-open`, 'open');
-        addThread(room.ydoc, `${docId}-done`, 'resolved');
+        const doc = docStore.getOrCreate(docId, { type: 'markdown', title: `Threaded ${i}` });
+        addThread(doc.ydoc, `${docId}-open`, 'open');
+        addThread(doc.ydoc, `${docId}-done`, 'resolved');
       }
     }
     docStore.flush();
@@ -219,9 +219,9 @@ describe('an index-backed listing equals the hydrated listing', () => {
 
   it('carries open and total thread counts without loading the doc', () => {
     const docStore = makeDocStore(dataDir);
-    const room = docStore.getOrCreate('counted', { type: 'markdown', title: 'Counted' });
-    addThread(room.ydoc, 'still-open', 'open');
-    addThread(room.ydoc, 'done', 'resolved');
+    const doc = docStore.getOrCreate('counted', { type: 'markdown', title: 'Counted' });
+    addThread(doc.ydoc, 'still-open', 'open');
+    addThread(doc.ydoc, 'done', 'resolved');
     docStore.flush();
 
     const counts = docStore.threadCountsFromIndex('counted');

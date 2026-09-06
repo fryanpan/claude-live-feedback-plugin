@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
 import { type DocMeta, type DocType, attachmentIdOf } from '@feedback/core';
 import type { BindDiffOpts } from './bind-diff.ts';
-import type { DocRoom } from './doc-store.ts';
+import type { LiveDoc } from './doc-store.ts';
 import type { DiffFileEntry } from './git-diff.ts';
 import { isPrivateMetaKey } from './private-meta.ts';
 /**
@@ -20,7 +20,7 @@ import { isPrivateMetaKey } from './private-meta.ts';
 /** The slice of DocStore the bind flows actually need (avoids a runtime
  *  circular import; DocStore passes itself). */
 export interface BindHost {
-  get(docId: string): DocRoom | undefined;
+  get(docId: string): LiveDoc | undefined;
   /** Force a persistence pass for a doc whose in-memory meta changed without
    *  a CRDT update — the private sidecar keys have no Yjs write to ride. */
   persistMeta(docId: string): void;
@@ -48,7 +48,7 @@ export interface BindHost {
       diffGroupRank?: number;
       diffGroupDetails?: string;
     },
-  ): DocRoom;
+  ): LiveDoc;
   // Every attach here reads a path the CALLER supplied — a file in a repo
   // the bind was pointed at — so all three are the pool doors rather than the
   // synchronous ones. A bind loop over a repository whose folder has stopped
@@ -91,13 +91,13 @@ export function isExcluded(relPath: string, excludes: string[]): boolean {
 
 /**
  * Refresh the derived diff fields (status, rename source, line counts) on
- * an existing room. `initDocMeta` is deliberately set-if-absent, which is
+ * an existing doc. `initDocMeta` is deliberately set-if-absent, which is
  * right for identity fields but wrong for these — in working-tree mode
  * they change every time the agent edits, and a re-bind should show the
  * current numbers, not the ones from the first bind.
  */
 export function refreshDiffMeta(
-  room: DocRoom,
+  doc: LiveDoc,
   entry: DiffFileEntry,
   group?: { group: string; rank: number; details?: string },
 ): void {
@@ -114,16 +114,16 @@ export function refreshDiffMeta(
     diffGroupRank: group?.rank,
     diffGroupDetails: group?.details,
   };
-  const m = room.ydoc.getMap('meta');
+  const m = doc.ydoc.getMap('meta');
   const changed = (Object.entries(next) as Array<[keyof DocMeta, unknown]>).filter(
-    ([k, v]) => v !== undefined && room.meta[k] !== v,
+    ([k, v]) => v !== undefined && doc.meta[k] !== v,
   );
   if (changed.length === 0) return;
-  room.ydoc.transact(() => {
+  doc.ydoc.transact(() => {
     for (const [k, v] of changed) m.set(k, v);
   });
   for (const [k, v] of changed) {
-    (room.meta as unknown as Record<string, unknown>)[k] = v;
+    (doc.meta as unknown as Record<string, unknown>)[k] = v;
   }
 }
 
@@ -149,7 +149,7 @@ export function rememberWorkspaceConfig(
   }
 }
 
-/** Set (or, for an undefined value, DELETE) meta keys on a room, skipping
+/** Set (or, for an undefined value, DELETE) meta keys on a doc, skipping
  *  keys already at the target value. Compares by JSON so array/object values
  *  don't rewrite on every bind. */
 export function writeMeta(
@@ -157,16 +157,16 @@ export function writeMeta(
   docId: string,
   entries: Array<[keyof DocMeta, unknown]>,
 ): void {
-  const room = host.get(docId);
-  if (!room) return;
-  const changed = entries.filter(([k, v]) => JSON.stringify(room.meta[k]) !== JSON.stringify(v));
+  const doc = host.get(docId);
+  if (!doc) return;
+  const changed = entries.filter(([k, v]) => JSON.stringify(doc.meta[k]) !== JSON.stringify(v));
   if (changed.length === 0) return;
-  const m = room.ydoc.getMap('meta');
-  room.ydoc.transact(() => {
+  const m = doc.ydoc.getMap('meta');
+  doc.ydoc.transact(() => {
     for (const [k, v] of changed) {
       // Host-describing keys never enter the CRDT — the sync channel hands
       // the whole doc to share visitors. They live in the sidecar, which
-      // saveToDisk writes from `room.meta`, so updating the in-memory copy
+      // saveToDisk writes from `doc.meta`, so updating the in-memory copy
       // below is the whole write. No call site passes one today; the guard
       // is here so a future one can't reopen the hole by accident.
       if (isPrivateMetaKey(k as string)) continue;
@@ -175,7 +175,7 @@ export function writeMeta(
     }
   });
   for (const [k, v] of changed) {
-    (room.meta as unknown as Record<string, unknown>)[k] = v;
+    (doc.meta as unknown as Record<string, unknown>)[k] = v;
   }
   // A private-only change makes no CRDT update, so nothing would schedule the
   // write that persists the sidecar. Ask for one explicitly.
@@ -186,16 +186,16 @@ export function writeMeta(
  *  writing `false`, so a live member's meta looks the same as it did before
  *  this feature existed. */
 export function setStaleFlag(host: BindHost, docId: string, stale: boolean): void {
-  const room = host.get(docId);
-  if (!room) return;
-  if (stale === (room.meta.stale === true)) return;
-  const m = room.ydoc.getMap('meta');
-  room.ydoc.transact(() => {
+  const doc = host.get(docId);
+  if (!doc) return;
+  if (stale === (doc.meta.stale === true)) return;
+  const m = doc.ydoc.getMap('meta');
+  doc.ydoc.transact(() => {
     if (stale) m.set('stale', true);
     else m.delete('stale');
   });
-  if (stale) room.meta.stale = true;
-  else room.meta.stale = undefined;
+  if (stale) doc.meta.stale = true;
+  else doc.meta.stale = undefined;
 }
 
 /** Write a group assignment onto a member, DELETING keys the new assignment

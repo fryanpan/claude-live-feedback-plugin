@@ -9,10 +9,10 @@
  * answer "this set is finished", and they are the only writers that treat
  * a set's member docs as one unit.
  *
- * What is NOT here is the room lifecycle they act on. Hydration, teardown,
+ * What is NOT here is the doc lifecycle they act on. Hydration, teardown,
  * alias release and the persisted index stay in `doc-store.ts`, reached through
  * the interface below — so archiving can move a doc's files without this
- * file knowing what a room is made of.
+ * file knowing what a doc is made of.
  */
 import { existsSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
@@ -40,7 +40,7 @@ import {
   moveDocIndex,
   readDocIndex,
 } from './doc-index.ts';
-import type { DocRoom, WorkspaceDirNode, WorkspaceFileNode, WorkspaceTree } from './doc-store.ts';
+import type { LiveDoc, WorkspaceDirNode, WorkspaceFileNode, WorkspaceTree } from './doc-store.ts';
 import { isListedFile, scanFolderPaths } from './fs-scan.ts';
 import { privateMetaPath } from './private-meta.ts';
 import {
@@ -59,13 +59,13 @@ import { isWithinRoot } from './safe-path.ts';
 import { boundFiles } from './slow-fs.ts';
 
 /**
- * What the workspace surface needs from the room lifecycle. Deliberately
- * verbs rather than the maps behind them: `residentRoom` is the doc map,
+ * What the workspace surface needs from the doc lifecycle. Deliberately
+ * verbs rather than the maps behind them: `residentDoc` is the doc map,
  * `setIndexEntry` / `deleteIndexEntry` are the persisted doc index, and
  * nothing here gets to iterate either.
  *
- * `room` resolves an alias and hydrates; `residentRoom` returns only what is
- * already in memory. Archiving uses the second on purpose — it flushes a room
+ * `doc` resolves an alias and hydrates; `residentDoc` returns only what is
+ * already in memory. Archiving uses the second on purpose — it flushes a doc
  * that happens to be open, and must not page in the several hundred members
  * of a set nobody is looking at just to retire them.
  */
@@ -78,8 +78,8 @@ export interface DocStoreWorkspacePersistence {
   listThreads(docId: string, filter?: { status?: 'open' | 'resolved' }): Thread[];
   peekMeta(docId: string): DocMeta | undefined;
   docExists(docId: string): boolean;
-  room(docId: string): DocRoom | undefined;
-  residentRoom(docId: string): DocRoom | undefined;
+  doc(docId: string): LiveDoc | undefined;
+  residentDoc(docId: string): LiveDoc | undefined;
   getOrCreate(
     docId: string,
     init: {
@@ -92,7 +92,7 @@ export interface DocStoreWorkspacePersistence {
       relPath: string;
       title: string;
     },
-  ): DocRoom;
+  ): LiveDoc;
   // The pool doors, not the synchronous ones: the path being bound came out
   // of a repo tree the caller pointed at, so it is exactly the path a
   // cloud-sync provider can refuse to answer for.
@@ -100,8 +100,8 @@ export interface DocStoreWorkspacePersistence {
   attachReadonlyFileAsync(docId: string, filePath: string): Promise<{ ok: boolean }>;
   deleteDoc(docId: string, opts?: { force?: boolean }): { ok: boolean };
   hydrateDoc(docId: string): boolean;
-  persistRoomNow(room: DocRoom): void;
-  teardownRoom(room: DocRoom, closeReason: string): void;
+  persistDocNow(doc: LiveDoc): void;
+  teardownDoc(doc: LiveDoc, closeReason: string): void;
   releaseAliases(docId: string): void;
   pathFor(docId: string): string;
   forgetActivityMtime(docId: string): void;
@@ -343,7 +343,7 @@ export class DocStoreWorkspaces {
     // Markdown opens as the full WYSIWYG editable doc (same as bind_folder
     // always did); everything else is read-only highlighted source.
     const isMd = clean.toLowerCase().endsWith('.md');
-    const room = this.p.getOrCreate(docId, {
+    const doc = this.p.getOrCreate(docId, {
       type: isMd ? 'markdown' : 'code',
       sourceUrl: abs,
       setId,
@@ -359,7 +359,7 @@ export class DocStoreWorkspaces {
       ? await this.p.attachFileAsync(docId, abs)
       : await this.p.attachReadonlyFileAsync(docId, abs);
     if (!attached.ok) return { ok: false, error: 'attach-failed' };
-    return { ok: true, docId: room.docId, meta: room.meta };
+    return { ok: true, docId: doc.docId, meta: doc.meta };
   }
 
   /**
@@ -422,7 +422,7 @@ export class DocStoreWorkspaces {
     if (!isWithinRoot(root, abs)) return { ok: false, error: 'bad-path' };
     const owner = members.find((m) => m.owner)?.owner;
     const companionId = memberDocId(`${setId}:edit`, clean);
-    const room = this.p.getOrCreate(companionId, {
+    const doc = this.p.getOrCreate(companionId, {
       type: 'markdown',
       sourceUrl: abs,
       setId,
@@ -436,7 +436,7 @@ export class DocStoreWorkspaces {
     });
     const attached = await this.p.attachFileAsync(companionId, abs);
     if (!attached.ok) return { ok: false, error: 'attach-failed' };
-    return { ok: true, docId: room.docId, meta: room.meta };
+    return { ok: true, docId: doc.docId, meta: doc.meta };
   }
 
   /**
@@ -680,7 +680,7 @@ export class DocStoreWorkspaces {
 
   /**
    * RETIRE a review without destroying it: move every member's persisted
-   * state into `data/_archive/` and unbind the live rooms.
+   * state into `data/_archive/` and unbind the live docs.
    *
    * This is the soft counterpart to `deleteWorkspace`, and it is the one to
    * reach for when a review is finished — a merged diff review that keeps
@@ -689,7 +689,7 @@ export class DocStoreWorkspaces {
    *
    *   - `hydrateFromDisk` reads only the TOP LEVEL of the data dir, so an
    *     archived member stops loading at every restart and stops costing a
-   *     file poll and a room's worth of memory.
+   *     file poll and a doc's worth of memory.
    *   - `activity-backfill` scans `_archive` explicitly, so the `.ydoc` keeps
    *     feeding the Weekly Review analyses. The stream over an archived doc is
    *     byte-identical to the stream before it was archived; that is the
@@ -729,32 +729,32 @@ export class DocStoreWorkspaces {
 
     const moved: string[] = [];
     for (const m of members) {
-      const room = this.p.residentRoom(m.docId);
+      const doc = this.p.residentDoc(m.docId);
       // Flush BEFORE tearing down: the pending debounced write is cancelled by
       // teardown, so without this the archived snapshot is up to 200ms stale —
       // and for a doc edited right up to the moment it was retired, that is
       // the edit the reviewer just made.
-      if (room) this.p.persistRoomNow(room);
+      if (doc) this.p.persistDocNow(doc);
       if (!this.moveDocFiles(m.docId, this.p.dataDir(), dir)) {
         // Undo every move so a failed archive costs nothing — not even to a
         // restart that lands right after it. Nothing has been torn down yet,
-        // so the live rooms are still exactly as they were.
+        // so the live docs are still exactly as they were.
         for (const done of moved) this.moveDocFiles(done, dir, this.p.dataDir());
         return { ok: false, error: 'move-failed', docIds: [m.docId] };
       }
       moved.push(m.docId);
     }
-    // Commit point passed: every file is parked. Now unbind the rooms.
+    // Commit point passed: every file is parked. Now unbind the docs.
     for (const m of members) {
-      const room = this.p.residentRoom(m.docId);
-      if (room) {
-        this.p.teardownRoom(room, 'review archived');
+      const doc = this.p.residentDoc(m.docId);
+      if (doc) {
+        this.p.teardownDoc(doc, 'review archived');
         continue;
       }
-      // A member nobody had opened has no room to tear down, but its alias
+      // A member nobody had opened has no doc to tear down, but its alias
       // was claimed from the index at boot and would outlive its file:
       // `claimAlias` then refuses to give that name to a NEW doc, so a reused
-      // review name resolves for ever to something archived. `teardownRoom`
+      // review name resolves for ever to something archived. `teardownDoc`
       // released these back when every doc was resident.
       this.p.releaseAliases(m.docId);
     }
@@ -777,7 +777,7 @@ export class DocStoreWorkspaces {
 
   /**
    * Put an archived review back exactly where it was: move each member's
-   * persisted state up out of `_archive`, hydrate the rooms, re-arm the file
+   * persisted state up out of `_archive`, hydrate the docs, re-arm the file
    * bindings, and drop the manifest.
    *
    * Refuses, all-or-nothing, if any member id has been re-minted at the top
@@ -814,7 +814,7 @@ export class DocStoreWorkspaces {
 
   /**
    * RETIRE ONE free-standing doc: flush it, move its persisted state into
-   * `data/_archive/`, and unbind the room.
+   * `data/_archive/`, and unbind the doc.
    *
    * `archiveReview` is the same act over a member list, and it is the verb for
    * anything that HAS a member list. This one exists for what that cannot
@@ -822,7 +822,7 @@ export class DocStoreWorkspaces {
    * `bind_mock`: a few hundred docs on the production box whose only removal
    * path was `delete_doc`, which purges the `.ydoc` the activity analyses are
    * rebuilt from. Everything mechanical is shared with the review path
-   * (`moveDocFiles`, `teardownRoom`, `hydrateDoc`), so the two cannot drift
+   * (`moveDocFiles`, `teardownDoc`, `hydrateDoc`), so the two cannot drift
    * about what archiving means.
    *
    * Three refusals, each because the right verb is a different one:
@@ -833,7 +833,7 @@ export class DocStoreWorkspaces {
    *     a proper review" but "would `archiveReview` move this file", and that
    *     selector is `attachmentIdOf`. Answering the narrower question would let two
    *     verbs both claim the same doc.
-   *   - `board-owned` — a `task:` body or a `ws:` board room is live furniture
+   *   - `board-owned` — a `task:` body or a `ws:` board doc is live furniture
    *     the board re-creates, not a document anyone archives.
    *   - `archive-collision` — an older snapshot of this id is already parked.
    *     Nothing here decides which of two snapshots is worth less.
@@ -850,12 +850,12 @@ export class DocStoreWorkspaces {
     | { ok: false; error: 'not-found' | 'board-owned' | 'archive-collision' | 'move-failed' }
     | { ok: false; error: 'review-member'; setId: string } {
     if (isBoardOwnedDoc(docId)) return { ok: false, error: 'board-owned' };
-    const room = this.p.room(docId);
-    if (!room) return { ok: false, error: 'not-found' };
+    const doc = this.p.doc(docId);
+    if (!doc) return { ok: false, error: 'not-found' };
     // From here on the CANONICAL id: everything below names files, writes a
     // manifest and reports back, and an alias names none of them.
-    const id = room.docId;
-    const setId = attachmentIdOf(room.meta);
+    const id = doc.docId;
+    const setId = attachmentIdOf(doc.meta);
     if (setId !== undefined) return { ok: false, error: 'review-member', setId };
 
     const dir = ensureArchiveDir(this.p.dataDir());
@@ -865,17 +865,17 @@ export class DocStoreWorkspaces {
     // so without this the archived snapshot is up to 200ms stale — and for a
     // doc edited right up to the moment it was retired, that is the edit the
     // reviewer just made.
-    this.p.persistRoomNow(room);
+    this.p.persistDocNow(doc);
     if (!this.moveDocFiles(id, this.p.dataDir(), dir)) return { ok: false, error: 'move-failed' };
-    // Commit point passed: the files are parked. Now unbind the room.
-    this.p.teardownRoom(room, 'doc archived');
+    // Commit point passed: the files are parked. Now unbind the doc.
+    this.p.teardownDoc(doc, 'doc archived');
 
     const manifest: ArchivedDoc = {
       docId: id,
       archivedAt: toUtcIso(Date.now()),
       archivedBy: opts.archivedBy,
       ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
-      ...(room.meta.title !== undefined ? { title: room.meta.title } : {}),
+      ...(doc.meta.title !== undefined ? { title: doc.meta.title } : {}),
       linkedWorkspaces: opts.linkedWorkspaces ?? [],
     };
     writeDocArchiveManifest(this.p.dataDir(), manifest);
@@ -885,7 +885,7 @@ export class DocStoreWorkspaces {
 
   /**
    * Put an archived doc back where it was: move its persisted state up out of
-   * `_archive`, hydrate the room, re-arm the file binding, drop the manifest.
+   * `_archive`, hydrate the doc, re-arm the file binding, drop the manifest.
    *
    * Refuses if the id has been re-minted at the top level while the doc was
    * away — restoring over a live doc would destroy the newer one, which is the
@@ -944,7 +944,7 @@ export class DocStoreWorkspaces {
     }
     // Membership of the resident index map follows the FILE, in the one place
     // that knows the direction. Without this, archiving moved the .ydoc out
-    // and dropped the room while the row stayed behind — and `list()` went on
+    // and dropped the doc while the row stayed behind — and `list()` went on
     // reporting a doc that had just been archived, which is the whole failure
     // an archive is supposed to produce the opposite of.
     const carried = moveDocIndex(fromDir, toDir, docId);

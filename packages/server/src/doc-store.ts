@@ -41,9 +41,9 @@ import {
   type PrereadFile,
 } from './file-binding.ts';
 
-/** Moved to `room-fanout.ts` with the presence ticker it drives — re-exported
+/** Moved to `live-doc-fanout.ts` with the presence ticker it drives — re-exported
  *  under the name it was first published as. */
-export { maintainAwareness } from './room-fanout.ts';
+export { maintainAwareness } from './live-doc-fanout.ts';
 
 export { randomId } from './doc-threads.ts';
 /** Moved to `doc-ids.ts`, one line from the prefix list it reads — re-exported
@@ -97,6 +97,11 @@ import {
 } from './doc-index.ts';
 import { resolveOriginRepoCheckout } from './doc-origin-repo.ts';
 import { DOC_STORE_TIMINGS } from './doc-store-timings.ts';
+import {
+  CONTENT_REVISION_ORIGIN,
+  LiveDocFanout,
+  type LiveDocFanoutHost,
+} from './live-doc-fanout.ts';
 import { deleteMockupCapture } from './mockup-capture.ts';
 import {
   deletePrivateMeta,
@@ -105,7 +110,6 @@ import {
   writePrivateMeta,
 } from './private-meta.ts';
 import { type ArchivedDoc, type ArchivedReview } from './review-archive.ts';
-import { CONTENT_REVISION_ORIGIN, RoomFanout, type RoomFanoutHost } from './room-fanout.ts';
 import { boundFiles, redactBoundPath } from './slow-fs.ts';
 import type { SseBus } from './sse.ts';
 import type { ScheduleArgs, ThreadSummarizer } from './summarize.ts';
@@ -160,7 +164,7 @@ export type WsCtx = {
    * Enforced in `yjs-protocol.ts`: sync step 1 is answered (that is the
    * read), and a sync step 2 or update frame is dropped. Awareness still
    * flows both ways — presence is not content, and a reader who cannot be
-   * seen in the room is a worse review surface, not a safer one.
+   * seen in the doc is a worse review surface, not a safer one.
    */
   readOnly?: boolean;
 };
@@ -172,7 +176,7 @@ export type FeedbackWs = ServerWebSocket<WsCtx>;
  * to hang it up.
  *
  * A type rather than `FeedbackWs` because not every socket a share authorized
- * is a room's editing socket. `trackShareSocket` takes this so the meeting's
+ * is a doc's editing socket. `trackShareSocket` takes this so the meeting's
  * audio socket — a different upgrade, a different handler, and no member of
  * any `conns` — can be swept by the same three functions.
  */
@@ -181,15 +185,15 @@ export interface ShareAuthorizedSocket {
   close(code?: number, reason?: string): void;
 }
 
-export interface DocRoom {
+export interface LiveDoc {
   docId: string;
   ydoc: Y.Doc;
   /**
-   * Presence state for this room, CREATED ON FIRST READ.
+   * Presence state for this doc, CREATED ON FIRST READ.
    *
    * y-protocols' `Awareness` starts a 3s `setInterval` in its constructor and
-   * never unrefs it, so one instance per hydrated room meant thousands of
-   * timers firing forever on a server whose rooms are, almost all of them,
+   * never unrefs it, so one instance per hydrated doc meant thousands of
+   * timers firing forever on a server whose docs are, almost all of them,
    * nobody's open tab. Every reader of this field is on a websocket path
    * (`yjs-protocol.ts`), so deferring construction to the first read is
    * exactly "created on first connection" without any caller having to know.
@@ -197,8 +201,8 @@ export interface DocRoom {
    */
   awareness: awarenessProtocol.Awareness;
   /**
-   * The Awareness instance if this room has one, else null — the read that
-   * does not construct. Teardown uses it so closing an untouched room does
+   * The Awareness instance if this doc has one, else null — the read that
+   * does not construct. Teardown uses it so closing an untouched doc does
    * not create the very object it is about to destroy.
    */
   peekAwareness(): awarenessProtocol.Awareness | null;
@@ -222,7 +226,7 @@ export interface DocRoom {
    * whole current work is somebody rewriting its doc does not read as
    * silent (see `isAuthoringOrigin`).
    *
-   * Stamped from the room's single `ydoc.on('update')` hook, so it covers
+   * Stamped from the doc's single `ydoc.on('update')` hook, so it covers
    * every writer — browser websocket, MCP edit tool, HTTP route — without a
    * per-path call anyone can forget to add. Deliberately NOT any of the
    * three timestamps that already existed and each lie in a different
@@ -309,13 +313,13 @@ export interface DocStoreConfig {
    */
   summarizer?: ThreadSummarizer;
   /**
-   * Called for every thread/comment event, alongside the room's own fan-out.
+   * Called for every thread/comment event, alongside the doc's own fan-out.
    * A doc can belong to something that wants to hear about its discussion
    * without being a member of a review — a task's
-   * body room is one — and this is the seam for that, so DocStore stays
+   * body doc is one — and this is the seam for that, so DocStore stays
    * ignorant of what a `task:` docId means.
    */
-  onRoomEvent?: (docId: string, payload: WebhookPayload) => void;
+  onDocEvent?: (docId: string, payload: WebhookPayload) => void;
   /**
    * The clock the RESIDENCY policy reads — the idle/eviction window and the
    * file poll's fast lane, both of which are keyed on `lastTouchedAt`.
@@ -371,56 +375,56 @@ const PERSIST_MS = DOC_STORE_TIMINGS.persistMs;
 const MEMORY_LOG_MS = 5 * 60_000;
 
 export class DocStore {
-  private docs = new Map<string, DocRoom>();
+  private docs = new Map<string, LiveDoc>();
 
   /**
    * Everything that keeps a live doc and a file on disk saying the same
    * thing, behind the handle it needs from this lifecycle (`file-binding.ts`).
    * The binding map, the mtime sweep, the write-back debounce and the doc-origin-repo
-   * pin all live there; what stays here is the room they act on.
+   * pin all live there; what stays here is the doc they act on.
    */
   private readonly bindings = new FileBindings(this.bindingHost());
 
   private bindingHost(): FileBindingHost {
     return {
       dataDir: () => this.cfg.dataDir,
-      room: (docId) => this.resolveRoom(docId),
-      residentRoom: (docId) => this.docs.get(docId),
+      doc: (docId) => this.resolveDoc(docId),
+      residentDoc: (docId) => this.docs.get(docId),
       ydocPath: (docId) => this.pathFor(docId),
-      schedulePersist: (room) => this.saveToDisk(room),
-      persistNow: (room) => this.persistRoomNow(room),
+      schedulePersist: (doc) => this.saveToDisk(doc),
+      persistNow: (doc) => this.persistDocNow(doc),
       clearPendingFileWrite: (docId) => this.clearPendingFileWrite(docId),
       now: () => this.now(),
       lastTouchedAt: (docId) => this.lastTouchedAt.get(docId),
       noteTouched: (docId, at) => {
         this.lastTouchedAt.set(docId, at);
       },
-      broadcast: (room, payload) => this.fanout.broadcastToRoom(room, payload),
+      broadcast: (doc, payload) => this.fanout.broadcastToDoc(doc, payload),
       decorate: (meta) => this.cfg.decorateDocMeta?.(meta) ?? meta,
     };
   }
   /**
-   * Who hears about a change to a room, and over which channel
-   * (`room-fanout.ts`): the update wiring and its meta guards, the thread and
+   * Who hears about a change to a doc, and over which channel
+   * (`live-doc-fanout.ts`): the update wiring and its meta guards, the thread and
    * suggestion frames, the SSE/webhook broadcast, presence, and the socket
-   * closes. It holds the rooms it acts on the only way it can — as room
+   * closes. It holds the docs it acts on the only way it can — as doc
    * objects handed in per call — and reaches back here through thunks.
    */
-  private readonly fanout = new RoomFanout(this.fanoutHost());
+  private readonly fanout = new LiveDocFanout(this.fanoutHost());
 
-  private fanoutHost(): RoomFanoutHost {
+  private fanoutHost(): LiveDocFanoutHost {
     return {
-      residentRooms: () => this.docs.values(),
+      residentDocs: () => this.docs.values(),
       sse: () => this.cfg.sse,
       webhooks: () => this.cfg.webhooks,
       decorate: (meta) => this.cfg.decorateDocMeta?.(meta) ?? meta,
-      emitRoomEvent: (docId, payload) => this.cfg.onRoomEvent?.(docId, payload),
+      emitDocEvent: (docId, payload) => this.cfg.onDocEvent?.(docId, payload),
       summarizer: () => this.cfg.summarizer,
       thread: (docId, threadId) => this.getThread(docId, threadId),
       memberOfCompanion: (docId) => this.memberOfCompanion(docId),
-      schedulePersist: (room) => this.saveToDisk(room),
-      scheduleRevisionBump: (room) => this.scheduleRevisionBump(room),
-      maybeRebindHome: (room) => this.bindings.maybeRebindHome(room),
+      schedulePersist: (doc) => this.saveToDisk(doc),
+      scheduleRevisionBump: (doc) => this.scheduleRevisionBump(doc),
+      maybeRebindHome: (doc) => this.bindings.maybeRebindHome(doc),
     };
   }
 
@@ -437,7 +441,7 @@ export class DocStore {
    * Rebuilt from `meta.alias` on every `getOrCreate`, so it comes back from
    * disk with the docs at boot and travels with a `.ydoc` through archive and
    * restore. There is deliberately no separate alias file to fall out of step
-   * with the rooms it describes.
+   * with the docs it describes.
    *
    * Write-once: `claimAlias` refuses a name already held. That is what makes
    * a captured URL a promise rather than a hint — a link that resolved
@@ -449,7 +453,7 @@ export class DocStore {
    * docId → `.ydoc` mtime (ms), the value `withActivity` reports.
    *
    * This file is written by exactly one process — us — so the cache is
-   * authoritative between writes, and `persistRoomNow` refreshes it. Before
+   * authoritative between writes, and `persistDocNow` refreshes it. Before
    * this, every `list()` stat'd every doc: `GET /api/docs` alone was ~11k
    * syscalls per request against the measured corpus, and `list()` is called
    * two or three times over by the workspace-thread and grouped-diff views.
@@ -471,7 +475,7 @@ export class DocStore {
   private memoryTicker: ReturnType<typeof setInterval> | null = null;
   private evictTicker: ReturnType<typeof setInterval> | null = null;
   /**
-   * When each resident room entered memory. The eviction clock reads
+   * When each resident doc entered memory. The eviction clock reads
    * `lastTouchedAt` first — a real reach — and falls back to this, so a doc
    * that was just created or just hydrated is never evicted before anyone
    * has had a chance to touch it.
@@ -484,12 +488,12 @@ export class DocStore {
 
   private docThreadPersistence(): DocThreadPersistence {
     return {
-      room: (docId) => this.resolveRoom(docId),
-      residentRoom: (docId) => this.docs.get(docId),
-      fireThreadEvent: (room, event, thread, comment, opts, actor) =>
-        this.fanout.fireEvent(room, event, thread, comment, opts, actor),
-      recordActivity: (room, type, author, threadId, opts) =>
-        this.recordActivity(room, type, author, threadId, opts),
+      doc: (docId) => this.resolveDoc(docId),
+      residentDoc: (docId) => this.docs.get(docId),
+      fireThreadEvent: (doc, event, thread, comment, opts, actor) =>
+        this.fanout.fireEvent(doc, event, thread, comment, opts, actor),
+      recordActivity: (doc, type, author, threadId, opts) =>
+        this.recordActivity(doc, type, author, threadId, opts),
     };
   }
 
@@ -499,10 +503,10 @@ export class DocStore {
   private docEditPersistence(): DocEditPersistence {
     return {
       dataDir: () => this.cfg.dataDir,
-      room: (docId) => this.resolveRoom(docId),
+      doc: (docId) => this.resolveDoc(docId),
       thread: (docId, threadId) => this.getThread(docId, threadId),
-      announceSuggestion: (room, event, sid, summary) =>
-        this.fanout.fireSuggestionEvent(room, event, sid, summary),
+      announceSuggestion: (doc, event, sid, summary) =>
+        this.fanout.fireSuggestionEvent(doc, event, sid, summary),
     };
   }
 
@@ -517,15 +521,15 @@ export class DocStore {
       listThreads: (docId, filter) => this.listThreads(docId, filter),
       peekMeta: (docId) => this.peekMeta(docId),
       docExists: (docId) => this.docExists(docId),
-      room: (docId) => this.resolveRoom(docId),
-      residentRoom: (docId) => this.docs.get(docId),
+      doc: (docId) => this.resolveDoc(docId),
+      residentDoc: (docId) => this.docs.get(docId),
       getOrCreate: (docId, init) => this.getOrCreate(docId, init),
       attachFileAsync: (docId, filePath) => this.attachFileAsync(docId, filePath),
       attachReadonlyFileAsync: (docId, filePath) => this.attachReadonlyFileAsync(docId, filePath),
       deleteDoc: (docId, opts) => this.deleteDoc(docId, opts),
       hydrateDoc: (docId) => this.hydrateDoc(docId),
-      persistRoomNow: (room) => this.persistRoomNow(room),
-      teardownRoom: (room, closeReason) => this.teardownRoom(room, closeReason),
+      persistDocNow: (doc) => this.persistDocNow(doc),
+      teardownDoc: (doc, closeReason) => this.teardownDoc(doc, closeReason),
       releaseAliases: (docId) => this.releaseAliases(docId),
       pathFor: (docId) => this.pathFor(docId),
       forgetActivityMtime: (docId) => this.activityMtime.delete(docId),
@@ -547,14 +551,14 @@ export class DocStore {
   /**
    * Drop ONE doc from memory without losing anything it was holding.
    *
-   * This is not `teardownRoom` and must never become it. `teardownRoom` is
+   * This is not `teardownDoc` and must never become it. `teardownDoc` is
    * for a doc that is going away — it CANCELS the pending save and write-back
    * timers, closes the sockets, and releases the aliases. Every one of those
    * is wrong here, because the doc is coming back:
    *
    *  - Pending writes are FLUSHED, not cancelled. A cancelled write-back is
    *    the keystrokes between the last flush and now, silently gone.
-   *  - Aliases stay. `teardownRoom` releases them; a captured review URL
+   *  - Aliases stay. `teardownDoc` releases them; a captured review URL
    *    would then 404 on a doc that is merely not loaded.
    *  - The index row stays, so the doc is still listed, still resolvable,
    *    still countable — it is out of memory, not out of existence.
@@ -573,31 +577,31 @@ export class DocStore {
    *
    * Returns false if the doc was not in memory to begin with.
    */
-  evictRoom(docId: string): boolean {
-    const room = this.docs.get(docId);
-    if (!room) return false;
+  evictDoc(docId: string): boolean {
+    const doc = this.docs.get(docId);
+    if (!doc) return false;
 
     // 0. Settle the revision debounce BEFORE the flush below persists the
     //    doc: a pending bump lost at eviction is an edit burst whose derived
     //    tasks would never learn the plan moved.
-    this.commitRevisionBump(room);
+    this.commitRevisionBump(doc);
 
     // 1. FLUSH. Same order and same calls as `flush()`, so a doc leaving
     //    memory is saved exactly the way a shutdown saves it.
     // Loud on failure, and the eviction still proceeds: the `.ydoc` write
     // below is the durable record, and refusing to evict here would pin a
     // wedged doc in memory forever.
-    this.bindings.flushWriteBeforeEvict(room);
+    this.bindings.flushWriteBeforeEvict(doc);
     const pendingSave = this.saveTimers.get(docId);
     if (pendingSave) {
       clearTimeout(pendingSave);
       this.saveTimers.delete(docId);
-      this.persistRoomNow(room);
+      this.persistDocNow(doc);
     } else if (this.bindings.hasFailedWrite(docId)) {
       // The flush above threw. Nothing else will write this doc's row, and
       // the row is the only thing that tells the next boot to come back for
       // it — so pay the mtime refresh here rather than lose the repair.
-      this.persistRoomNow(room);
+      this.persistDocNow(doc);
     }
     // No pending save means the `.ydoc` and its index row already match this
     // doc — every mutation schedules one. Rewriting anyway would refresh the
@@ -616,12 +620,12 @@ export class DocStore {
     // The row written above carries the marker now, so the in-memory copy has
     // done its job; a doc that comes back re-derives it from its own binding.
     this.bindings.forgetFailedWrite(docId);
-    this.fanout.forgetRoom(room);
+    this.fanout.forgetDoc(doc);
     try {
-      // peek, not `room.awareness`: the getter would construct an Awareness
+      // peek, not `doc.awareness`: the getter would construct an Awareness
       // purely to destroy it.
-      room.peekAwareness()?.destroy();
-      room.ydoc.destroy();
+      doc.peekAwareness()?.destroy();
+      doc.ydoc.destroy();
     } catch {}
     return true;
   }
@@ -641,20 +645,20 @@ export class DocStore {
    * nothing is watching the file for it. There is no per-doc subscriber
    * count to hold on today; when there is, it belongs in this list.
    */
-  private evictionHold(docId: string, room: DocRoom, now: number): string | null {
+  private evictionHold(docId: string, doc: LiveDoc, now: number): string | null {
     // Somebody is in it. Their next keystroke belongs to this Y.Doc.
-    if (room.conns.size > 0) return 'connected';
+    if (doc.conns.size > 0) return 'connected';
     // The last write-back failed or collided. A wedged doc has a backup and
     // an unresolved disagreement with its file; dropping it now would leave
     // that to be rediscovered by whoever opens it next.
     if (this.bindings.getSyncError(docId)) return 'sync-error';
-    // A write is in flight. `evictRoom` would flush it correctly, but a doc
+    // A write is in flight. `evictDoc` would flush it correctly, but a doc
     // mid-write is by definition a doc something is doing work on.
     if (this.saveTimers.has(docId) || this.bindings.hasPendingWrite(docId)) return 'pending-write';
     // A person edited it inside the stale-write window — the same window
     // `staleWriteCheck` uses to refuse an agent's overwrite. If an agent's
     // write is not safe yet, neither is dropping the doc it would land on.
-    if (room.lastHumanEditAt !== undefined && now - room.lastHumanEditAt < STALE_WRITE_WINDOW_MS) {
+    if (doc.lastHumanEditAt !== undefined && now - doc.lastHumanEditAt < STALE_WRITE_WINDOW_MS) {
       return 'human-edit';
     }
     return null;
@@ -670,12 +674,12 @@ export class DocStore {
   evictIdleDocs(): string[] {
     const now = this.now();
     const evicted: string[] = [];
-    // Snapshot: `evictRoom` mutates the map being walked.
-    for (const [docId, room] of [...this.docs]) {
+    // Snapshot: `evictDoc` mutates the map being walked.
+    for (const [docId, doc] of [...this.docs]) {
       const last = this.lastTouchedAt.get(docId) ?? this.hydratedAt.get(docId) ?? now;
       if (now - last < IDLE_EVICT_MS) continue;
-      if (this.evictionHold(docId, room, now) !== null) continue;
-      if (this.evictRoom(docId)) evicted.push(docId);
+      if (this.evictionHold(docId, doc, now) !== null) continue;
+      if (this.evictDoc(docId)) evicted.push(docId);
     }
     return evicted;
   }
@@ -814,7 +818,7 @@ export class DocStore {
    * This is the whole migration for the docs written before the index
    * existed: hydrate once, write the row, evict. There is no separate
    * backfill script to remember to run, and no second code path that could
-   * produce a different row than `persistRoomNow` does — the row comes from
+   * produce a different row than `persistDocNow` does — the row comes from
    * the same `indexEntryFor`.
    *
    * A doc that already has a row is never opened, which is the point: the
@@ -834,11 +838,11 @@ export class DocStore {
       const docId = file.slice(0, -'.ydoc'.length);
       if (!docId || this.docIndex.has(docId)) continue;
       try {
-        // Boot, and the row is written from the room in the same turn.
+        // Boot, and the row is written from the doc in the same turn.
         this.hydrateDoc(docId, { blocking: true });
-        const room = this.docs.get(docId);
-        if (!room) continue;
-        const entry = this.indexEntryFor(room);
+        const doc = this.docs.get(docId);
+        if (!doc) continue;
+        const entry = this.indexEntryFor(doc);
         writeDocIndex(this.cfg.dataDir, docId, entry);
         this.docIndex.set(docId, entry);
         written++;
@@ -851,7 +855,7 @@ export class DocStore {
         // Straight back out. Writing a row is not somebody opening the doc,
         // and a migration that left 5,000 docs resident would be the very
         // boot this change exists to stop.
-        this.evictRoom(docId);
+        this.evictDoc(docId);
       }
     }
     if (written > 0) {
@@ -860,7 +864,7 @@ export class DocStore {
   }
 
   /**
-   * One line every few minutes: resident memory, how many rooms are in it,
+   * One line every few minutes: resident memory, how many docs are in it,
    * and how many timers this process is actually holding.
    *
    * It exists because the 2026-08-29 jetsam kill left nothing to read — the
@@ -873,7 +877,7 @@ export class DocStore {
     const timer = setInterval(() => {
       const s = this.stats();
       console.error(
-        `[doc-store] mem rss=${s.rssMb}MB rooms=${s.rooms} bindings=${s.bindings} ` +
+        `[doc-store] mem rss=${s.rssMb}MB residentDocs=${s.residentDocs} bindings=${s.bindings} ` +
           `activeBindings=${s.activeBindings} awareness=${s.awareness} timers=${s.timers} ` +
           // The busiest activator, so a log-only reading of an incident still
           // names a caller instead of only a count.
@@ -885,7 +889,7 @@ export class DocStore {
   }
 
   /**
-   * What this DocStore currently costs: resident memory, how many rooms are in
+   * What this DocStore currently costs: resident memory, how many docs are in
    * it, and how many timers it actually holds.
    *
    * Public because the memory line and the tests that pin these numbers must
@@ -895,11 +899,11 @@ export class DocStore {
    */
   stats(): {
     rssMb: number;
-    rooms: number;
+    residentDocs: number;
     bindings: number;
     /** Bindings the sweep would stat on this tick (see `bindingIsActive`). */
     activeBindings: number;
-    /** DocStore holding a live Awareness instance. */
+    /** Live docs holding a live Awareness instance. */
     awareness: number;
     /** Timers owned by this DocStore: pending saves + file debounces + tickers. */
     timers: number;
@@ -916,7 +920,7 @@ export class DocStore {
     const presence = this.fanout.stats();
     return {
       rssMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
-      rooms: this.docs.size,
+      residentDocs: this.docs.size,
       bindings: files.count,
       activeBindings: files.active,
       awareness: presence.awareness,
@@ -949,7 +953,7 @@ export class DocStore {
   /**
    * Every doc on this server, as listing rows.
    *
-   * A resident room is authoritative — it may hold changes the last write
+   * A resident doc is authoritative — it may hold changes the last write
    * has not carried into the index yet. A doc that is NOT resident is served
    * from its index row, which is the whole point: answering "what docs are
    * there" must not require decoding every CRDT that has ever been written.
@@ -961,7 +965,7 @@ export class DocStore {
    */
   list(): DocMeta[] {
     const out: DocMeta[] = [];
-    for (const room of this.docs.values()) out.push(this.withActivity(room.meta));
+    for (const doc of this.docs.values()) out.push(this.withActivity(doc.meta));
     for (const [docId, entry] of this.docIndex) {
       if (this.docs.has(docId)) continue;
       out.push(this.withActivity(entry.meta));
@@ -970,12 +974,12 @@ export class DocStore {
   }
 
   /**
-   * The same listing built ONLY from index rows, never from resident rooms.
+   * The same listing built ONLY from index rows, never from resident docs.
    *
    * Exists so the equality that everything else rests on can be asserted
    * directly: an index-backed listing must equal the hydrated one field for
-   * field. Without a seam that refuses to consult the rooms, a test of that
-   * property would read the rooms through `list()` and pass no matter what
+   * field. Without a seam that refuses to consult the docs, a test of that
+   * property would read the docs through `list()` and pass no matter what
    * the index said.
    */
   listFromIndex(): DocMeta[] {
@@ -1014,9 +1018,9 @@ export class DocStore {
       const entry = this.docIndex.get(docId);
       if (entry) return { ...entry.threads };
     }
-    const room = this.docs.get(docId);
-    if (!room) return { open: 0, total: 0 };
-    const all = listThreads(room.ydoc);
+    const doc = this.docs.get(docId);
+    if (!doc) return { open: 0, total: 0 };
+    const all = listThreads(doc.ydoc);
     return { open: all.filter((t) => t.status === 'open').length, total: all.length };
   }
 
@@ -1029,9 +1033,9 @@ export class DocStore {
       const entry = this.docIndex.get(docId);
       if (entry) return entry.lastThreadActivityAt ?? 0;
     }
-    const room = this.docs.get(docId);
-    if (!room) return 0;
-    return listThreads(room.ydoc).reduce((max, t) => Math.max(max, t.lastActivity), 0);
+    const doc = this.docs.get(docId);
+    if (!doc) return 0;
+    return listThreads(doc.ydoc).reduce((max, t) => Math.max(max, t.lastActivity), 0);
   }
 
   /**
@@ -1049,7 +1053,7 @@ export class DocStore {
    * The `.ydoc` mtime for a doc, stat'd at most once per write.
    *
    * Same number `withActivity` always reported — this only stops asking the
-   * filesystem for it on every row of every list. `persistRoomNow` refreshes
+   * filesystem for it on every row of every list. `persistDocNow` refreshes
    * the entry (it is the only writer of that file), and every path that moves
    * or removes the file drops the entry so the next read re-stats.
    */
@@ -1066,7 +1070,7 @@ export class DocStore {
   }
 
   /**
-   * Permanently remove an attachment: drop the in-memory room, cancel its
+   * Permanently remove an attachment: drop the in-memory doc, cancel its
    * timers, and delete the persisted `.ydoc` so it doesn't reload on the
    * next restart. The bound SOURCE file (sourceUrl) is the user's own file
    * and is left untouched.
@@ -1080,29 +1084,29 @@ export class DocStore {
     docId: string,
     opts?: { force?: boolean },
   ): { ok: boolean; error?: 'not-found' | 'has-open-threads'; openThreads?: number } {
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'not-found' };
-    const openThreads = listThreads(room.ydoc).filter((t) => t.status === 'open').length;
+    const doc = this.resolveDoc(docId);
+    if (!doc) return { ok: false, error: 'not-found' };
+    const openThreads = listThreads(doc.ydoc).filter((t) => t.status === 'open').length;
     if (openThreads > 0 && !opts?.force) {
       return { ok: false, error: 'has-open-threads', openThreads };
     }
-    this.teardownRoom(room, 'doc deleted');
-    // `room.docId`, not `docId`: an alias resolves to the room but names no
+    this.teardownDoc(doc, 'doc deleted');
+    // `doc.docId`, not `docId`: an alias resolves to the doc but names no
     // file, so purging the raw argument deleted nothing and reported success
     // — the doc came back on the next boot.
-    this.purgePersisted(room.docId);
+    this.purgePersisted(doc.docId);
     return { ok: true };
   }
 
   /**
-   * Unbind a room from this process: cancel its pending persistence, drop its
+   * Unbind a doc from this process: cancel its pending persistence, drop its
    * file binding and every timer that binding owns, close live viewers, and
    * take it out of memory.
    *
    * Shared by the two verbs that stop serving a doc — `deleteDoc`, which then
    * removes the persisted state, and `archiveReview`, which then moves it into
    * `_archive`. They differ only in what happens to the FILE; everything about
-   * unhooking the room is the same, and keeping one copy is what stops an
+   * unhooking the doc is the same, and keeping one copy is what stops an
    * archive from leaving a poll running against a doc nobody can open.
    *
    * Cancelling the save timer is load-bearing rather than tidy: a pending
@@ -1111,39 +1115,39 @@ export class DocStore {
    * restart. Callers that need the CURRENT state on disk must flush BEFORE
    * calling this.
    */
-  private teardownRoom(room: DocRoom, closeReason: string): void {
-    const docId = room.docId;
+  private teardownDoc(doc: LiveDoc, closeReason: string): void {
+    const docId = doc.docId;
     this.releaseAliases(docId);
     // A doc being deleted has no derived-task bookkeeping left to do — but a
     // live timer firing on a destroyed ydoc does. Drop the debounce, not
     // commit it: this path destroys the doc.
-    if (room.revisionTimer) clearTimeout(room.revisionTimer);
-    room.revisionTimer = null;
-    room.pendingRevisionBump = false;
+    if (doc.revisionTimer) clearTimeout(doc.revisionTimer);
+    doc.revisionTimer = null;
+    doc.pendingRevisionBump = false;
     const saveTimer = this.saveTimers.get(docId);
     if (saveTimer) clearTimeout(saveTimer);
     this.saveTimers.delete(docId);
     this.bindings.discard(docId);
-    this.fanout.closeSockets(room, closeReason);
+    this.fanout.closeSockets(doc, closeReason);
     this.docs.delete(docId);
     this.activityMtime.delete(docId);
     this.lastTouchedAt.delete(docId);
     this.hydratedAt.delete(docId);
-    this.fanout.forgetRoom(room);
+    this.fanout.forgetDoc(doc);
     try {
-      // peek, not `room.awareness`: the getter would construct an Awareness
+      // peek, not `doc.awareness`: the getter would construct an Awareness
       // (and register a fresh sweep entry) purely to destroy it.
-      room.peekAwareness()?.destroy();
-      room.ydoc.destroy();
+      doc.peekAwareness()?.destroy();
+      doc.ydoc.destroy();
     } catch {}
   }
 
   /**
-   * Remove a docId's persisted state whether or not the room is in memory,
+   * Remove a docId's persisted state whether or not the doc is in memory,
    * and report whether the disk is now clean.
    *
-   * `deleteDoc` answers about the ROOM: it logs a failed unlink and still
-   * returns ok, and on a second attempt the room is already out of memory so
+   * `deleteDoc` answers about the DOC: it logs a failed unlink and still
+   * returns ok, and on a second attempt the doc is already out of memory so
    * it returns 'not-found' without touching disk at all. A caller that must
    * not leave an orphan `.ydoc` behind — one that reloads on every restart,
    * under an id whose owner may be gone — has to ask about the FILE.
@@ -1154,10 +1158,10 @@ export class DocStore {
    * take back.
    *
    * `rename` is the whole point: unlinking is not reversible from a live
-   * room (its state re-reaches disk only on the next write, and a restart in
+   * doc (its state re-reaches disk only on the next write, and a restart in
    * between loses it), while a staged file can be moved straight back. The
    * staged name deliberately does not end in `.ydoc`, so `hydrateFromDisk`
-   * skips it — a leftover is inert litter rather than a room that reloads
+   * skips it — a leftover is inert litter rather than a doc that reloads
    * under an id whose owner is gone.
    *
    * Returns false only if the file is there and could not be moved.
@@ -1195,7 +1199,7 @@ export class DocStore {
   }
 
   /** Remove a staged `.ydoc` — the delete committed. A failure here leaves
-   *  a file nothing loads, so it is litter, not an orphan room. */
+   *  a file nothing loads, so it is litter, not an orphan doc. */
   dropStaged(docId: string): void {
     dropStagedDocIndex(this.cfg.dataDir, docId);
     try {
@@ -1261,11 +1265,11 @@ export class DocStore {
     // deferred bind lands would write nothing and lose the edit for good.
     const blocking = opts.blocking === true;
     // Server authority: hydration re-admits ids that ALREADY EXIST on disk,
-    // including the `task:` and `ws:` rooms the projection wrote. Refusing
-    // them here would not close a hole — the room is already persisted — it
+    // including the `task:` and `ws:` docs the projection wrote. Refusing
+    // them here would not close a hole — the doc is already persisted — it
     // would only make the board fail to come back after a restart.
-    const room = this.getOrCreate(docId, undefined, { authority: 'server' });
-    const src = room.meta.sourceUrl;
+    const doc = this.getOrCreate(docId, undefined, { authority: 'server' });
+    const src = doc.meta.sourceUrl;
     // The index row remembers a write-back that had not landed at shutdown:
     // the doc holds content the file does not, whatever the two mtimes say.
     //
@@ -1274,21 +1278,21 @@ export class DocStore {
     // `bindAfterRead`). Both say "the live doc holds content disk has never
     // held", which is the one thing an mtime comparison cannot see.
     const liveWins = opts.liveWins === true || this.docIndex.get(docId)?.pendingFileWrite === true;
-    // A board-owned room is never file-bound (§3.3), so a sourceUrl on one
+    // A board-owned doc is never file-bound (§3.3), so a sourceUrl on one
     // can only have arrived from a peer's ydoc write. Refusing to bind
     // here is the second, independent stop behind `guardPrivateMeta` —
     // binding is what turns a stray meta key into "read (then overwrite)
     // any file this process can reach".
     if (src && isBoardOwnedDoc(docId)) {
-      console.error(`[doc-store] ${docId}: ignoring a sourceUrl on a server-owned board room`);
+      console.error(`[doc-store] ${docId}: ignoring a sourceUrl on a server-owned board doc`);
       return false;
     }
     // A home-pinned doc re-resolves its home rather than trusting the path
     // it was bound to when the server went down — worktrees move between
     // restarts. Unplaced parks exactly like a live park: content is in the
     // .ydoc, no binding, the pin persists for the next resolve.
-    const home = room.meta.docHome;
-    if (home && !isBoardOwnedDoc(docId) && contentKind(room.meta.type) === 'prose') {
+    const home = doc.meta.docHome;
+    if (home && !isBoardOwnedDoc(docId) && contentKind(doc.meta.type) === 'prose') {
       const placement = resolveOriginRepoCheckout(home);
       if (!placement.placed) {
         console.warn(
@@ -1298,7 +1302,7 @@ export class DocStore {
       }
       const homePre = this.prereadFor(docId, placement.absPath, blocking);
       if (homePre === 'unavailable') return false;
-      this.bindings.retargetHomeBinding(room, placement.absPath, {
+      this.bindings.retargetHomeBinding(doc, placement.absPath, {
         liveWins,
         ...(homePre ? { preread: homePre } : {}),
       });
@@ -1313,10 +1317,10 @@ export class DocStore {
     // survives only on the boot branch, where `preread` is undefined.
     if (preread ? !preread.exists : !existsSync(src)) return false;
     const attachOpts: AttachOpts = { liveWins, ...(preread ? { preread } : {}) };
-    if (contentKind(room.meta.type) === 'prose') {
+    if (contentKind(doc.meta.type) === 'prose') {
       return this.attachFile(docId, src, attachOpts).ok;
     }
-    if (contentKind(room.meta.type) === 'flat') {
+    if (contentKind(doc.meta.type) === 'flat') {
       // Working-tree diff docs have a sourceUrl and re-arm their live
       // poll like code docs. Pinned diff docs have no sourceUrl and
       // need no binding — content is already in the .ydoc. Editable
@@ -1324,9 +1328,9 @@ export class DocStore {
       // hydration ≠ state hydration, and a read-only re-attach here
       // silently ate every post-restart File-view edit.
       const writeBack =
-        room.meta.type === 'diff' &&
-        !room.meta.diffTarget &&
-        !(room.meta.relPath ?? '').toLowerCase().endsWith('.md');
+        doc.meta.type === 'diff' &&
+        !doc.meta.diffTarget &&
+        !(doc.meta.relPath ?? '').toLowerCase().endsWith('.md');
       return this.attachFlatFile(docId, src, { ...attachOpts, writeBack }).ok;
     }
     return false;
@@ -1539,7 +1543,7 @@ export class DocStore {
      * restricted answer rather than the permissive one.
      */
     opts?: { authority?: DocIdAuthority },
-  ): DocRoom {
+  ): LiveDoc {
     // THE SEAM. Every path that can bring a docId into existence funnels
     // here — the three creation routes, both bind paths, the lazy sidebar
     // open, the task projection, and hydration — so the entitlement question
@@ -1564,8 +1568,8 @@ export class DocStore {
       // kept serving the old file while the call reported success. sourceUrl
       // is private-sidecar meta (never CRDT), so the whole repoint is the
       // in-memory field plus the same debounced persist creation uses. Board
-      // rooms stay excluded for the same reason hydrateFromDisk refuses a
-      // sourceUrl on them: a server-owned room is never file-bound.
+      // docs stay excluded for the same reason hydrateFromDisk refuses a
+      // sourceUrl on them: a server-owned doc is never file-bound.
       if (
         init?.sourceUrl !== undefined &&
         init.sourceUrl !== existing.meta.sourceUrl &&
@@ -1581,7 +1585,7 @@ export class DocStore {
     // Private fields live in a sidecar, not the CRDT (see private-meta.ts).
     // A `.ydoc` written before that change still carries them: lift them out
     // — which also DELETES them from the doc, so the next share visitor to
-    // sync this room doesn't receive them — and let the sidecar win where
+    // sync this doc doesn't receive them — and let the sidecar win where
     // both exist, since the sidecar is the one being maintained.
     const legacyPrivate = liftPrivateMetaFromYdoc(ydoc);
     const storedPrivate = { ...legacyPrivate, ...readPrivateMeta(this.cfg.dataDir, docId) };
@@ -1628,14 +1632,14 @@ export class DocStore {
     // be complete at creation and empty after a restart.
     if (meta.alias) this.claimAlias(meta.alias, docId);
     // Captured so the `awareness` getter below can reach the DocStore instance:
-    // inside a getter, `this` is the room, not the map that owns it.
+    // inside a getter, `this` is the doc, not the map that owns it.
     const owner = this;
     let awareness: awarenessProtocol.Awareness | null = null;
-    const room: DocRoom = {
+    const doc: LiveDoc = {
       docId,
       ydoc,
       get awareness(): awarenessProtocol.Awareness {
-        if (!awareness) awareness = owner.fanout.createAwareness(this as DocRoom);
+        if (!awareness) awareness = owner.fanout.createAwareness(this as LiveDoc);
         return awareness;
       },
       peekAwareness: () => awareness,
@@ -1644,12 +1648,12 @@ export class DocStore {
       webhookUrl: init?.webhookUrl,
       seq: 0,
     };
-    this.docs.set(docId, room);
+    this.docs.set(docId, doc);
     this.hydratedAt.set(docId, this.now());
-    this.fanout.wireEvents(room);
-    // For freshly-created rooms (no on-disk state), the initDocMeta call
+    this.fanout.wireEvents(doc);
+    // For freshly-created docs (no on-disk state), the initDocMeta call
     // above fired its update event before wireEvents listened, so nothing
-    // would ever flush this room to disk if the user hasn't done another
+    // would ever flush this doc to disk if the user hasn't done another
     // mutation by the next supervisor restart. Force a snapshot now so a
     // create_review_doc immediately followed by a `bun --watch` reload
     // doesn't lose the doc.
@@ -1658,12 +1662,12 @@ export class DocStore {
     // reason — the lift's transaction also ran before wireEvents listened, so
     // without this the private keys would still be in the `.ydoc` on disk and
     // would come straight back on the next restart.
-    if (isNew || Object.keys(legacyPrivate).length > 0) this.saveToDisk(room);
-    return room;
+    if (isNew || Object.keys(legacyPrivate).length > 0) this.saveToDisk(doc);
+    return doc;
   }
 
   /**
-   * A room by its id, or by a readable alias that resolves to it.
+   * A doc by its id, or by a readable alias that resolves to it.
    *
    * Primary first, alias second — and the order is the migration. Every doc
    * created before minting has a caller-chosen string as its PRIMARY id, so a
@@ -1673,20 +1677,20 @@ export class DocStore {
    * `claimAlias` refuses a name that any doc already answers to, in either
    * space, so the two branches can never both match.
    */
-  get(docId: string): DocRoom | undefined {
-    const room = this.resolveRoom(docId);
-    if (room) this.touchDoc(room.docId);
-    return room;
+  get(docId: string): LiveDoc | undefined {
+    const doc = this.resolveDoc(docId);
+    if (doc) this.touchDoc(doc.docId);
+    return doc;
   }
 
   /**
-   * The room for a docId, LOADING IT FROM DISK if it is not in memory.
+   * The doc for a docId, LOADING IT FROM DISK if it is not in memory.
    *
    * This is the seam lazy hydration hangs on. Every method that is about to
    * read or write a document's CONTENT goes through here, so "not in memory"
    * and "does not exist" stop being the same answer — which they were when
    * every doc was loaded at boot, and which is why so much code could get
-   * away with reaching straight into the room map.
+   * away with reaching straight into the doc map.
    *
    * Deliberately does NOT touch: hydrating is not the same as somebody
    * reaching for a doc, and a sweep that pulled docs in would otherwise hold
@@ -1697,7 +1701,7 @@ export class DocStore {
    * mint an empty doc for an id nobody wrote, which is exactly what
    * `getOrCreate` would do for a stray index row with no file behind it.
    */
-  private resolveRoom(docId: string): DocRoom | undefined {
+  private resolveDoc(docId: string): LiveDoc | undefined {
     const resident = this.peek(docId);
     if (resident) return resident;
     const target = this.aliases.get(docId) ?? docId;
@@ -1723,7 +1727,7 @@ export class DocStore {
    * when the caller is about to read or write the doc's CONTENT — that is a
    * real access and the poll should speed up for it.
    */
-  peek(docId: string): DocRoom | undefined {
+  peek(docId: string): LiveDoc | undefined {
     const direct = this.docs.get(docId);
     if (direct) return direct;
     const aliased = this.aliases.get(docId);
@@ -1742,7 +1746,7 @@ export class DocStore {
    * error anybody would see in a log.
    *
    * The index row carries the whole `DocMeta`, so this answers for every doc
-   * on disk at the cost of a map lookup. Resident first — a live room's meta
+   * on disk at the cost of a map lookup. Resident first — a live doc's meta
    * is newer than the last row written for it.
    */
   /**
@@ -1781,7 +1785,7 @@ export class DocStore {
 
   /**
    * A doc's body as markdown, WITHOUT making it resident — the read the ref
-   * backfill sweeps every doc with. A resident room is serialized in place;
+   * backfill sweeps every doc with. A resident doc is serialized in place;
    * a non-resident one is hydrated, read, and evicted straight back out
    * (the `indexUnindexedDocs` idiom: reading a body is not somebody opening
    * the doc, and a sweep that left every doc resident would be a boot-cost
@@ -1789,10 +1793,10 @@ export class DocStore {
    */
   readMarkdownBody(docId: string): string | null {
     const target = this.resolveDocId(docId);
-    const serialize = (room: DocRoom): string =>
-      contentKind(room.meta.type) === 'flat'
-        ? room.ydoc.getText('content').toString()
-        : prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
+    const serialize = (doc: LiveDoc): string =>
+      contentKind(doc.meta.type) === 'flat'
+        ? doc.ydoc.getText('content').toString()
+        : prose.serializeFragmentToMarkdown(prose.getProseFragment(doc.ydoc));
     const resident = this.docs.get(target);
     if (resident) return serialize(resident);
     if (!this.docExists(target)) return null;
@@ -1802,13 +1806,13 @@ export class DocStore {
       // the fan-out shape that must never open a bound file on the main
       // thread. Every hydrate defers now, so there is nothing to ask for.
       this.hydrateDoc(target);
-      const room = this.docs.get(target);
-      return room ? serialize(room) : null;
+      const doc = this.docs.get(target);
+      return doc ? serialize(doc) : null;
     } catch (err) {
       console.error(`[doc-store] failed to read ${target} for a body sweep:`, err);
       return null;
     } finally {
-      this.evictRoom(target);
+      this.evictDoc(target);
     }
   }
 
@@ -1830,17 +1834,17 @@ export class DocStore {
   createForCaller(
     requested: string,
     init?: Parameters<DocStore['getOrCreate']>[1],
-  ): { ok: true; room: DocRoom; minted: boolean } | { ok: false; error: 'reserved-namespace' } {
+  ): { ok: true; doc: LiveDoc; minted: boolean } | { ok: false; error: 'reserved-namespace' } {
     if (isReservedDocId(requested)) return { ok: false, error: 'reserved-namespace' };
     const existing = this.get(requested);
     if (existing) {
       // Re-tag / repoint the doc this name already resolves to, exactly as
       // before — but under its OWN id, never the name it was asked by.
-      return { ok: true, room: this.getOrCreate(existing.docId, init), minted: false };
+      return { ok: true, doc: this.getOrCreate(existing.docId, init), minted: false };
     }
     const docId = newDocId();
-    const room = this.getOrCreate(docId, { ...init, alias: requested });
-    return { ok: true, room, minted: true };
+    const doc = this.getOrCreate(docId, { ...init, alias: requested });
+    return { ok: true, doc, minted: true };
   }
 
   /**
@@ -1878,7 +1882,7 @@ export class DocStore {
     this.aliases.set(alias, docId);
   }
 
-  /** Forget a doc's alias when its room goes away, so the name does not
+  /** Forget a doc's alias when its doc goes away, so the name does not
    *  outlive the doc as a dangling resolution. */
   private releaseAliases(docId: string): void {
     for (const [alias, target] of this.aliases) {
@@ -1889,8 +1893,8 @@ export class DocStore {
   /** Schedule a persistence pass for a doc whose in-memory meta changed with
    *  no accompanying CRDT update (the private sidecar keys). */
   persistMeta(docId: string): void {
-    const room = this.resolveRoom(docId);
-    if (room) this.saveToDisk(room);
+    const doc = this.resolveDoc(docId);
+    if (doc) this.saveToDisk(doc);
   }
 
   // ── Comment threads ──────────────────────────────────────────────────────
@@ -2054,7 +2058,7 @@ export class DocStore {
     // workspace listing, the archive route and the stall scan each walk EVERY
     // docId on a board, none of which reaches a URL for the request prewarm
     // to find. One bad file among them used to park the whole server.
-    this.resolveRoom(docId);
+    this.resolveDoc(docId);
     return this.docThreads.listThreads(docId, filter);
   }
 
@@ -2081,22 +2085,22 @@ export class DocStore {
     threads: Thread[];
     syncError?: { message: string; at: number };
   } | null {
-    const room = this.resolveRoom(docId);
-    if (!room) return null;
+    const doc = this.resolveDoc(docId);
+    if (!doc) return null;
     // Code and diff docs are flat read-only text in the `content` Y.Text,
     // not a prose fragment — surface the whole source as one block. (For a
     // diff doc that text is the file at the target commit.)
-    if (contentKind(room.meta.type) === 'flat') {
-      const text = room.ydoc.getText('content').toString();
-      const syncError = this.bindings.getSyncError(room.docId);
+    if (contentKind(doc.meta.type) === 'flat') {
+      const text = doc.ydoc.getText('content').toString();
+      const syncError = this.bindings.getSyncError(doc.docId);
       return {
         plainText: text,
         blocks: [{ type: 'code', text, startOffset: 0, endOffset: text.length }],
-        threads: listThreads(room.ydoc),
+        threads: listThreads(doc.ydoc),
         ...(syncError ? { syncError } : {}),
       };
     }
-    const fragment = prose.getProseFragment(room.ydoc);
+    const fragment = prose.getProseFragment(doc.ydoc);
     const walk = prose.walkProse(fragment);
 
     // Group segments by their TOP-LEVEL block — so a table's many cells
@@ -2156,7 +2160,7 @@ export class DocStore {
     return {
       plainText: walk.plainText,
       blocks,
-      threads: listThreads(room.ydoc),
+      threads: listThreads(doc.ydoc),
       ...(syncError ? { syncError } : {}),
     };
   }
@@ -2166,7 +2170,7 @@ export class DocStore {
    * doc bound, is it wedged, how big is it, is anything pending" WITHOUT
    * the body. `getDoc` re-renders every block to markdown and has returned
    * 320KB for one doc, which overflows tool-result caps; this returns the
-   * metadata the room and binding already hold, plus counts. Deliberately
+   * metadata the doc and binding already hold, plus counts. Deliberately
    * no plainText, no blocks, no thread bodies.
    */
   getDocStatus(docId: string): {
@@ -2185,35 +2189,35 @@ export class DocStore {
     threads: { open: number; resolved: number };
     pendingSuggestions: number;
   } | null {
-    const room = this.resolveRoom(docId);
-    if (!room) return null;
-    const binding = this.bindings.describe(room.docId);
-    const meta = this.withActivity(room.meta);
+    const doc = this.resolveDoc(docId);
+    if (!doc) return null;
+    const binding = this.bindings.describe(doc.docId);
+    const meta = this.withActivity(doc.meta);
 
     let textLength: number;
     let blockCount: number;
     let pendingSuggestions = 0;
-    if (contentKind(room.meta.type) === 'flat') {
-      textLength = room.ydoc.getText('content').length;
+    if (contentKind(doc.meta.type) === 'flat') {
+      textLength = doc.ydoc.getText('content').length;
       blockCount = 1;
     } else {
-      const fragment = prose.getProseFragment(room.ydoc);
+      const fragment = prose.getProseFragment(doc.ydoc);
       textLength = prose.walkProse(fragment).plainText.length;
       blockCount = fragment.length;
-      pendingSuggestions = suggestOps.listSuggestions(room.ydoc).length;
+      pendingSuggestions = suggestOps.listSuggestions(doc.ydoc).length;
     }
 
     let open = 0;
     let resolved = 0;
-    for (const t of listThreads(room.ydoc)) {
+    for (const t of listThreads(doc.ydoc)) {
       if (t.status === 'resolved') resolved += 1;
       else open += 1;
     }
 
     return {
       docId,
-      type: room.meta.type,
-      ...(room.meta.title ? { title: room.meta.title } : {}),
+      type: doc.meta.type,
+      ...(doc.meta.title ? { title: doc.meta.title } : {}),
       bound: Boolean(binding),
       ...(binding ? { path: binding.path } : {}),
       ...(binding?.syncError ? { syncError: binding.syncError } : {}),
@@ -2414,7 +2418,7 @@ export class DocStore {
   }
 
   /**
-   * Track a share-authorized socket that no room's `conns` holds — the
+   * Track a share-authorized socket that no doc's `conns` holds — the
    * meeting's `/audio/<docId>` socket — so the sweeps below can close it.
    * The set lives with the walk, in the fan-out.
    */
@@ -2429,7 +2433,7 @@ export class DocStore {
 
   /**
    * Close every websocket a given share opened, and the two sweeps beside it.
-   * The rooms are this store's; the sockets on them are the fan-out's, so the
+   * The docs are this store's; the sockets on them are the fan-out's, so the
    * walk lives there and these keep the names their callers already use
    * (`server.ts`, `routes/auth-share.ts`).
    */
@@ -2588,7 +2592,7 @@ export class DocStore {
   /**
    * Drop `pendingFileWrite` from a doc's index row, if it is set.
    *
-   * Writes the row rather than waiting for the next `persistRoomNow`: the
+   * Writes the row rather than waiting for the next `persistDocNow`: the
    * whole value of the flag is that it is accurate at the moment the process
    * dies, and a flag left set only costs one doc's hydration at the next
    * boot, while a flag cleared too eagerly loses the edit it was guarding.
@@ -2624,7 +2628,7 @@ export class DocStore {
    *  observer; public so tests can pin the window policy without a socket. */
   /**
    * When this doc's content was last changed by a person or an agent, or
-   * undefined if no change has been seen since the room was loaded (a room
+   * undefined if no change has been seen since the doc was loaded (a doc
    * that was never opened answers undefined, which is the right answer — it
    * has no activity to report).
    *
@@ -2652,16 +2656,16 @@ export class DocStore {
   /**
    * The doc's content revision with any pending bump COMMITTED first — what a
    * create-from-doc stamps onto the task, so words typed before the create
-   * can never flag the task they produced (see `DocRoom.pendingRevisionBump`).
+   * can never flag the task they produced (see `LiveDoc.pendingRevisionBump`).
    * `peek`, not `get`: a task citing an unloaded doc answers undefined and the
    * task simply never joins the staleness comparison, which is the quiet
    * direction to be wrong in.
    */
   settledContentRevision(docId: string): number | undefined {
-    const room = this.peek(docId);
-    if (!room) return undefined;
-    this.commitRevisionBump(room);
-    return room.meta.contentRevision ?? 0;
+    const doc = this.peek(docId);
+    if (!doc) return undefined;
+    this.commitRevisionBump(doc);
+    return doc.meta.contentRevision ?? 0;
   }
 
   /**
@@ -2671,27 +2675,27 @@ export class DocStore {
    * statement about an edit session, and per-update bumps would write CRDT
    * meta on every keypress.
    */
-  private scheduleRevisionBump(room: DocRoom): void {
-    room.pendingRevisionBump = true;
-    if (room.revisionTimer) clearTimeout(room.revisionTimer);
-    room.revisionTimer = setTimeout(() => this.commitRevisionBump(room), REVISION_SETTLE_MS);
+  private scheduleRevisionBump(doc: LiveDoc): void {
+    doc.pendingRevisionBump = true;
+    if (doc.revisionTimer) clearTimeout(doc.revisionTimer);
+    doc.revisionTimer = setTimeout(() => this.commitRevisionBump(doc), REVISION_SETTLE_MS);
   }
 
-  private commitRevisionBump(room: DocRoom): void {
-    if (!room.pendingRevisionBump) return;
-    room.pendingRevisionBump = false;
-    if (room.revisionTimer) {
-      clearTimeout(room.revisionTimer);
-      room.revisionTimer = null;
+  private commitRevisionBump(doc: LiveDoc): void {
+    if (!doc.pendingRevisionBump) return;
+    doc.pendingRevisionBump = false;
+    if (doc.revisionTimer) {
+      clearTimeout(doc.revisionTimer);
+      doc.revisionTimer = null;
     }
-    const revision = (room.meta.contentRevision ?? 0) + 1;
-    const m = room.ydoc.getMap('meta');
+    const revision = (doc.meta.contentRevision ?? 0) + 1;
+    const m = doc.ydoc.getMap('meta');
     // A string origin that does NOT start with 'agent': the meta write lands
-    // back in the room's own update hook, and an authoring-shaped origin here
+    // back in the doc's own update hook, and an authoring-shaped origin here
     // would re-arm the very debounce that just fired.
-    room.ydoc.transact(() => m.set('contentRevision', revision), CONTENT_REVISION_ORIGIN);
-    room.meta.contentRevision = revision;
-    const ids = room.meta.alias ? [room.docId, room.meta.alias] : [room.docId];
+    doc.ydoc.transact(() => m.set('contentRevision', revision), CONTENT_REVISION_ORIGIN);
+    doc.meta.contentRevision = revision;
+    const ids = doc.meta.alias ? [doc.docId, doc.meta.alias] : [doc.docId];
     this.onContentRevision?.(ids, revision);
   }
 
@@ -2706,17 +2710,17 @@ export class DocStore {
     docId: string,
     by: string,
   ): { ok: true; docId: string; requestedAt: number } | { ok: false; error: 'not-found' } {
-    const room = this.get(docId);
-    if (!room) return { ok: false, error: 'not-found' };
+    const doc = this.get(docId);
+    if (!doc) return { ok: false, error: 'not-found' };
     const requestedAt = Date.now();
-    const m = room.ydoc.getMap('meta');
-    room.ydoc.transact(() => {
+    const m = doc.ydoc.getMap('meta');
+    doc.ydoc.transact(() => {
       m.set('planRequestedAt', requestedAt);
       m.set('planRequestedBy', by);
     }, CONTENT_REVISION_ORIGIN);
-    room.meta.planRequestedAt = requestedAt;
-    room.meta.planRequestedBy = by;
-    return { ok: true, docId: room.docId, requestedAt };
+    doc.meta.planRequestedAt = requestedAt;
+    doc.meta.planRequestedBy = by;
+    return { ok: true, docId: doc.docId, requestedAt };
   }
 
   /**
@@ -2730,19 +2734,19 @@ export class DocStore {
     by: string,
     threadId: string,
   ): { ok: true; docId: string; requestedAt: number } | { ok: false; error: 'not-found' } {
-    const room = this.get(docId);
-    if (!room) return { ok: false, error: 'not-found' };
+    const doc = this.get(docId);
+    if (!doc) return { ok: false, error: 'not-found' };
     const requestedAt = Date.now();
-    const m = room.ydoc.getMap('meta');
-    room.ydoc.transact(() => {
+    const m = doc.ydoc.getMap('meta');
+    doc.ydoc.transact(() => {
       m.set('reviewRequestedAt', requestedAt);
       m.set('reviewRequestedBy', by);
       m.set('reviewThreadId', threadId);
     }, CONTENT_REVISION_ORIGIN);
-    room.meta.reviewRequestedAt = requestedAt;
-    room.meta.reviewRequestedBy = by;
-    room.meta.reviewThreadId = threadId;
-    return { ok: true, docId: room.docId, requestedAt };
+    doc.meta.reviewRequestedAt = requestedAt;
+    doc.meta.reviewRequestedBy = by;
+    doc.meta.reviewThreadId = threadId;
+    return { ok: true, docId: doc.docId, requestedAt };
   }
 
   /**
@@ -2756,12 +2760,12 @@ export class DocStore {
     state: 'pending' | 'approved',
     by?: string,
   ): { ok: true; docId: string; changed: boolean } | { ok: false; error: 'not-found' } {
-    const room = this.get(docId);
-    if (!room) return { ok: false, error: 'not-found' };
-    if (room.meta.planState === state) return { ok: true, docId: room.docId, changed: false };
-    const m = room.ydoc.getMap('meta');
+    const doc = this.get(docId);
+    if (!doc) return { ok: false, error: 'not-found' };
+    if (doc.meta.planState === state) return { ok: true, docId: doc.docId, changed: false };
+    const m = doc.ydoc.getMap('meta');
     const approvedAt = state === 'approved' ? Date.now() : undefined;
-    room.ydoc.transact(() => {
+    doc.ydoc.transact(() => {
       m.set('planState', state);
       if (state === 'approved') {
         if (by !== undefined) m.set('planApprovedBy', by);
@@ -2773,15 +2777,15 @@ export class DocStore {
         m.delete('planApprovedAt');
       }
     }, CONTENT_REVISION_ORIGIN);
-    room.meta.planState = state;
-    room.meta.planApprovedBy = state === 'approved' ? by : undefined;
-    room.meta.planApprovedAt = approvedAt;
-    return { ok: true, docId: room.docId, changed: true };
+    doc.meta.planState = state;
+    doc.meta.planApprovedBy = state === 'approved' ? by : undefined;
+    doc.meta.planApprovedAt = approvedAt;
+    return { ok: true, docId: doc.docId, changed: true };
   }
 
   noteHumanEdit(docId: string, at: number = Date.now()): void {
-    const room = this.get(docId);
-    if (room) room.lastHumanEditAt = at;
+    const doc = this.get(docId);
+    if (doc) doc.lastHumanEditAt = at;
   }
 
   /** Record that `reader` fetched this doc's content (their copy is current
@@ -2813,10 +2817,10 @@ export class DocStore {
     reader?: string,
     now: number = Date.now(),
   ): { humanEditedAt: number; lastReadAt?: number } | null {
-    const room = this.get(docId);
-    const humanEditedAt = room?.lastHumanEditAt;
-    if (humanEditedAt === undefined || !room) return null;
-    const lastReadAt = reader ? this.agentReads.get(room.docId)?.get(reader) : undefined;
+    const doc = this.get(docId);
+    const humanEditedAt = doc?.lastHumanEditAt;
+    if (humanEditedAt === undefined || !doc) return null;
+    const lastReadAt = reader ? this.agentReads.get(doc.docId)?.get(reader) : undefined;
     if (lastReadAt !== undefined) {
       // STRICTLY newer. Date.now() ticks in milliseconds, so a read and an
       // edit in the same tick carry no order — `>=` called that tie "read is
@@ -3011,7 +3015,7 @@ export class DocStore {
    * is swallowed so activity capture can't break the action it observes.
    */
   private recordActivity(
-    room: DocRoom,
+    doc: LiveDoc,
     type: ActivityType,
     author: User,
     threadId: string,
@@ -3025,7 +3029,7 @@ export class DocStore {
       const id = eventId({
         ts,
         actor,
-        docId: room.docId,
+        docId: doc.docId,
         type,
         threadId,
         payloadDigest: payloadDigest(opts.text),
@@ -3039,7 +3043,7 @@ export class DocStore {
         actorName: author.name,
         isOwner: isOwnerActor(author),
         threadId,
-        doc: buildEventDoc(room.meta),
+        doc: buildEventDoc(doc.meta),
         payload,
       };
       appendActivity(this.cfg.dataDir, event);
@@ -3063,8 +3067,8 @@ export class DocStore {
     if (type !== 'read_session' && type !== 'doc_open') {
       return { ok: false, error: 'bad-type' };
     }
-    const room = this.resolveRoom(docId);
-    if (!room) return { ok: false, error: 'no-doc' };
+    const doc = this.resolveDoc(docId);
+    if (!doc) return { ok: false, error: 'no-doc' };
     try {
       // Re-clamp the browser-supplied duration/scroll fields server-side so a
       // spoofed or buggy POST can't write an inflated read time.
@@ -3087,7 +3091,7 @@ export class DocStore {
         actorId: author.id,
         actorName: author.name,
         isOwner: isOwnerActor(author),
-        doc: buildEventDoc(room.meta),
+        doc: buildEventDoc(doc.meta),
         payload,
       };
       appendActivity(this.cfg.dataDir, event);
@@ -3104,7 +3108,7 @@ export class DocStore {
    * Generation is triggered by thread CHANGES, so nothing that was written
    * before this feature shipped would ever get a summary — the docs with the
    * worst deterministic topic lines are exactly the old ones. This walks the
-   * hydrated rooms once and hands the backlog to the summarizer, which paces
+   * hydrated docs once and hands the backlog to the summarizer, which paces
    * it over `windowMs`.
    *
    * Resolved threads are included: their cards still render both lines in the
@@ -3138,10 +3142,10 @@ export class DocStore {
       // hundred docs and one that reads five thousand.
       if (this.threadCounts(docId).total === 0) continue;
       const wasResident = this.docs.has(docId);
-      const room = this.resolveRoom(docId);
-      if (!room) continue;
+      const doc = this.resolveDoc(docId);
+      if (!doc) continue;
       let queuedHere = 0;
-      for (const t of listThreads(room.ydoc)) {
+      for (const t of listThreads(doc.ydoc)) {
         // Ask the same question the live path asks, so a thread summarized a
         // second ago is not paid for twice.
         if (!needsCall(t, t.summary)) continue;
@@ -3154,10 +3158,10 @@ export class DocStore {
           getThread: () => this.getThread(docId, t.id),
           apply: (summary) => {
             // Resolved again HERE, not captured above: this runs minutes
-            // later, spread over the pacing window, and the room it was
+            // later, spread over the pacing window, and the doc it was
             // collected from may have been evicted since — writing into a
             // destroyed Y.Doc would drop the summary silently.
-            const live = this.resolveRoom(docId);
+            const live = this.resolveDoc(docId);
             if (!live) return;
             setThreadSummary(live.ydoc, t.id, summary);
             this.saveToDisk(live);
@@ -3167,7 +3171,7 @@ export class DocStore {
       // Put back what this sweep pulled in and did not need. A doc that had
       // work queued stays for now — `apply` is about to write to it — and the
       // idle sweep takes it later on the ordinary clock.
-      if (!wasResident && queuedHere === 0) this.evictRoom(docId);
+      if (!wasResident && queuedHere === 0) this.evictDoc(docId);
     }
     if (tasks.length > 0) {
       void summarizer
@@ -3193,10 +3197,10 @@ export class DocStore {
    * an on-demand summary cannot end up in the doc but not on disk.
    */
   applyThreadSummary(docId: string, threadId: string, summary: StoredSummary): Thread | null {
-    const room = this.resolveRoom(docId);
-    if (!room) return null;
-    const t = setThreadSummary(room.ydoc, threadId, summary);
-    if (t) this.saveToDisk(room);
+    const doc = this.resolveDoc(docId);
+    if (!doc) return null;
+    const t = setThreadSummary(doc.ydoc, threadId, summary);
+    if (t) this.saveToDisk(doc);
     return t;
   }
 
@@ -3222,51 +3226,51 @@ export class DocStore {
 
   private saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-  private saveToDisk(room: DocRoom): void {
-    const prev = this.saveTimers.get(room.docId);
+  private saveToDisk(doc: LiveDoc): void {
+    const prev = this.saveTimers.get(doc.docId);
     if (prev) clearTimeout(prev);
     this.saveTimers.set(
-      room.docId,
+      doc.docId,
       setTimeout(() => {
-        this.saveTimers.delete(room.docId);
-        this.persistRoomNow(room);
+        this.saveTimers.delete(doc.docId);
+        this.persistDocNow(doc);
       }, PERSIST_MS),
     );
   }
 
-  private persistRoomNow(room: DocRoom): void {
+  private persistDocNow(doc: LiveDoc): void {
     try {
-      const update = Y.encodeStateAsUpdate(room.ydoc);
-      const path = this.pathFor(room.docId);
+      const update = Y.encodeStateAsUpdate(doc.ydoc);
+      const path = this.pathFor(doc.docId);
       writeFileSync(path, update);
       // We are the only writer of this file, so recording the mtime here is
       // what lets `withActivity` stop stat-ing every doc on every list.
       try {
-        this.activityMtime.set(room.docId, Math.round(statSync(path).mtimeMs));
+        this.activityMtime.set(doc.docId, Math.round(statSync(path).mtimeMs));
       } catch {
-        this.activityMtime.delete(room.docId);
+        this.activityMtime.delete(doc.docId);
       }
       // The sidecar rides the SAME debounced write as the `.ydoc`. Two
       // persistence paths would eventually disagree, and a doc whose
       // sourceUrl went missing stops writing back to disk silently —
       // the failure mode this whole change must not introduce.
-      writePrivateMeta(this.cfg.dataDir, room.docId, room.meta);
+      writePrivateMeta(this.cfg.dataDir, doc.docId, doc.meta);
       // And the listing row, for the same reason and in the same write. A
       // board asks "what is this called, which workspace, how many threads
       // are open" far more often than it asks for a document, and none of
       // those answers needs the CRDT decoded. Written here so the index
       // cannot describe a state the `.ydoc` was never in.
-      const entry = this.indexEntryFor(room);
-      writeDocIndex(this.cfg.dataDir, room.docId, entry);
-      this.docIndex.set(room.docId, entry);
+      const entry = this.indexEntryFor(doc);
+      writeDocIndex(this.cfg.dataDir, doc.docId, entry);
+      this.docIndex.set(doc.docId, entry);
     } catch (err) {
-      console.error(`[doc-store] failed to persist ${room.docId}:`, err);
+      console.error(`[doc-store] failed to persist ${doc.docId}:`, err);
     }
   }
 
-  /** The doc's listing row, built from the live room. */
-  private indexEntryFor(room: DocRoom): DocIndexEntry {
-    const threads = listThreads(room.ydoc);
+  /** The doc's listing row, built from the live doc. */
+  private indexEntryFor(doc: LiveDoc): DocIndexEntry {
+    const threads = listThreads(doc.ydoc);
     let lastThreadActivityAt: number | undefined;
     let open = 0;
     for (const t of threads) {
@@ -3280,12 +3284,12 @@ export class DocStore {
     // The ydoc save runs at 200ms and the file write-back at 800ms, so a
     // pending write-back is always visible from here. See `DocIndexEntry`.
     const pendingFileWrite =
-      this.bindings.hasPendingWrite(room.docId) || this.bindings.hasFailedWrite(room.docId);
+      this.bindings.hasPendingWrite(doc.docId) || this.bindings.hasFailedWrite(doc.docId);
     return {
       v: DOC_INDEX_VERSION,
-      // A copy, not the live object: `room.meta` keeps being mutated and the
+      // A copy, not the live object: `doc.meta` keeps being mutated and the
       // entry must describe this write.
-      meta: { ...room.meta },
+      meta: { ...doc.meta },
       threads: { open, total: threads.length },
       ...(lastThreadActivityAt !== undefined ? { lastThreadActivityAt } : {}),
       ...(pendingFileWrite ? { pendingFileWrite: true } : {}),
@@ -3306,7 +3310,7 @@ export class DocStore {
     // schedules the very saves the passes below persist. After a restart the
     // counter is all that remains of an edit burst — the in-memory clocks are
     // deliberately not durable.
-    for (const room of this.docs.values()) this.commitRevisionBump(room);
+    for (const doc of this.docs.values()) this.commitRevisionBump(doc);
     // A write-back can re-arm a timer while flushing (the reconcile guard's
     // conflict path re-schedules the flush it just consumed), so sweep until
     // quiescent — bounded, so a wedged binding cannot loop forever.
@@ -3317,8 +3321,8 @@ export class DocStore {
       for (const [docId, timer] of saves) {
         clearTimeout(timer);
         this.saveTimers.delete(docId);
-        const room = this.docs.get(docId);
-        if (room) this.persistRoomNow(room);
+        const doc = this.docs.get(docId);
+        if (doc) this.persistDocNow(doc);
       }
       for (const docId of writes) {
         this.bindings.flushWrite(docId, this.docs.get(docId));

@@ -62,19 +62,19 @@ const waitForFileText = (path: string, needle: string, timeout = 8000): Promise<
 
 /** Replace the doc's prose with `md`, as an agent edit would. */
 function setProse(docStore: DocStore, docId: string, md: string): void {
-  const room = docStore.get(docId);
-  if (!room) throw new Error(`no room ${docId}`);
-  const fragment = prose.getProseFragment(room.ydoc);
-  room.ydoc.transact(() => {
+  const doc = docStore.get(docId);
+  if (!doc) throw new Error(`no doc ${docId}`);
+  const fragment = prose.getProseFragment(doc.ydoc);
+  doc.ydoc.transact(() => {
     fragment.delete(0, fragment.length);
     fragment.push(prose.parseMarkdownBlocks(md));
   }, 'agent');
 }
 
 function docText(docStore: DocStore, docId: string): string {
-  const room = docStore.get(docId);
-  if (!room) throw new Error(`no room ${docId}`);
-  return prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
+  const doc = docStore.get(docId);
+  if (!doc) throw new Error(`no doc ${docId}`);
+  return prose.serializeFragmentToMarkdown(prose.getProseFragment(doc.ydoc));
 }
 
 let mtimeBump = 0;

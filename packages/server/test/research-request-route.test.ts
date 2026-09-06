@@ -82,15 +82,15 @@ describe('POST /api/docs/:docId/research-request', () => {
   const threadsOf = async (docId: string): Promise<ThreadRow[]> =>
     (await jj<{ threads: ThreadRow[] }>(await local(`/api/docs/${docId}/threads`))).threads;
   const markdownOf = (docId: string): string => {
-    const room = handle.docStore.get(docId);
-    if (!room) throw new Error('room missing');
-    return prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
+    const doc = handle.docStore.get(docId);
+    if (!doc) throw new Error('doc missing');
+    return prose.serializeFragmentToMarkdown(prose.getProseFragment(doc.ydoc));
   };
   /** The selection, as the pill sends it: a text-range over the words. */
   const anchorOver = (docId: string, find: string) => {
-    const room = handle.docStore.get(docId);
-    if (!room) throw new Error('room missing');
-    const r = prose.resolveTextRangeFromFind(room.ydoc, { find });
+    const doc = handle.docStore.get(docId);
+    if (!doc) throw new Error('doc missing');
+    const r = prose.resolveTextRangeFromFind(doc.ydoc, { find });
     if (!r.ok) throw new Error(`anchor: ${r.error}`);
     return {
       kind: 'text-range',

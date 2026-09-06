@@ -20,26 +20,26 @@
  *
  * WHAT IDENTIFIES AN EVENT. In order:
  *
- *  1. `eid` — a process-unique id the server stamps in `broadcastToRoom`
+ *  1. `eid` — a process-unique id the server stamps in `broadcastToDoc`
  *     before the fan-out, so every channel carrying one broadcast carries the
  *     same string and no two broadcasts ever share one. This is the only key
  *     that is correct by construction, and it is what a current server sends.
  *  2. `${event}#${docId}#${seq}` — the fallback for a server older than that
  *     stamp (a new bundle against an un-restarted box is normal here).
- *     `doc-store.ts` bumps a PER-ROOM monotonic `seq` on every thread and
- *     suggestion event, so within one room `seq` separates two real events
- *     and across rooms it collides freely — hence `docId`, and hence `seq`
+ *     `doc-store.ts` bumps a PER-DOC monotonic `seq` on every thread and
+ *     suggestion event, so within one doc `seq` separates two real events
+ *     and across docs it collides freely — hence `docId`, and hence `seq`
  *     alone is not a key at all.
  *
- * WHY THE FALLBACK NEEDS A WINDOW. `room.seq` is a field on the in-memory
- * room, initialised to 0 by `getOrCreate` and never persisted into the
+ * WHY THE FALLBACK NEEDS A WINDOW. `doc.seq` is a field on the in-memory
+ * doc, initialised to 0 by `getOrCreate` and never persisted into the
  * `.ydoc`. Every server start — a deploy, a `bun --watch` reload — rebuilds
- * every room counting from 1 again, while this process lives for days. So
+ * every doc counting from 1 again, while this process lives for days. So
  * that key is unique only WITHIN a server epoch, and a set that outlived the
  * epoch would swallow the first real comment on every doc it had already
  * heard from. Two things bound it: `reset()`, called whenever an SSE loop
  * RECONNECTS (which is what a server restart looks like from in here), and a
- * wall-clock TTL for the cases a reconnect does not cover — a room destroyed
+ * wall-clock TTL for the cases a reconnect does not cover — a doc destroyed
  * and rebuilt under a live server (`delete_workspace` then re-create with the
  * same id). The two copies of one broadcast arrive milliseconds apart, so a
  * window of seconds is already enormous for the job it has to do.
@@ -72,7 +72,7 @@ export interface FrameDedup {
    *
    * Called when an SSE loop reconnects. A reconnect means the stream broke,
    * and the overwhelmingly common reason is that the server restarted — which
-   * reset every room's `seq` to 0, making every key held here able to collide
+   * reset every doc's `seq` to 0, making every key held here able to collide
    * with a genuinely new event. Dropping the window costs at most a duplicate
    * (both copies of an in-flight broadcast get forwarded); keeping it costs a
    * comment nobody ever hears about.

@@ -15,7 +15,7 @@
  * type out of `routes/`.
  */
 import type { DocMeta, DocType, ReviewPayload, Thread, User, suggestOps } from '@feedback/core';
-import type { DocRoom, DocStore } from '../doc-store.ts';
+import type { DocStore, LiveDoc } from '../doc-store.ts';
 import type { createLeadPresenceMonitor } from '../lead-presence.ts';
 import type { ShareTarget } from '../middleware/host-guard.ts';
 import type { ReadyWorkNudger } from '../ready-nudge.ts';
@@ -215,8 +215,8 @@ export interface DocRouteRequest {
 export interface DocResourceRouteRequest extends DocRouteRequest {
   /** The doc this resource route is operating on. */
   docId: string;
-  /** The room for `docId`, already confirmed to exist. */
-  room: DocRoom;
+  /** The doc for `docId`, already confirmed to exist. */
+  doc: LiveDoc;
   /** The path after `/api/docs/:id/`, e.g. `''`, `threads`, `content`. */
   rest: string;
 }

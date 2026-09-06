@@ -75,7 +75,7 @@ export interface ClaimSession extends OwnerSession {
  * Ydoc projection of the board task store (plan §3.3).
  *
  * The sidecar-backed TaskStore is the source of truth for everything the
- * system is accountable for; the `ws:<workspaceId>` room's `tasks` and
+ * system is accountable for; the `ws:<workspaceId>` doc's `tasks` and
  * `workspace` Y.Maps are a PROJECTION of it so the board renders in
  * realtime. Two rules make "only the server writes" true rather than
  * aspirational (§3.3, ultrareview):
@@ -85,17 +85,17 @@ export interface ClaimSession extends OwnerSession {
  *    malicious — is reasserted away, and NO task.* event fires for it:
  *    events originate exclusively from store mutations, never from map
  *    observation.
- *  - On hydrate the sidecar is authoritative: the ws room's .ydoc persists
- *    like any doc room, and `init()` reasserts the projection from the
+ *  - On hydrate the sidecar is authoritative: the ws doc's .ydoc persists
+ *    like any live doc, and `init()` reasserts the projection from the
  *    store after load, so a crash can't leave forged or stale board state
  *    standing.
  *
  * Task BODIES are EDITED in a deliberate exception to "tasks live in the
  * store": each body is a live collaborative doc in its own `task:<taskId>`
- * room (no file binding), which is what makes every existing edit tool,
+ * doc (no file binding), which is what makes every existing edit tool,
  * thread store, REST route, and SSE event apply unchanged (they're all
  * keyed by docId). The store's `body` string is a debounced SNAPSHOT of
- * that room — a snapshot never re-seeds a live fragment, so fragment
+ * that doc — a snapshot never re-seeds a live fragment, so fragment
  * identity (and every thread anchor in it) survives projection refreshes
  * and restarts.
  *
@@ -103,11 +103,11 @@ export interface ClaimSession extends OwnerSession {
  * not, originally, and the cost was that a task read as a bare title and
  * "what is this for" meant navigating to a second page — the
  * store-has-it/surface-can't-show-it failure this codebase has hit before.
- * Note what this widens: the ws room syncs to workspace-share visitors, and
+ * Note what this widens: the ws doc syncs to workspace-share visitors, and
  * Yjs is a state exchange with no per-connection projection, so a
  * description is now readable by anyone holding a workspace share.
  *
- * What the ws room syncs is otherwise the §3.3 visitor-contract list:
+ * What the ws doc syncs is otherwise the §3.3 visitor-contract list:
  * titles, status, order, transitions with actor DISPLAY names (no ids),
  * token usage, goal text, and verbatim quote/answer
  * fields. AgentAttachment records never enter any ydoc.
@@ -117,7 +117,7 @@ export interface ClaimSession extends OwnerSession {
  *  touching the projected maps is foreign and gets reverted. */
 export const PROJECTION_ORIGIN = 'task-projection';
 
-/** The workspace board room's docId. */
+/** The workspace board doc's docId. */
 export function workspaceDocId(workspaceId: string): string {
   return `ws:${workspaceId}`;
 }
@@ -129,14 +129,14 @@ export class TaskProjection {
   /**
    * The DOC a workspace's revert guard is wired to — keyed to the ydoc, not
    * to the workspaceId. `docStore.getOrCreate` hands back a NEW Y.Doc whenever
-   * the room is no longer in the map (a `DELETE /api/docs/ws:<id>` drops
+   * the doc is no longer in the map (a `DELETE /api/docs/ws:<id>` drops
    * it), and a workspaceId-keyed "already wired" set then skips observing
    * the replacement: from that moment the board accepts and KEEPS arbitrary
    * client writes, silently, until the process restarts.
    */
   private wired = new Map<string, Y.Doc>();
-  /** Same identity rule for body rooms: docId → the ydoc whose snapshot
-   *  observer is wired. A recreated room re-arms rather than going quiet. */
+  /** Same identity rule for body docs: docId → the ydoc whose snapshot
+   *  observer is wired. A recreated doc re-arms rather than going quiet. */
   private bodyWired = new Map<string, Y.Doc>();
   private snapshotTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private off: (() => void) | null = null;
@@ -147,7 +147,7 @@ export class TaskProjection {
     this.snapshotDebounceMs = opts.snapshotDebounceMs ?? 300;
   }
 
-  /** Wire everything up. Order matters on hydrate: the rooms have already
+  /** Wire everything up. Order matters on hydrate: the docs have already
    *  loaded whatever the .ydoc files held, so reasserting from the store
    *  here is what makes the sidecar authoritative for gated fields. */
   init(): void {
@@ -160,21 +160,21 @@ export class TaskProjection {
    * Undo the staging half of a delete that the process didn't live to
    * finish.
    *
-   * A workspace delete renames its room files aside before committing, so a
+   * A workspace delete renames its doc files aside before committing, so a
    * crash in that window leaves the state in `<docId>.ydoc.deleting` — which
-   * hydration deliberately skips. Left alone, the body room would come back
+   * hydration deliberately skips. Left alone, the body doc would come back
    * EMPTY on the next `getOrCreate`, and the only copy of the task's
    * discussion would sit in a file nothing reads.
    *
    * The board's continued existence is the discriminator, and it is the
    * reason this lives here rather than in DocStore: a staged file whose board
    * is GONE is the opposite case — post-commit litter, where restoring
-   * would resurrect a room belonging to nothing. So this restores only for
-   * boards the store still has, and it runs before anything opens a room.
+   * would resurrect a doc belonging to nothing. So this restores only for
+   * boards the store still has, and it runs before anything opens a doc.
    */
   private recoverInterruptedDeletes(): void {
     for (const ws of this.tasks.listWorkspaces()) {
-      // Archived rows included: an archived task still OWNS a room file, and
+      // Archived rows included: an archived task still OWNS a doc file, and
       // a recovery that skipped it would leave that file staged forever with
       // nothing left to notice.
       const taskIds = this.tasks.listTasks(ws.id, { includeArchived: true }).map((t) => t.id);
@@ -309,7 +309,7 @@ export class TaskProjection {
   }
 
   /**
-   * Make the workspace's board room exist, guarded, and current. Safe to
+   * Make the workspace's board doc exist, guarded, and current. Safe to
    * call repeatedly — server.ts calls it from the create/attach routes
    * (which mutate the store without emitting events) and `onEvent` calls it
    * for everything else.
@@ -317,14 +317,14 @@ export class TaskProjection {
   ensureWorkspace(workspaceId: string): void {
     const ws = this.tasks.getWorkspace(workspaceId);
     if (!ws) return;
-    const room = this.docStore.getOrCreate(
+    const doc = this.docStore.getOrCreate(
       workspaceDocId(workspaceId),
       { type: 'workspace', title: ws.name },
       // The `ws:` namespace is the server's; the projection is the server.
       { authority: 'server' },
     );
-    if (this.wired.get(workspaceId) !== room.ydoc) {
-      this.wired.set(workspaceId, room.ydoc);
+    if (this.wired.get(workspaceId) !== doc.ydoc) {
+      this.wired.set(workspaceId, doc.ydoc);
       const guard = (_events: Y.YEvent<Y.AbstractType<unknown>>[], tr: Y.Transaction) => {
         if (tr.origin === PROJECTION_ORIGIN) return;
         // A foreign transaction touched server-owned state (client writes
@@ -333,13 +333,13 @@ export class TaskProjection {
         // mutations only, so a forged write is invisible to subscribers.
         this.refresh(workspaceId);
       };
-      room.ydoc.getMap('tasks').observeDeep(guard);
-      room.ydoc.getMap('workspace').observeDeep(guard);
-      // Re-arm body rooms after a restart: state hydration ≠ binding
+      doc.ydoc.getMap('tasks').observeDeep(guard);
+      doc.ydoc.getMap('workspace').observeDeep(guard);
+      // Re-arm body docs after a restart: state hydration ≠ binding
       // hydration, and without this the snapshot observer would be silently
-      // missing on every rehydrated task room.
+      // missing on every rehydrated task doc.
       // Archived rows included — an archived task's discussion is still
-      // readable, and its body room has to be armed to stay that way.
+      // readable, and its body doc has to be armed to stay that way.
       for (const t of this.tasks.listTasks(workspaceId, { includeArchived: true })) {
         this.ensureTaskBody(t);
       }
@@ -347,15 +347,15 @@ export class TaskProjection {
     this.refresh(workspaceId);
   }
 
-  /** Every room this projection owns for a workspace: the board, plus one
-   *  body room per task. The caller passes the ids because after the board
+  /** Every doc this projection owns for a workspace: the board, plus one
+   *  body doc per task. The caller passes the ids because after the board
    *  is deleted the store can no longer enumerate them. */
   private workspaceDocIds(workspaceId: string, taskIds: string[]): string[] {
     return [...taskIds.map(taskBodyDocId), workspaceDocId(workspaceId)];
   }
 
   /**
-   * Move every room file a workspace owns out of the way, reversibly, and
+   * Move every doc file a workspace owns out of the way, reversibly, and
    * report whether they all moved.
    *
    * This is the pre-commit half of the teardown, and it is staged rather
@@ -363,16 +363,16 @@ export class TaskProjection {
    *  - orphan `.ydoc`s must not outlive the board (once the store entry is
    *    gone the id no longer resolves as a board, so nothing can come back
    *    for them, and they reload on every restart);
-   *  - but a body room is NOT derived state — it holds the task's discussion
+   *  - but a body doc is NOT derived state — it holds the task's discussion
    *    threads, which live nowhere else — so a delete that goes on to FAIL
    *    must be able to give everything back, including after a restart that
    *    lands in the middle.
    * A rename satisfies both. Unlinking satisfies only the first: a live
-   * room's state re-reaches disk on its next write, which may never come.
+   * doc's state re-reaches disk on its next write, which may never come.
    *
-   * Ask about the FILE, not the room: `deleteDoc` logs a failed unlink and
+   * Ask about the FILE, not the doc: `deleteDoc` logs a failed unlink and
    * still returns ok, and on a retry it answers 'not-found' without going
-   * near the disk, because the first attempt took the room out of memory.
+   * near the disk, because the first attempt took the doc out of memory.
    */
   stageWorkspaceFiles(workspaceId: string, taskIds: string[]): { ok: boolean } {
     let ok = true;
@@ -382,7 +382,7 @@ export class TaskProjection {
     return { ok };
   }
 
-  /** Put every staged room file back — the delete didn't commit. Runs over
+  /** Put every staged doc file back — the delete didn't commit. Runs over
    *  the whole set, including ids that never staged, because a partial
    *  failure leaves a partial staging. */
   unstageWorkspaceFiles(workspaceId: string, taskIds: string[]): void {
@@ -392,14 +392,14 @@ export class TaskProjection {
   }
 
   /**
-   * Tear the live rooms down. DESTRUCTIVE — a body room's threads are gone
+   * Tear the live docs down. DESTRUCTIVE — a body doc's threads are gone
    * after this — so call it only once the board is out of the store, i.e.
    * once the delete has actually committed and nothing can still refuse.
    *
-   * Cancel each snapshot timer BEFORE its room goes: a debounced snapshot
+   * Cancel each snapshot timer BEFORE its doc goes: a debounced snapshot
    * firing afterwards would try to write body text back into a task that no
    * longer exists. `deleteDoc` re-purges the persisted file, which covers
-   * anything a live room rewrote between the purge above and here.
+   * anything a live doc rewrote between the purge above and here.
    */
   dropWorkspaceDocs(workspaceId: string, taskIds: string[]): void {
     for (const taskId of taskIds) {
@@ -415,7 +415,7 @@ export class TaskProjection {
       // deleted, so open ones are not a reason to refuse here — the refusal
       // that matters (open TASKS) already happened, before any of this.
       this.docStore.deleteDoc(docId, { force: true });
-      // deleteDoc unlinks the LIVE path, which covers anything a room
+      // deleteDoc unlinks the LIVE path, which covers anything a doc
       // rewrote between the staging and here; the staged copy is the one
       // holding the state, and this is the point of no return for it.
       this.docStore.dropStaged(docId);
@@ -425,19 +425,19 @@ export class TaskProjection {
   /**
    * Reassert the projection from the store — diff-aware, so an in-sync map
    * is a no-op transaction and a foreign write is surgically overwritten.
-   * Never touches task body rooms.
+   * Never touches task body docs.
    */
   refresh(workspaceId: string): void {
     const ws = this.tasks.getWorkspace(workspaceId);
     if (!ws) return;
-    const room = this.docStore.getOrCreate(
+    const doc = this.docStore.getOrCreate(
       workspaceDocId(workspaceId),
       { type: 'workspace', title: ws.name },
       // The `ws:` namespace is the server's; the projection is the server.
       { authority: 'server' },
     );
-    const tasksMap = room.ydoc.getMap('tasks');
-    const wsMap = room.ydoc.getMap('workspace');
+    const tasksMap = doc.ydoc.getMap('tasks');
+    const wsMap = doc.ydoc.getMap('workspace');
     // The workspace's own agent roster, read once per refresh. `onEvent`
     // funnels every store event through `ensureWorkspace`, and agent.attached
     // / agent.detached are store events — so the derived half of an owner's
@@ -479,18 +479,18 @@ export class TaskProjection {
     const goalRows = this.tasks.listGoalRows(workspaceId);
     // A goal's DESCRIPTION and its discussion, projected the way a task's are.
     //
-    // The room is brought into existence here rather than on a store event,
+    // The doc is brought into existence here rather than on a store event,
     // because there is no `goal.created` event to hang it on the way
     // `task.created` carries `ensureTaskBody` — and every goal write (the four
     // goals routes, the transition gate, hydrate) reaches this refresh, so
     // this is the one place that sees every goal that has ever existed.
-    // Idempotent and cheap on the repeat: an existing room is a map hit and
+    // Idempotent and cheap on the repeat: an existing doc is a map hit and
     // an already-wired observer is a reference compare.
     //
     // `bodyDocId` is projected even when the body is empty, because it is the
     // ADDRESS — the panel mounts its editor on it and the discussion is
     // fetched from it, both of which have to work on a goal nobody has
-    // described yet. That is the difference between a body and a body room.
+    // described yet. That is the difference between a body and a body doc.
     for (const r of goalRows) this.ensureGoalBody(r);
     const goalMeta = new Map(
       goalRows.map((r) => {
@@ -553,7 +553,7 @@ export class TaskProjection {
       ...(ws.retiredReason !== undefined ? { retiredReason: ws.retiredReason } : {}),
       createdAt: ws.createdAt,
     };
-    room.ydoc.transact(() => {
+    doc.ydoc.transact(() => {
       for (const key of Array.from(tasksMap.keys())) {
         if (!want.has(key)) tasksMap.delete(key);
       }
@@ -570,25 +570,25 @@ export class TaskProjection {
   }
 
   /**
-   * Make a task's live body room exist and keep the store snapshot fresh.
-   * The room seeds ONCE from the stored snapshot — only while the fragment
+   * Make a task's live body doc exist and keep the store snapshot fresh.
+   * The doc seeds ONCE from the stored snapshot — only while the fragment
    * is empty — so a restart rehydrates the .ydoc and the seed path stays
    * cold, preserving fragment identity and every thread anchor in it.
    */
   ensureTaskBody(task: Task): void {
     const docId = taskBodyDocId(task.id);
-    const room = this.docStore.getOrCreate(
+    const doc = this.docStore.getOrCreate(
       docId,
       { type: 'markdown', title: task.title },
-      // Likewise `task:` — a body room is minted here or nowhere.
+      // Likewise `task:` — a body doc is minted here or nowhere.
       { authority: 'server' },
     );
-    const fragment = prose.getProseFragment(room.ydoc);
+    const fragment = prose.getProseFragment(doc.ydoc);
     if (fragment.length === 0 && task.body?.trim()) {
       this.docStore.setDocContent(docId, task.body);
     }
-    if (this.bodyWired.get(docId) !== room.ydoc) {
-      this.bodyWired.set(docId, room.ydoc);
+    if (this.bodyWired.get(docId) !== doc.ydoc) {
+      this.bodyWired.set(docId, doc.ydoc);
       fragment.observeDeep(() => this.scheduleSnapshot(docId));
     }
   }
@@ -605,33 +605,33 @@ export class TaskProjection {
    * could see.
    *
    * Shares `bodyWired`, and correctly: that map is keyed on docId, which is
-   * the room's identity rather than the row's kind. Two rows cannot claim one
+   * the doc's identity rather than the row's kind. Two rows cannot claim one
    * docId, so there is nothing for the two kinds to collide over.
    */
   ensureGoalBody(goal: GoalRow): void {
     const docId = taskBodyDocId(goal.id);
-    const room = this.docStore.getOrCreate(
+    const doc = this.docStore.getOrCreate(
       docId,
       { type: 'markdown', title: goal.title },
       { authority: 'server' },
     );
-    const fragment = prose.getProseFragment(room.ydoc);
+    const fragment = prose.getProseFragment(doc.ydoc);
     if (fragment.length === 0 && goal.body?.trim()) {
       this.docStore.setDocContent(docId, goal.body);
     }
-    if (this.bodyWired.get(docId) !== room.ydoc) {
-      this.bodyWired.set(docId, room.ydoc);
+    if (this.bodyWired.get(docId) !== doc.ydoc) {
+      this.bodyWired.set(docId, doc.ydoc);
       fragment.observeDeep(() => this.scheduleSnapshot(docId));
     }
   }
 
   /**
-   * Make a task's body room exist and hand back its docId — the entry point
+   * Make a task's body doc exist and hand back its docId — the entry point
    * for anything that wants to WRITE a body rather than react to one.
    *
    * DocStore are created lazily and re-armed by `ensureWorkspace`, so on a
    * process that hasn't served this workspace yet (i.e. after every deploy)
-   * the room for a task nobody has opened does not exist, and a write aimed
+   * the doc for a task nobody has opened does not exist, and a write aimed
    * straight at the doc comes back 'not-found' — which reads as "no such
    * task" to the caller.
    */
@@ -641,7 +641,7 @@ export class TaskProjection {
   }
 
   /**
-   * Push the body room's text into the store snapshot NOW, instead of on the
+   * Push the body doc's text into the store snapshot NOW, instead of on the
    * debounce. A caller that rewrote a body and immediately reads the task
    * back (the MCP round trip does exactly this) would otherwise be handed
    * the pre-rewrite text and conclude the write failed.
@@ -654,15 +654,15 @@ export class TaskProjection {
   }
 
   /**
-   * How many comments the task's discussion holds, read from the body room
-   * where they actually live. Zero when the room doesn't exist yet — the
-   * common case, since a room is created lazily and an empty one has no
+   * How many comments the task's discussion holds, read from the body doc
+   * where they actually live. Zero when the doc doesn't exist yet — the
+   * common case, since a doc is created lazily and an empty one has no
    * threads either way.
    */
   private commentCount(rowId: string): number {
-    const room = this.docStore.get(taskBodyDocId(rowId));
-    if (!room) return 0;
-    return listThreads(room.ydoc).reduce((n, t) => n + t.comments.length, 0);
+    const doc = this.docStore.get(taskBodyDocId(rowId));
+    if (!doc) return 0;
+    return listThreads(doc.ydoc).reduce((n, t) => n + t.comments.length, 0);
   }
 
   /**
@@ -671,7 +671,7 @@ export class TaskProjection {
    *
    * Reads from memory only, and that is sound rather than lucky: `DocStore`
    * hydrates every `.ydoc` under the data dir at construction, so a task
-   * whose body room has ever held content is loaded. A room that genuinely
+   * whose body doc has ever held content is loaded. A doc that genuinely
    * does not exist has no threads either, so the empty answer is the true
    * one rather than a miss.
    *
@@ -681,10 +681,10 @@ export class TaskProjection {
    * have been confirmed.
    */
   discussionNotes(taskId: string): PremiseNote[] {
-    const room = this.docStore.get(taskBodyDocId(taskId));
-    if (!room) return [];
+    const doc = this.docStore.get(taskBodyDocId(taskId));
+    if (!doc) return [];
     const notes: PremiseNote[] = [];
-    for (const thread of listThreads(room.ydoc)) {
+    for (const thread of listThreads(doc.ydoc)) {
       for (const c of thread.comments) {
         notes.push({ ts: c.ts, by: c.author?.name ?? 'unknown', text: c.text });
       }
@@ -704,12 +704,12 @@ export class TaskProjection {
   }
 
   private snapshotNow(docId: string): void {
-    const room = this.docStore.get(docId);
-    if (!room) return;
+    const doc = this.docStore.get(docId);
+    if (!doc) return;
     const rowId = taskIdOfBodyDoc(docId);
     if (!rowId) return;
     try {
-      const md = prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
+      const md = prose.serializeFragmentToMarkdown(prose.getProseFragment(doc.ydoc));
       // A GOAL's body lands in its own row. Tried task-first and goal-second
       // rather than branching on a `kind` lookup because that is the order the
       // ids make true: the two `updateBody*` calls are each a miss on the

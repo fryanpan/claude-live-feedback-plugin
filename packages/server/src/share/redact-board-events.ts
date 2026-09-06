@@ -1,7 +1,7 @@
 /**
  * Visitor redaction for board events riding the workspace SSE feed.
  *
- * The ws:<id> board room enforces the §3.3 visitor contract via projectTask
+ * The ws:<id> board doc enforces the §3.3 visitor contract via projectTask
  * (transition actors as display names only). The SSE feed
  * broadcasts the RAW store events — full Task objects and TaskActor records
  * with ids — so without this, granting a visitor the feed (§3.12 commit 8)

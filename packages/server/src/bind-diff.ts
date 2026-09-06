@@ -124,7 +124,7 @@ export type BindDiffResult =
  */
 export async function bindDiff(host: BindHost, opts: BindDiffOpts): Promise<BindDiffResult> {
   // The review id is the `groupId` half of every member docId this bind is
-  // about to mint, so a reserved one mints reserved rooms: `reviewId: 'task'`
+  // about to mint, so a reserved one mints reserved docs: `reviewId: 'task'`
   // over a folder with a README produced a real `task:README.md`. The seam in
   // `getOrCreate` refuses those anyway — this is here so the caller gets one
   // legible 400 naming the id it chose, instead of a throw from the middle of
@@ -325,7 +325,7 @@ export async function bindDiff(host: BindHost, opts: BindDiffOpts): Promise<Bind
   }> = [];
   for (const { entry, text } of accepted) {
     const docId = memberDocId(reviewId, entry.relPath);
-    const room = host.getOrCreate(docId, {
+    const doc = host.getOrCreate(docId, {
       type: 'diff',
       setId: reviewId,
       owner: opts.owner,
@@ -351,8 +351,8 @@ export async function bindDiff(host: BindHost, opts: BindDiffOpts): Promise<Bind
     // the file has none yet — a group-less refresh re-bind must not clobber
     // semantic groups an agent set earlier.
     const groupAssignment =
-      opts.groups || room.meta.diffGroup === undefined ? groupOf.get(entry.relPath) : undefined;
-    refreshDiffMeta(room, entry, groupAssignment);
+      opts.groups || doc.meta.diffGroup === undefined ? groupOf.get(entry.relPath) : undefined;
+    refreshDiffMeta(doc, entry, groupAssignment);
     // Being accepted here IS being part of the diff, so a member that had
     // gone stale stops rendering as a ghost. Re-running create_diff_review is
     // documented as an idempotent refresh path; leaving the flag set would
@@ -361,9 +361,9 @@ export async function bindDiff(host: BindHost, opts: BindDiffOpts): Promise<Bind
     if (target) {
       // Pinned mode: seed the target-commit content once; no file
       // binding, no poll — content can't change underneath us.
-      const content = room.ydoc.getText('content');
+      const content = doc.ydoc.getText('content');
       if (content.length === 0 && text.length > 0) {
-        room.ydoc.transact(() => content.insert(0, text), 'file-seed');
+        doc.ydoc.transact(() => content.insert(0, text), 'file-seed');
       }
     } else if (entry.status !== 'deleted') {
       // Working-tree mode: bind the live file like a code doc — seeds the

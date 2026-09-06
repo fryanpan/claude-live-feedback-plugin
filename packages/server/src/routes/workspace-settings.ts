@@ -74,7 +74,7 @@ export async function handleWorkspaceSettings(
     });
     if (!res.ok) return j(404, res);
     // The store emits, but the projection reads the workspace record
-    // rather than the event payload, so the board room needs telling
+    // rather than the event payload, so the board doc needs telling
     // that the record moved — otherwise the badge appears only when
     // some unrelated mutation next touches this workspace, which on a
     // board somebody just retired is never.

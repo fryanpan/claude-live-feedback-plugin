@@ -154,7 +154,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
   };
 
   /**
-   * A doc room on disk, attached to `boardId` — the shape `docResource` reads.
+   * A live doc on disk, attached to `boardId` — the shape `docResource` reads.
    * Returns the id the server MINTED; `docId` is only the readable name.
    */
   const newDoc = async (docId: string): Promise<string> => {

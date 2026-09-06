@@ -110,9 +110,9 @@ describe('spoken asks on a huddle doc', () => {
       body: JSON.stringify(body),
     });
   const docMarkdown = (): string => {
-    const room = handle.docStore.get(docId);
-    if (!room) throw new Error(`no room for ${docId}`);
-    return prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
+    const doc = handle.docStore.get(docId);
+    if (!doc) throw new Error(`no doc for ${docId}`);
+    return prose.serializeFragmentToMarkdown(prose.getProseFragment(doc.ydoc));
   };
   const rows = () => handle.tasks.listTasks(workspaceId).filter((t) => t.kind !== 'goal');
 

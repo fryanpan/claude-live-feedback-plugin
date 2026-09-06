@@ -178,7 +178,7 @@ describe('the board reads its workspace out of the address', () => {
 });
 
 describe('the board opens exactly one socket, at the address it derived', () => {
-  it('connects once, to the workspace room, over wss on an https page', async () => {
+  it('connects once, to the workspace doc, over wss on an https page', async () => {
     const { sockets } = await boot(`https://board.test/workspaces/${WS}/tasks`);
     const board = sockets.opened.filter((c) => c.url.includes('type=workspace'));
     expect(board).toHaveLength(1);
@@ -387,7 +387,7 @@ describe('a browser that may not write is told before it tries', () => {
     expect(asks.map((b) => b.textContent)).toEqual(['Plan', 'Review']);
   });
 
-  it('wraps fetch for the sign-in notice before it opens the board room', async () => {
+  it('wraps fetch for the sign-in notice before it opens the board doc', async () => {
     // A FRESH module registry. `installWriteGateNotice` installs once per
     // process and returns early ever after, so a boot later in this file
     // would find the wrapper already there and pass without having asked for
@@ -427,11 +427,11 @@ describe('a browser that may not write is told before it tries', () => {
     expect(document.querySelector('.signin-required')).not.toBeNull();
   });
 
-  it('has the write answer IN HAND before it opens the board room', async () => {
+  it('has the write answer IN HAND before it opens the board doc', async () => {
     server.on('/api/auth/session', { authenticated: false, canWrite: false });
     const sockets = fakeSockets();
     shell();
-    // Read at the moment the room opens. The request log alone cannot carry
+    // Read at the moment the doc opens. The request log alone cannot carry
     // this: `ensureUserIdentity` asks the SAME endpoint, so a boot that never
     // awaited the write answer still shows a session request before the
     // socket.

@@ -265,7 +265,7 @@ describe('TaskAuthoringStore title and body writes', () => {
     const task = fake.getTask('t-1');
     expect(task?.quote).toBe('what they actually said');
     expect(task?.body).toBe('a second restatement');
-    // Body typing is content activity; the live doc room announces it.
+    // Body typing is content activity; the live live doc announces it.
     expect(task?.updatedAt).toBe(1_000);
     expect(fake.events).toEqual([]);
   });

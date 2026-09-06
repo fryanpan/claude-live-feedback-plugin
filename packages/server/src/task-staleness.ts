@@ -24,7 +24,7 @@
  * silence.
  */
 
-/** A comment on the task's body room, flattened to what a reader needs. */
+/** A comment on the task's body doc, flattened to what a reader needs. */
 export interface PremiseNote {
   ts: number;
   /** Display name of the commenter. */

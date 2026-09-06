@@ -4,7 +4,7 @@
  * The gap it closes, measured on a real board: `get_doc` returned 320KB for
  * one doc, which overflows tool-result caps — so an agent that only needed
  * "is this doc bound, is it wedged, how big is it" had NO call that answered
- * without paying for the whole body. Status is metadata the room and binding
+ * without paying for the whole body. Status is metadata the doc and binding
  * already hold: no plainText, no blocks, no thread bodies.
  *
  * HTTP-level on purpose (the route layer hand-copies fields and is the layer

@@ -129,7 +129,7 @@ describe('security docs are wired together', () => {
       // …and the fifth, which is NOT an auth surface and is on the list
       // anyway. Shell and static serving holds the three static roots and
       // the containment checks over them, serves a mockup from an absolute
-      // path the room was bound to, and `/widget/` sits on the share-host
+      // path the doc was bound to, and `/widget/` sits on the share-host
       // allowlist. Checklist items 1, 2 and 4 — name the gate on a moved
       // route, what rejects a hostile file path, did share scope widen —
       // all land on this file, so a PR that edits only it must still answer
@@ -161,7 +161,7 @@ describe('security docs are wired together', () => {
       // life. `open` is what makes a share-stamped socket reachable by the
       // revocation sweeps — a stamp that never reaches `trackShareSocket` is
       // a connection no sweep can find — and `message` is where a frame is
-      // handed to a room, which is the read the share scope was deciding
+      // handed to a doc, which is the read the share scope was deciding
       // about in the first place.
       'packages/server/src/socket-handlers.ts',
       // …and the ninth, which came out of `server.ts` when the last five

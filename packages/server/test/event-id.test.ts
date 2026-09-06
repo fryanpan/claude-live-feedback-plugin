@@ -4,8 +4,8 @@
  *
  * WHY THIS EXISTS. A subscriber holding two channels that both carry one
  * broadcast has to collapse the copies, and until now the only thing it could
- * key on was `seq`. `seq` is a counter on the IN-MEMORY room: `getOrCreate`
- * builds every room with `seq: 0` (hydrated ones included — nothing writes it
+ * key on was `seq`. `seq` is a counter on the IN-MEMORY doc: `getOrCreate`
+ * builds every doc with `seq: 0` (hydrated ones included — nothing writes it
  * to the `.ydoc`), so a deploy, a `bun --watch` reload, or a
  * `delete_workspace` + re-create hands out `seq: 1` again for a genuinely new
  * comment. The MCP child outlives all of those — it lives for the whole

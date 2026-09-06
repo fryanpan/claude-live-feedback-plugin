@@ -72,7 +72,7 @@ class AudioClient {
     );
   }
 
-  /** The room HAS been told — never sent with `start`. */
+  /** The doc HAS been told — never sent with `start`. */
 
   /** One 20ms frame of silence — the relay only counts chunks, not samples. */
   speak(chunks: number): void {

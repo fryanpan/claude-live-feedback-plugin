@@ -268,7 +268,7 @@ describe('identity and the write gate are settled before anything connects', () 
     document.body.innerHTML = SHELL;
     history.replaceState(null, '', '/review/d-notes');
     const sockets = fakeSockets();
-    // Read at the moment the room opens. Ordering in the request log alone
+    // Read at the moment the doc opens. Ordering in the request log alone
     // cannot carry this claim: `ensureUserIdentity` asks the SAME endpoint,
     // so a boot that opened its socket without ever awaiting the write
     // answer still shows a session request sitting before the socket.
@@ -286,7 +286,7 @@ describe('identity and the write gate are settled before anything connects', () 
     await settle();
     expect(sockets.opened).toHaveLength(1);
     expect(barUpWhenSocketOpened).toBe(true);
-    // And the request itself precedes the room, on one ordered log.
+    // And the request itself precedes the doc, on one ordered log.
     const session = firstAt('/api/auth/session');
     const socket = firstAt('socket ');
     expect(session).toBeGreaterThanOrEqual(0);

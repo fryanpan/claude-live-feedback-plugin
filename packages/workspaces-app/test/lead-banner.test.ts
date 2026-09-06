@@ -79,7 +79,7 @@ describe('lead banner', () => {
     expect(m.banner.presence()).toBeNull();
   });
 
-  it('names the other empty room: a doc no board holds', () => {
+  it('names the other empty doc: a doc no board holds', () => {
     expect(leadBannerText(presence({ workspaceId: undefined }))).toContain('on no board');
     expect(leadBannerText(presence({ live: true }))).toBeNull();
     expect(leadBannerText(null)).toBeNull();

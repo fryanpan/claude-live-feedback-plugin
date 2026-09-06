@@ -718,7 +718,7 @@ export function createReviewGate(ctx: ReviewGateContext) {
           return res.ok ? { ok: true, row: res.review } : { ok: false };
         },
         // Nothing to project: the payload lives in the doc's own CRDT, and
-        // `setCommentReview` has already broadcast it to everyone in the room.
+        // `setCommentReview` has already broadcast it to everyone in the doc.
         settled: () => {},
       },
       review,

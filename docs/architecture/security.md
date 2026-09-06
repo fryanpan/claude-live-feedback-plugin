@@ -91,7 +91,7 @@ Two things a request names in its BODY rather than in its path get the same ques
 
 A route a member may call still filters what it sends back. Where a row can point across boards, what comes back is narrowed to the reader's own: the rows pointing at one of their rows, at a document they can open, or at a thread in it. The settings withhold the notes checkout, which is a path on the owner's disk, and refuse to accept one. The activity log names people the way the board's live feed already does, by display name rather than by internal id, so the two doors onto the same record cannot disagree.
 
-Document text is edited over the live-editing connection, and that is what a review is for. The board's own live room is different: its contents are a projection the server owns, so a write arriving on it from any peer is reverted, and a member changes the board through the named routes instead.
+Document text is edited over the live-editing connection, and that is what a review is for. The board's own live doc is different: its contents are a projection the server owns, so a write arriving on it from any peer is reverted, and a member changes the board through the named routes instead.
 
 Roles, and finer control than "everything", are not built yet. When they are, they belong in this layer.
 

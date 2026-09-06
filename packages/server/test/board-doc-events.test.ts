@@ -204,10 +204,9 @@ describe('a doc thread reaches the boards holding the doc', () => {
     const { task } = (await t.json()) as { task: { id: string } };
     await settle();
 
-    const boardRoom = handle.docStore.get(workspaceDocId(workspaceId));
-    if (!boardRoom) throw new Error('board room missing');
-    const projected = () =>
-      boardRoom.ydoc.getMap('tasks').get(task.id) as { commentCount?: number };
+    const boardDoc = handle.docStore.get(workspaceDocId(workspaceId));
+    if (!boardDoc) throw new Error('board doc missing');
+    const projected = () => boardDoc.ydoc.getMap('tasks').get(task.id) as { commentCount?: number };
     expect(projected().commentCount ?? 0).toBe(0);
 
     await comment(taskBodyDocId(task.id), 'Is this still above the API work?');

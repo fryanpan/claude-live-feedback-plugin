@@ -4,7 +4,7 @@ import { boardState } from './support/board-region-harness.ts';
 
 /**
  * A row's comments live in its BODY doc — `task:<id>` for a task and for a
- * goal alike — so this is the ordinary thread API pointed at that room.
+ * goal alike — so this is the ordinary thread API pointed at that doc.
  *
  * The invariant driven hardest here is the keying: `discussionTaskId` is
  * claimed BEFORE the fetch and re-checked after it, so a load that lands once
@@ -42,7 +42,7 @@ describe('goalBodyDocId', () => {
     expect(goalBodyDocId({ id: 'g-1', bodyDocId: 'task:custom' })).toBe('task:custom');
   });
 
-  it('derives the room for a server that predates the goal-body projection', () => {
+  it('derives the doc for a server that predates the goal-body projection', () => {
     // Without this the panel fetched `/api/docs//threads` and mounted an
     // editor on nothing.
     expect(goalBodyDocId({ id: 'g-1' })).toBe('task:g-1');
