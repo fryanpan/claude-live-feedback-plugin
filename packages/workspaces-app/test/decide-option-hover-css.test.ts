@@ -13,6 +13,21 @@ import { describe, expect, it } from 'vitest';
  * affordance. Read as text because a layout-free runner cannot evaluate a
  * media query; each probe asserts it FOUND the rule before judging where it
  * sits, so a renamed selector fails loudly rather than passing empty.
+ *
+ * PERMANENT SOURCE-SHAPE SITES, and counted as such. Two of the audit's
+ * source-shape floor lives here (scripts/test-audit.baseline.json names all
+ * three). A `:hover` treatment inside `@media (hover: hover)` needs a real layout engine, and the only browser this repo
+ * has is `bun run ui:shot`. Since 2026-09-05 that browser DOES run in CI —
+ * but NIGHTLY, from .github/workflows/nightly-ui.yml, and deliberately not on
+ * pull requests, because installing a browser and rendering four real pages is
+ * the expensive kind of job (Bryan's call, 2026-09-05). That schedule is
+ * exactly why this test stays here. Moving it would take a check that runs on
+ * EVERY PR and put it on one that runs once a day: the regression would land,
+ * merge, and surface tomorrow. Not a conversion, a downgrade. The nightly run
+ * stands BEHIND this test on the same subject, asserting in a real layout
+ * engine what this file can only read as text — see scripts/ui-nightly-lib.ts.
+ * It carries no `audit: not-source` marker
+ * because it IS a source read; what it is not is an unconverted leftover.
  */
 
 // The board's cascade is two files since the board block moved to board.css:

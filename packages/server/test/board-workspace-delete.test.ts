@@ -12,8 +12,8 @@
  * left behind fails differently:
  *   - the tasks sidecar    → hydrate RESURRECTS the workspace on restart
  *   - the events log       → the audit trail of a board nobody can see
- *   - the `ws:<id>` room   → the board URL still loads, with stale content
- *   - `task:<id>` rooms    → one orphan Yjs room per task, forever
+ *   - the `ws:<id>` doc   → the board URL still loads, with stale content
+ *   - `task:<id>` docs    → one orphan Yjs doc per task, forever
  *   - the taskIndex        → task ids resolve to a workspace that is gone
  *
  * The one thing deletion must NOT touch is linked docs. `attachDoc` is a
@@ -78,8 +78,8 @@ describe('DELETE /workspaces/:id — board workspace', () => {
 
   /**
    * A comment on a task's body, anchored the way the product anchors one.
-   * These threads live ONLY in the body room — nothing in the task store
-   * holds them — which is what makes destroying a body room before the
+   * These threads live ONLY in the body doc — nothing in the task store
+   * holds them — which is what makes destroying a body doc before the
    * delete has committed a data-loss path rather than a cache miss.
    */
   const commentOnBody = async (taskId: string, find: string) => {
@@ -101,7 +101,7 @@ describe('DELETE /workspaces/:id — board workspace', () => {
   };
 
   /**
-   * Both the tasks sidecar and a room's `.ydoc` are written on a debounce, so
+   * Both the tasks sidecar and a doc's `.ydoc` are written on a debounce, so
    * "it exists" is a condition to wait for, not a fact right after the
    * create. This matters beyond timing: a test that deletes before the first
    * write would assert the absence of a file that was never there, and pass
@@ -180,7 +180,7 @@ describe('DELETE /workspaces/:id — board workspace', () => {
   afterEach(async () => {
     await handle?.stop();
     handle = undefined;
-    // `stop()` flushes the task store and the body snapshots, but a room's
+    // `stop()` flushes the task store and the body snapshots, but a doc's
     // `.ydoc` write sits on its own 200ms debounce that nothing cancels — so
     // removing the data dir immediately makes that write log an ENOENT into
     // the next test's output. Let it land first. (The gap itself is real and
@@ -206,7 +206,7 @@ describe('DELETE /workspaces/:id — board workspace', () => {
 
   it('deletes the board, its docs and its sidecars, with force', async () => {
     const { wsId, open, done } = await seed();
-    const boardRoom = workspaceDocId(wsId);
+    const boardDoc = workspaceDocId(wsId);
     const openBody = taskBodyDocId(open.id);
     const doneBody = taskBodyDocId(done.id);
 
@@ -215,7 +215,7 @@ describe('DELETE /workspaces/:id — board workspace', () => {
     expect(await listWorkspaceIds()).toContain(wsId);
     expect(await awaitFile(tasksSidecarPath(dataDir as string, wsId))).toBe(true);
     expect(existsSync(eventsLogPath(dataDir as string, wsId))).toBe(true);
-    expect(handle?.docStore.get(boardRoom)).toBeDefined();
+    expect(handle?.docStore.get(boardDoc)).toBeDefined();
     expect(handle?.docStore.get(openBody)).toBeDefined();
     expect(handle?.docStore.get(doneBody)).toBeDefined();
 
@@ -251,7 +251,7 @@ describe('DELETE /workspaces/:id — board workspace', () => {
     expect(existsSync(tasksSidecarPath(dataDir as string, wsId))).toBe(false);
     expect(existsSync(eventsLogPath(dataDir as string, wsId))).toBe(false);
     expect(legacyPaths.some((p) => existsSync(p))).toBe(false);
-    expect(handle?.docStore.get(boardRoom)).toBeUndefined();
+    expect(handle?.docStore.get(boardDoc)).toBeUndefined();
     expect(handle?.docStore.get(openBody)).toBeUndefined();
     expect(handle?.docStore.get(doneBody)).toBeUndefined();
     // The tasks no longer resolve either — a task id pointing at a workspace
@@ -296,9 +296,9 @@ describe('DELETE /workspaces/:id — board workspace', () => {
     // filesystem is fixed still has something to delete.
     expect(await listWorkspaceIds()).toContain(wsId);
     expect(handle?.tasks.getTask(open.id)).toBeDefined();
-    // This is the failure that happens at the COMMIT, after the room files
+    // This is the failure that happens at the COMMIT, after the doc files
     // were already removed — and it still costs nothing, because the live
-    // rooms were never torn down. The board works and the comment is there.
+    // docs were never torn down. The board works and the comment is there.
     expect(handle?.docStore.get(workspaceDocId(wsId))).toBeDefined();
     expect(await openThreadCount(open.id)).toBe(1);
     const again = await post(`/workspaces/${wsId}/tasks`, {
@@ -310,8 +310,8 @@ describe('DELETE /workspaces/:id — board workspace', () => {
     expect(again.status).toBe(200);
   });
 
-  it('keeps the board when a room file cannot be moved, and survives a restart', async () => {
-    // If a room's `.ydoc` can't be got rid of, deleting the board anyway
+  it('keeps the board when a doc file cannot be moved, and survives a restart', async () => {
+    // If a doc's `.ydoc` can't be got rid of, deleting the board anyway
     // would strand an orphan that reloads on every restart behind an id that
     // no longer resolves as a board — nothing could ever come back for it.
     const { wsId, open } = await seed();
@@ -328,28 +328,28 @@ describe('DELETE /workspaces/:id — board workspace', () => {
 
     const res = await del(`/workspaces/${wsId}?force=true`);
     expect(res.status).toBe(500);
-    expect(((await res.json()) as { error: string }).error).toBe('rooms-cleanup-failed');
+    expect(((await res.json()) as { error: string }).error).toBe('docs-cleanup-failed');
     // And it must keep refusing while the file is still there. The first
-    // attempt took the room out of memory, so a check that asks the ROOM
+    // attempt took the doc out of memory, so a check that asks the DOC
     // ("not-found, nothing to do") would call the retry a success and delete
     // the board over the top of the orphan.
     const retry = await del(`/workspaces/${wsId}?force=true`);
     expect(retry.status).toBe(500);
-    expect(((await retry.json()) as { error: string }).error).toBe('rooms-cleanup-failed');
+    expect(((await retry.json()) as { error: string }).error).toBe('docs-cleanup-failed');
     // The board and its tasks are still there, so the same call retries once
     // the filesystem is fixed.
     expect(await listWorkspaceIds()).toContain(wsId);
     expect(handle?.tasks.getTask(open.id)).toBeDefined();
     expect(existsSync(tasksSidecarPath(dataDir as string, wsId))).toBe(true);
     // And nothing irreversible happened on the way to failing. The comment
-    // exists ONLY in the body room, so a teardown that ran before the delete
+    // exists ONLY in the body doc, so a teardown that ran before the delete
     // could commit would destroy it — a failed operation that silently costs
     // the reviewer their thread.
     expect(await openThreadCount(open.id)).toBe(1);
 
     // The strong form of the same claim: the failure cost nothing even to a
     // restart landing right after it. This is what makes the pre-commit half
-    // a rename and not an unlink — a live room's state reaches disk again
+    // a rename and not an unlink — a live doc's state reaches disk again
     // only on its next write, which may never come.
     await handle?.stop();
     handle = await start(dataDir as string);
@@ -360,7 +360,7 @@ describe('DELETE /workspaces/:id — board workspace', () => {
   it('recovers a delete the process died in the middle of', async () => {
     // The staging window is small but not empty: renamed aside, not yet
     // committed, process gone. Hydration skips a staged file on purpose, so
-    // nothing else would ever put it back — the body room would return
+    // nothing else would ever put it back — the body doc would return
     // empty and the task's only discussion would sit in a file nothing
     // reads.
     const { wsId, open } = await seed();

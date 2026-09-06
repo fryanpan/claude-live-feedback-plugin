@@ -93,7 +93,7 @@ describe('DocStore.deleteWorkspace + listWorkspaces', () => {
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.deleted).toBe(3);
-    // Every member room is gone.
+    // Every member doc is gone.
     expect(docStore.list().length).toBe(0);
     for (const f of bound.files) expect(docStore.get(f.docId)).toBeUndefined();
   });

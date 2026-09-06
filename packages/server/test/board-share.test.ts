@@ -7,7 +7,7 @@
  * transport (the §6 rule: a negative test needs a positive control):
  *
  *   1. the board page (GET /workspaces/<id>)
- *   2. the ws:<id> board room socket (/y/ws:<id>) — a REAL Yjs sync, not a
+ *   2. the ws:<id> board doc socket (/y/ws:<id>) — a REAL Yjs sync, not a
  *      raw socket (a raw socket never completes the handshake and every
  *      absence it reports is vacuous; see learnings.md)
  *   3. the workspace SSE feed (/workspaces/<id>)/events:stream
@@ -361,7 +361,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
     });
   });
 
-  describe('transport 2: the ws:<id> board room socket', () => {
+  describe('transport 2: the ws:<id> board doc socket', () => {
     it('a workspace visitor completes a REAL Yjs sync and sees the board (presence)', async () => {
       const client = connectDoc(`${wsBase}/y/ws%3A${boardId}`, { ...boardCookie });
       try {
@@ -389,7 +389,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
 
     it('refuses the socket to another workspace’s visitor whose socket auth otherwise works (absence)', async () => {
       // Positive control: the SAME cookie passes the guard for its own board
-      // room (426 = past the guard, upgrade-required on a plain fetch).
+      // doc (426 = past the guard, upgrade-required on a plain fetch).
       expect((await pub(`/y/ws%3A${otherId}`, otherCookie)).status).toBe(426);
       expect((await pub(`/y/ws%3A${boardId}`, otherCookie)).status).toBe(403);
       expect((await pub(`/y/ws%3A${boardId}`)).status).toBe(403);
@@ -501,7 +501,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
     });
 
     /**
-     * The strip's decision half arrives over the board room and its thread
+     * The strip's decision half arrives over the board doc and its thread
      * half over this route, so a gate that allows one and refuses the other
      * leaves a visitor a strip that silently drops every question — the same
      * split-transport failure as the two reads above.
@@ -927,7 +927,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
   });
 
   describe('a workspace visitor reaches the workspace’s own docs, comments only', () => {
-    it('reads the attached doc and the task body room', async () => {
+    it('reads the attached doc and the task body doc', async () => {
       expect((await pub(`/api/docs/${attachedId}`, boardCookie)).status).toBe(200);
       expect((await pub(`/api/docs/task%3A${taskId}`, boardCookie)).status).toBe(200);
     });
@@ -978,7 +978,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
    * The chip endpoint used to be justified by the doc-scoped invite: a
    * visitor who could see a doc but not the board still had to resolve the
    * task chips inside it. That visitor no longer exists — everyone who can
-   * read a doc is in its workspace, and can sync the board room. What did
+   * read a doc is in its workspace, and can sync the board doc. What did
    * NOT change is the contract: the endpoint answers the §3.3 rule-2 shape
    * and stays scoped, so it is still not a task enumeration oracle for a
    * visitor holding some other workspace's link.
@@ -1004,7 +1004,7 @@ describe('workspace-board minimal share (§3.12 commit 8)', () => {
   });
 
   describe('revocation hangs up the board, it does not just refuse', () => {
-    it('closes the board room socket and the workspace stream a share had open', async () => {
+    it('closes the board doc socket and the workspace stream a share had open', async () => {
       const share = await mintAccessShare(base, access, boardId);
       const cookie = share.headers;
 

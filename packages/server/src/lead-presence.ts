@@ -4,7 +4,7 @@
  *
  * A meeting doc's floats and spoken asks all address the board's LEAD seat:
  * Make Plan, Review, "can you research X", a task said aloud. Every one of
- * them files fine into an empty room, and until this existed the room
+ * them files fine into an empty doc, and until this existed the doc
  * looked the same either way — the ask sat in a queue nobody was draining,
  * and the person who asked found out an hour later. So the doc says it,
  * plainly and persistently, while it is true: no lead agent is listening,

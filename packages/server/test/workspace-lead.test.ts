@@ -589,26 +589,26 @@ describe('lead agent routes + projection', () => {
     await incumbent.close();
   });
 
-  it('the board room projects the lead — and drops the key when the seat is empty', async () => {
+  it('the board doc projects the lead — and drops the key when the seat is empty', async () => {
     const r = await post('/workspaces', {
       name: 'projected-lead',
       goal: 'Ship it.',
       leadAgentId: 'agent-relay',
     });
     const wsId = ((await r.json()) as { workspace: BoardWorkspace }).workspace.id;
-    const room = handle.docStore.get(workspaceDocId(wsId));
-    if (!room) throw new Error('ws room missing');
-    const wsMap = room.ydoc.getMap('workspace');
-    // Positive control: the room really projects this workspace…
+    const doc = handle.docStore.get(workspaceDocId(wsId));
+    if (!doc) throw new Error('ws doc missing');
+    const wsMap = doc.ydoc.getMap('workspace');
+    // Positive control: the doc really projects this workspace…
     expect(wsMap.get('name')).toBe('projected-lead');
     expect(wsMap.get('leadAgentId')).toBe('agent-relay');
 
     const leaderless = await post('/workspaces', { name: 'projected-empty', goal: 'Ship it.' });
     const emptyId = ((await leaderless.json()) as { workspace: BoardWorkspace }).workspace.id;
-    const emptyRoom = handle.docStore.get(workspaceDocId(emptyId));
-    if (!emptyRoom) throw new Error('ws room missing');
-    expect(emptyRoom.ydoc.getMap('workspace').get('name')).toBe('projected-empty');
-    expect(emptyRoom.ydoc.getMap('workspace').has('leadAgentId')).toBe(false);
+    const emptyDoc = handle.docStore.get(workspaceDocId(emptyId));
+    if (!emptyDoc) throw new Error('ws doc missing');
+    expect(emptyDoc.ydoc.getMap('workspace').get('name')).toBe('projected-empty');
+    expect(emptyDoc.ydoc.getMap('workspace').has('leadAgentId')).toBe(false);
   });
 });
 

@@ -4,20 +4,20 @@ import { randomBytes } from 'node:crypto';
  * Who is allowed to bring a docId into existence, and where.
  *
  * The doc id space is shared: a caller-chosen attachment, a folder member, a
- * task's body room and a board room are all just strings in the same map, and
+ * task's body doc and a board doc are all just strings in the same map, and
  * the same string reaches disk as a filename. That shared space is the reason
  * two holes existed at once — a folder bound as `setId: 'task'` minted real
- * `task:README.md` rooms, and `POST /api/docs` with `docId: 'task:<realId>'`
+ * `task:README.md` docs, and `POST /api/docs` with `docId: 'task:<realId>'`
  * landed on a live task's body and file-bound it. Neither needed a bug in the
  * route it came through; both needed only that nothing asked whether the
  * CALLER was entitled to that part of the space.
  *
- * So entitlement is asked once, at the seam where a room is created, rather
+ * So entitlement is asked once, at the seam where a doc is created, rather
  * than enumerated across the doors that reach it. An allowlist of entry points
  * already missed `POST /api/docs` once.
  */
 export type DocIdAuthority =
-  /** The server itself: the task projection's body and board rooms, and
+  /** The server itself: the task projection's body and board docs, and
    *  hydration, which is re-admitting ids that already exist on disk. */
   | 'server'
   /** Anything driven by a request. Default, because a missing opt-in must
@@ -25,18 +25,18 @@ export type DocIdAuthority =
    *  remembered to list. */
   | 'caller';
 
-/** Prefixes whose rooms the server owns — never file-bound, content projected
+/** Prefixes whose docs the server owns — never file-bound, content projected
  *  from the task store rather than typed into a doc. */
 export const BOARD_DOC_PREFIXES = ['ws:', 'task:'] as const;
 
 /**
  * Docs the BOARD owns rather than the filesystem: the `ws:<workspaceId>`
- * board room and every `task:<taskId>` body room (§3.3). They are never
+ * board doc and every `task:<taskId>` body doc (§3.3). They are never
  * bound to a file, so a `sourceUrl` on one is by construction not ours —
  * and unlike a bound doc they have no private-meta sidecar to outvote a
  * forged value.
  *
- * This answers "is this room's content server-owned". `isReservedDocId`
+ * This answers "is this doc's content server-owned". `isReservedDocId`
  * answers the different question "may a caller occupy this address", and is a
  * superset — both read the same prefix list, one line apart, so the two can
  * never disagree about `ws:` and `task:`. It lives here rather than in
@@ -50,9 +50,9 @@ export function isBoardOwnedDoc(docId: string): boolean {
 /**
  * Prefixes a CALLER may never create or name.
  *
- * A superset of the board room prefixes: `goal:` reserves the namespace for the
- * goal ids minted in `tasks.ts`, which are not rooms today. Reserving ahead of
- * the room is deliberate — a namespace is cheap to hold and expensive to
+ * A superset of the board doc prefixes: `goal:` reserves the namespace for the
+ * goal ids minted in `tasks.ts`, which are not docs today. Reserving ahead of
+ * the doc is deliberate — a namespace is cheap to hold and expensive to
  * reclaim once callers have addresses inside it.
  */
 export const RESERVED_DOC_PREFIXES = [...BOARD_DOC_PREFIXES, 'goal:'] as const;

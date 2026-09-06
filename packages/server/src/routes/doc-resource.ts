@@ -3,7 +3,7 @@
  * surface — read, delete, its task chips, the plan/review/research asks the
  * meeting floats fire, its origin repo, and the read-only content/status/diff
  * views. Split out of `routes/docs.ts`'s `handleDocResourceRoutes`, which
- * still owns the `/api/docs/:id/...` match and the `docId`/`room`/`rest`
+ * still owns the `/api/docs/:id/...` match and the `docId`/`doc`/`rest`
  * resolution — see that file's header for why call order across the three
  * families is not load-bearing.
  */
@@ -51,7 +51,7 @@ export async function handleDocResourceCore(
     req,
     url,
     docId,
-    room,
+    doc,
     rest,
     visitor,
     authorFor,
@@ -65,7 +65,7 @@ export async function handleDocResourceCore(
   // silently drops those rows from the doc's own surface.
   const docTaskRows = (): Task[] => {
     const rows = taskStore.tasksReferencingDoc(docId);
-    const alias = room.meta.alias;
+    const alias = doc.meta.alias;
     const all =
       alias === undefined || alias === docId
         ? rows
@@ -117,13 +117,13 @@ export async function handleDocResourceCore(
     // one from a member doc. Resolved through the review when the
     // doc is a member of a review, which is where `hubWorkspaceId`
     // deliberately stops.
-    const backTo = visitor ? null : backTargetFor(docId, room.meta.workspaceId);
+    const backTo = visitor ? null : backTargetFor(docId, doc.meta.workspaceId);
     // Who the Make Plan float names ("Ask <lead> to create a plan").
     // Owner-only like the board id it comes from; a lead id is
     // already a display name everywhere the board shows one.
     const lead = boardWs ? taskStore.getWorkspace(boardWs)?.leadAgentId : undefined;
     return j(200, {
-      meta: metaFor(room.meta),
+      meta: metaFor(doc.meta),
       ...(taskRefs.length > 0 ? { tasks: taskRefs } : {}),
       ...(boardWs ? { hubWorkspaceId: boardWs } : {}),
       ...(lead !== undefined ? { leadAgentId: lead } : {}),
@@ -161,7 +161,7 @@ export async function handleDocResourceCore(
   }
   // Task-chip resolution (§3.3 rule 2): how a chip inside a doc
   // resolves for a DOC-scoped invite, which never gets the workspace
-  // board room. The chip is the visitor-safe shape (id, title,
+  // board doc. The chip is the visitor-safe shape (id, title,
   // status, assignee) — adding a field to it is a sharing decision.
   if (rest === 'tasks' && req.method === 'GET') {
     return j(200, { docId, tasks: docTaskEntries() });
@@ -184,7 +184,7 @@ export async function handleDocResourceCore(
     if (!set.ok) return j(404, { error: 'doc not found' });
     let released: string[] = [];
     if (state === 'approved') {
-      const ids = room.meta.alias ? [docId, room.meta.alias] : [docId];
+      const ids = doc.meta.alias ? [docId, doc.meta.alias] : [docId];
       const rel = taskStore.releasePlanHolds(ids, author);
       released = rel.released;
       // Holds cleared WITHOUT a transition (archived rows, rows
@@ -366,7 +366,7 @@ export async function handleDocResourceCore(
   // cleaned up, baseText comes back null and the client falls back to
   // the full-file view, which needs nothing beyond the ydoc.
   if (rest === 'diff' && req.method === 'GET') {
-    const meta = room.meta;
+    const meta = doc.meta;
     if (meta.type !== 'diff') return j(400, { error: 'not a diff doc' });
     const { workspaceRoot, diffBase, diffTarget, relPath } = meta;
     const basePath = meta.diffOldPath ?? relPath;
@@ -428,17 +428,17 @@ export async function handleDocResourceCore(
     const ts = docStore.listThreads(docId);
     if (ts.length === 0) return j(404, { error: 'no threads' });
     const last = ts[ts.length - 1]!;
-    if (room.webhookUrl) {
-      await webhooks.send(room.webhookUrl, {
+    if (doc.webhookUrl) {
+      await webhooks.send(doc.webhookUrl, {
         event: 'thread.replied',
         docId,
         threadId: last.id,
         thread: last,
-        doc: withReviewUrl(room.meta),
-        seq: ++room.seq,
+        doc: withReviewUrl(doc.meta),
+        seq: ++doc.seq,
       });
     }
-    return j(200, { fired: !!room.webhookUrl });
+    return j(200, { fired: !!doc.webhookUrl });
   }
   return undefined;
 }

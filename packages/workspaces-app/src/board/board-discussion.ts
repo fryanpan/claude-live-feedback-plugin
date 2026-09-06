@@ -4,7 +4,7 @@
  * One responsibility, and the reason it is one is the sentence the inline
  * version buried: a row's comments live in its BODY doc — `task:<id>` for a
  * task and for a goal alike — so this is the ordinary thread API pointed at
- * that room. There is no second store, an agent's `create_thread` writes the
+ * that doc. There is no second store, an agent's `create_thread` writes the
  * same threads, and a GOAL reaches both its discussion and its description
  * editor through the same two functions. Scattered through `bootBoard` that was
  * invisible: `loadDiscussion` sat beside `renderDetail` and read like part of
@@ -26,7 +26,7 @@ import { type BoardState, fetchJson, send, showToast } from './board-actions.ts'
 import type { TaskThread } from './board-detail-render.ts';
 
 /**
- * A row and its live body room — the only two things the discussion and the
+ * A row and its live body doc — the only two things the discussion and the
  * description editor ever needed from a task, which is why a GOAL reaches
  * both through the same functions.
  */
@@ -46,7 +46,7 @@ export interface BoardDiscussionDeps {
   renderDetail(): void;
 }
 
-/** What `bootBoard` keeps: the two verbs, plus the goal's room derivation. */
+/** What `bootBoard` keeps: the two verbs, plus the goal's doc derivation. */
 export interface BoardDiscussion {
   /** Where a goal's description and comments live. */
   goalBodyDocId(section: { id: string; bodyDocId?: string }): string;
@@ -72,7 +72,7 @@ export function createBoardDiscussion(deps: BoardDiscussionDeps): BoardDiscussio
 
   /**
    * A row's comments live in its body doc (`task:<rowId>` for a task and for a
-   * goal alike), so this is the ordinary thread API pointed at that room — no
+   * goal alike), so this is the ordinary thread API pointed at that doc — no
    * second store, and the same threads an agent sees through `create_thread`.
    */
   async function loadDiscussion(task: DiscussionRow, quiet = false): Promise<void> {

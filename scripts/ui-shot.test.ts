@@ -28,11 +28,14 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   DEFAULTS,
   DEFAULT_CHROME_BIN,
+  HOVER_CAPABLE_BLINK_SETTINGS,
   MOBILE_TIER_MAX_WIDTH,
   PRESETS,
   RUN_ID_ENV,
   UsageError,
+  chromeLaunchArgs,
   describeStaleProfiles,
+  extraChromeArgs,
   findStaleProfiles,
   parseArgs,
   parseSize,
@@ -130,6 +133,46 @@ describe('ui-shot Chrome binary resolution', () => {
     );
     expect(() => resolveChromeBin(undefined, { CW_CHROME_BIN: '/nope' }, exists([]))).toThrow(
       /CW_CHROME_BIN/,
+    );
+  });
+});
+
+describe('ui-shot Chrome launch line', () => {
+  it('carries the hover/pointer settings, the throwaway profile and the window size', () => {
+    // The positive control for the two real-Chrome hover tests below, which on
+    // a machine whose own devices agree with the model would pass even if this
+    // flag had been dropped.
+    const args = chromeLaunchArgs({ width: 1180, height: 820 }, '/tmp/profile-x', []);
+    expect(args).toContain(HOVER_CAPABLE_BLINK_SETTINGS);
+    expect(args).toContain('--user-data-dir=/tmp/profile-x');
+    expect(args).toContain('--window-size=1180,820');
+    expect(args).toContain('--hide-scrollbars');
+    expect(args.at(-1)).toBe('about:blank');
+  });
+
+  it('puts the CI flags before the URL, so Chrome reads them as flags', () => {
+    const args = chromeLaunchArgs({ width: 430, height: 932 }, '/tmp/p', ['--no-sandbox']);
+    expect(args.indexOf('--no-sandbox')).toBeGreaterThan(0);
+    expect(args.indexOf('--no-sandbox')).toBeLessThan(args.indexOf('about:blank'));
+  });
+});
+
+describe('ui-shot extra Chrome flags', () => {
+  it('is empty when the variable is unset or blank, so a laptop keeps its sandbox', () => {
+    expect(extraChromeArgs({})).toEqual([]);
+    expect(extraChromeArgs({ CW_CHROME_ARGS: '   ' })).toEqual([]);
+  });
+
+  it('splits the CI pair on whitespace', () => {
+    expect(extraChromeArgs({ CW_CHROME_ARGS: '--no-sandbox  --disable-dev-shm-usage' })).toEqual([
+      '--no-sandbox',
+      '--disable-dev-shm-usage',
+    ]);
+  });
+
+  it('refuses a bare word, which Chrome would open as a URL', () => {
+    expect(() => extraChromeArgs({ CW_CHROME_ARGS: '--no-sandbox http://evil' })).toThrow(
+      /must be a --flag/,
     );
   });
 });
@@ -244,6 +287,47 @@ describe.skipIf(!existsSync(CHROME))('ui-shot against real headless Chrome', () 
       }
     }
   });
+
+  /**
+   * The control this file did not have when a CI run went red on a clean tree.
+   *
+   * Chrome answers `(hover:)` and `(pointer:)` from the HOST's input devices,
+   * so a Mac with a trackpad said `hover: hover` at every preset and a headless
+   * Linux runner said `hover: none` at every preset. Only asserting BOTH sides
+   * in one run catches that: a machine-dependent answer fails one of them
+   * wherever it runs. `Emulation.setEmulatedMedia` is not the fix — it applies
+   * `prefers-color-scheme` and ignores these two — so the launch carries
+   * HOVER_CAPABLE_BLINK_SETTINGS and touch emulation overrides it on --mobile.
+   */
+  it.each([
+    ['ipad', true, false],
+    ['phone', false, true],
+  ])(
+    'models %s as hover=%s / coarse pointer=%s, whatever the host has',
+    (preset, hover, coarse) => {
+      const runId = newRunId();
+      const probe =
+        'JSON.stringify({h:matchMedia("(hover: hover)").matches,c:matchMedia("(pointer: coarse)").matches})';
+      const r = spawnSync(
+        'bun',
+        [
+          SCRIPT,
+          '--url',
+          'data:text/html,<p>probe</p>',
+          '--preset',
+          String(preset),
+          '--settle',
+          '200',
+          '--eval',
+          probe,
+        ],
+        { encoding: 'utf8', timeout: 60_000, env: { ...process.env, [RUN_ID_ENV]: runId } },
+      );
+      expect(r.status, r.stderr).toBe(0);
+      const summary = JSON.parse(r.stdout) as { result: string };
+      expect(JSON.parse(summary.result)).toEqual({ h: hover, c: coarse });
+    },
+  );
 
   it('screenshots a data: URL at 430px and the page reports innerWidth 430', () => {
     dir = mkdtempSync(join(tmpdir(), 'ui-shot-test-'));

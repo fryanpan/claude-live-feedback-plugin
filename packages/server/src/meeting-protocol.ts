@@ -172,7 +172,7 @@ export class MeetingRelay {
    * The socket callbacks cannot await — they are Bun websocket handlers —
    * but what they start is durable: `stop()` flushes the engine's turn in
    * progress and then the notes into the doc. On shutdown every socket closes
-   * at once and those writes have to land before the rooms are flushed, so
+   * at once and those writes have to land before the docs are flushed, so
    * `dispose()` waits here. A `WeakMap` of connections cannot be enumerated;
    * this can.
    *
@@ -180,7 +180,7 @@ export class MeetingRelay {
    * closes mid-handshake gets a DEFERRED teardown — `stop()` only records
    * `pendingStop` and returns, and the real flush runs inside `start`'s own
    * continuation when the engine finally answers. Tracking only the `stop`
-   * would see that connection as already finished and flush the rooms out
+   * would see that connection as already finished and flush the docs out
    * from under it.
    */
   private readonly inFlight = new Set<Promise<void>>();

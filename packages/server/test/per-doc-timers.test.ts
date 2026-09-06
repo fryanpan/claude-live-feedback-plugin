@@ -1,9 +1,9 @@
 /**
- * The per-doc cost of a hydrated room.
+ * The per-doc cost of a hydrated doc.
  *
  * On 2026-08-29 the server reached 2.6 GB and was killed by jetsam. Hydration
- * loads every persisted doc, and each hydrated room used to construct a
- * y-protocols `Awareness` (a 3s interval per room, never unref'd) and, if the
+ * loads every persisted doc, and each hydrated doc used to construct a
+ * y-protocols `Awareness` (a 3s interval per doc, never unref'd) and, if the
  * doc was file-bound, a 500ms stat poll — both running forever whether or not
  * anybody had the doc open. These tests pin the three costs down: no presence
  * timer without a connection, no stat syscalls for a doc nobody is looking at,
@@ -32,12 +32,12 @@ function makeDocStore(dataDir: string): DocStore {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function markdownOf(docStore: DocStore, docId: string): string {
-  const room = docStore.get(docId);
-  if (!room) throw new Error(`no room ${docId}`);
-  return prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
+  const doc = docStore.get(docId);
+  if (!doc) throw new Error(`no doc ${docId}`);
+  return prose.serializeFragmentToMarkdown(prose.getProseFragment(doc.ydoc));
 }
 
-describe('per-room timers', () => {
+describe('per-doc timers', () => {
   let dataDir: string;
   let srcDir: string;
 
@@ -76,7 +76,7 @@ describe('per-room timers', () => {
     // `get` returns the doc in the same turn and binds its file a moment
     // later, off the thread pool — a hydrate no longer opens a bound path on
     // the main thread (see `DocStore.prereadFor`). So wait for the bindings this
-    // fixture is about rather than assuming they arrived with the rooms.
+    // fixture is about rather than assuming they arrived with the docs.
     await waitFor(() => docStore.stats().bindings === count, {
       describe: `all ${count} deferred file bindings to land`,
     });
@@ -92,26 +92,26 @@ describe('per-room timers', () => {
     count: number,
   ): Promise<{ docStore: DocStore; docIds: string[]; paths: string[] }> {
     const { docStore, docIds, paths } = await seedBound(count);
-    for (const docId of docIds) docStore.evictRoom(docId);
+    for (const docId of docIds) docStore.evictDoc(docId);
     return { docStore, docIds, paths };
   }
 
   it('a restart holds nothing until somebody reaches for a doc', async () => {
     const { docStore, docIds } = await seedBoundCold(5);
     // The boot that used to load every doc on the server now loads none, and
-    // that is the whole memory change: no rooms, no bindings, no timers that
+    // that is the whole memory change: no docs, no bindings, no timers that
     // scale with the corpus.
-    expect(docStore.stats().rooms).toBe(0);
+    expect(docStore.stats().residentDocs).toBe(0);
     expect(docStore.stats().bindings).toBe(0);
     // ...and every one of them still resolves and still lists.
     expect(docStore.list().length).toBeGreaterThanOrEqual(docIds.length);
     expect(docStore.get(docIds[0] as string)).toBeDefined();
-    expect(docStore.stats().rooms).toBe(1);
+    expect(docStore.stats().residentDocs).toBe(1);
   });
 
   it('opening docs constructs no Awareness (no presence timer)', async () => {
     const { docStore, docIds } = await seedBound(5);
-    expect(docStore.stats().rooms).toBeGreaterThanOrEqual(docIds.length);
+    expect(docStore.stats().residentDocs).toBeGreaterThanOrEqual(docIds.length);
     expect(docStore.stats().awareness).toBe(0);
     for (const docId of docIds) {
       // The peek must not be the thing that creates one.
@@ -122,13 +122,13 @@ describe('per-room timers', () => {
 
   it('creates the Awareness on first read and keeps returning the same one', async () => {
     const { docStore, docIds } = await seedBound(2);
-    const room = docStore.get(docIds[0]);
-    if (!room) throw new Error('room missing');
-    const first = room.awareness;
+    const doc = docStore.get(docIds[0]);
+    if (!doc) throw new Error('doc missing');
+    const first = doc.awareness;
     expect(first).toBeDefined();
-    expect(room.peekAwareness()).toBe(first);
-    expect(room.awareness).toBe(first);
-    // Only the room that was read has one.
+    expect(doc.peekAwareness()).toBe(first);
+    expect(doc.awareness).toBe(first);
+    // Only the doc that was read has one.
     expect(docStore.stats().awareness).toBe(1);
   });
 
@@ -161,16 +161,16 @@ describe('per-room timers', () => {
     remote.destroy();
   });
 
-  it('expires stale presence on a room with NO sockets left', async () => {
-    // codex P2: skipping maintenance for socketless rooms let a state left
+  it('expires stale presence on a doc with NO sockets left', async () => {
+    // codex P2: skipping maintenance for socketless docs let a state left
     // behind by a socket whose cleanup never ran survive indefinitely, and
     // `onOpen` hands `getStates()` to the next joiner before any sweep — so
     // the joiner would see a ghost peer. The library's own timer expired
     // those whether or not anyone was connected.
     const { docStore, docIds } = await seedBound(1);
-    const room = docStore.get(docIds[0]);
-    if (!room) throw new Error('room missing');
-    const aw = room.awareness;
+    const doc = docStore.get(docIds[0]);
+    if (!doc) throw new Error('doc missing');
+    const aw = doc.awareness;
 
     // A peer's state arrives, then its socket vanishes without cleanup.
     const ghostDoc = new Y.Doc();
@@ -181,7 +181,7 @@ describe('per-room timers', () => {
       awarenessProtocol.encodeAwarenessUpdate(ghost, [ghost.clientID]),
       'test',
     );
-    expect(room.conns.size).toBe(0);
+    expect(doc.conns.size).toBe(0);
     // Control: the ghost really is present, so the assertion below has
     // something to fail on.
     expect(aw.getStates().has(ghost.clientID)).toBe(true);
@@ -230,13 +230,13 @@ describe('per-room timers', () => {
   it('a doc nobody has OPENED is not polled — and the edit is read on open', async () => {
     // A behaviour change from lazy hydration, recorded here on purpose
     // rather than left to be discovered. A doc the server has never opened
-    // has no room and no binding, so nothing stats its file: an external
+    // has no doc and no binding, so nothing stats its file: an external
     // edit to it is NOT picked up live, and no `watch_doc` subscriber is
     // notified. What is preserved is the thing that matters — the edit is
     // not lost. `attachFile` arbitrates on open, the file is the source of
     // truth at rest, and the content is there the moment somebody reaches.
     const { docStore, docIds, paths } = await seedBoundCold(1);
-    expect(docStore.stats().rooms).toBe(0);
+    expect(docStore.stats().residentDocs).toBe(0);
     expect(docStore.stats().bindings).toBe(0);
 
     writeFileSync(paths[0], '# Doc 0\n\nedited while cold\n');
@@ -246,7 +246,7 @@ describe('per-room timers', () => {
     // which a poll could have run has to pass before the counts mean anything.
     await sleep(pastExternalRead());
     // Nothing woke up: no poll ran, because there was no binding to run one.
-    expect(docStore.stats().rooms).toBe(0);
+    expect(docStore.stats().residentDocs).toBe(0);
 
     // And the edit survived — reaching for the doc reads it off disk.
     expect(markdownOf(docStore, docIds[0])).toContain('edited while cold');
@@ -288,21 +288,21 @@ describe('per-room timers', () => {
   });
 
   it('a live connection keeps a doc active with no access at all', async () => {
-    // The websocket path: `websocket.open` resolves the room and adds the
+    // The websocket path: `websocket.open` resolves the doc and adds the
     // socket to `conns`, and from then on the doc is active for as long as
     // the socket lives — it must not fall back to the idle rotation after
     // FILE_POLL_ACTIVE_MS just because nobody made another REST call.
     const { docStore, docIds } = await seedBound(3);
-    const room = docStore.get(docIds[1]);
-    if (!room) throw new Error('room missing');
+    const doc = docStore.get(docIds[1]);
+    if (!doc) throw new Error('doc missing');
     // Stand in for the socket; `bindingIsActive` only reads `conns.size`.
-    room.conns.add({} as never);
+    doc.conns.add({} as never);
     // Push every access stamp far into the past so ONLY the connection can
     // be keeping this binding active. Without this the assertion would pass
     // on the `docStore.get` above and prove nothing about connections.
     docStore.resetDerivedCaches();
     expect(docStore.stats().activeBindings).toBe(1);
-    room.conns.clear();
+    doc.conns.clear();
     expect(docStore.stats().activeBindings).toBe(0);
   });
 
@@ -319,18 +319,18 @@ describe('per-room timers', () => {
     const t = new Date(Date.now() + 2000);
     utimesSync(paths[0], t, t);
 
-    // Exactly what `websocket.open` does: resolve the room, then add the
+    // Exactly what `websocket.open` does: resolve the doc, then add the
     // socket. Two things can carry the edit here and BOTH are the point —
     // `get` re-stats on the idle to active edge, and the connection then
     // holds the doc in the fast lane. The test above isolates the connection
     // on its own; this one asserts the outcome the upgrade path must give.
-    const room = docStore.get(docId);
-    if (!room) throw new Error('room missing');
-    room.conns.add({} as never);
+    const doc = docStore.get(docId);
+    if (!doc) throw new Error('doc missing');
+    doc.conns.add({} as never);
     await waitFor(() => markdownOf(docStore, docId).includes('edited before anyone connected'), {
       describe: 'the connect path to re-stat the file and pull the edit in',
     });
-    room.conns.clear();
+    doc.conns.clear();
   });
 
   it('picks up an external edit to an IDLE bound file on the next access', async () => {
@@ -394,9 +394,9 @@ describe('per-room timers', () => {
     const { docStore, docIds } = await seedBound(1);
     const before = docStore.list().find((m) => m.docId === docIds[0])?.lastActivityAt;
     await sleep(20);
-    const room = docStore.get(docIds[0]);
-    if (!room) throw new Error('room missing');
-    room.ydoc.transact(() => room.ydoc.getMap('meta').set('title', 'renamed'));
+    const doc = docStore.get(docIds[0]);
+    if (!doc) throw new Error('doc missing');
+    doc.ydoc.transact(() => doc.ydoc.getMap('meta').set('title', 'renamed'));
     docStore.flush();
     const after = docStore.list().find((m) => m.docId === docIds[0])?.lastActivityAt;
     expect(after).toBeGreaterThanOrEqual(before ?? 0);
@@ -423,9 +423,9 @@ describe('hydration cost at corpus scale', () => {
       const docStore = makeDocStore(dataDir);
       // A restart now loads nothing — assert that before opening them, so
       // this file records the boot cost as well as the held cost.
-      expect(docStore.stats().rooms).toBe(0);
+      expect(docStore.stats().residentDocs).toBe(0);
       for (let i = 0; i < 200; i++) docStore.get(`scale-${i}`);
-      // The bindings arrive off the thread pool a moment after the rooms do —
+      // The bindings arrive off the thread pool a moment after the docs do —
       // a hydrate no longer opens a bound file on the main thread, which is
       // the whole of `DocStore.prereadFor`. Wait for them, because the count
       // below is what this test is about.
@@ -434,10 +434,10 @@ describe('hydration cost at corpus scale', () => {
       });
       docStore.resetDerivedCaches();
       const s = docStore.stats();
-      expect(s.rooms).toBe(200);
+      expect(s.residentDocs).toBe(200);
       expect(s.bindings).toBe(200);
       // The whole point: the timer count does not scale with the corpus.
-      // 200 rooms, 200 bindings, no presence instances, three timers — the
+      // 200 docs, 200 bindings, no presence instances, three timers — the
       // memory line, the shared file sweep and the idle-eviction sweep.
       // Before this change the same fixture held 400 (one Awareness interval
       // and one stat poll per doc), which is what took the server to 2.6 GB

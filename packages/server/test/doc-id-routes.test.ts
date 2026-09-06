@@ -102,7 +102,7 @@ describe('a doc answers to its readable alias everywhere it answers at all', () 
       });
       expect(created.status).toBe(200);
 
-      // The write landed on the DOC, not on a second room named by the alias.
+      // The write landed on the DOC, not on a second doc named by the alias.
       const byMinted = (await (
         await local(`/api/docs/${encodeURIComponent(mintedId)}/threads`)
       ).json()) as { threads: Array<{ comments: Array<{ text: string }> }> };
@@ -154,7 +154,7 @@ describe('a doc answers to its readable alias everywhere it answers at all', () 
       });
       expect(archived.status).toBe(200);
 
-      // Both spellings 404 now — the room is gone, and an alias with no room
+      // Both spellings 404 now — the doc is gone, and an alias with no doc
       // must not keep answering.
       expect((await local(`/api/docs/${ALIAS}`)).status).toBe(404);
       expect((await local(`/api/docs/${encodeURIComponent(mintedId)}`)).status).toBe(404);
@@ -163,7 +163,7 @@ describe('a doc answers to its readable alias everywhere it answers at all', () 
     it('unarchives by the MINTED id, which is the id the archive listing hands back', async () => {
       await post(`/api/docs/${ALIAS}/archive`, { author: PERSON });
 
-      // An archived doc has no room, so there is nothing for an alias to
+      // An archived doc has no doc, so there is nothing for an alias to
       // resolve against. The listing is where a caller gets the id that
       // works — asserted so the asymmetry is on the record rather than a
       // surprise someone rediscovers.

@@ -67,9 +67,9 @@ describe('projection narrows legacy triagedAgainst rows', () => {
   });
 
   it('the board ydoc row carries only { goalId, ts }', () => {
-    const room = handle.docStore.get(workspaceDocId(wsId));
-    if (!room) throw new Error('ws room was not created');
-    const row = room.ydoc.getMap('tasks').get(taskId) as {
+    const doc = handle.docStore.get(workspaceDocId(wsId));
+    if (!doc) throw new Error('ws doc was not created');
+    const row = doc.ydoc.getMap('tasks').get(taskId) as {
       triagedAgainst?: Record<string, unknown>;
     };
     expect(row.triagedAgainst).toEqual({ goalId: 'chores', ts: 1755400000000 });

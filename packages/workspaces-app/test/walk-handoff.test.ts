@@ -1,6 +1,5 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { WALK_HANDOFF_DEADLINE_MS } from '../src/board/board-app.ts';
 import { type BoardTask, CHORES_ID } from '../src/board/board-model';
 import {
   type ReviewQueue,
@@ -11,7 +10,15 @@ import {
   walkNextUrl,
   walkPosition,
 } from '../src/board/board-review-model';
-import { BOARD_BOOT_SOURCES } from './support/board-boot-sources.ts';
+import {
+  NOW,
+  WS,
+  boardRow,
+  bootTestBoard,
+  resetBoardServer,
+  server,
+  settle,
+} from './support/board-drive.ts';
 
 // The landing page's review chip and "Review all" bar (the walkthrough
 // handoff ticket) hand
@@ -51,54 +58,6 @@ describe('walkNextUrl', () => {
   });
 });
 
-// Pinned on the source: these three sit behind a four-second deadline and a
-// cross-workspace hop, so the wiring is read rather than driven — the boot
-// itself is driveable (board-boot.test.ts). The boot reads the handoff, an armed
-// walk auto-opens after the first review-items load, and a drained queue
-// chains to the next workspace instead of dead-ending on a cleared card.
-describe('board-app wires the handoff', () => {
-  const src = BOARD_BOOT_SOURCES.map((m) =>
-    readFileSync(join(__dirname, '..', 'src', 'board', `${m}.ts`), 'utf8'),
-  ).join('\n');
-  // The ydoc observers moved to `board-live-wiring.ts`; the entry is what hands
-  // them the tick, so the retry contract is asserted across both halves.
-  const wiring = readFileSync(
-    join(__dirname, '..', 'src', 'board', 'board-live-wiring.ts'),
-    'utf8',
-  );
-
-  it('reads walkHandoff from the boot URL', () => {
-    expect(src).toContain('walkHandoff(location.search)');
-  });
-
-  it('auto-opens the walkthrough after the first review-items load', () => {
-    // `deepLinkTick` bundles the ?walk= flag with the ?item= boot deep link —
-    // both wait on the same queue, so they share every retry hook.
-    expect(src).toMatch(/loadReviewItems\(\)\.then\([\s\S]{0,120}deepLinkTick\(\)/);
-    expect(src).toMatch(/const deepLinkTick[\s\S]{0,80}maybeAutoWalk\(\)/);
-  });
-
-  it('chains to walkNextUrl when the queue drains', () => {
-    expect(src).toContain('walkNextUrl(');
-  });
-
-  // Decisions ride the ydoc task projection, not the REST review-items list,
-  // so on a cold connection the first load can resolve before the board has
-  // synced. An empty queue must NOT burn the one-shot flag — the walk retries
-  // when the projection lands, and only a deadline concludes the board is
-  // genuinely clear (hopping the chain instead of opening on nothing).
-  it('retries the auto-walk when the task projection arrives', () => {
-    // The entry passes its own armed tick down as a thunk...
-    expect(src).toMatch(/autoWalkTick: \(\) => autoWalkTick\?\.\(\)/);
-    // ...and the projection observer is what calls it.
-    expect(wiring).toMatch(/tasksMap\.observeDeep\([\s\S]{0,500}autoWalkTick\(\)/);
-  });
-
-  it('an empty queue leaves the flag armed until the deadline', () => {
-    expect(src).toContain('WALK_HANDOFF_DEADLINE_MS');
-  });
-});
-
 // ── Where the handoff walk STARTS ──────────────────────────────────────────
 //
 // The walk aims by item KEY (walkPosition), and the key is chosen from the
@@ -109,8 +68,6 @@ describe('board-app wires the handoff', () => {
 // opened on it aimed at the OLDEST ask. When the projection landed, the key
 // followed that ask to its real rank, which is the bottom of the queue:
 // "Review all" opened on N of N. All fixtures are synthetic.
-
-const NOW = 1_700_000_000_000;
 
 function task(id: string, order: number): BoardTask {
   return {
@@ -201,22 +158,124 @@ describe('the handoff walk starts at item 1', () => {
   });
 });
 
-describe('board-app gates the auto-walk on both sources', () => {
-  const src = BOARD_BOOT_SOURCES.map((m) =>
-    readFileSync(join(__dirname, '..', 'src', 'board', `${m}.ts`), 'utf8'),
-  ).join('\n');
-
-  it('maybeAutoWalk asks walkHandoffReady, not queue length', () => {
-    expect(src).toMatch(/const maybeAutoWalk[\s\S]{0,900}walkHandoffReady\(/);
+// ── The boot itself, driven ────────────────────────────────────────────────
+//
+// This used to be read out of the boot's source — twice, as "board-app wires
+// the handoff" and "board-app gates the auto-walk on both sources" — on the
+// grounds that a four-second deadline and a cross-workspace hop are not
+// reachable from a test. Both are: the deadline is a `setTimeout` fake timers
+// step over, and the hop writes to the INJECTED location, which never leaves
+// the process. So the boot is booted, and what it does is what is asserted.
+describe('the boot opens a ?walk=1 handoff on the queue, once', () => {
+  beforeEach(() => {
+    resetBoardServer();
+    // `shouldAdvanceTime` keeps `settle()`'s own zero-delay turns running
+    // while the 4s stand-down timer is faked.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    document.body.innerHTML = '';
   });
 
-  it('the ydoc sync (onReady, empty doc included) marks the projection landed and re-ticks', () => {
-    expect(src).toMatch(
-      /client\.onReady\([\s\S]{0,600}walkSources\.projection = true[\s\S]{0,200}autoWalkTick\?\.\(\)/,
-    );
+  /** The sitting is a PAGE inside Home, so Home's content goes while it is
+   *  up — the one toggle every region is covered by. */
+  const sitting = (): boolean =>
+    document.getElementById('board-home-page')?.classList.contains('hidden') === true;
+
+  const ASK: ReviewThreadItem = {
+    kind: 'doc-thread',
+    docId: 'd-1',
+    threadId: 'th-1',
+    title: 'The hob spec',
+    ask: 'Induction or gas?',
+    askedBy: 'Ada',
+    since: NOW - 60_000,
+    band: 'declared',
+  };
+  /** A decision rides the ydoc projection, not the review-items list — the
+   *  half that lands on `onReady` rather than on a fetch. */
+  const DECISION = boardRow('t-1', { needs: 'decision', title: 'Which hob?' });
+
+  it('opens the sitting the landing page asked for', async () => {
+    server.on(`/workspaces/${WS}/review-items`, { items: [ASK] });
+    await bootTestBoard({
+      url: `https://board.test/workspaces/${WS}/home?walk=1`,
+      tasks: [boardRow('t-2')],
+    });
+    expect(sitting()).toBe(true);
   });
 
-  it('the first review-items load marks that half landed before ticking', () => {
-    expect(src).toMatch(/walkSources\.reviewItems = true[\s\S]{0,120}deepLinkTick\(\)/);
+  it('opens nothing without the flag — a plain link to Home is inert', async () => {
+    server.on(`/workspaces/${WS}/review-items`, { items: [ASK] });
+    await bootTestBoard({
+      url: `https://board.test/workspaces/${WS}/home`,
+      tasks: [boardRow('t-2')],
+    });
+    expect(sitting()).toBe(false);
+  });
+
+  it('waits for the ydoc projection, and an empty queue does not burn the flag', async () => {
+    server.on(`/workspaces/${WS}/review-items`, { items: [ASK] });
+    const board = await bootTestBoard({
+      url: `https://board.test/workspaces/${WS}/home?walk=1`,
+      noSync: true,
+    });
+    // The review-items load has resolved; the projection has not. Opening
+    // here would aim at a head the projection re-ranks to the bottom.
+    expect(sitting()).toBe(false);
+    board.sockets.first().sync();
+    await settle();
+    expect(sitting()).toBe(true);
+  });
+
+  it('waits for the review-items list too, even when the projection alone fills the queue', async () => {
+    // A decision makes the queue non-empty off the ydoc alone, which is
+    // exactly the case a queue-length gate would open on.
+    const realFetch = globalThis.fetch;
+    let release!: () => void;
+    const landed = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('/review-items')) await landed;
+      return realFetch(input, init);
+    }) as typeof fetch;
+    try {
+      server.on(`/workspaces/${WS}/review-items`, { items: [ASK] });
+      await bootTestBoard({
+        url: `https://board.test/workspaces/${WS}/home?walk=1`,
+        tasks: [DECISION],
+      });
+      expect(sitting()).toBe(false);
+      release();
+      await settle();
+      expect(sitting()).toBe(true);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('hops to the next board in the chain when this one is genuinely clear', async () => {
+    const board = await bootTestBoard({
+      url: `https://board.test/workspaces/${WS}/home?walk=1&then=w-b,w-c`,
+    });
+    expect(board.location.navigations).toEqual([]);
+    await vi.advanceTimersByTimeAsync(WALK_HANDOFF_DEADLINE_MS + 1);
+    expect(sitting()).toBe(false);
+    expect(board.location.navigations).toEqual(['/workspaces/w-b/home?walk=1&then=w-c']);
+  });
+
+  it('a board with items in hand opens on them at the deadline instead of hopping', async () => {
+    server.on(`/workspaces/${WS}/review-items`, { items: [ASK] });
+    const board = await bootTestBoard({
+      url: `https://board.test/workspaces/${WS}/home?walk=1&then=w-b`,
+      noSync: true,
+    });
+    expect(sitting()).toBe(false);
+    await vi.advanceTimersByTimeAsync(WALK_HANDOFF_DEADLINE_MS + 1);
+    expect(sitting()).toBe(true);
+    expect(board.location.navigations).toEqual([]);
   });
 });

@@ -10,7 +10,7 @@ import {
  * fast. The whole bargain depends on production never seeing a scaled value,
  * so the first two tests here are about the DEFAULTS, not about the feature.
  */
-describe('room timings', () => {
+describe('doc timings', () => {
   it('resolves the production cadences when the scale is absent or unusable', () => {
     // Undefined is the production case. The rest are the ways a stray value
     // could reach a real deploy: a blank from a shell expansion, a word, a

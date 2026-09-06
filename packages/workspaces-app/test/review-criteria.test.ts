@@ -11,11 +11,21 @@
  * All fixtures are synthetic.
  */
 
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
-import { type ReviewCriteria, mountReviewCriteria } from '../src/board/review-criteria.ts';
-import { BOARD_BOOT_SOURCES } from './support/board-boot-sources.ts';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  type ReviewCriteria,
+  criteriaNote,
+  mountReviewCriteria,
+} from '../src/board/review-criteria.ts';
+import {
+  WS,
+  boardRow,
+  bootTestBoard,
+  click,
+  el,
+  resetBoardServer,
+  server,
+} from './support/board-drive.ts';
 
 const DEFAULT_TEXT = 'A good review item can be answered from the card alone.';
 const OWN_TEXT = 'Every headline is a question, and every option names its cost.';
@@ -158,36 +168,96 @@ describe('the review-item criteria field', () => {
 
 /**
  * A module nobody mounts is the same bug the review found. The field's
- * behaviour is pinned above; this pins that the panel actually carries it —
- * the reviewer's query was `[id*=criteri]` against the open gear panel, and
- * it returned nothing.
+ * behaviour is pinned above; this pins that the panel actually carries it.
+ *
+ * DRIVEN, NOT GREPPED. This used to read the seventeen board boot modules as
+ * one string, slice out the settings panel's markup and match `id="..."` on
+ * it, plus `mountReviewCriteria({` and `reviewCriteria.refresh()`. The bug it
+ * stands in for was found by a reviewer running `[id*=criteri]` against the
+ * OPEN gear panel and getting nothing back — so run that query. A gate wired
+ * to a payload the server does not send, or a gear press that never paints
+ * the panel, leaves all four strings in the source and the reviewer's query
+ * still empty.
  */
 describe('the settings panel carries the field', () => {
-  const shell = BOARD_BOOT_SOURCES.map((m) =>
-    readFileSync(resolve(import.meta.dirname, `../src/board/${m}.ts`), 'utf8'),
-  ).join('\n');
+  const CRITERIA_SETTINGS = { reviewItemCriteria: { value: OWN_TEXT, isDefault: false } };
 
-  it('has the textarea, its note and both buttons inside the settings panel', () => {
-    const panel = shell.slice(
-      shell.indexOf('id="board-settings-panel"'),
-      shell.indexOf('id="board-connection"'),
-    );
-    expect(panel).not.toBe('');
+  beforeEach(() => {
+    resetBoardServer();
+    server.on(`/workspaces/${WS}/settings`, CRITERIA_SETTINGS);
+  });
+
+  // The panel is a popover with document-level listeners; leaving it open
+  // would let a later test's unrelated click reach a torn-down handler.
+  afterEach(async () => {
+    const panel = document.getElementById('board-settings-panel');
+    if (panel && !panel.classList.contains('hidden')) await click(el('board-settings'));
+    document.body.innerHTML = '';
+  });
+
+  /** Press the gear the way a reader does, and hand back the panel. */
+  async function openSettings(): Promise<HTMLElement> {
+    await bootTestBoard({ tasks: [boardRow('t-1')] });
+    await click(el('board-settings'));
+    const panel = el('board-settings-panel');
+    expect(panel.classList.contains('hidden'), 'the gear did not open the panel').toBe(false);
+    return panel;
+  }
+
+  it('answers the reviewer’s own query — [id*=criteri] against the open panel', async () => {
+    const panel = await openSettings();
+    // The query that came back empty and started the ticket.
+    expect(panel.querySelectorAll('[id*=criteri]').length).toBeGreaterThan(0);
     for (const id of [
       'board-review-criteria',
       'board-review-criteria-note',
       'board-review-criteria-save',
       'board-review-criteria-default',
     ]) {
-      expect(panel).toContain(`id="${id}"`);
+      expect(panel.querySelector(`#${id}`), `#${id} is not in the settings panel`).not.toBeNull();
     }
-    // The control: the ids the reviewer DID find are in the same slice, so a
-    // mis-sliced panel cannot pass this by matching nothing.
-    expect(panel).toContain('id="board-done-filter"');
+    // Control: the row the reviewer DID find is in the same panel, so a panel
+    // that matched nothing at all could not pass this.
+    expect(panel.querySelector('#board-done-filter')).not.toBeNull();
   });
 
-  it('mounts it and refreshes it when the panel opens', () => {
-    expect(shell).toContain('mountReviewCriteria({');
-    expect(shell).toContain('reviewCriteria.refresh()');
+  it('mounts it and fills it with the board’s own criteria when the panel opens', async () => {
+    const panel = await openSettings();
+    const box = panel.querySelector('#board-review-criteria') as HTMLTextAreaElement;
+    const note = panel.querySelector('#board-review-criteria-note') as HTMLElement;
+    // The words the gate judges against, in the box a reader can edit — which
+    // is the whole ticket: they shipped visible only to an MCP tool.
+    expect(box.value).toBe(OWN_TEXT);
+    expect(box.disabled).toBe(false);
+    expect(note.textContent).toBe(criteriaNote({ value: OWN_TEXT, isDefault: false }));
+  });
+
+  it('re-reads on every open, so criteria rewritten from a tool land here', async () => {
+    // Why `refresh()` is on the open rather than on the mount: an agent can
+    // rewrite the criteria while this tab sits here, and a stale box that got
+    // saved would put the old words back.
+    const panel = await openSettings();
+    const box = panel.querySelector('#board-review-criteria') as HTMLTextAreaElement;
+    expect(box.value).toBe(OWN_TEXT);
+
+    server.on(`/workspaces/${WS}/settings`, {
+      reviewItemCriteria: { value: DEFAULT_TEXT, isDefault: true },
+    });
+    await click(el('board-settings')); // close
+    await click(el('board-settings')); // and open again
+    expect(box.value).toBe(DEFAULT_TEXT);
+  });
+
+  it('a settings read that answers nothing disables the field rather than emptying it', async () => {
+    // A failed READ must never become a destructive WRITE — the control that
+    // says the two cases above are the read landing, not a default painted
+    // over an unanswered route.
+    server.on(`/workspaces/${WS}/settings`, {});
+    const panel = await openSettings();
+    const box = panel.querySelector('#board-review-criteria') as HTMLTextAreaElement;
+    expect(box.disabled).toBe(true);
+    expect(panel.querySelector('#board-review-criteria-note')?.textContent).toContain(
+      'Could not read the criteria',
+    );
   });
 });

@@ -75,7 +75,7 @@ export interface OpsRouteRequest {
   authorFor: (claimed: unknown) => User | undefined;
 }
 
-/** `GET /api/metrics` — room stats plus this process's uptime. It runs high
+/** `GET /api/metrics` — doc stats plus this process's uptime. It runs high
  *  in the chain, above the doc routes, where it always has. */
 export function handleOpsMetricsRoute(
   ctx: OpsRoutesContext,

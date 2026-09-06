@@ -31,7 +31,7 @@ import {
   parseCoverage,
   restoreNoticeContent,
 } from '../src/watch-coverage.ts';
-import { readMcpSource } from './harness/mcp-source.ts';
+import { type BundleHarness, startBundle } from './harness/mcp-bundle.ts';
 
 const EMPTY: CoverageQueue = {
   queuedVoice: 0,
@@ -370,25 +370,76 @@ describe('restoreNoticeContent — the unprompted line a respawn gets', () => {
   });
 });
 
-describe('mcp.ts wires the readout in', () => {
-  // mcp.ts ends in a top-level `await server.connect(transport)` and exports
-  // nothing, so a test cannot import it. Source assertions are the only
-  // available proof that the helpers above are reached at all — without them
-  // every test here could pass against a module nothing calls.
-  const src = readMcpSource();
+describe('the running bundle carries the readout through', () => {
+  // The helpers above are unit-tested against fakes; without this every one
+  // of them could pass against a module nothing calls. The old proof was
+  // three `toContain` checks over the concatenated source, which cannot tell
+  // a reached helper from an imported one — and passes on a source edit that
+  // was never rebuilt into the artifact peers load. So drive the bundle:
+  // answer the watches route with a coverage block and read what
+  // `list_watched_docs` hands back.
+  const COVERAGE = {
+    agentId: 'agent-harness-agent',
+    workspaces: [{ workspaceId: 'ws-1', name: 'coverage-board', live: true }],
+    unattachedBoards: [
+      {
+        workspaceId: 'ws-2',
+        name: 'quiet-board',
+        watchedDocs: ['doc-one'],
+        queuedTotal: 2,
+        queued: { queuedVoice: 2 },
+      },
+    ],
+  };
 
-  it('list_watched_docs carries `coverage` through', () => {
-    const tool = src.slice(src.indexOf("case 'list_watched_docs'"));
-    const body = tool.slice(0, tool.indexOf("case '", 10));
-    expect(body).toContain('coverage');
-    expect(body).toContain('watching');
-    expect(body).toContain('restore');
-  });
+  it('list_watched_docs reports coverage beside watching and restore', async () => {
+    let h: BundleHarness | undefined;
+    try {
+      h = await startBundle((req) =>
+        req.method === 'GET' && /\/watches$/.test(req.path)
+          ? { watches: [{ key: 'doc-one' }], pruned: [], workspaces: [], coverage: COVERAGE }
+          : {},
+      );
+      const res = await h.call('list_watched_docs', {});
+      expect(res.isError, res.text).toBe(false);
+      const body = res.json as {
+        watching?: unknown;
+        restore?: unknown;
+        coverage?: { unattachedBoards?: Array<{ name?: string }> };
+      };
+      expect(body.watching).toBeDefined();
+      expect(body.restore).toBeDefined();
+      // Verbatim, not a summary: the board the server named has to survive
+      // the trip to the agent that has to act on it.
+      expect(body.coverage?.unattachedBoards?.[0]?.name).toBe('quiet-board');
+    } finally {
+      await h?.stop();
+    }
+  }, 60_000);
 
-  // That the restore path reaches `restoreNoticeContent`, `parseCoverage` and
-  // `boardsToReattach` at all is asserted by driving it: watch-restore.test.ts
-  // runs a whole restore against fakes and reads the notice that came out, the
-  // board it re-attached to and the coverage it parsed. Three `toContain`
-  // checks on an import line could not tell a reached helper from an imported
-  // one.
+  it('CONTROL: fabricates no coverage when the server sent none', async () => {
+    // Absent rather than empty. Without this, the assertion above would also
+    // pass on a handler that always reported an all-clear.
+    let h: BundleHarness | undefined;
+    try {
+      h = await startBundle((req) =>
+        req.method === 'GET' && /\/watches$/.test(req.path)
+          ? { watches: [{ key: 'doc-one' }], pruned: [], workspaces: [] }
+          : {},
+      );
+      const res = await h.call('list_watched_docs', {});
+      expect(res.isError, res.text).toBe(false);
+      expect((res.json as { coverage?: unknown }).coverage).toBeUndefined();
+      // …and the surrounding fields are still there, so "no coverage" is not
+      // "the call failed".
+      expect((res.json as { watching?: unknown }).watching).toBeDefined();
+    } finally {
+      await h?.stop();
+    }
+  }, 60_000);
 });
+
+// That the restore path reaches `restoreNoticeContent`, `parseCoverage` and
+// `boardsToReattach` at all is asserted by driving it: watch-restore.test.ts
+// runs a whole restore against fakes and reads the notice that came out, the
+// board it re-attached to and the coverage it parsed.

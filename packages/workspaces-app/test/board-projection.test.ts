@@ -70,7 +70,7 @@ describe('createBoardProjection', () => {
     expect(el('board-retired-badge').classList.contains('hidden')).toBe(false);
   });
 
-  it('leaves state.info alone until the room has synced an id', () => {
+  it('leaves state.info alone until the doc has synced an id', () => {
     // The boot REST fetch is the other writer. An empty map must not wipe
     // what it already put there — that window is a second wide on a cold
     // connection, and the header would blink back to the raw id.

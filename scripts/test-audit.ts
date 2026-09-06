@@ -486,6 +486,19 @@ function providesTransitively(rel: string, seen = new Set<string>()): boolean {
  *    in `launcher.test.ts`, which compares two artifacts' PARSED fields and
  *    asserts on no text at all.
  *
+ * A third shape, added when the MCP sweep reached it: a read whose path IS
+ * repo source, but whose text is the INPUT to the transform under test rather
+ * than its subject. `css-minify.test.ts` feeds the widget stylesheet's raw
+ * literal to `minifyCss` and asserts only RELATIONS between the input and the
+ * output — every interpolation preserved, every rule block still there, the
+ * result smaller. A renamed selector changes both sides and can neither pass
+ * nor fail a case. It is the `fixtures/` carve-out ("a parser driven over
+ * sample input is behaviour") applied where the sample has to be the real
+ * file, because a copy would drift away from what the build actually feeds.
+ * The discriminator a reviewer can check: is there any assertion whose
+ * expected value is a literal from the file? If yes, it is a source grep and
+ * this marker does not apply.
+ *
  * WHAT KEEPS IT FROM BECOMING A HIDING PLACE. Three things, and the first two
  * are the same discipline `// timed:` runs on:
  *

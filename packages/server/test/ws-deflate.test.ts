@@ -1,7 +1,7 @@
 /**
  * The Yjs socket compresses what it sends.
  *
- * The board is ONE ws room per workspace, and a fresh tab receives the
+ * The board is ONE ws doc per workspace, and a fresh tab receives the
  * whole board state in sync step 2 — one uncompressed binary frame, measured
  * at 1,264,566 bytes over the live board's persisted state on 2026-08-29,
  * deflating to 431,733 (2.9×). Browsers offer permessage-deflate on every

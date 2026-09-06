@@ -1,7 +1,7 @@
 /**
- * Ydoc projection + workspace room (plan §3.3, §6).
+ * Ydoc projection + workspace doc (plan §3.3, §6).
  *
- * Tasks live in the server-owned store; the `ws:<workspaceId>` room's `tasks`
+ * Tasks live in the server-owned store; the `ws:<workspaceId>` doc's `tasks`
  * Y.Map is a PROJECTION only the server writes. Two rules make "only the
  * server writes" true rather than aspirational, both proven here through a
  * real Yjs client (a raw socket never completes the sync handshake — every
@@ -13,9 +13,9 @@
  *    a forged .ydoc) can't leave fake board state standing.
  *
  * Task BODIES are the deliberate exception: each lives in its own
- * `task:<taskId>` doc room so the whole editing/thread machinery applies
+ * `task:<taskId>` live doc so the whole editing/thread machinery applies
  * unchanged, and body-anchored threads survive projection refreshes and
- * server restarts because a refresh never touches the body room.
+ * server restarts because a refresh never touches the body doc.
  *
  * All fixtures are synthetic — invented names in the jordan@partner.example
  * register. The repo is public.
@@ -155,7 +155,7 @@ type ProjectedTask = {
   }>;
 };
 
-describe('ydoc projection + workspace room', () => {
+describe('ydoc projection + workspace doc', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
@@ -199,15 +199,15 @@ describe('ydoc projection + workspace room', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it('a REST-created task appears in the ws room tasks map, and a transition updates it', async () => {
+  it('a REST-created task appears in the ws doc tasks map, and a transition updates it', async () => {
     const wsId = await makeWorkspace('search-revamp');
-    const room = handle.docStore.get(workspaceDocId(wsId));
-    if (!room) throw new Error('ws room was not created');
+    const doc = handle.docStore.get(workspaceDocId(wsId));
+    if (!doc) throw new Error('ws doc was not created');
     // The workspace map carries the board's name (visitor-contract field).
-    expect(room.ydoc.getMap('workspace').get('name')).toBe('search-revamp');
+    expect(doc.ydoc.getMap('workspace').get('name')).toBe('search-revamp');
 
     const taskId = await makeTask(wsId, { title: 'Wire the index' });
-    const projected = room.ydoc.getMap('tasks').get(taskId) as ProjectedTask | undefined;
+    const projected = doc.ydoc.getMap('tasks').get(taskId) as ProjectedTask | undefined;
     if (!projected) throw new Error('task missing from projection');
     expect(projected.title).toBe('Wire the index');
     // `triage` — an agent filed it. Asserted as the literal rather than
@@ -219,7 +219,7 @@ describe('ydoc projection + workspace room', () => {
 
     const t = await post(`/api/tasks/${taskId}/transition`, { to: 'in-progress', author: AGENT });
     expect(t.status).toBe(200);
-    const after = room.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
+    const after = doc.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
     expect(after.status).toBe('in-progress');
     // Transitions ship actor DISPLAY names, not ids (§3.3 visitor contract).
     expect(after.transitions).toHaveLength(1);
@@ -240,7 +240,7 @@ describe('ydoc projection + workspace room', () => {
       assignee?: string;
       ownerKind?: string;
     };
-    const goals = room.ydoc.getMap('workspace').get('goals') as ProjectedGoal[];
+    const goals = doc.ydoc.getMap('workspace').get('goals') as ProjectedGoal[];
     expect(goals.map((x) => x.title)).toContain('Ship it faster');
     // The band carries its goal ROW's status, so a board reader can tell a
     // done band from an open one — or an un-agreed one — without a second
@@ -259,7 +259,7 @@ describe('ydoc projection + workspace room', () => {
       note: 'shipped enough of it',
     });
     expect(gt.status).toBe(200);
-    const decorated = (room.ydoc.getMap('workspace').get('goals') as ProjectedGoal[]).find(
+    const decorated = (doc.ydoc.getMap('workspace').get('goals') as ProjectedGoal[]).find(
       (x) => x.id === band.id,
     );
     expect(decorated?.status).toBe('done');
@@ -280,7 +280,7 @@ describe('ydoc projection + workspace room', () => {
     if (!row) throw new Error('goal row missing from the store');
     row.assignee = 'Search Revamp';
     handle.projection.refresh(wsId);
-    const owned = (room.ydoc.getMap('workspace').get('goals') as ProjectedGoal[]).find(
+    const owned = (doc.ydoc.getMap('workspace').get('goals') as ProjectedGoal[]).find(
       (x) => x.id === band.id,
     );
     expect(owned?.assignee).toBe('Search Revamp');
@@ -290,12 +290,12 @@ describe('ydoc projection + workspace room', () => {
   it('projects a transition without the evidence the caller still sends', async () => {
     // The board renders from ws:<id> and nothing else, so this is where a
     // "removed" field would go on being visible if the projection still
-    // carried it. Positive control: the row IS in the room, with its actor
+    // carried it. Positive control: the row IS in the doc, with its actor
     // and note, so an absent `evidence` below is a decision and not an empty
-    // room.
-    const wsId = await makeWorkspace('evidence-room');
-    const room = handle.docStore.get(workspaceDocId(wsId));
-    if (!room) throw new Error('ws room was not created');
+    // doc.
+    const wsId = await makeWorkspace('evidence-doc');
+    const doc = handle.docStore.get(workspaceDocId(wsId));
+    if (!doc) throw new Error('ws doc was not created');
     const taskId = await makeTask(wsId, { title: 'Fix the ranking' });
     await post(`/api/tasks/${taskId}/transition`, {
       to: 'done',
@@ -304,7 +304,7 @@ describe('ydoc projection + workspace room', () => {
       evidence: { commit: 'b2ba21edef' },
     });
 
-    const row = (room.ydoc.getMap('tasks').get(taskId) as ProjectedTask).transitions.at(-1);
+    const row = (doc.ydoc.getMap('tasks').get(taskId) as ProjectedTask).transitions.at(-1);
     expect(row?.to).toBe('done');
     expect(row?.note).toBe('merged as #402');
     expect(row?.by).toEqual({ name: 'Search Revamp', kind: 'agent' });
@@ -341,11 +341,11 @@ describe('ydoc projection + workspace room', () => {
       await settle();
 
       // Server state reverted…
-      const room = handle.docStore.get(workspaceDocId(wsId));
-      if (!room) throw new Error('ws room missing');
-      const serverTask = room.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
+      const doc = handle.docStore.get(workspaceDocId(wsId));
+      if (!doc) throw new Error('ws doc missing');
+      const serverTask = doc.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
       expect(serverTask.status).toBe('triage');
-      expect(room.ydoc.getMap('tasks').get('t-forged')).toBeUndefined();
+      expect(doc.ydoc.getMap('tasks').get('t-forged')).toBeUndefined();
       // …and the revert propagated BACK to the writer.
       const clientTask = client.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
       expect(clientTask.status).toBe('triage');
@@ -377,15 +377,15 @@ describe('ydoc projection + workspace room', () => {
     expect(r.status).toBe(404);
   });
 
-  it('seeds the task body room from the snapshot and snapshots live edits back', async () => {
-    const wsId = await makeWorkspace('body-rooms');
+  it('seeds the task body doc from the snapshot and snapshots live edits back', async () => {
+    const wsId = await makeWorkspace('body-docs');
     const taskId = await makeTask(wsId, {
       title: 'Write the rollout note',
       body: '## Steps\n\nCheck the flow works end to end.\n',
     });
-    const bodyRoom = handle.docStore.get(taskBodyDocId(taskId));
-    if (!bodyRoom) throw new Error('body room missing');
-    const md = prose.serializeFragmentToMarkdown(prose.getProseFragment(bodyRoom.ydoc));
+    const bodyDoc = handle.docStore.get(taskBodyDocId(taskId));
+    if (!bodyDoc) throw new Error('body doc missing');
+    const md = prose.serializeFragmentToMarkdown(prose.getProseFragment(bodyDoc.ydoc));
     expect(md).toContain('Check the flow works end to end.');
 
     // A live edit through the doc surface flows back into the store snapshot
@@ -416,9 +416,9 @@ describe('ydoc projection + workspace room', () => {
       title: 'Write the rollout note',
       body: 'Agent can read the description on the task so that it can pick it up cold.\n',
     });
-    const room = handle.docStore.get(workspaceDocId(wsId));
-    if (!room) throw new Error('ws room missing');
-    const projected = room.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
+    const doc = handle.docStore.get(workspaceDocId(wsId));
+    if (!doc) throw new Error('ws doc missing');
+    const projected = doc.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
     expect(projected.body).toContain('pick it up cold');
     expect(projected.bodyTruncated).toBeUndefined();
 
@@ -427,19 +427,19 @@ describe('ydoc projection + workspace room', () => {
     });
     expect(r.status).toBe(200);
     await settle(700);
-    const after = room.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
+    const after = doc.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
     expect(after.body).toContain('stays current');
   });
 
   it('caps a runaway description and says it capped it', async () => {
     const wsId = await makeWorkspace('body-cap');
-    // A body room is a live doc anyone can paste a plan into, and the ws room
+    // A body doc is a live doc anyone can paste a plan into, and the ws doc
     // syncs to every board viewer on every debounced snapshot.
     const long = `${'word '.repeat(1_200)}TAIL`;
     const taskId = await makeTask(wsId, { title: 'Pasted a whole plan in here', body: long });
-    const room = handle.docStore.get(workspaceDocId(wsId));
-    if (!room) throw new Error('ws room missing');
-    const projected = room.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
+    const doc = handle.docStore.get(workspaceDocId(wsId));
+    if (!doc) throw new Error('ws doc missing');
+    const projected = doc.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
     expect(projected.bodyTruncated).toBe(true);
     expect(projected.body?.length).toBe(BODY_PROJECTION_LIMIT);
     expect(projected.body).not.toContain('TAIL');
@@ -464,22 +464,22 @@ describe('ydoc projection + workspace room', () => {
     const { thread } = (await tr.json()) as { thread: { id: string } };
 
     const resolves = (h: ServerHandle): boolean => {
-      const room = h.docStore.get(docId);
-      if (!room) return false;
+      const doc = h.docStore.get(docId);
+      if (!doc) return false;
       const stored = h.docStore.getThread(docId, thread.id);
       if (!stored || stored.anchor.kind !== 'text-range') return false;
-      return prose.resolveRelativePosition(room.ydoc, stored.anchor.startRel) !== null;
+      return prose.resolveRelativePosition(doc.ydoc, stored.anchor.startRel) !== null;
     };
     // POSITIVE CONTROL: the anchor resolves right after creation.
     expect(resolves(handle)).toBe(true);
 
     // Force a projection refresh (a real task event rewrites the projection
-    // entry) plus an explicit reassert — neither may touch the body room.
+    // entry) plus an explicit reassert — neither may touch the body doc.
     await post(`/api/tasks/${taskId}/transition`, { to: 'in-progress', author: AGENT });
     handle.projection.refresh(wsId);
     expect(resolves(handle)).toBe(true);
 
-    // Restart on the same dataDir: the body room rehydrates from its .ydoc,
+    // Restart on the same dataDir: the body doc rehydrates from its .ydoc,
     // the seed path is gated on an empty fragment, so identity survives.
     await settle(600); // let the debounced .ydoc + sidecar writes land
     await handle.stop();
@@ -487,9 +487,9 @@ describe('ydoc projection + workspace room', () => {
     base = `http://localhost:${handle.port}`;
     wsBase = `ws://localhost:${handle.port}`;
     expect(resolves(handle)).toBe(true);
-    const room = handle.docStore.get(docId);
-    if (!room) throw new Error('body room missing after restart');
-    expect(prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc))).toContain(
+    const doc = handle.docStore.get(docId);
+    if (!doc) throw new Error('body doc missing after restart');
+    expect(prose.serializeFragmentToMarkdown(prose.getProseFragment(doc.ydoc))).toContain(
       'anchor me here',
     );
   });
@@ -500,7 +500,7 @@ describe('ydoc projection + workspace room', () => {
     await settle(600); // persist .ydoc + sidecar
     await handle.stop();
 
-    // Forge the persisted ws room offline — the crash-leaves-fake-state shape.
+    // Forge the persisted ws doc offline — the crash-leaves-fake-state shape.
     const ydocPath = join(dataDir, `${workspaceDocId(wsId)}.ydoc`);
     const forged = new Y.Doc();
     Y.applyUpdate(forged, new Uint8Array(readFileSync(ydocPath)));
@@ -516,9 +516,9 @@ describe('ydoc projection + workspace room', () => {
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
     wsBase = `ws://localhost:${handle.port}`;
-    const room = handle.docStore.get(workspaceDocId(wsId));
-    if (!room) throw new Error('ws room missing after restart');
-    const projected = room.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
+    const doc = handle.docStore.get(workspaceDocId(wsId));
+    if (!doc) throw new Error('ws doc missing after restart');
+    const projected = doc.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
     expect(projected.status).toBe('triage');
     expect(projected.title).toBe('Honest task');
   });

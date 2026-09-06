@@ -7,7 +7,7 @@ import { waitFor } from './wait-for.ts';
 
 // bind_mock(docId, newPath) is documented as REPOINTING an existing mockup
 // doc, but POST /api/docs routes through DocStore.getOrCreate, whose
-// existing-room branch used to update only webhookUrl and setId — the doc
+// existing-doc branch used to update only webhookUrl and setId — the doc
 // kept serving the old file while the call reported success. These tests pin
 // the repoint: served content follows the new path, meta.sourceUrl follows,
 // and the private-meta sidecar (the durable record binding survives restarts
@@ -65,7 +65,7 @@ describe('bind_mock rebind (POST /api/docs on an existing mockup doc)', () => {
 
     // The sidecar is what a restart rehydrates sourceUrl from — a rebind that
     // only touched memory would silently revert at the next supervisor
-    // restart. saveToDisk debounces ~200ms; give it room.
+    // restart. saveToDisk debounces ~200ms; give it doc.
     const sidecar = await waitFor(
       () => {
         const file = join(dataDir, `${mintedId}.private.json`);

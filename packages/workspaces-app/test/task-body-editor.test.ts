@@ -1,11 +1,11 @@
 /**
- * The host that puts a live editor over a task's body room.
+ * The host that puts a live editor over a task's body doc.
  *
  * Everything below drives the real `createTaskBodyEditorHost` with a fake
  * websocket client and a fake editor module — the Tiptap half is behind a
  * dynamic import precisely so it never enters the board's bundle, and a test
  * that imported it would be measuring the thing the design avoids. What is
- * under test here is the LIFECYCLE: which room gets opened, when a mount is
+ * under test here is the LIFECYCLE: which doc gets opened, when a mount is
  * kept, when it is torn down, and what a failed chunk fetch leaves behind.
  */
 import type { FeedbackClient } from '@feedback/core';
@@ -131,12 +131,12 @@ beforeEach(() => {
 });
 
 describe('createTaskBodyEditorHost', () => {
-  it('opens the task’s own body room and mounts the editor over it', async () => {
+  it('opens the task’s own body doc and mounts the editor over it', async () => {
     const { host, h } = harness();
     host.sync(target('t-1'), slot);
     await h.land();
 
-    // The room is the one an agent writes through `set_doc_content`, not a
+    // The doc is the one an agent writes through `set_doc_content`, not a
     // second store — that identity is the whole reason the panel can be
     // edited while an agent is rewriting the same description.
     expect(h.clients.map((c) => c.docId)).toEqual(['task:t-1']);
@@ -181,7 +181,7 @@ describe('createTaskBodyEditorHost', () => {
     expect(h.created).toHaveLength(1);
   });
 
-  it('moves to the other room when the reader opens another task', async () => {
+  it('moves to the other doc when the reader opens another task', async () => {
     const { host, h } = harness();
     host.sync(target('t-1'), slot);
     await h.land();
@@ -199,7 +199,7 @@ describe('createTaskBodyEditorHost', () => {
     expect(next.classList.contains(BODY_LIVE_CLASS)).toBe(true);
   });
 
-  it('lets go of the room when the panel closes', async () => {
+  it('lets go of the doc when the panel closes', async () => {
     const { host, h } = harness();
     host.sync(target('t-1'), slot);
     await h.land();

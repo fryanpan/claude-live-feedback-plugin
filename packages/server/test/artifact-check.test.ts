@@ -437,7 +437,7 @@ describe('TaskStore.recordArtifactCheck', () => {
 
 describe('server wiring: REST done-transition triggers the check', () => {
   // Route-level proof of the glue in server.ts: the subscription, the store
-  // write, and the system comment on the task's body room — with the fetch
+  // write, and the system comment on the task's body doc — with the fetch
   // stubbed through ServerOptions so nothing leaves the process.
   const REST_PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
 

@@ -980,7 +980,7 @@ describe('board workspace + task routes', () => {
 
       // A person opens the thread (which is also what puts them on the
       // roster of addressable names), then the agent asks them by name. A
-      // thread on the task's own body room is the same surface
+      // thread on the task's own body doc is the same surface
       // `create_thread` writes to — and since 2026-08-21 only a DIRECT ask
       // reaches the queue, not every agent comment.
       const made = await post(`/api/docs/${encodeURIComponent(bodyDoc)}/threads`, {

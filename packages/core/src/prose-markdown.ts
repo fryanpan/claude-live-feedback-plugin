@@ -245,7 +245,7 @@ function setHeadingLevel(el: Y.XmlElement, level: number): void {
 /**
  * Rewrite any heading whose `level` attribute is still a string (every doc
  * persisted before the fix above) to the numeric form. Returns how many
- * headings changed; idempotent, so it's safe to run on every room load.
+ * headings changed; idempotent, so it's safe to run on every doc load.
  */
 export function normalizeHeadingLevels(
   doc: Y.Doc,

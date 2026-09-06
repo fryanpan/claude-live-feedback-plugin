@@ -6,7 +6,7 @@
  * import: the `open` flag that tells a live subscription from a registered
  * intention, the `Last-Event-ID` the loop presents so a fast reconnect does
  * not resume with a hole, and the dedup window it drops on every reconnect
- * because a restarted server counts every room's `seq` from zero again.
+ * because a restarted server counts every doc's `seq` from zero again.
  *
  * `createSseLoops` takes `fetch`, the frame handler, the dedup reset, the
  * backoff and the connect cap's timers as arguments, so every one of those is

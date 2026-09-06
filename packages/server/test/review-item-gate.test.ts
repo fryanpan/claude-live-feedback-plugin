@@ -368,7 +368,7 @@ describe('the review-item quality gate', () => {
     // The filer's agent id is store-only, like every actor id (§3.3): the
     // board projection carries the verdict and the display name, never
     // the id. Asserted on `projectTask` directly, which is the one door the
-    // `ws:<id>` room reads through.
+    // `ws:<id>` doc reads through.
     it('the projection carries the verdict and drops the filer’s id', () => {
       const projected = projectTask({
         id: 't-1',

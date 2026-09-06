@@ -38,9 +38,9 @@ describe('the board projection carries the effort model', () => {
   };
 
   const row = (taskId: string): Record<string, unknown> => {
-    const room = handle.docStore.get(workspaceDocId(wsId));
-    if (!room) throw new Error('ws room was not created');
-    return room.ydoc.getMap('tasks').get(taskId) as Record<string, unknown>;
+    const doc = handle.docStore.get(workspaceDocId(wsId));
+    if (!doc) throw new Error('ws doc was not created');
+    return doc.ydoc.getMap('tasks').get(taskId) as Record<string, unknown>;
   };
 
   /** The provenance a run must carry to survive the staleness guard. */

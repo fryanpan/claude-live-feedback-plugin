@@ -340,14 +340,14 @@ describe('flat write-back through bindDiff', () => {
     // nothing races the setup): getOrCreate + a content edit is exactly what
     // hydration will find after a crash mid-flush.
     const setup = makeDocStore(dataDir);
-    const room = setup.getOrCreate('crash1', {
+    const doc = setup.getOrCreate('crash1', {
       type: 'diff',
       sourceUrl: file,
       relPath: 'Main.kt',
       workspaceId: 'wcrash',
       workspaceRoot: repo,
     });
-    room.ydoc.getText('content').insert(0, docText);
+    doc.ydoc.getText('content').insert(0, docText);
     await waitForYdoc(dataDir, 'crash1');
     // Stamp the file OLDER than the .ydoc — the on-disk truth of "the write
     // never happened".
@@ -371,14 +371,14 @@ describe('flat write-back through bindDiff', () => {
     // write-back of the stale doc may fire.
     const file = join(repo, 'Main.kt');
     const setup = makeDocStore(dataDir);
-    const room = setup.getOrCreate('crash2', {
+    const doc = setup.getOrCreate('crash2', {
       type: 'diff',
       sourceUrl: file,
       relPath: 'Main.kt',
       workspaceId: 'wcrash',
       workspaceRoot: repo,
     });
-    room.ydoc.getText('content').insert(0, readFileSync(file, 'utf8'));
+    doc.ydoc.getText('content').insert(0, readFileSync(file, 'utf8'));
     await waitForYdoc(dataDir, 'crash2');
     const downtimeEdit = '// written while the server was down\n';
     writeExternal(file, downtimeEdit); // future mtime > .ydoc mtime

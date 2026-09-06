@@ -130,7 +130,7 @@ describe('TaskStore.setReadingTime', () => {
   });
 });
 
-describe('server wiring: a read_session on a task body room updates Task.readingTime', () => {
+describe('server wiring: a read_session on a task body doc updates Task.readingTime', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
@@ -175,7 +175,7 @@ describe('server wiring: a read_session on a task body room updates Task.reading
         body: JSON.stringify({ author: PERSON, title: 'Read this ticket' }),
       }),
     );
-    // Task creation mints the body room asynchronously (projection commit);
+    // Task creation mints the body doc asynchronously (projection commit);
     // wait for it before posting a read against it.
     await until(() => handle.docStore.getDoc(taskBodyDocId(task.id)));
     return task.id;
@@ -193,7 +193,7 @@ describe('server wiring: a read_session on a task body room updates Task.reading
     });
   }
 
-  it('a read_session on the task body room accumulates readingTime', async () => {
+  it('a read_session on the task body doc accumulates readingTime', async () => {
     const taskId = await newTask();
     const r = await postActivity(taskBodyDocId(taskId), 'read_session', {
       sessionId: 's1',

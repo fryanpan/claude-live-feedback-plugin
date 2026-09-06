@@ -31,7 +31,7 @@
  *
  * The third entry point, `handleDocResourceRoutes`, is itself a chain of
  * three: this file still owns the `/api/docs/:id/...` match and resolves
- * `docId` / `room` / `rest` once (both halves of the alias contract — see
+ * `docId` / `doc` / `rest` once (both halves of the alias contract — see
  * the comment inside the function), then delegates to `doc-resource.ts`
  * (the doc's own reads/writes, its task chips, the meeting-float asks, its
  * origin repo, and content/status/diff/activity), `doc-threads-routes.ts`
@@ -189,7 +189,7 @@ export async function handleDocCreateListRoutes(
     // opened the link. Markdown and code already fail their attach
     // loudly; this is the same courtesy.
     //
-    // Both the check AND the read happen here, before the room exists,
+    // Both the check AND the read happen here, before the doc exists,
     // for two reasons: a failed bind leaves nothing behind, and the
     // content held from this read is what the capture below stores — so
     // a source that goes away between the two steps is still a refusal
@@ -241,12 +241,12 @@ export async function handleDocCreateListRoutes(
         hint: `"${docId}" is in a namespace the server owns (${RESERVED_DOC_PREFIXES.join(', ')}). Pick a docId that isn't.`,
       });
     }
-    const room = created.room;
+    const doc = created.doc;
     // Canonical from here down. Everything below keys on the doc's own
     // id, never the name the request arrived under — two callers using
     // the two spellings of one doc must not end up with two of anything.
-    const canonicalId = room.docId;
-    // Before the file attach, not after: the room already exists at this
+    const canonicalId = doc.docId;
+    // Before the file attach, not after: the doc already exists at this
     // point, and the 409 below returns early — filing afterwards would
     // leave a failed bind as the one doc this route can still strand
     // outside a workspace.
@@ -293,7 +293,7 @@ export async function handleDocCreateListRoutes(
         // and works — the doc is exactly as durable as every mockup was
         // before this change — so the response says that rather than
         // claiming nothing happened. Undoing it would mean purging a
-        // room, or restoring a previous sourceUrl, on the one path that
+        // doc, or restoring a previous sourceUrl, on the one path that
         // only fires when the disk is already refusing writes; that is
         // destructive machinery guarding a condition an operator has to
         // fix anyway, and the capture write is atomic, so a failure here
@@ -308,8 +308,8 @@ export async function handleDocCreateListRoutes(
       }
     }
     return j(200, {
-      docId: room.docId,
-      meta: withReviewUrl(room.meta),
+      docId: doc.docId,
+      meta: withReviewUrl(doc.meta),
       // Where the doc landed, in the same call that created it — a
       // caller who supplied no workspace still learns which one it got.
       hubWorkspaceId: boardWorkspaceId,
@@ -478,9 +478,9 @@ export async function handleDocPromoteRoute(
     // rows are drafts like the batch-filed ones, held until the same
     // approval. A doc with no plan gate (or an approved one) promotes
     // exactly as before.
-    const promoteRoom = docStore.get(docId);
+    const promoteDoc = docStore.get(docId);
     const promoteHold =
-      promoteRoom?.meta.planState === 'pending' ? { docId: promoteRoom.docId } : undefined;
+      promoteDoc?.meta.planState === 'pending' ? { docId: promoteDoc.docId } : undefined;
     const res = taskStore.createTask(workspaceId, {
       title,
       body: draftBody,
@@ -541,16 +541,16 @@ export async function handleDocResourceRoutes(
   const addressed = decodeURIComponent(docMatch[1] ?? '');
   const rest = docMatch[2] ?? '';
   if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-  const room = docStore.get(addressed);
-  if (!room) return j(404, { error: 'doc not found' });
+  const doc = docStore.get(addressed);
+  if (!doc) return j(404, { error: 'doc not found' });
   // Canonicalize ONCE, here, and the ~30 subroutes below inherit both
   // halves of the alias contract: a readable name resolves, and
   // everything they key on (SSE channels, activity rows, thread ids,
   // filenames) uses the doc's own id. Rebinding the name `docId` is
   // deliberate — it is what makes the subroutes correct by default
   // rather than each one having to remember.
-  const docId = room.docId;
-  const docRq: DocResourceRouteRequest = { ...rq, docId, room, rest };
+  const docId = doc.docId;
+  const docRq: DocResourceRouteRequest = { ...rq, docId, doc, rest };
   return (
     (await handleDocResourceCore(ctx, docRq)) ??
     (await handleDocThreadRoutes(ctx, docRq)) ??

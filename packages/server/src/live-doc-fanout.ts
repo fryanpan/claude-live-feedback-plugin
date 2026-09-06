@@ -1,23 +1,23 @@
 /**
- * The websocket fan-out of a doc room: who hears about a change, and over
+ * The websocket fan-out of a live doc: who hears about a change, and over
  * which channel.
  *
- * The other half of `doc-store.ts`, which keeps the room LIFECYCLE — hydrate,
+ * The other half of `doc-store.ts`, which keeps the doc LIFECYCLE — hydrate,
  * evict, tear down, persist the `.ydoc` and its index row. This half is
- * everything that happens because a room changed rather than because it
+ * everything that happens because a doc changed rather than because it
  * exists: the `ydoc.on('update')` wiring and the meta guards that ride it,
  * the thread / suggestion frames, the SSE + webhook broadcast behind them,
  * the shared presence ticker, and the socket closes a revoked share or a
  * teardown has to perform.
  *
- * The handle is the ROOM OBJECT, not a docId, and that is the whole reason
+ * The handle is the DOC OBJECT, not a docId, and that is the whole reason
  * the seam is here rather than a line range: every path below reads
- * `room.ydoc`, `room.conns`, `room.meta` or `room.seq` on the frame it is
- * building, so a lookup-by-id version would re-resolve the room several
+ * `doc.ydoc`, `doc.conns`, `doc.meta` or `doc.seq` on the frame it is
+ * building, so a lookup-by-id version would re-resolve the doc several
  * times per broadcast and could disagree with the caller about which one it
- * has. `RoomFanoutHost` carries only what a frame cannot get from the room
+ * has. `LiveDocFanoutHost` carries only what a frame cannot get from the doc
  * itself — the SSE bus and webhook dispatcher, the persist debounce, the
- * companion/review projections, and the resident room map the share sweeps
+ * companion/review projections, and the resident doc map the share sweeps
  * walk.
  *
  * Timings, ordering and log lines are unchanged from when this lived in
@@ -39,7 +39,7 @@ import {
 import * as awarenessProtocol from 'y-protocols/awareness';
 import * as Y from 'yjs';
 import { DOC_STORE_TIMINGS } from './doc-store-timings.ts';
-import type { DocRoom, FeedbackWs, ShareAuthorizedSocket } from './doc-store.ts';
+import type { FeedbackWs, LiveDoc, ShareAuthorizedSocket } from './doc-store.ts';
 import { newEventId } from './event-id.ts';
 import { isPrivateMetaKey } from './private-meta.ts';
 import type { SseBus } from './sse.ts';
@@ -52,7 +52,7 @@ const PRIVATE_META_GUARD_ORIGIN = 'private-meta-guard';
 
 /**
  * Does this transaction origin mean a PERSON or an AGENT changed the doc, as
- * opposed to the server writing to itself? Feeds `DocRoom.lastContentChangeAt`.
+ * opposed to the server writing to itself? Feeds `LiveDoc.lastContentChangeAt`.
  *
  * An ALLOW-list, and the difference is the whole correctness argument. Yjs
  * stamps a bare `undefined` origin on any transaction that does not name one,
@@ -66,7 +66,7 @@ const PRIVATE_META_GUARD_ORIGIN = 'private-meta-guard';
  * first version of this hook had that bug.
  *
  * Two shapes count:
- *  - the CONNECTION OBJECT of one of this room's live websockets — a person
+ *  - the CONNECTION OBJECT of one of this doc's live websockets — a person
  *    typing in the browser editor. `lastHumanEditAt` identifies them the
  *    same way, a few hundred lines below.
  *  - an `agent…` string. Every server-side writer acting FOR an agent stamps
@@ -82,12 +82,12 @@ const PRIVATE_META_GUARD_ORIGIN = 'private-meta-guard';
  * Excluding the undefined-origin THREAD writes costs the stall loop nothing —
  * a comment already reaches the same clock as `thread.lastActivity`; see the
  * caller in server.ts. And hydration is excluded twice over: `wireEvents` is
- * wired after `loadFromDisk`, so a room's load never reaches the hook at all.
+ * wired after `loadFromDisk`, so a doc's load never reaches the hook at all.
  */
 const REANCHOR_ORIGIN = 'agent-reanchor';
 
 /** Yjs origin for the server's own `contentRevision` / plan-state meta
- *  writes. Deliberately NOT agent-shaped: these land in the room's update
+ *  writes. Deliberately NOT agent-shaped: these land in the doc's update
  *  hook, and an authoring origin would re-arm the debounce that fired them. */
 export const CONTENT_REVISION_ORIGIN = 'content-revision';
 
@@ -113,10 +113,10 @@ const SERVER_META_KEYS = [
   'contentRevision',
 ] as const;
 
-function isAuthoringOrigin(room: DocRoom, origin: unknown): boolean {
+function isAuthoringOrigin(doc: LiveDoc, origin: unknown): boolean {
   if (typeof origin === 'string') return origin.startsWith('agent') && origin !== REANCHOR_ORIGIN;
   if (typeof origin !== 'object' || origin === null) return false;
-  return room.conns.has(origin as FeedbackWs);
+  return doc.conns.has(origin as FeedbackWs);
 }
 
 /** How long after a content change the thread re-anchor sweep runs. */
@@ -135,9 +135,9 @@ const AWARENESS_TICK_MS = AWARENESS_OUTDATED_MS / 10;
  *
  * Reimplemented over the public surface (`getLocalState` / `setLocalState` /
  * `meta` / `states` / `removeAwarenessStates`) so ONE ticker can drive every
- * room. The library's version is per instance and never unref'd; on a server
+ * doc. The library's version is per instance and never unref'd; on a server
  * that hydrates every persisted doc that was thousands of timers firing
- * forever for rooms with no sockets on them.
+ * forever for docs with no sockets on them.
  *
  * Exported so the equivalence is testable rather than asserted.
  */
@@ -161,62 +161,62 @@ export function maintainAwareness(aw: awarenessProtocol.Awareness, now = Date.no
 }
 
 /**
- * What the fan-out needs from the room lifecycle, as thunks onto the live
+ * What the fan-out needs from the doc lifecycle, as thunks onto the live
  * thing rather than copies of it. Nothing here owns state this file owns
- * (the presence ticker and its room set), and nothing this file does reaches
+ * (the presence ticker and its doc set), and nothing this file does reaches
  * the lifecycle any other way.
  */
-export interface RoomFanoutHost {
-  /** Every RESIDENT room — the set the share-socket sweeps walk. */
-  residentRooms(): Iterable<DocRoom>;
+export interface LiveDocFanoutHost {
+  /** Every RESIDENT doc — the set the share-socket sweeps walk. */
+  residentDocs(): Iterable<LiveDoc>;
   sse(): SseBus;
   webhooks(): WebhookDispatcher;
   /** `DocStoreConfig.decorateDocMeta`, already defaulted to identity. */
   decorate(meta: DocMeta): DocMeta;
-  /** `DocStoreConfig.onRoomEvent`, already defaulted to a no-op. */
-  emitRoomEvent(docId: string, payload: WebhookPayload): void;
+  /** `DocStoreConfig.onDocEvent`, already defaulted to a no-op. */
+  emitDocEvent(docId: string, payload: WebhookPayload): void;
   summarizer(): ThreadSummarizer | undefined;
   thread(docId: string, threadId: string): Thread | null;
   memberOfCompanion(docId: string): string | undefined;
   /** The `.ydoc` persist debounce. */
-  schedulePersist(room: DocRoom): void;
-  scheduleRevisionBump(room: DocRoom): void;
-  maybeRebindHome(room: DocRoom): void;
+  schedulePersist(doc: LiveDoc): void;
+  scheduleRevisionBump(doc: LiveDoc): void;
+  maybeRebindHome(doc: LiveDoc): void;
 }
 
 /**
- * The fan-out for every room this server holds. One instance per `DocStore`,
+ * The fan-out for every doc this server holds. One instance per `DocStore`,
  * holding the one presence ticker that serves all of them.
  */
-export class RoomFanout {
+export class LiveDocFanout {
   /** DocStore that have a live Awareness instance, i.e. the ones the shared
    *  presence ticker has to visit. */
-  private awarenessRooms = new Set<DocRoom>();
+  private awarenessDocs = new Set<LiveDoc>();
 
   private awarenessTicker: ReturnType<typeof setInterval> | null = null;
 
-  constructor(private host: RoomFanoutHost) {}
+  constructor(private host: LiveDocFanoutHost) {}
 
   /** DocStore holding presence, and the ticker count `DocStore.stats` folds in. */
   stats(): { awareness: number; timers: number } {
-    return { awareness: this.awarenessRooms.size, timers: this.awarenessTicker ? 1 : 0 };
+    return { awareness: this.awarenessDocs.size, timers: this.awarenessTicker ? 1 : 0 };
   }
 
   /**
-   * Forget a room that is leaving memory. The Awareness itself is destroyed
+   * Forget a doc that is leaving memory. The Awareness itself is destroyed
    * by the caller (which peeks rather than constructs); this only drops the
    * sweep entry, so the ticker stops when the last one goes.
    */
-  forgetRoom(room: DocRoom): void {
-    this.awarenessRooms.delete(room);
+  forgetDoc(doc: LiveDoc): void {
+    this.awarenessDocs.delete(doc);
   }
 
   /**
-   * Close every socket on one room, because the room is going away. 1000 is
+   * Close every socket on one doc, because the doc is going away. 1000 is
    * a normal close: nothing was violated, the doc simply no longer exists.
    */
-  closeSockets(room: DocRoom, reason: string): void {
-    for (const ws of room.conns) {
+  closeSockets(doc: LiveDoc, reason: string): void {
+    for (const ws of doc.conns) {
       try {
         ws.close(1000, reason);
       } catch {}
@@ -234,18 +234,18 @@ export class RoomFanout {
   }
 
   /**
-   * Build this room's Awareness and enrol it in the shared presence ticker.
+   * Build this doc's Awareness and enrol it in the shared presence ticker.
    *
    * The library instance's own interval is stopped immediately: it is the
-   * per-room timer this whole change exists to remove, and `maintainAwareness`
+   * per-doc timer this whole change exists to remove, and `maintainAwareness`
    * does its work from one place instead.
    */
-  createAwareness(room: DocRoom): awarenessProtocol.Awareness {
-    const aw = new awarenessProtocol.Awareness(room.ydoc);
+  createAwareness(doc: LiveDoc): awarenessProtocol.Awareness {
+    const aw = new awarenessProtocol.Awareness(doc.ydoc);
     clearInterval(
       (aw as unknown as { _checkInterval: ReturnType<typeof setInterval> })._checkInterval,
     );
-    this.awarenessRooms.add(room);
+    this.awarenessDocs.add(doc);
     if (!this.awarenessTicker) {
       const timer = setInterval(() => this.sweepAwareness(), AWARENESS_TICK_MS);
       timer.unref?.();
@@ -255,30 +255,30 @@ export class RoomFanout {
   }
 
   /**
-   * Presence maintenance for every room that HAS an Awareness — including the
+   * Presence maintenance for every doc that HAS an Awareness — including the
    * ones with no sockets left on them.
    *
-   * Skipping socketless rooms looked free and was not (codex, P2): a peer
+   * Skipping socketless docs looked free and was not (codex, P2): a peer
    * whose socket went away without its cleanup running leaves its state
    * behind, and `onOpen` hands `getStates()` to the next joiner before any
    * sweep can fire. That joiner would see a ghost. The library's timer
    * expired those states whether or not anyone was connected, and this must
-   * too — the count of rooms holding an Awareness is the count that have ever
+   * too — the count of docs holding an Awareness is the count that have ever
    * been opened, tens rather than thousands, so there was nothing to save.
    *
-   * A room whose last socket has gone keeps its Awareness rather than
-   * destroying it: `yjs-protocol.ts` registers the room's broadcast handler
-   * against that instance once, in a WeakMap keyed by room, so a replacement
+   * A doc whose last socket has gone keeps its Awareness rather than
+   * destroying it: `yjs-protocol.ts` registers the doc's broadcast handler
+   * against that instance once, in a WeakMap keyed by doc, so a replacement
    * instance would never get an `update` listener and presence would stop
    * working silently on the next connection.
    */
   private sweepAwareness(): void {
     const now = Date.now();
     let live = 0;
-    for (const room of this.awarenessRooms) {
-      const aw = room.peekAwareness();
+    for (const doc of this.awarenessDocs) {
+      const aw = doc.peekAwareness();
       if (!aw) {
-        this.awarenessRooms.delete(room);
+        this.awarenessDocs.delete(doc);
         continue;
       }
       live++;
@@ -291,7 +291,7 @@ export class RoomFanout {
   }
 
   /**
-   * Share-authorized sockets that no room's `conns` holds.
+   * Share-authorized sockets that no doc's `conns` holds.
    *
    * The three sweeps below used to walk `conns` alone, which is the yjs
    * editing sockets and nothing else. A meeting's `/audio/<docId>` socket is
@@ -307,7 +307,7 @@ export class RoomFanout {
   private readonly trackedShareSockets = new Set<ShareAuthorizedSocket>();
 
   /**
-   * Put a non-room socket in front of the sweeps below.
+   * Put a non-doc socket in front of the sweeps below.
    *
    * Sockets carrying NO share and NO membership are not tracked at all: the
    * owner's own audio socket is never offered to a matcher, which is the
@@ -328,17 +328,17 @@ export class RoomFanout {
   }
 
   /**
-   * Every socket a share authorized: the rooms' editing sockets, then the
+   * Every socket a share authorized: the docs' editing sockets, then the
    * tracked ones beside them.
    *
-   * Straight over the room map. `list()` + `get()` walked the same rooms but
+   * Straight over the doc map. `list()` + `get()` walked the same docs but
    * built a fresh DocMeta for every one of them and then looked each back up
    * by id — and `get` marks a doc ACCESSED, which is what put the whole
    * corpus in the file poll's fast lane. See `closeSocketsForDeadShares`.
    */
   private *shareAuthorizedSockets(): Generator<ShareAuthorizedSocket> {
-    for (const room of this.host.residentRooms()) {
-      for (const ws of room.conns) yield ws;
+    for (const doc of this.host.residentDocs()) {
+      for (const ws of doc.conns) yield ws;
     }
     for (const ws of this.trackedShareSockets) yield ws;
   }
@@ -394,22 +394,22 @@ export class RoomFanout {
    *  expired). Returns the shareIds that were swept. */
   closeSocketsForDeadShares(isLive: (shareId: string) => boolean): string[] {
     const dead = new Set<string>();
-    // This runs every 60s for the life of the server, over every room, and it
+    // This runs every 60s for the life of the server, over every doc, and it
     // only ever reads `conns`. Two things were wrong with reaching them via
     // `list()` + `get()`:
     //
-    //  - `get` counts as an ACCESS. On a 5,624-room server the sweep marked
+    //  - `get` counts as an ACCESS. On a 5,624-doc server the sweep marked
     //    every bound doc accessed once a minute, and the file poll's active
     //    window is also 60s — so from the first sweep onward the fast lane
     //    never emptied and every bound file was stat'd every 500ms. Measured
     //    on a copy of the production data directory: one sweep took
     //    activeBindings from 0 to 4,196, and production sat pinned at 2,549
     //    from ~90s of uptime onward.
-    //  - `list()` allocates a spread DocMeta per room, so the sweep also
+    //  - `list()` allocates a spread DocMeta per doc, so the sweep also
     //    produced several MB of garbage a minute for a pass that reads one
     //    field of one Set.
     //
-    // The room map is the same set `list()` maps over, so coverage is
+    // The doc map is the same set `list()` maps over, so coverage is
     // unchanged.
     for (const ws of this.shareAuthorizedSockets()) {
       const id = ws.data?.shareId;
@@ -421,7 +421,7 @@ export class RoomFanout {
   }
 
   fireEvent(
-    room: DocRoom,
+    doc: LiveDoc,
     event: 'thread.created' | 'thread.replied' | 'thread.resolved' | 'thread.reopened',
     thread: Thread,
     comment?: { id: string; author: User; text: string; ts: number },
@@ -431,26 +431,26 @@ export class RoomFanout {
     // sent channel renderers to comments[0].author, i.e. the CREATOR.
     actor?: User,
   ): void {
-    room.seq++;
+    doc.seq++;
     // Every thread change funnels through here, which is exactly why the
     // summary trigger lives here and not at the four call sites: a fifth
     // event added later gets summarization for free rather than silently
     // going without it.
-    if (opts?.generate !== false) this.scheduleSummary(room, thread.id);
+    if (opts?.generate !== false) this.scheduleSummary(doc, thread.id);
     const decorate = (m: DocMeta) => this.host.decorate(m);
-    this.broadcastToRoom(room, {
+    this.broadcastToDoc(doc, {
       event,
-      docId: room.docId,
+      docId: doc.docId,
       threadId: thread.id,
       thread,
-      doc: decorate(room.meta),
+      doc: decorate(doc.meta),
       comment,
       ...(actor ? { actor } : {}),
       // A comment ON a review item names the item at the top level, so the
       // owner's channel line can say which item to revise without walking
       // the thread's anchor.
       ...(thread.anchor.kind === 'review-item' ? { reviewItemId: thread.anchor.reviewItemId } : {}),
-      seq: room.seq,
+      seq: doc.seq,
     });
   }
 
@@ -465,20 +465,20 @@ export class RoomFanout {
    * shouldn't happen since callers scan and mutate in the same call.
    */
   fireSuggestionEvent(
-    room: DocRoom,
+    doc: LiveDoc,
     event: 'suggestion.created' | 'suggestion.accepted' | 'suggestion.rejected',
     sid: string,
     summary: suggestOps.SuggestionSummary | undefined,
   ): void {
-    room.seq++;
+    doc.seq++;
     const decorate = (m: DocMeta) => this.host.decorate(m);
-    this.broadcastToRoom(room, {
+    this.broadcastToDoc(doc, {
       event,
-      docId: room.docId,
+      docId: doc.docId,
       sid,
       suggestion: summary,
-      doc: decorate(room.meta),
-      seq: room.seq,
+      doc: decorate(doc.meta),
+      seq: doc.seq,
     });
   }
 
@@ -489,7 +489,7 @@ export class RoomFanout {
    * seconds of debounce is long enough for two more replies to land, and the
    * summary must describe the thread as it will be, not as it was.
    */
-  private scheduleSummary(room: DocRoom, threadId: string): void {
+  private scheduleSummary(doc: LiveDoc, threadId: string): void {
     const summarizer = this.host.summarizer();
     if (!summarizer) return;
     // Tell the clients a generation was QUEUED — the synced marker is what
@@ -499,42 +499,42 @@ export class RoomFanout {
     // (`generate: false` never reaches this method) and must not pend.
     // Written only when enabled, so a key-less server promises nothing.
     if (summarizer.enabled) {
-      const threadMap = (room.ydoc.getMap('threads') as Y.Map<Y.Map<unknown>>).get(threadId);
+      const threadMap = (doc.ydoc.getMap('threads') as Y.Map<Y.Map<unknown>>).get(threadId);
       if (threadMap) {
-        room.ydoc.transact(() => threadMap.set('summaryPendingTs', Date.now()));
+        doc.ydoc.transact(() => threadMap.set('summaryPendingTs', Date.now()));
       }
     }
     summarizer.schedule({
-      docId: room.docId,
+      docId: doc.docId,
       threadId,
-      getThread: () => this.host.thread(room.docId, threadId),
+      getThread: () => this.host.thread(doc.docId, threadId),
       apply: (summary) => {
         // Writes into the SAME ydoc the browsers are synced to, so the new
         // lines appear on every open card without a reload.
-        setThreadSummary(room.ydoc, threadId, summary);
-        this.host.schedulePersist(room);
+        setThreadSummary(doc.ydoc, threadId, summary);
+        this.host.schedulePersist(doc);
       },
     });
   }
 
   /** Shared SSE + workspace + webhook fan-out behind fireEvent /
    *  fireSuggestionEvent. Caller stamps `event`/`seq`/`doc` into payload. */
-  broadcastToRoom(room: DocRoom, payload: WebhookPayload): void {
+  broadcastToDoc(doc: LiveDoc, payload: WebhookPayload): void {
     // ONE id per broadcast, stamped before the fan-out so every channel below
     // carries the same string. That is what lets a subscriber holding two of
     // these channels collapse the copies without having to guess from `seq`,
-    // which is per-room AND per-server-epoch and therefore repeats after any
+    // which is per-doc AND per-server-epoch and therefore repeats after any
     // restart — a guess whose wrong answer is a comment silently swallowed.
     // See event-id.ts.
     payload.eid = newEventId();
-    this.host.sse().broadcast(room.docId, payload);
+    this.host.sse().broadcast(doc.docId, payload);
     // A companion editor doc (openEditableFile) is the same FILE as its diff
     // member, opened for prose; the reviewer comments in whichever view they
     // are reading, and the agent watching the member never learned the
     // companion's id — nothing hands it back. So a companion's events ride
     // the member's own channel too. Same eid on every copy, so a watcher
     // holding both collapses them.
-    const memberId = this.host.memberOfCompanion(room.docId);
+    const memberId = this.host.memberOfCompanion(doc.docId);
     if (memberId) this.host.sse().broadcast(memberId, payload);
     // Double-broadcast on the REVIEW's channel — the `setId` a diff review or
     // folder bind stamps on each member — so an agent can watch ONE stream per
@@ -545,16 +545,16 @@ export class RoomFanout {
     // and an agent watching `ws:<workspaceId>` has no way to notice — silence
     // from a subscription you never made is indistinguishable from nobody
     // having commented. The workspace fan-out lives in server.ts's
-    // `onDocRoomEvent`, which resolves `workspace.docIds` at broadcast time;
+    // `onLiveDocEvent`, which resolves `workspace.docIds` at broadcast time;
     // doc-store.ts has no view of workspaces.
-    const attachmentId = attachmentIdOf(room.meta);
+    const attachmentId = attachmentIdOf(doc.meta);
     if (attachmentId) {
       this.host.sse().broadcast(`ws~${attachmentId}`, payload);
     }
-    if (room.webhookUrl) {
-      void this.host.webhooks().send(room.webhookUrl, payload);
+    if (doc.webhookUrl) {
+      void this.host.webhooks().send(doc.webhookUrl, payload);
     }
-    this.host.emitRoomEvent(room.docId, payload);
+    this.host.emitDocEvent(doc.docId, payload);
   }
 
   /**
@@ -565,29 +565,29 @@ export class RoomFanout {
    * is all-or-nothing), so a private key appearing in this map arrived over
    * a websocket — from a share visitor as easily as from Bryan's browser.
    * Left standing it is not merely noise: `getOrCreate` lifts private keys
-   * out of a loaded `.ydoc` as LEGACY state, and a room with no sidecar —
-   * every `ws:<id>` board room, every `task:<id>` body room, any doc never
+   * out of a loaded `.ydoc` as LEGACY state, and a doc with no sidecar —
+   * every `ws:<id>` board doc, every `task:<id>` body doc, any doc never
    * bound to a file — has nothing to outvote it. On the next load
-   * `hydrateFromDisk` would bind the room to the injected path, seed the
+   * `hydrateFromDisk` would bind the doc to the injected path, seed the
    * fragment with that file's bytes, and wire the debounced write-back.
    *
    * One-directional by construction: it can only remove keys the server
    * never writes, so its worst failure is a genuinely legacy doc that needs
    * an explicit re-bind — never a lost edit.
    */
-  private guardPrivateMeta(room: DocRoom): void {
-    const meta = room.ydoc.getMap('meta');
+  private guardPrivateMeta(doc: LiveDoc): void {
+    const meta = doc.ydoc.getMap('meta');
     meta.observe((event, tr) => {
       if (tr.origin === PRIVATE_META_GUARD_ORIGIN) return;
       const injected = Array.from(event.keysChanged).filter(
         (key) => isPrivateMetaKey(key) && meta.has(key),
       );
       if (injected.length === 0) return;
-      room.ydoc.transact(() => {
+      doc.ydoc.transact(() => {
         for (const key of injected) meta.delete(key);
       }, PRIVATE_META_GUARD_ORIGIN);
       console.error(
-        `[doc-store] ${room.docId}: dropped peer-written private meta key(s): ${injected.join(', ')}`,
+        `[doc-store] ${doc.docId}: dropped peer-written private meta key(s): ${injected.join(', ')}`,
       );
     });
   }
@@ -602,67 +602,67 @@ export class RoomFanout {
    * before this observer attaches (`wireEvents` runs after `loadFromDisk`),
    * and every server write to these keys updates it in the same call.
    */
-  private guardServerMeta(room: DocRoom): void {
-    const meta = room.ydoc.getMap('meta');
+  private guardServerMeta(doc: LiveDoc): void {
+    const meta = doc.ydoc.getMap('meta');
     meta.observe((event, tr) => {
       if (tr.origin === CONTENT_REVISION_ORIGIN || tr.origin === PRIVATE_META_GUARD_ORIGIN) return;
       const touched = SERVER_META_KEYS.filter((key) => event.keysChanged.has(key));
       if (touched.length === 0) return;
-      room.ydoc.transact(() => {
+      doc.ydoc.transact(() => {
         for (const key of touched) {
-          const want = room.meta[key];
+          const want = doc.meta[key];
           if (want === undefined) meta.delete(key);
           else meta.set(key, want);
         }
       }, PRIVATE_META_GUARD_ORIGIN);
       console.error(
-        `[doc-store] ${room.docId}: reverted peer write to server meta key(s): ${touched.join(', ')}`,
+        `[doc-store] ${doc.docId}: reverted peer write to server meta key(s): ${touched.join(', ')}`,
       );
     });
   }
 
-  wireEvents(room: DocRoom): void {
-    room.ydoc.on('update', (_update: Uint8Array, origin: unknown) => {
-      // One hook, every writer. See `DocRoom.lastContentChangeAt` for why the
+  wireEvents(doc: LiveDoc): void {
+    doc.ydoc.on('update', (_update: Uint8Array, origin: unknown) => {
+      // One hook, every writer. See `LiveDoc.lastContentChangeAt` for why the
       // three pre-existing timestamps could not be used, and
       // `isAuthoringOrigin` for what counts as somebody working and why.
-      if (isAuthoringOrigin(room, origin)) {
-        room.lastContentChangeAt = Date.now();
-        this.host.scheduleRevisionBump(room);
+      if (isAuthoringOrigin(doc, origin)) {
+        doc.lastContentChangeAt = Date.now();
+        this.host.scheduleRevisionBump(doc);
         // "The next edit resumes syncing" — see maybeRebindHome. No-op for
         // every doc that has a binding (or no pin), which is all of them
         // outside the hydration-parked state.
-        this.host.maybeRebindHome(room);
+        this.host.maybeRebindHome(doc);
       }
-      this.host.schedulePersist(room);
+      this.host.schedulePersist(doc);
     });
-    this.guardPrivateMeta(room);
-    this.guardServerMeta(room);
+    this.guardPrivateMeta(doc);
+    this.guardServerMeta(doc);
     // Code and diff docs have no prose fragment — the prose-fragment
     // auto-reanchor sweep below would find nothing and orphan every thread.
     // Run the flat-text twin instead: observe the raw `content` Y.Text and
     // re-anchor threads by snippet match. (Diff content is pinned to a
     // commit and normally never changes, but a reparse after data loss
     // re-seeds it, and the sweep re-anchors threads then.)
-    if (contentKind(room.meta.type) === 'flat') {
-      const content = room.ydoc.getText('content');
+    if (contentKind(doc.meta.type) === 'flat') {
+      const content = doc.ydoc.getText('content');
       let codeReanchorTimer: ReturnType<typeof setTimeout> | null = null;
       content.observe((_event, tr) => {
         if (tr.origin === 'agent-reanchor') return;
         if (codeReanchorTimer) clearTimeout(codeReanchorTimer);
         codeReanchorTimer = setTimeout(() => {
-          const res = prose.autoReanchorCodeDoc(room.ydoc);
+          const res = prose.autoReanchorCodeDoc(doc.ydoc);
           if (res.reanchored > 0 || res.stillOrphan > 0) {
             console.log(
-              `[doc-store] ${room.docId}: code re-anchor — ${res.reanchored} fixed, ${res.stillOrphan} orphaned`,
+              `[doc-store] ${doc.docId}: code re-anchor — ${res.reanchored} fixed, ${res.stillOrphan} orphaned`,
             );
           }
         }, REANCHOR_MS);
       });
-      const initialCode = prose.autoReanchorCodeDoc(room.ydoc);
+      const initialCode = prose.autoReanchorCodeDoc(doc.ydoc);
       if (initialCode.reanchored > 0) {
         console.log(
-          `[doc-store] ${room.docId}: on-load code re-anchored ${initialCode.reanchored} thread(s)`,
+          `[doc-store] ${doc.docId}: on-load code re-anchored ${initialCode.reanchored} thread(s)`,
         );
       }
       return;
@@ -672,19 +672,19 @@ export class RoomFanout {
     // (e.g. the user split a block or re-typed the anchored text —
     // prosemirror can destroy the original Y.XmlText during those).
     // Debounced so a burst of keystrokes only does one sweep.
-    const fragment = prose.getProseFragment(room.ydoc);
+    const fragment = prose.getProseFragment(doc.ydoc);
     let reanchorTimer: ReturnType<typeof setTimeout> | null = null;
     fragment.observeDeep((_events, tr) => {
-      // A prose transaction whose origin is one of this room's live
+      // A prose transaction whose origin is one of this doc's live
       // websockets is a person typing in the browser editor — every
       // server-side writer stamps a string origin instead. That marker is
       // what stops set_doc_content from silently rewriting over them.
       if (
         typeof tr.origin === 'object' &&
         tr.origin !== null &&
-        room.conns.has(tr.origin as FeedbackWs)
+        doc.conns.has(tr.origin as FeedbackWs)
       ) {
-        room.lastHumanEditAt = Date.now();
+        doc.lastHumanEditAt = Date.now();
       }
       // Don't re-enter on our own re-anchor writes. NOTE: 'file-watch' must
       // NOT be skipped here — a disk reparse is exactly when anchors inside a
@@ -694,25 +694,25 @@ export class RoomFanout {
       if (tr.origin === 'agent-reanchor') return;
       if (reanchorTimer) clearTimeout(reanchorTimer);
       reanchorTimer = setTimeout(() => {
-        const res = prose.autoReanchorDoc(room.ydoc);
+        const res = prose.autoReanchorDoc(doc.ydoc);
         if (res.reanchored > 0) {
-          console.log(`[doc-store] ${room.docId}: auto-reanchored ${res.reanchored} thread(s)`);
+          console.log(`[doc-store] ${doc.docId}: auto-reanchored ${res.reanchored} thread(s)`);
         }
       }, REANCHOR_MS);
     });
     // Docs seeded from disk before the heading-level fix persisted `level` as
     // a string, which makes Tiptap render every heading as <h1>. Repair them
     // on load so an existing doc doesn't need a reparse to render correctly.
-    const fixed = prose.normalizeHeadingLevels(room.ydoc);
+    const fixed = prose.normalizeHeadingLevels(doc.ydoc);
     if (fixed > 0) {
-      console.log(`[doc-store] ${room.docId}: normalized ${fixed} legacy string heading level(s)`);
+      console.log(`[doc-store] ${doc.docId}: normalized ${fixed} legacy string heading level(s)`);
     }
-    // Also sweep once on room load so threads recover after server
+    // Also sweep once on doc load so threads recover after server
     // restart even if no new edits happen.
-    const initial = prose.autoReanchorDoc(room.ydoc);
+    const initial = prose.autoReanchorDoc(doc.ydoc);
     if (initial.reanchored > 0) {
       console.log(
-        `[doc-store] ${room.docId}: on-load auto-reanchored ${initial.reanchored} thread(s)`,
+        `[doc-store] ${doc.docId}: on-load auto-reanchored ${initial.reanchored} thread(s)`,
       );
     }
   }

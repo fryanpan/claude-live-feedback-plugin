@@ -176,18 +176,18 @@ describe("a task's linked doc counts as the task moving", () => {
   });
 
   describe('which transaction origins count as somebody working', () => {
-    /** A doc room with no stamp yet, so a single write is unambiguous. */
-    async function freshRoom(docId: string): Promise<Y.Doc> {
+    /** A live doc with no stamp yet, so a single write is unambiguous. */
+    async function freshDoc(docId: string): Promise<Y.Doc> {
       const file = join(dataDir, `${docId}.md`);
       writeFileSync(file, '# Design\n');
       await jj(await post('/api/docs', { docId, type: 'markdown', sourceUrl: file }));
-      const room = handle.docStore.peek(docId);
-      expect(room, `room ${docId} should exist`).toBeTruthy();
-      return (room as { ydoc: Y.Doc }).ydoc;
+      const doc = handle.docStore.peek(docId);
+      expect(doc, `doc ${docId} should exist`).toBeTruthy();
+      return (doc as { ydoc: Y.Doc }).ydoc;
     }
 
     it('an agent write stamps the doc, server bookkeeping does not', async () => {
-      const ydoc = await freshRoom('origins-doc');
+      const ydoc = await freshDoc('origins-doc');
       // Positive control first: a plain agent-origin write must move the
       // stamp, or the negatives below would pass for the wrong reason.
       ydoc.transact(() => {
@@ -208,8 +208,8 @@ describe("a task's linked doc counts as the task moving", () => {
         'agent-reanchor',
         'task-projection',
         'private-meta-guard',
-        // An object that is not one of this room's live connections — a
-        // websocket from some other room must not author this one.
+        // An object that is not one of this doc's live connections — a
+        // websocket from some other doc must not author this one.
         { notAConnection: true },
       ];
       for (const origin of synthetic) {

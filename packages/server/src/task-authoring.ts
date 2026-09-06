@@ -269,7 +269,7 @@ export class TaskAuthoringStore {
    * literal, `renameTask`, and `noteBodyEdited`. Seven doors sit above them
    * (`create_tasks` single and batch, `promote_to_task`,
    * `import_tasks_markdown`, the board's inline rename, `rewrite_task`,
-   * and `set_doc_content` on a `task:<id>` room), and no two of them share a
+   * and `set_doc_content` on a `task:<id>` doc), and no two of them share a
    * reading — `parseTaskCreate` fronts two, promote and import build their
    * own. So a title standard enforced at any one door would be a guarantee
    * for that door's callers only, which is exactly how the `quote`
@@ -347,9 +347,9 @@ export class TaskAuthoringStore {
   /**
    * Record that somebody replaced a task's description — and, when the same
    * act gave the row a new title, retitle it here rather than in a second
-   * call. The markdown itself lives in the `task:<id>` doc room and reaches
+   * call. The markdown itself lives in the `task:<id>` live doc and reaches
    * this store as a snapshot, so this does not take it; what this provides is
-   * the half `set_doc_content` on the body room never could (a doc edit knows
+   * the half `set_doc_content` on the body doc never could (a doc edit knows
    * nothing about tasks): an attributed audit row, the body clock, the
    * preserved original, and the title.
    *
@@ -366,7 +366,7 @@ export class TaskAuthoringStore {
    * happen here, taking the pre-rewrite title and body as a required
    * parameter so a new call site could not quietly skip it. That guard worked
    * exactly as far as it could reach and no further: `set_doc_content` on the
-   * `task:<id>` room never called this method at all, so it destroyed the
+   * `task:<id>` doc never called this method at all, so it destroyed the
    * capture with nothing preserved and nothing recorded, and the caller and
    * the board both saw success. A parameter can only bind the callers who
    * call you. So `quote` now has ONE writer, sitting where the body actually
@@ -420,10 +420,10 @@ export class TaskAuthoringStore {
 
   /**
    * Refresh a task's markdown body snapshot from its live `task:<taskId>`
-   * doc room (the projection's debounced flush). The snapshot is for search
+   * live doc (the projection's debounced flush). The snapshot is for search
    * and export only — it never re-seeds a live fragment (§3.3) — so this
    * emits NO event and deliberately does not bump `updatedAt`: body typing
-   * is content activity, and the live doc room already announces it.
+   * is content activity, and the live live doc already announces it.
    */
   updateBodySnapshot(taskId: string, body: string): boolean {
     const task = this.p.getTask(taskId);
@@ -431,7 +431,7 @@ export class TaskAuthoringStore {
     if (task.body === body) return true;
     // THE CHOKE POINT for "this row's description was replaced". Every door
     // into a task body converges here — `rewrite_task`, `set_doc_content`
-    // on the `task:<id>` room, `find_and_replace` and the other prose edit
+    // on the `task:<id>` doc, `find_and_replace` and the other prose edit
     // tools aimed at that docId, and a person typing on the board — because
     // they all mutate one Yjs fragment and this is what its observer flushes.
     // So the preservation hangs here rather than on any one route: a route
@@ -441,7 +441,7 @@ export class TaskAuthoringStore {
     // Write-once, predicate `quote` empty and NOTHING else — see the note on
     // `noteBodyEdited`, which used to hold this and could not see the doorways
     // that skipped it. Placed AFTER the equality guard above so a no-op flush
-    // (the seed round-trip when a body room is first opened, measured stable)
+    // (the seed round-trip when a body doc is first opened, measured stable)
     // preserves nothing: there is no rewrite there to preserve against.
     if (task.quote === undefined) {
       const original = task.body?.trim() || task.title.trim();

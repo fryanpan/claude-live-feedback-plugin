@@ -16,9 +16,8 @@
  *
  * All fixtures are synthetic — invented names and ids throughout.
  */
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { PanelReviewItem } from '../src/board/board-detail-render.ts';
 import { type BoardTask, CHORES_ID } from '../src/board/board-model.ts';
 import {
   type ReviewItem,
@@ -36,13 +35,22 @@ import {
   homeReviewData,
   mountHomeReviewIsland,
 } from '../src/board/home-review-island.tsx';
+import { taskDetailData } from '../src/board/task-detail-island.tsx';
 import {
   type WalkthroughHandlers,
   type WalkthroughView,
   mountWalkthroughIsland,
   walkthroughData,
 } from '../src/board/walkthrough-island.tsx';
-import { BOARD_BOOT_SOURCES } from './support/board-boot-sources.ts';
+import {
+  type Booted,
+  WS,
+  boardRow,
+  bootTestBoard,
+  resetBoardServer,
+  server,
+  settle as settleBoot,
+} from './support/board-drive.ts';
 
 const NOW = 1_700_000_000_000;
 const DETAIL = 'The mockup shows one and the build ships the other. Which do we keep?';
@@ -621,45 +629,122 @@ describe('the walkthrough card: "I have a question" — asking without selecting
   });
 });
 
-// Pinned on the source (the pattern of walk-return.test.ts): the wiring is
-// read rather than driven, and the behaviour — the card leaving on Send,
-// the toast — was verified headlessly against a built client; see the PR.
-describe('board-app wires both asks to one POST and holds nothing back', () => {
-  const src = BOARD_BOOT_SOURCES.map((m) =>
-    readFileSync(join(__dirname, '..', 'src', 'board', `${m}.ts`), 'utf8'),
-  ).join('\n');
-  // The asking verbs themselves live in the review controller; the entry keeps
-  // the wiring that says which surface calls which.
-  const controller = readFileSync(
-    join(__dirname, '..', 'src', 'board', 'board-review-controller.ts'),
-    'utf8',
-  );
+// ── The boot, driven ───────────────────────────────────────────────────────
+//
+// This used to be read out of the boot's source: the two card surfaces were
+// pinned by the arrow they were declared with, and the panel's by the name of
+// the function it called. What is asserted below instead is the request each
+// surface actually put on the wire, the toast it raised, and the queue it
+// left behind — the whole of "one POST, and nothing held back", driven.
+describe('every asking surface makes the same request and lets the item go', () => {
+  /** A ticket-borne item: the only kind with an anchor to ask on. */
+  const TICKET: ReviewThreadItem = {
+    kind: 'task-review',
+    taskId: 't-1',
+    reviewItemId: 'r-1',
+    docId: '',
+    threadId: '',
+    title: 'Fit the hob',
+    ask: 'Which hob?',
+    askedBy: 'Helper',
+    since: NOW - 60_000,
+    band: 'declared',
+    review: {
+      shape: 'review',
+      headline: 'Ship the blue one',
+      detail: 'the build ships the OTHER (blue).',
+    },
+  };
+  const THREAD_PATH = '/api/docs/task%3At-1/threads';
 
-  it('the link and the pill share askOnReviewItem, which re-reads the queue after a landed write', () => {
-    expect(src).toMatch(
-      /onAskOnItem: \(item, phrase, question\) => askOnReviewItem\(item, phrase, question\)/,
-    );
-    expect(src).toMatch(
-      /onQuestionOnItem: \(item, question\) => askOnReviewItem\(item, null, question\)/,
-    );
-    expect(controller).toMatch(
-      /async function sendReviewItemQuestion[\s\S]{0,1800}showToast\(askedToast\('Asked', askedBy\)\);[\s\S]{0,400}await loadReviewItems\(\);\s*return true;/,
-    );
-    // The panel's card goes through the same POST.
-    expect(src).toMatch(
-      /onAskOnPanelItem: \(t, item, question\) => askOnPanelItem\(t, item, question\)/,
-    );
-    expect(controller).toMatch(
-      /async function askOnPanelItem[\s\S]{0,600}sendReviewItemQuestion\(reqSpec/,
+  beforeEach(() => {
+    resetBoardServer();
+    server.on(`/workspaces/${WS}/review-items`, { items: [TICKET] });
+  });
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  /** Boot into a sitting on the ticket item, and arrange for the re-read
+   *  after the write to answer the way the server would: it is the owner's
+   *  turn now, so the item is not on the queue any more. */
+  async function sitting(): Promise<{ board: Booted; view: WalkthroughView; item: ReviewItem }> {
+    const board = await bootTestBoard({
+      url: `https://board.test/workspaces/${WS}/home?walk=1`,
+      tasks: [boardRow('t-1', { title: 'Fit the hob' })],
+    });
+    const view = walkthroughData.value;
+    const item = view.queue.items[view.index];
+    if (!item) throw new Error('the sitting opened on nothing');
+    server.on(`/workspaces/${WS}/review-items`, { items: [] });
+    return { board, view, item };
+  }
+
+  const posts = () => server.calls.filter((c) => c.method === 'POST' && c.url === THREAD_PATH);
+  const toast = () => document.getElementById('board-toast')?.textContent ?? '';
+
+  it('the selection pill asks on the phrase, and the item leaves the queue', async () => {
+    const { view, item } = await sitting();
+    await view.handlers.onAskOnItem(item, { text: 'the OTHER (blue)' }, 'Which other?');
+    await settleBoot();
+    expect(posts()).toHaveLength(1);
+    expect(posts()[0]?.body).toMatchObject({
+      text: 'Which other?',
+      anchor: { kind: 'review-item', reviewItemId: 'r-1', snippet: { text: 'the OTHER (blue)' } },
+    });
+    // The re-read is what takes the item off every surface, so it has to
+    // follow the write rather than merely happen sometime.
+    const after = server.calls.slice(server.calls.findIndex((c) => c.url === THREAD_PATH));
+    expect(after.some((c) => c.url.endsWith('/review-items'))).toBe(true);
+    // Nothing held back: no card, no waiting note, and the toast is the only
+    // thing left saying where the question went.
+    expect(walkthroughData.value.queue.items).toHaveLength(0);
+    expect(document.querySelector('.board-walk-waiting')).toBeNull();
+    expect(toast()).toBe(
+      'Asked — waiting on Helper. It comes back to your queue when they revise it.',
     );
   });
 
-  it('the hold is gone: no walkHold, no holdWaitingItem, no waiting copy of the item', () => {
-    for (const text of [src, controller]) {
-      expect(text).not.toMatch(/walkHold/);
-      expect(text).not.toMatch(/holdWaitingItem/);
-      expect(text).not.toMatch(/waiting: \{ question/);
-    }
+  it('“I have a question” makes the same request, quoting the headline', async () => {
+    const { view, item } = await sitting();
+    await view.handlers.onQuestionOnItem(item, 'Which other?');
+    await settleBoot();
+    expect(posts()).toHaveLength(1);
+    expect(posts()[0]?.body).toMatchObject({
+      text: 'Which other?',
+      anchor: { kind: 'review-item', reviewItemId: 'r-1', snippet: { text: 'Ship the blue one' } },
+    });
+    expect(walkthroughData.value.queue.items).toHaveLength(0);
+  });
+
+  it('the task panel’s card goes through the same POST', async () => {
+    const { board, view } = await sitting();
+    const task = boardRow('t-1', { title: 'Fit the hob' });
+    const panelItem: PanelReviewItem = {
+      id: 'r-1',
+      source: 'task-review',
+      shape: 'review',
+      headline: 'Ship the blue one',
+      detail: 'the build ships the OTHER (blue).',
+      askedBy: 'Helper',
+      since: NOW - 60_000,
+      reviewItemId: 'r-1',
+      declared: true,
+    };
+    // The panel's handler, off the panel's own view — the walkthrough is only
+    // here because booting into it is how this board gets a queue.
+    const ask = taskDetailData.value.handlers.onAskOnPanelItem;
+    expect(ask, 'the panel wires no asking handler').toBeTruthy();
+    await ask?.(task, panelItem, 'Which other?');
+    await settleBoot();
+    expect(posts()).toHaveLength(1);
+    expect(posts()[0]?.body).toMatchObject({
+      text: 'Which other?',
+      anchor: { kind: 'review-item', reviewItemId: 'r-1', snippet: { text: 'Ship the blue one' } },
+    });
+    expect(toast()).toContain('waiting on Helper');
+    expect(view.queue.items).toHaveLength(1); // the paint that opened, untouched
+    expect(board.location.navigations).toEqual([]);
   });
 });
 

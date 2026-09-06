@@ -104,7 +104,7 @@ export function taskAskReceipt(
 
 /**
  * Where a press goes. `task:<id>` is the ticket's body-doc id — the same
- * room its comments already post to — and it is encoded as ONE path segment,
+ * doc its comments already post to — and it is encoded as ONE path segment,
  * colon and all, because the route matches `/api/docs/([^/]+)` and an
  * unescaped id would still resolve while a slash in a future id would not.
  */

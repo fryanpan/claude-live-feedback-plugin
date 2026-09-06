@@ -191,7 +191,7 @@ describe('boundFiles', () => {
     expect(redactBoundPath(ordinary)).toBe(ordinary);
   });
 
-  it('runs on the scaled room cadences, at three seconds and a minute in production', () => {
+  it('runs on the scaled doc cadences, at three seconds and a minute in production', () => {
     // The deadline is a cadence like the write-back and the poll, so it rides
     // the same `CW_TEST_TIMING_SCALE` — otherwise every test here would pay
     // three real seconds and sit two seconds under the runner's own timeout.
