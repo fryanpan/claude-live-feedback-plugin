@@ -1,6 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   readyIdleLine,
@@ -8,6 +5,7 @@ import {
   reviewItemHeldLine,
   stalledLine,
 } from '../src/nudge-line.ts';
+import { type BundleHarness, restoredWatches, startBundle } from './harness/mcp-bundle.ts';
 import { readMcpSource } from './harness/mcp-source.ts';
 
 /**
@@ -292,9 +290,7 @@ describe('the propagation clause on reviewAnsweredLine', () => {
 
 describe('the channel switch and the shipped bundle both use it', () => {
   const CLAUSE = 'walk its links as the propagation checklist';
-  const HERE = dirname(fileURLToPath(import.meta.url));
   const SRC = readMcpSource();
-  const BUNDLE = readFileSync(join(HERE, '../../plugin/mcp/index.js'), 'utf8');
 
   /** The `case 'workspace.review_answered':` arm, up to the next case. */
   const arm = (): string => {
@@ -309,16 +305,65 @@ describe('the channel switch and the shipped bundle both use it', () => {
     expect(arm()).not.toContain(CLAUSE);
   });
 
-  it('ships the guard in the artifact peers actually load', () => {
-    // Positive control first: the bundle is a real build that contains the
-    // clause at all, so "no unconditional clause" cannot be "wrong file".
-    expect(BUNDLE).toContain(CLAUSE);
-    // Both renderers guard the same way, so this literal must appear at least
-    // twice — decision-line.ts's copy and this one.
-    expect(BUNDLE.split('Array.isArray(p.links) && p.links.length > 0').length - 1).toBeGreaterThan(
-      1,
-    );
-  });
+  /**
+   * The delivery half, driven rather than grepped.
+   *
+   * It used to count occurrences of `Array.isArray(p.links) && …` in the
+   * bundle's text and require at least two — a proxy for "both renderers
+   * guard" that a minifier, a shared helper or a dead second copy would each
+   * have broken while the feature worked. What matters is that THIS event's
+   * line obeys the guard, so this pushes the frame and reads the sentence.
+   * `decision.answered`'s own copy is driven the same way in
+   * decision-line.test.ts.
+   */
+  it('ships the guard in the artifact peers actually load', async () => {
+    let h: BundleHarness | undefined;
+    try {
+      h = await startBundle((req) =>
+        req.method === 'GET' && /\/watches$/.test(req.path) ? restoredWatches('doc-1') : {},
+      );
+      await h.streamOpen();
+
+      // Positive control: an answered item that DOES annotate rows carries the
+      // clause, so an absent clause below cannot be a bundle that lost the
+      // sentence entirely.
+      h.pushFrame({
+        id: 'r:1',
+        event: 'workspace.review_answered',
+        data: {
+          event: 'workspace.review_answered',
+          eid: 'e-linked',
+          docId: 'doc-1',
+          taskId: 't-linked',
+          title: 'Rank results by recency',
+          actor: { id: 'a-someone-else', name: 'Alex' },
+          links: [{ id: 't-other' }],
+        },
+      });
+      const linked = await h.waitForChannel((c) => c.content.includes('t-linked'));
+      expect(linked.content).toContain(CLAUSE);
+
+      // The measurement. An answer recorded against a COMMENT names no row at
+      // all, and this line used to send its reader after that row's links.
+      h.pushFrame({
+        id: 'r:2',
+        event: 'workspace.review_answered',
+        data: {
+          event: 'workspace.review_answered',
+          eid: 'e-bare',
+          docId: 'doc-1',
+          taskId: 't-bare',
+          title: 'Cache the facet counts',
+          actor: { id: 'a-someone-else', name: 'Alex' },
+          links: [],
+        },
+      });
+      const bare = await h.waitForChannel((c) => c.content.includes('t-bare'));
+      expect(bare.content).not.toContain(CLAUSE);
+    } finally {
+      await h?.stop();
+    }
+  }, 60_000);
 });
 
 /**
