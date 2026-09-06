@@ -12,7 +12,11 @@
 // accident and made the file read as if the vitest run covered it.
 import { afterEach, describe, expect, it } from 'bun:test';
 import { summaryHash } from '@feedback/core';
-import { SUMMARY_PROMPT_VERSION, type StoredSummary } from '@feedback/core/summary-prompt';
+import {
+  SUMMARY_PROMPT_VERSION,
+  type StoredSummary,
+  needsCall,
+} from '@feedback/core/summary-prompt';
 import type { Thread, User } from '@feedback/core/types';
 import {
   KEYCHAIN_SERVICE,
@@ -299,6 +303,36 @@ describe('ThreadSummarizer.generate — word budget retry', () => {
     expect(out?.discussion).toBe('');
   });
 
+  /*
+   * The same production shape as the case above, one draw worse: the
+   * corrective retry comes back blank too.
+   *
+   * Storing the first answer here is what turned a bad card into a permanent
+   * one. A `discussion: ""` carries the CURRENT hash and the current prompt
+   * version, which is precisely the pair `needsCall` reads as "already done" —
+   * so no backfill, no repeat of the same state and no scheduled run asks
+   * again while the thread stands still. Store nothing and the card keeps its
+   * deterministic lines, which is where it was before the call.
+   */
+  it('stores NOTHING when the retry leaves the discussion empty too', async () => {
+    const { impl, calls } = sequencedFetch([emptyDiscussion, emptyDiscussion]);
+    const s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl });
+    const out = await s.generate(thread());
+    expect(calls).toHaveLength(2); // it did ask again, once
+    expect(out).toBeNull();
+  });
+
+  it('keeps an over-budget retry over an empty first answer', async () => {
+    // The mirror of "does not let a retry DELETE the discussion line": when it
+    // is the FIRST answer that is blank, the long-but-real retry is the one
+    // with a line on it, and a complete line beats an absent one.
+    const { impl, calls } = sequencedFetch([emptyDiscussion, over]);
+    const s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl });
+    const out = await s.generate(thread());
+    expect(calls).toHaveLength(2);
+    expect(out?.discussion).toBe(LONG);
+  });
+
   it('keeps the first answer when the retry fails outright', async () => {
     const calls: string[] = [];
     const impl = (async (_url: string, init?: RequestInit) => {
@@ -540,6 +574,58 @@ describe('ThreadSummarizer.schedule', () => {
     // And what it writes back carries the CURRENT stamp, so the same thread
     // does not come round again on the next backfill.
     expect(applied[0]?.promptVersion).toBe(SUMMARY_PROMPT_VERSION);
+  });
+
+  /*
+   * The half a `generate` test cannot reach: what the SCHEDULED path leaves
+   * BEHIND after a round that produced nothing usable.
+   *
+   * The production failure was never one bad card line — a bad line is one
+   * call away from a better one. It was that the bad line was stamped with the
+   * thread's current hash, which is the single gate deciding whether the
+   * thread is ever asked again. So this asserts the gate, not the line: after
+   * an empty-then-empty round the thread must still read as needing a call,
+   * and the next change must really spend one.
+   */
+  it('leaves the thread eligible for another call after an empty-then-empty round', async () => {
+    const blank = '{"topic":"Retry loop swallows errors","discussion":""}';
+    const good = '{"topic":"Retry loop swallows errors","discussion":"Fix underway now"}';
+    let calls = 0;
+    const impl = (async () => {
+      calls++;
+      // The first round (call + corrective retry) is blank; anything after
+      // the thread moves gets a usable answer.
+      return new Response(JSON.stringify({ content: [{ text: calls <= 2 ? blank : good }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    s = new ThreadSummarizer({ apiKey: 'k', fetchImpl: impl, debounceMs: 1 });
+    const t = thread();
+    const args = {
+      docId: 'd1',
+      threadId: 't1',
+      getThread: () => t,
+      apply: (x: StoredSummary) => {
+        t.summary = x;
+      },
+    };
+    s.schedule(args);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(calls).toBe(2); // it did send the corrective retry
+    expect(t.summary).toBeUndefined();
+    expect(needsCall(t, t.summary)).toBe(true);
+
+    // The thread moves, the way it does when someone replies.
+    t.comments.push({ id: 'c3', author: alice, text: 'Pushed the fix.', ts: 3 });
+    t.commentCount = 3;
+    t.lastActivity = 3;
+    s.schedule(args);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(calls).toBe(3);
+    expect(t.summary?.discussion).toBe('Fix underway now');
+    expect(needsCall(t, t.summary)).toBe(false);
   });
 
   it('does nothing, quietly, when generation is switched off', async () => {
