@@ -25,19 +25,32 @@
  * you had run it yourself, and the summary at the end is an index into that
  * scrollback, never a replacement for it.
  *
- * ORDER. CI's order is not this order. CI runs the suites early because its
- * steps are its own report; here the members are sorted cheapest-first, so a
- * broken `loc:audit` costs twenty seconds instead of seven minutes. What is
- * enforced is identical — parity checks the SET, not the sequence.
+ * ORDER. CI's order is not this order. CI runs the suites in jobs of their
+ * own because its steps are its own report; here the members are sorted
+ * cheapest-first, so a broken `loc:audit` costs twenty seconds instead of
+ * seven minutes. What is enforced is identical — parity checks the SET, not
+ * the sequence. The one ordering that is not cosmetic is the last three:
+ * `test:vitest` and `test:server` run UNDER coverage instrumentation and
+ * leave their lcov in `.coverage/`, and `coverage` then ratchets what they
+ * left. The suites used to run twice — once plain, once again inside the
+ * coverage step — which was half of this command's wall clock and all of
+ * CI's; each now runs once and answers both questions.
  *
- *   bun run verify                  every member, ~8 min, all failures reported
+ * PARITY ACROSS JOBS. ci.yml is four jobs now (`gates`, `client`, `server`,
+ * `coverage`) plus the note-taking slice. `--parity` reads all of them except
+ * the ones named in NON_GATE_JOBS, so a gate added to a NEW job is covered by
+ * the same check that covers a gate added to an old one — a parity check
+ * pinned to one job name would have gone quietly vacuous the moment CI was
+ * split.
+ *
+ *   bun run verify                  every member, ~4 min, all failures reported
  *   bun run verify --bail           stop at the first failure
  *   bun run verify --only lint,typecheck
  *   bun run verify --list           print the members and exit
  *   bun run verify --parity         only the CI-parity check (instant)
  *   bun run verify --base <ref>     base for the two diff-against-base gates
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -130,20 +143,45 @@ export const MEMBERS: Member[] = [
     argv: ['typecheck'],
     ci: 'typecheck',
   },
-  { id: 'test:vitest', title: 'unit + client suites', argv: ['test:vitest'], ci: 'test:vitest' },
+  // The last three are a chain: both suites run instrumented and write their
+  // lcov under .coverage/, and `coverage` reads it back instead of running
+  // the suites a second time. `--only coverage` on its own says so rather
+  // than measuring whatever an older run left behind.
+  {
+    id: 'test:vitest',
+    title: 'unit + client suites',
+    argv: [
+      'test:vitest',
+      '--coverage.enabled',
+      '--coverage.reporter=lcovonly',
+      '--coverage.reportsDirectory=.coverage/vitest',
+    ],
+    ci: 'test:vitest',
+  },
   {
     id: 'test:server',
     title: 'server suite — vitest does not run it',
-    argv: ['test:server'],
+    argv: ['test:server', '--coverage', '--coverage-dir=.coverage/server'],
     ci: 'test:server',
   },
   {
     id: 'coverage',
     title: 'per-package line coverage, ratcheted',
-    argv: ['coverage', '--list'],
+    argv: ['coverage', '--reuse', '--list'],
     ci: 'coverage',
   },
 ];
+
+/**
+ * Jobs in ci.yml that are not part of the verdict, and why. Everything else
+ * in the file is read by `--parity`, so a new job's gates are covered without
+ * anybody remembering to add its name here.
+ */
+export const NON_GATE_JOBS: Record<string, string> = {
+  'notes-eval-smoke':
+    'spends money and reaches the network, runs `continue-on-error`, and skips itself when ' +
+    'no key is configured — it reports, it does not gate.',
+};
 
 /**
  * Gates CI runs that this command cannot, each with the reason. An entry here
@@ -202,6 +240,55 @@ export function ciRunTokens(yaml: string, jobId: string): string[] {
   return tokens;
 }
 
+/**
+ * Every job id in the workflow — the two-space keys under `jobs:`.
+ *
+ * Enumerated rather than listed, so splitting the verify job into four (or
+ * forty) cannot leave a gate unscanned. A `jobs:` key that is not there at
+ * all throws: an empty set is the answer that makes parity vacuous.
+ */
+export function ciJobIds(yaml: string): string[] {
+  const lines = yaml.split('\n');
+  const start = lines.findIndex((l) => l === 'jobs:');
+  if (start === -1) throw new Error('no `jobs:` in the workflow');
+  const ids: string[] = [];
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i] ?? '';
+    if (/^\S/.test(line)) break; // a top-level key ends the jobs block
+    const m = line.match(/^ {2}([\w.-]+):\s*$/);
+    if (m?.[1]) ids.push(m[1]);
+  }
+  if (ids.length === 0) throw new Error('`jobs:` in the workflow has no jobs under it');
+  return ids;
+}
+
+/**
+ * Every `bun run` token in every job that gates a pull request.
+ *
+ * A name in NON_GATE_JOBS that no longer matches a job is drift too — the
+ * exclusion would be silently protecting nothing — so it is reported rather
+ * than ignored.
+ */
+export function ciGateTokens(
+  yaml: string,
+  excluded: Record<string, string> = NON_GATE_JOBS,
+): { tokens: string[]; problems: string[] } {
+  const ids = ciJobIds(yaml);
+  const problems = Object.keys(excluded)
+    .filter((id) => !ids.includes(id))
+    .map(
+      (id) =>
+        `NON_GATE_JOBS excuses a job \`${id}\` that ci.yml does not have.\n` +
+        '    Either the job was renamed, or the entry is stale — drop it.',
+    );
+  const tokens: string[] = [];
+  for (const id of ids) {
+    if (id in excluded) continue;
+    for (const token of ciRunTokens(yaml, id)) if (!tokens.includes(token)) tokens.push(token);
+  }
+  return { tokens, problems };
+}
+
 /** Everything that makes MEMBERS and ci.yml disagree, as printable lines. */
 export function parityProblems(members: Member[], ciTokens: string[]): string[] {
   const claimed = new Set(members.map((m) => m.ci).filter((c): c is string => c !== null));
@@ -225,12 +312,12 @@ export function parityProblems(members: Member[], ciTokens: string[]): string[] 
 
 /** The parity member, as a member: 0 when the two agree. */
 export function runParity(): number {
-  const problems = parityProblems(
-    MEMBERS,
-    ciRunTokens(readFileSync(CI_WORKFLOW, 'utf8'), 'verify'),
-  );
+  const { tokens, problems: jobProblems } = ciGateTokens(readFileSync(CI_WORKFLOW, 'utf8'));
+  const problems = [...jobProblems, ...parityProblems(MEMBERS, tokens)];
   if (problems.length === 0) {
-    console.log('✓ every gate in ci.yml is a member of `bun run verify`.');
+    console.log(
+      `✓ every gate in ci.yml (${ciJobIds(readFileSync(CI_WORKFLOW, 'utf8')).length} job(s)) is a member of \`bun run verify\`.`,
+    );
     return 0;
   }
   for (const p of problems) console.error(`  ✗ ${p}`);
@@ -309,6 +396,9 @@ function main(): void {
     for (const [token, why] of Object.entries(CI_ONLY)) {
       console.log(`\n  CI-only: bun run ${token}\n    ${why}`);
     }
+    for (const [job, why] of Object.entries(NON_GATE_JOBS)) {
+      console.log(`\n  not a gate: ci.yml job \`${job}\`\n    ${why}`);
+    }
     process.exit(0);
   }
 
@@ -321,6 +411,14 @@ function main(): void {
       console.error(`unknown member(s): ${unknown.join(', ')} — see bun run verify --list`);
       process.exit(2);
     }
+  }
+
+  // A suite in this run rewrites its lcov, so anything already in .coverage
+  // is from a previous run — and `coverage --reuse` would ratchet it without
+  // a word. Cleared here rather than by the suites, because a run of
+  // `--only coverage` is deliberately reading what a previous run left.
+  if (members.some((m) => m.id === 'test:vitest' || m.id === 'test:server')) {
+    rmSync(join(REPO_ROOT, '.coverage'), { recursive: true, force: true });
   }
 
   const needsBase = members.some((m) => m.argv.includes('{base}'));

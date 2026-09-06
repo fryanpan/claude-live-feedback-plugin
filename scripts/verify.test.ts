@@ -1,8 +1,13 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   CI_ONLY,
+  CI_WORKFLOW,
   MEMBERS,
   type Member,
+  NON_GATE_JOBS,
+  ciGateTokens,
+  ciJobIds,
   ciRunTokens,
   overallExit,
   parityProblems,
@@ -118,6 +123,60 @@ describe('ciRunTokens', () => {
   it('says so when the job is not there, rather than reporting an empty set', () => {
     // An empty list is the answer that would make parity vacuously pass.
     expect(() => ciRunTokens(workflow, 'renamed-job')).toThrow(/renamed-job/);
+  });
+});
+
+describe('ciJobIds and ciGateTokens', () => {
+  const workflow = [
+    'name: CI',
+    'on:',
+    '  pull_request:',
+    'jobs:',
+    '  gates:',
+    '    steps:',
+    '      - run: bun run lint',
+    '  client:',
+    '    strategy:',
+    '      matrix:',
+    '        shard: [1, 2]',
+    '    steps:',
+    '      - run: bun run test:vitest --shard=1/2',
+    '  paid-slice:',
+    '    steps:',
+    '      - run: bun run notes:eval --smoke',
+  ].join('\n');
+
+  it('enumerates the jobs rather than being told one name', () => {
+    // A parity check pinned to a single job goes vacuous the moment CI is
+    // split — which is exactly what this change did to it.
+    expect(ciJobIds(workflow)).toEqual(['gates', 'client', 'paid-slice']);
+  });
+
+  it('does not mistake a nested key for a job', () => {
+    expect(ciJobIds(workflow)).not.toContain('matrix');
+    expect(ciJobIds(workflow)).not.toContain('steps');
+  });
+
+  it('reads every gating job, and skips the ones with a written reason', () => {
+    const { tokens, problems } = ciGateTokens(workflow, { 'paid-slice': 'costs money' });
+    expect(tokens).toEqual(['lint', 'test:vitest']);
+    expect(problems).toEqual([]);
+  });
+
+  it('reports an exclusion for a job that is not there any more', () => {
+    // A stale excuse protects nothing, and reads like it protects something.
+    const { problems } = ciGateTokens(workflow, { 'renamed-job': 'because' });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('renamed-job');
+  });
+
+  it('throws rather than returning an empty set when there are no jobs', () => {
+    expect(() => ciJobIds('name: CI\non:\n  push:\n')).toThrow(/jobs/);
+  });
+
+  it('excuses only jobs the real workflow actually has', () => {
+    const ids = ciJobIds(readFileSync(CI_WORKFLOW, 'utf8'));
+    for (const job of Object.keys(NON_GATE_JOBS)) expect(ids).toContain(job);
   });
 });
 
