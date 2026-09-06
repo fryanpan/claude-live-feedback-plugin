@@ -699,7 +699,7 @@ describe('a restore that could not reach the server fails loudly, then recovers'
    * socket this process opened before the stop still answers 200 from the
    * DEAD instance while the child (a new process, new pool) talks to the live
    * one. Measured: the thread posted over the stale socket landed in the old
-   * server's rooms and broadcast to nobody, so the delivery assertion below
+   * server's docs and broadcast to nobody, so the delivery assertion below
    * failed while every other line passed. `127.0.0.1` keys a different pool,
    * so phase two connects fresh — the port is identical, which is what the
    * child requires.

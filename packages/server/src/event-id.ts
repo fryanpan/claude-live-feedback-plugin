@@ -1,20 +1,20 @@
 /**
  * A globally unique id for one broadcast — the thing `seq` is not.
  *
- * `room.seq` is a monotonic counter on the in-memory room, initialised to 0
+ * `doc.seq` is a monotonic counter on the in-memory doc, initialised to 0
  * by `DocStore.getOrCreate` and never written into the `.ydoc`. It separates two
  * events WITHIN one server epoch and nothing more: every restart (a deploy, a
- * `bun --watch` reload) rebuilds every room counting from 1 again, and a room
+ * `bun --watch` reload) rebuilds every doc counting from 1 again, and a doc
  * destroyed and re-created under a live server does the same. A subscriber
  * that outlives the server — the MCP child lives for a whole Claude Code
  * session, days — therefore cannot use `seq` to tell "the second copy of one
- * broadcast" from "a new comment that happens to be this room's first since
+ * broadcast" from "a new comment that happens to be this doc's first since
  * the restart". It has to guess, and both guesses are wrong somewhere:
  * suppress and a real comment is silently swallowed, forward and every
  * multi-channel delivery is doubled.
  *
  * So the server answers instead. `boot` is random per PROCESS, `n` is
- * monotonic within it, and `broadcastToRoom` stamps one id per broadcast
+ * monotonic within it, and `broadcastToDoc` stamps one id per broadcast
  * before the fan-out — so every channel carrying that broadcast carries the
  * same string, and no two broadcasts anywhere ever share one.
  *

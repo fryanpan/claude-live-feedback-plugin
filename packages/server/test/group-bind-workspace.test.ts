@@ -9,11 +9,11 @@
  * this is separate work — two different things wear the word "workspace":
  *
  *   - a GROUPING id (`meta.workspaceId`, a.k.a. `reviewId`) bundles the member
- *     docs of one folder bind or diff review. It has no doc room of its own.
+ *     docs of one folder bind or diff review. It has no live doc of its own.
  *   - a BOARD workspace is the board: goals, tasks, and a list of attached ids.
  *
  * A board's `docIds` is a list of ATTACHMENT ids, and an attachment is either
- * a doc room or a grouping — `POST /workspaces/:id/docs` has accepted both
+ * a live doc or a grouping — `POST /workspaces/:id/docs` has accepted both
  * since it was written, and the board sidebar already resolves a grouping id
  * through the workspace endpoints. So the unit that goes on the board is the
  * grouping, and its members stay off: a hundred-file review is one row, not a

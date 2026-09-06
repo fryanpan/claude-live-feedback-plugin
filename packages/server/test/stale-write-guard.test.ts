@@ -300,7 +300,7 @@ describe('DocStore.staleWriteCheck (10-minute fallback window)', () => {
   let docStore: DocStore;
 
   beforeEach(() => {
-    dataDir = mkdtempSync(join(tmpdir(), 'cw-stale-rooms-'));
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-stale-docs-'));
     docStore = new DocStore({
       dataDir,
       sse: new SseBus(),

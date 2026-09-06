@@ -71,7 +71,7 @@ export async function handleWorkspaceCreateRead(
       });
       // createWorkspace emits no event (nothing subscribes to a
       // workspace that doesn't exist yet), so the route brings the
-      // board room up itself.
+      // board doc up itself.
       taskProjection.ensureWorkspace(workspace.id);
       return j(200, { workspace });
     }

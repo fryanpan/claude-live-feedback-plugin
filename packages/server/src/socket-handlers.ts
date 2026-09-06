@@ -11,10 +11,10 @@
  *
  * ── Nothing here is snapshotted ──
  *
- * The context holds three LIVE stores, not values read out of them. A room
+ * The context holds three LIVE stores, not values read out of them. A doc
  * is looked up per frame (`docStore.get(ws.data.docId)`), because `ws.data.docId`
  * is re-resolved on every message for the reason the `/y/` upgrade documents,
- * and because a room can be created, evicted or rehydrated while a socket is
+ * and because a doc can be created, evicted or rehydrated while a socket is
  * open. The meeting relay's session map and the bot relay's token registry
  * are the same: per-connection state that must be read at call time. Hoisting
  * any of it to factory time would bind every socket this server ever opens to
@@ -42,7 +42,7 @@ import { onClose, onMessage, onOpen } from './yjs-protocol.ts';
 /** What the socket handlers read. All three are live stores, read at call
  *  time — see the note above on why none of it may be snapshotted. */
 export interface SocketHandlersContext {
-  /** Doc store. The room for a frame is looked up per frame, never held. */
+  /** Doc store. The doc for a frame is looked up per frame, never held. */
   docStore: DocStore;
   /** Live meeting sessions, keyed by socket. */
   meetingRelay: MeetingRelay;
@@ -93,7 +93,7 @@ export function createSocketHandlers(ctx: SocketHandlersContext): WebSocketHandl
   const { docStore, meetingRelay, recallRelay } = ctx;
 
   return {
-    // Yjs sync step 2 hands a fresh tab the WHOLE room state in one binary
+    // Yjs sync step 2 hands a fresh tab the WHOLE doc state in one binary
     // frame. Measured over the live board's persisted state on
     // 2026-08-29: 1,264,566 bytes, deflating to 431,733 — 2.9×, or 813 KB
     // this server stops sending on every board open, every tab, every
@@ -119,12 +119,12 @@ export function createSocketHandlers(ctx: SocketHandlersContext): WebSocketHandl
         return;
       }
       const typed = ws as unknown as FeedbackWs;
-      const room = docStore.get(typed.data.docId);
-      if (!room) {
-        ws.close(1008, 'no room');
+      const doc = docStore.get(typed.data.docId);
+      if (!doc) {
+        ws.close(1008, 'no doc');
         return;
       }
-      onOpen(room, typed);
+      onOpen(doc, typed);
     },
     message(ws, message) {
       if (ws.data.kind === 'recall') {
@@ -152,8 +152,8 @@ export function createSocketHandlers(ctx: SocketHandlersContext): WebSocketHandl
         return;
       }
       const typed = ws as unknown as FeedbackWs;
-      const room = docStore.get(typed.data.docId);
-      if (!room) return;
+      const doc = docStore.get(typed.data.docId);
+      if (!doc) return;
       let data: Uint8Array;
       if (typeof message === 'string') {
         data = new TextEncoder().encode(message);
@@ -162,7 +162,7 @@ export function createSocketHandlers(ctx: SocketHandlersContext): WebSocketHandl
         const buf = message as unknown as ArrayBufferView;
         data = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
       }
-      onMessage(room, typed, data);
+      onMessage(doc, typed, data);
     },
     close(ws) {
       if (ws.data.kind === 'recall') {

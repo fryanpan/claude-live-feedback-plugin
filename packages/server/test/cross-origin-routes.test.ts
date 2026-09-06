@@ -455,7 +455,7 @@ describe('the public share host is same-origin only', () => {
   it('POSITIVE CONTROL: a same-origin visitor socket really does sync', async () => {
     // Without this every "nothing synced" below would also pass on a socket
     // that was refused for some unrelated reason — a wrong credential, a
-    // renamed doc, a server that never serves this room at all.
+    // renamed doc, a server that never serves this doc at all.
     const prose = await syncedProse({
       ...visitorHeaders,
       'x-forwarded-proto': 'https',

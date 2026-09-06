@@ -53,12 +53,12 @@ afterEach(async () => {
   }
 });
 
-describe('shutdown flush of room save timers', () => {
+describe('shutdown flush of doc save timers', () => {
   it('SIGKILL-shaped death inside the 200ms debounce window loses the burst (the loss window is real)', () => {
     const dataDir = tempDir();
     const docStore = makeDocStore(dataDir);
-    const room = docStore.getOrCreate('burst-doc', { type: 'code' });
-    room.ydoc.getText('content').insert(0, 'burst-typed-just-before-death');
+    const doc = docStore.getOrCreate('burst-doc', { type: 'code' });
+    doc.ydoc.getText('content').insert(0, 'burst-typed-just-before-death');
     // No stop, no wait: the 200ms save timer never fires. A fresh hydrate
     // from the same dataDir must NOT see the burst — this is the positive
     // premise the SIGTERM test below differs from.
@@ -74,8 +74,8 @@ describe('shutdown flush of room save timers', () => {
     const dataDir = tempDir();
     const handle = createServer({ port: 0, dataDir });
     handles.push(handle);
-    const room = handle.docStore.getOrCreate('burst-doc', { type: 'code' });
-    room.ydoc.getText('content').insert(0, 'burst-typed-just-before-death');
+    const doc = handle.docStore.getOrCreate('burst-doc', { type: 'code' });
+    doc.ydoc.getText('content').insert(0, 'burst-typed-just-before-death');
     await handle.stop();
     const rehydrated = makeDocStore(dataDir).getOrCreate('burst-doc', { type: 'code' });
     expect(rehydrated.ydoc.getText('content').toString()).toContain(

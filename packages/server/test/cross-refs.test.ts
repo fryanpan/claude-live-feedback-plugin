@@ -188,7 +188,7 @@ describe('cross-reference routes + payload surfacing', () => {
    * A `Ref` addresses a doc, so it carries the address rather than the
    * readable name — two spellings of one doc must not surface as two docs.
    * The alias still routes: every `/api/docs/xref-notes/...` fetch below
-   * reaches this same room.
+   * reaches this same doc.
    */
   let notesId: string;
 
@@ -297,13 +297,13 @@ describe('cross-reference routes + payload surfacing', () => {
       expect((await local('/api/tasks/t-ghost/links')).status).toBe(404);
     });
 
-    it('a link change lands in the ws board room projection (no store event exists for it)', async () => {
+    it('a link change lands in the ws board doc projection (no store event exists for it)', async () => {
       const t = await mkTask({ title: 'projected links' });
       await post(`/api/tasks/${t.id}/links`, { ref: { kind: 'doc', docId: 'xref-notes' } });
 
-      const room = handle.docStore.get(`ws:${wsId}`);
-      if (!room) throw new Error('ws room missing');
-      const projected = room.ydoc.getMap('tasks').get(t.id) as { links?: Ref[] } | undefined;
+      const doc = handle.docStore.get(`ws:${wsId}`);
+      if (!doc) throw new Error('ws doc missing');
+      const projected = doc.ydoc.getMap('tasks').get(t.id) as { links?: Ref[] } | undefined;
       expect(projected?.links).toEqual([{ kind: 'doc', docId: 'xref-notes' }]);
     });
   });

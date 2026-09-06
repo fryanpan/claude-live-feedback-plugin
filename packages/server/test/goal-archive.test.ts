@@ -309,11 +309,11 @@ describe('goal archive + restore routes', () => {
       author: PERSON,
       reason: 'shipped',
     });
-    // The board renders bands off the `ws:` room's projected `goals` and
+    // The board renders bands off the `ws:` doc's projected `goals` and
     // nothing else, so an archive only the store can see is the
     // store-has-it/surface-can't-show-it bug for the field that hides it.
-    const room = handle.docStore.get(`ws:${wsId}`);
-    const goals = room?.ydoc.getMap('workspace').get('goals') as
+    const doc = handle.docStore.get(`ws:${wsId}`);
+    const goals = doc?.ydoc.getMap('workspace').get('goals') as
       | Array<{ id: string; archivedAt?: number; archivedBy?: string; archiveReason?: string }>
       | undefined;
     const band = (goals ?? []).find((g) => g.id === G.trust);

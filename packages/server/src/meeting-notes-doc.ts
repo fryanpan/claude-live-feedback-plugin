@@ -326,9 +326,9 @@ export function applyNotesUpdate(
   ledger: NotesLedger,
   opts: { dataDir?: string } = {},
 ): boolean {
-  const room = docStore.get(update.docId);
-  if (!room) return false;
-  if (contentKind(room.meta.type) !== 'prose') return false;
+  const doc = docStore.get(update.docId);
+  if (!doc) return false;
+  if (contentKind(doc.meta.type) !== 'prose') return false;
   // NO TRANSCRIPT IN THIS DOC (owner, 2026-09-03). A tick used to append the
   // meeting's own words here under `## Raw transcript`. It does not any more:
   // the notes are the shorter record a person has reviewed and edited, and
@@ -340,12 +340,12 @@ export function applyNotesUpdate(
   // words are in that sister file, which is why removing them loses nothing —
   // and why it removes only the writer's exact fingerprint and never a
   // transcript a person put there themselves.
-  const legacy = dropLegacyTranscriptSection(room.ydoc, {
+  const legacy = dropLegacyTranscriptSection(doc.ydoc, {
     boundPath: docStore.boundPathOf?.(update.docId),
     dataDir: opts.dataDir,
   });
   if (legacy === 'kept') noteLegacyKept(update.docId);
-  return mergeNotesSection(room.ydoc, update.notes, MEETING_NOTES_HEADINGS, {
+  return mergeNotesSection(doc.ydoc, update.notes, MEETING_NOTES_HEADINGS, {
     ownership: ledger.forDoc(update.docId),
     ...(update.basedOn ? { basedOn: update.basedOn } : {}),
   }).ok;
@@ -357,10 +357,10 @@ export function readNotesState(
   ids: { docId: string; meetingId: string },
   ledger: NotesLedger,
 ): NotesSectionState | null {
-  const room = docStore.get(ids.docId);
-  if (!room) return null;
-  if (contentKind(room.meta.type) !== 'prose') return null;
-  return readNotesSection(room.ydoc, MEETING_NOTES_HEADINGS, ledger.forDoc(ids.docId));
+  const doc = docStore.get(ids.docId);
+  if (!doc) return null;
+  if (contentKind(doc.meta.type) !== 'prose') return null;
+  return readNotesSection(doc.ydoc, MEETING_NOTES_HEADINGS, ledger.forDoc(ids.docId));
 }
 
 /**
@@ -384,14 +384,14 @@ export function applyNotesRelabel(
   relabel: NotesRelabel,
   ledger: NotesLedger,
 ): number {
-  const room = docStore.get(relabel.docId);
-  if (!room) return 0;
-  if (contentKind(room.meta.type) !== 'prose') return 0;
+  const doc = docStore.get(relabel.docId);
+  if (!doc) return 0;
+  if (contentKind(doc.meta.type) !== 'prose') return 0;
   // Through the reclaim wrapper, not straight at the doc: the rename edits
   // the agent's own lines in place, and the ledger has to come out the other
   // side still recognising them. See `reclaimAfterInPlaceEdit`.
   return reclaimAfterInPlaceEdit(
-    room.ydoc,
+    doc.ydoc,
     MEETING_NOTES_HEADINGS,
     ledger.forDoc(relabel.docId),
     () => {
@@ -405,9 +405,9 @@ export function applyNotesRelabel(
       // no way to reach, and including the ones it has just corrected, where
       // it finds the right text already there and does nothing.
       const swept = relabel.rewriteUntagged
-        ? relabelNotesSection(room.ydoc, relabel.from, relabel.to).replaced
+        ? relabelNotesSection(doc.ydoc, relabel.from, relabel.to).replaced
         : 0;
-      return swept + retagSpeakerInNotes(room.ydoc, relabel.label, relabel.to).replaced;
+      return swept + retagSpeakerInNotes(doc.ydoc, relabel.label, relabel.to).replaced;
     },
   );
 }
@@ -433,12 +433,12 @@ export function applyNotesCorrection(
   correction: NotesCorrection,
   ledger: NotesLedger,
 ): NotesCorrectionResult {
-  const room = docStore.get(correction.docId);
-  if (!room) return 'none';
-  if (contentKind(room.meta.type) !== 'prose') return 'none';
+  const doc = docStore.get(correction.docId);
+  if (!doc) return 'none';
+  if (contentKind(doc.meta.type) !== 'prose') return 'none';
   const ownership = ledger.forDoc(correction.docId);
-  const outcome = reclaimAfterInPlaceEdit(room.ydoc, MEETING_NOTES_HEADINGS, ownership, () =>
-    correctNotesSection(room.ydoc, MEETING_NOTES_HEADINGS, ownership, correction),
+  const outcome = reclaimAfterInPlaceEdit(doc.ydoc, MEETING_NOTES_HEADINGS, ownership, () =>
+    correctNotesSection(doc.ydoc, MEETING_NOTES_HEADINGS, ownership, correction),
   );
   if (outcome.applied === 'revised') return 'revised';
   if (outcome.applied === 'suggested') return 'suggested';
@@ -456,21 +456,21 @@ export function applyNotesReattribution(
   reattribution: NotesReattribution,
   ledger: NotesLedger,
 ): number {
-  const room = docStore.get(reattribution.docId);
-  if (!room) return 0;
-  if (contentKind(room.meta.type) !== 'prose') return 0;
+  const doc = docStore.get(reattribution.docId);
+  if (!doc) return 0;
+  if (contentKind(doc.meta.type) !== 'prose') return 0;
   const ownership = ledger.forDoc(reattribution.docId);
   // Read BEFORE the edit, for the same reason `reclaimAfterInPlaceEdit`
   // snapshots there: ownership is element AND text, and the edit changes the
   // text. Afterwards the ledger would no longer claim the very lines this is
   // allowed to touch.
-  const owned = agentOwnedElements(room.ydoc, MEETING_NOTES_HEADINGS, ownership);
+  const owned = agentOwnedElements(doc.ydoc, MEETING_NOTES_HEADINGS, ownership);
   if (owned.size === 0) return 0;
   return reclaimAfterInPlaceEdit(
-    room.ydoc,
+    doc.ydoc,
     MEETING_NOTES_HEADINGS,
     ownership,
-    () => reattributeNotesSection(room.ydoc, reattribution, owned).replaced,
+    () => reattributeNotesSection(doc.ydoc, reattribution, owned).replaced,
   );
 }
 
@@ -535,8 +535,8 @@ export function withServerNotesSinks(
     deps.ledger ??
     createNotesLedger(deps.dataDir ? createNotesLedgerStore(deps.dataDir) : undefined);
   const boardOf = (docId: string): string | undefined => {
-    const room = deps.docStore().get(docId);
-    return room?.meta.setId ?? deps.boardOf?.(docId);
+    const doc = deps.docStore().get(docId);
+    return doc?.meta.setId ?? deps.boardOf?.(docId);
   };
   // Review asks already filed this meeting, by normalized question. The
   // capture's own dedupe covers a request seen twice in one tick's window;
@@ -544,7 +544,7 @@ export function withServerNotesSinks(
   const reviewAsked = new Map<string, Set<string>>();
   // The cue lines each meeting has already spent, by turn number. One cue is
   // one ask: without this the marked overlap would show the previous tick's
-  // "Claude, can you …" again and let it license whatever the room happened
+  // "Claude, can you …" again and let it license whatever the doc happened
   // to be talking about next. Cleared with the rest of the per-meeting state
   // in onSessionStart, because turn numbering restarts with the recording.
   const spentCues = new Map<string, Set<number>>();
@@ -562,9 +562,9 @@ export function withServerNotesSinks(
       ? async ({ docId, turns, priorTurns }) => {
           // The doc's board is the capture's scope: a meeting on a doc no
           // workspace owns or holds has no board to find or create on.
-          const room = deps.docStore().get(docId);
+          const doc = deps.docStore().get(docId);
           const workspaceId = boardOf(docId);
-          if (!room || !workspaceId) return { tasks: [], docs: [] };
+          if (!doc || !workspaceId) return { tasks: [], docs: [] };
           return runTaskCapture(
             {
               board: captureBoard(),
@@ -601,7 +601,7 @@ export function withServerNotesSinks(
             {
               workspaceId,
               docId,
-              ...(room.meta.title !== undefined ? { docTitle: room.meta.title } : {}),
+              ...(doc.meta.title !== undefined ? { docTitle: doc.meta.title } : {}),
               turns,
               priorTurns,
               spentCues: spentCuesFor(docId),
@@ -655,8 +655,8 @@ export function withServerNotesSinks(
     resolveContext: (docId: string): NotesProjectContext | undefined => {
       const gathered: NotesProjectContext = {};
       try {
-        const room = deps.docStore().get(docId);
-        if (room?.meta.title) gathered.docTitle = room.meta.title;
+        const doc = deps.docStore().get(docId);
+        if (doc?.meta.title) gathered.docTitle = doc.meta.title;
         const workspaceId = boardOf(docId);
         if (workspaceId) {
           gathered.workspaceId = workspaceId;
@@ -774,7 +774,7 @@ export function withServerNotesSinks(
         return result;
       } catch (err) {
         // A correction that cannot reach the doc leaves a note reading the
-        // way the room already said it does not; letting the throw reach the
+        // way the doc already said it does not; letting the throw reach the
         // compose chain would cost the meeting its next notes, which is
         // worse. Same containment as the relabel above.
         console.error('[meeting-notes] correction failed:', err);

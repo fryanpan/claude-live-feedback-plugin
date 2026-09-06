@@ -5,12 +5,12 @@
  * arbitrates when both sides moved — plus the doc-origin-repo pin, which is only
  * ever a rule about which file a binding may write.
  *
- * It reaches the room lifecycle through `FileBindingHost` rather than
+ * It reaches the doc lifecycle through `FileBindingHost` rather than
  * holding a `DocStore`. The seam is that shape because the bindings touch a
- * room on every path — its ydoc, its persist debounce, its event fan-out —
+ * doc on every path — its ydoc, its persist debounce, its event fan-out —
  * so a line-range extraction would have had to copy those, and a copy of a
  * persist timer is a second timer. Every entry below is a THUNK onto the
- * live thing: `room` is the doc map, `schedulePersist` is the 200ms
+ * live thing: `doc` is the doc map, `schedulePersist` is the 200ms
  * `.ydoc` debounce, `noteTouched` writes the one residency clock the
  * eviction policy also reads. Nothing here owns state the lifecycle owns,
  * and nothing there owns the bindings' own timers.
@@ -48,14 +48,14 @@ import {
   verifyPathInOriginRepo,
 } from './doc-origin-repo.ts';
 import { DOC_STORE_TIMINGS } from './doc-store-timings.ts';
-import type { DocRoom } from './doc-store.ts';
+import type { LiveDoc } from './doc-store.ts';
 import { showFile } from './git-diff.ts';
 import { gitConflictHint } from './git-provenance.ts';
 import { isWithinRoot } from './safe-path.ts';
 import { boundFiles } from './slow-fs.ts';
 
 /**
- * Per-room binding to a markdown file on disk. Maintained by
+ * Per-doc binding to a markdown file on disk. Maintained by
  * `attachFile` — every prose change debounces a write of the
  * serialized fragment back to the file. First attach seeds from disk
  * if the fragment is empty.
@@ -246,28 +246,28 @@ function activationTag(): string {
 }
 
 /**
- * What the bindings need from the room lifecycle, and nothing more.
+ * What the bindings need from the doc lifecycle, and nothing more.
  *
  * Every member is a function onto the live thing rather than a copy of it:
  * the doc map, the `.ydoc` persist debounce, the residency clock, the
- * room's event fan-out. That is the whole reason this interface exists —
- * the bindings mutate a room's ydoc and re-arm its persist timer on almost
- * every path, so handing them a snapshot of a room would give two owners to
+ * doc's event fan-out. That is the whole reason this interface exists —
+ * the bindings mutate a doc's ydoc and re-arm its persist timer on almost
+ * every path, so handing them a snapshot of a doc would give two owners to
  * one timer.
  */
 export interface FileBindingHost {
   /** Where the corpus lives: `.ydoc` files, index rows, clobber backups. */
   dataDir(): string;
-  /** Resolve an id (which may be an alias) to its room, hydrating if needed. */
-  room(docId: string): DocRoom | undefined;
+  /** Resolve an id (which may be an alias) to its doc, hydrating if needed. */
+  doc(docId: string): LiveDoc | undefined;
   /** Only what is already in memory — no hydrate, no access stamp. */
-  residentRoom(docId: string): DocRoom | undefined;
+  residentDoc(docId: string): LiveDoc | undefined;
   /** The doc's persisted `.ydoc` path, whose mtime the at-rest arbitration reads. */
   ydocPath(docId: string): string;
   /** Arm the debounced `.ydoc` persist (and the sidecar and index row with it). */
-  schedulePersist(room: DocRoom): void;
+  schedulePersist(doc: LiveDoc): void;
   /** Persist the `.ydoc` now, synchronously. */
-  persistNow(room: DocRoom): void;
+  persistNow(doc: LiveDoc): void;
   /** Drop `pendingFileWrite` from the doc's index row — the row belongs to
    *  the lifecycle, the flag's meaning belongs here. */
   clearPendingFileWrite(docId: string): void;
@@ -278,8 +278,8 @@ export interface FileBindingHost {
    *  window share. */
   lastTouchedAt(docId: string): number | undefined;
   noteTouched(docId: string, at: number): void;
-  /** Fan an event out to the room's sockets, SSE and webhooks. */
-  broadcast(room: DocRoom, payload: WebhookPayload): void;
+  /** Fan an event out to the doc's sockets, SSE and webhooks. */
+  broadcast(doc: LiveDoc, payload: WebhookPayload): void;
   /** Fill in `reviewUrl` and friends; the URL machinery stays in the server layer. */
   decorate(meta: DocMeta): DocMeta;
 }
@@ -435,10 +435,10 @@ export class FileBindings {
     resolvedPath?: string;
   } {
     if (!filePath || filePath.trim() === '') return { ok: false, error: 'path-empty' };
-    const room = this.p.room(docId);
-    if (!room) return { ok: false, error: 'not-found' };
+    const doc = this.p.doc(docId);
+    if (!doc) return { ok: false, error: 'not-found' };
     const abs = filePath.startsWith('/') ? filePath : join(process.cwd(), filePath);
-    const fragment = prose.getProseFragment(room.ydoc);
+    const fragment = prose.getProseFragment(doc.ydoc);
     // Either the caller already read the file for us (hydration does, off the
     // main thread) or we read it here. Both branches go through these two so
     // no path below can reach the filesystem behind the preread's back.
@@ -473,7 +473,7 @@ export class FileBindings {
         const md = readFile();
         const blocks = prose.parseMarkdownBlocks(md);
         if (blocks.length > 0) {
-          room.ydoc.transact(() => fragment.push(blocks), 'file-seed');
+          doc.ydoc.transact(() => fragment.push(blocks), 'file-seed');
           seeded = true;
         }
       } catch (err) {
@@ -493,9 +493,9 @@ export class FileBindings {
     // sourceUrl records the bound path. It stays OUT of the CRDT (an absolute
     // host path is exactly what a share visitor must not sync) — the sidecar
     // is its home, and saveToDisk is what persists it.
-    if (!room.meta.sourceUrl) {
-      room.meta.sourceUrl = abs;
-      this.p.schedulePersist(room);
+    if (!doc.meta.sourceUrl) {
+      doc.meta.sourceUrl = abs;
+      this.p.schedulePersist(doc);
     }
 
     // Attaching a NON-empty fragment (hydrate after a restart, or a re-run
@@ -537,8 +537,8 @@ export class FileBindings {
             // Without the normalized check, a doc whose drift was
             // suppressed at hydrate hit reconcile here and reported a
             // false conflict (backup + syncError) though disk never moved.
-            if (md === prior || diskNormalized === prior) this.scheduleFileWrite(room, binding);
-            else this.reconcileFromDisk(room, binding);
+            if (md === prior || diskNormalized === prior) this.scheduleFileWrite(doc, binding);
+            else this.reconcileFromDisk(doc, binding);
           } else if (
             prior === undefined &&
             (opts.liveWins || !this.diskNewerThanState(docId, abs, pre?.mtimeMs))
@@ -554,7 +554,7 @@ export class FileBindings {
             // caller's knowledge instead of the clock — see `AttachOpts`.
             this.backupExternalVersion(docId, md);
             binding.lastWritten = md;
-            this.scheduleFileWrite(room, binding);
+            this.scheduleFileWrite(doc, binding);
           } else if (prose.parseMarkdownBlocks(md).length > 0) {
             // At rest: pull disk in as a block diff so anchors on untouched
             // blocks keep resolving. On the no-bookkeeping path we can't
@@ -564,10 +564,10 @@ export class FileBindings {
             if (prior === undefined) {
               this.backupExternalVersion(docId, currentSerialized, 'live');
             }
-            room.ydoc.transact(() => {
+            doc.ydoc.transact(() => {
               prose.applyMarkdownToFragment(fragment, md);
             }, 'file-watch');
-            prose.normalizeHeadingLevels(room.ydoc);
+            prose.normalizeHeadingLevels(doc.ydoc);
           }
         }
       } catch (err) {
@@ -579,7 +579,7 @@ export class FileBindings {
     const observer: Parameters<Y.XmlFragment['observeDeep']>[0] = (_events, tr) => {
       // Don't echo our own seed-from-disk or file-watch apply back to disk.
       if (tr.origin === 'file-seed' || tr.origin === 'file-watch') return;
-      this.scheduleFileWrite(room, binding);
+      this.scheduleFileWrite(doc, binding);
     };
     binding.observer = observer;
     fragment.observeDeep(observer);
@@ -592,7 +592,7 @@ export class FileBindings {
     }
 
     // disk → doc: poll for external edits (see armFileWatcher).
-    this.armFileWatcher(room, binding, pre);
+    this.armFileWatcher(doc, binding, pre);
 
     return { ok: true, seeded, resolvedPath: abs };
   }
@@ -626,10 +626,10 @@ export class FileBindings {
     opts: AttachOpts & { writeBack?: boolean } = {},
   ): { ok: boolean; error?: 'not-found' | 'path-empty' | 'read-failed'; resolvedPath?: string } {
     if (!filePath || filePath.trim() === '') return { ok: false, error: 'path-empty' };
-    const room = this.p.room(docId);
-    if (!room) return { ok: false, error: 'not-found' };
+    const doc = this.p.doc(docId);
+    if (!doc) return { ok: false, error: 'not-found' };
     const abs = filePath.startsWith('/') ? filePath : join(process.cwd(), filePath);
-    const content = room.ydoc.getText('content');
+    const content = doc.ydoc.getText('content');
     // See `attachFile`: hydration reads off the main thread and hands the
     // bytes down, so nothing below opens the bound path itself.
     const pre = opts.preread;
@@ -672,7 +672,7 @@ export class FileBindings {
         reassertDoc = true;
       } else {
         const origin = content.length === 0 ? 'file-seed' : 'file-watch';
-        room.ydoc.transact(() => {
+        doc.ydoc.transact(() => {
           if (content.length > 0) content.delete(0, content.length);
           if (text.length > 0) content.insert(0, text);
         }, origin);
@@ -691,10 +691,10 @@ export class FileBindings {
       lastWritten: reassertDoc ? text : content.toString(),
     };
     this.bindings.set(docId, binding);
-    if (!room.meta.sourceUrl) {
+    if (!doc.meta.sourceUrl) {
       // Sidecar, not CRDT — see attachFile above.
-      room.meta.sourceUrl = abs;
-      this.p.schedulePersist(room);
+      doc.meta.sourceUrl = abs;
+      this.p.schedulePersist(doc);
     }
     if (opts.writeBack) {
       // doc → disk: same origin-guarded debounced writer as prose docs —
@@ -702,16 +702,16 @@ export class FileBindings {
       binding.writeBack = true;
       const observer = (_event: Y.YTextEvent, tr: Y.Transaction) => {
         if (tr.origin === 'file-seed' || tr.origin === 'file-watch') return;
-        this.scheduleFileWrite(room, binding);
+        this.scheduleFileWrite(doc, binding);
       };
       binding.contentObserver = observer;
       content.observe(observer);
     }
-    this.armFileWatcher(room, binding, pre);
+    this.armFileWatcher(doc, binding, pre);
     // Doc won the attach-time arbitration above: push its state back out
     // through the normal debounced writer (which also stamps the poll
     // baseline so the reassert isn't misread as an external edit).
-    if (reassertDoc) this.scheduleFileWrite(room, binding);
+    if (reassertDoc) this.scheduleFileWrite(doc, binding);
     return { ok: true, resolvedPath: abs };
   }
 
@@ -738,9 +738,9 @@ export class FileBindings {
         placement: { placed: true; path: string } | { placed: false; reason: string };
       }
     | { ok: false; error: 'not-found' | 'invalid-home' | 'not-markdown'; detail?: string } {
-    const room = this.p.room(docId);
-    if (!room) return { ok: false, error: 'not-found' };
-    if (isBoardOwnedDoc(room.docId) || contentKind(room.meta.type) !== 'prose') {
+    const doc = this.p.doc(docId);
+    if (!doc) return { ok: false, error: 'not-found' };
+    if (isBoardOwnedDoc(doc.docId) || contentKind(doc.meta.type) !== 'prose') {
       return {
         ok: false,
         error: 'not-markdown',
@@ -762,16 +762,16 @@ export class FileBindings {
       };
     }
     const home: DocOriginRepo = { ...norm.home, repoRoot: canonRoot };
-    room.meta.docHome = home;
+    doc.meta.docHome = home;
     const placement = resolveOriginRepoCheckout(home);
     if (placement.placed) {
-      const binding = this.bindings.get(room.docId);
+      const binding = this.bindings.get(doc.docId);
       // Already bound to an EXISTING copy of the home: nothing to move. A
       // missing file still retargets — the retarget is what exports it.
       if (binding?.path === placement.absPath && existsSync(placement.absPath)) {
-        this.p.schedulePersist(room);
+        this.p.schedulePersist(doc);
       } else {
-        this.retargetHomeBinding(room, placement.absPath);
+        this.retargetHomeBinding(doc, placement.absPath);
       }
       return { ok: true, home, placement: { placed: true, path: placement.absPath } };
     }
@@ -780,17 +780,17 @@ export class FileBindings {
     // existing binding to some other path is deliberately left in the map —
     // originRepoGuard is what stops it writing, and keeping it is what lets the
     // next flush attempt re-resolve and recover.
-    this.p.schedulePersist(room);
+    this.p.schedulePersist(doc);
     return { ok: true, home, placement: { placed: false, reason: placement.reason } };
   }
 
   /** Unpin: the doc keeps whatever binding it has and goes back to being an
    *  ordinary explicit-path doc. */
   clearDocOriginRepo(docId: string): { ok: boolean } {
-    const room = this.p.room(docId);
-    if (!room || !room.meta.docHome) return { ok: false };
-    room.meta.docHome = undefined;
-    this.p.schedulePersist(room);
+    const doc = this.p.doc(docId);
+    if (!doc || !doc.meta.docHome) return { ok: false };
+    doc.meta.docHome = undefined;
+    this.p.schedulePersist(doc);
     return { ok: true };
   }
 
@@ -802,11 +802,11 @@ export class FileBindings {
         boundPath?: string;
       }
     | undefined {
-    const room = this.p.room(docId);
-    const home = room?.meta.docHome;
-    if (!room || !home) return undefined;
+    const doc = this.p.doc(docId);
+    const home = doc?.meta.docHome;
+    if (!doc || !home) return undefined;
     const placement = resolveOriginRepoCheckout(home);
-    const boundPath = this.bindings.get(room.docId)?.path;
+    const boundPath = this.bindings.get(doc.docId)?.path;
     return {
       home,
       placement: placement.placed
@@ -824,14 +824,14 @@ export class FileBindings {
    * is dropped whole and the attach runs the same mtime arbitration a
    * restart does (losing side backed up, never silently discarded).
    */
-  retargetHomeBinding(room: DocRoom, absPath: string, opts: AttachOpts = {}): void {
-    const docId = room.docId;
+  retargetHomeBinding(doc: LiveDoc, absPath: string, opts: AttachOpts = {}): void {
+    const docId = doc.docId;
     const old = this.bindings.get(docId);
     if (old) {
       if (old.writeTimer) clearTimeout(old.writeTimer);
       if (old.readTimer) clearTimeout(old.readTimer);
       old.pollArmed = false;
-      if (old.observer) prose.getProseFragment(room.ydoc).unobserveDeep(old.observer);
+      if (old.observer) prose.getProseFragment(doc.ydoc).unobserveDeep(old.observer);
       this.bindings.delete(docId);
     }
     // A branch whose checkout holds no copy yet: the pin (or retarget) IS
@@ -845,7 +845,7 @@ export class FileBindings {
     const absent = opts.preread ? !opts.preread.exists : !existsSync(absPath);
     let attachOpts = opts;
     if (absent) {
-      const md = prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
+      const md = prose.serializeFragmentToMarkdown(prose.getProseFragment(doc.ydoc));
       try {
         mkdirSync(dirname(absPath), { recursive: true });
         const tmp = `${absPath}.cw-export~`;
@@ -861,9 +861,9 @@ export class FileBindings {
       }
     }
     // attachFile only records sourceUrl when absent; a retarget must repoint.
-    room.meta.sourceUrl = absPath;
+    doc.meta.sourceUrl = absPath;
     this.attachFile(docId, absPath, attachOpts);
-    this.p.schedulePersist(room);
+    this.p.schedulePersist(doc);
     console.log(`[doc-store] ${docId}: home binding now at ${absPath}`);
   }
 
@@ -875,16 +875,16 @@ export class FileBindings {
    * hook the park message's promise ("check the branch out and the next
    * edit or reparse resumes syncing") held only for docs parked while LIVE;
    * a doc parked at hydrate stayed parked until a re-pin or restart. Called
-   * from the room's update hook (throttled) and from reparseFromDisk
+   * from the doc's update hook (throttled) and from reparseFromDisk
    * (forced). Bound docs return immediately — originRepoGuard owns them.
    */
-  maybeRebindHome(room: DocRoom, opts?: { force?: boolean }): void {
-    const home = room.meta.docHome;
-    if (!home || this.bindings.has(room.docId)) return;
-    if (isBoardOwnedDoc(room.docId) || contentKind(room.meta.type) !== 'prose') return;
+  maybeRebindHome(doc: LiveDoc, opts?: { force?: boolean }): void {
+    const home = doc.meta.docHome;
+    if (!home || this.bindings.has(doc.docId)) return;
+    if (isBoardOwnedDoc(doc.docId) || contentKind(doc.meta.type) !== 'prose') return;
     const now = Date.now();
-    if (!opts?.force && now - (this.homeRebindAttemptAt.get(room.docId) ?? 0) < 1000) return;
-    this.homeRebindAttemptAt.set(room.docId, now);
+    if (!opts?.force && now - (this.homeRebindAttemptAt.get(doc.docId) ?? 0) < 1000) return;
+    this.homeRebindAttemptAt.set(doc.docId, now);
     const placement = resolveOriginRepoCheckout(home);
     if (!placement.placed) return;
     // Persist BEFORE attaching so the .ydoc the attach's at-rest arbitration
@@ -894,8 +894,8 @@ export class FileBindings {
     // `liveWins` says so instead of letting a clock tie decide (see
     // `AttachOpts`). A forced rebind (reparse) is the caller declaring disk
     // the winner, and the reparse that follows reads disk in regardless.
-    this.p.persistNow(room);
-    this.retargetHomeBinding(room, placement.absPath, { liveWins: !opts?.force });
+    this.p.persistNow(doc);
+    this.retargetHomeBinding(doc, placement.absPath, { liveWins: !opts?.force });
   }
 
   /**
@@ -914,8 +914,8 @@ export class FileBindings {
    * 'parked'     the home resolves nowhere; nothing was read or written,
    *              and a syncError names why and how to resume.
    */
-  private originRepoGuard(room: DocRoom, binding: FileBinding): 'ok' | 'retargeted' | 'parked' {
-    const home = room.meta.docHome;
+  private originRepoGuard(doc: LiveDoc, binding: FileBinding): 'ok' | 'retargeted' | 'parked' {
+    const home = doc.meta.docHome;
     if (!home) return 'ok';
     if (verifyPathInOriginRepo(binding.path, home) === 'ok') return 'ok';
     const placement = resolveOriginRepoCheckout(home);
@@ -924,12 +924,12 @@ export class FileBindings {
       // repo under relPath can split the two): writing there is what the
       // home declares, so treat it as placed rather than retarget-looping.
       if (placement.absPath === binding.path) return 'ok';
-      this.retargetHomeBinding(room, placement.absPath);
-      const next = this.bindings.get(room.docId);
+      this.retargetHomeBinding(doc, placement.absPath);
+      const next = this.bindings.get(doc.docId);
       // Re-arm a flush on the NEW binding: its no-op pass is what clears the
       // pending-write bookkeeping the flush this guard interrupted was
       // carrying.
-      if (next) this.scheduleFileWrite(room, next);
+      if (next) this.scheduleFileWrite(doc, next);
       return 'retargeted';
     }
     const message =
@@ -946,7 +946,7 @@ export class FileBindings {
             'in the workspace. Check the branch out in some worktree (git worktree add <path> ' +
             `"${home.branch}") and the next edit or reparse resumes syncing there.`;
     if (binding.lastSyncError?.message !== message) {
-      this.recordSyncError(room, binding, message);
+      this.recordSyncError(doc, binding, message);
     }
     return 'parked';
   }
@@ -970,7 +970,7 @@ export class FileBindings {
    * which visits active docs every tick and idle docs on a budget. Same
    * mechanism, same immunity, a constant number of timers.
    */
-  private armFileWatcher(_room: DocRoom, binding: FileBinding, preread?: PrereadFile): void {
+  private armFileWatcher(_doc: LiveDoc, binding: FileBinding, preread?: PrereadFile): void {
     binding.pollArmed = false;
     // A preread already paid for the stat on the thread pool. Re-stat'ing
     // here would put the blocking syscall back on the main thread and undo
@@ -1008,7 +1008,7 @@ export class FileBindings {
    *
    * "Looking at" is one of three things, all of them pushed to us rather
    * than polled for:
-   *   - a live websocket on the room (someone has the editor open),
+   *   - a live websocket on the doc (someone has the editor open),
    *   - a write-back or reconcile still inside its debounce window, or
    *   - an access within the last `FILE_POLL_ACTIVE_MS` — any `get` /
    *     `getOrCreate`, which is every REST read, every MCP edit tool, and the
@@ -1025,8 +1025,8 @@ export class FileBindings {
   private bindingIsActive(docId: string, binding: FileBinding, now: number): boolean {
     if (!binding.pollArmed) return false;
     if (binding.writeTimer || binding.readTimer) return true;
-    const room = this.p.residentRoom(docId);
-    if (room && room.conns.size > 0) return true;
+    const doc = this.p.residentDoc(docId);
+    if (doc && doc.conns.size > 0) return true;
     const touched = this.p.lastTouchedAt(docId);
     return touched !== undefined && now - touched < FILE_POLL_ACTIVE_MS;
   }
@@ -1037,7 +1037,7 @@ export class FileBindings {
    * on-access edge check run byte-identical logic.
    */
   private pollBinding(docId: string, binding: FileBinding): void {
-    if (!this.p.residentRoom(docId)) return;
+    if (!this.p.residentDoc(docId)) return;
     // One stat, and it runs on the thread pool. The sweep visits every bound
     // file, so a single path whose provider has stopped answering used to be
     // enough to park the event loop for the whole server — see slow-fs. A
@@ -1062,8 +1062,8 @@ export class FileBindings {
    * the stat can be awaited; the decisions below are unchanged.
    */
   private applyPolledMtime(docId: string, binding: FileBinding, mtimeMs: number): void {
-    const room = this.p.residentRoom(docId);
-    if (!room) return;
+    const doc = this.p.residentDoc(docId);
+    if (!doc) return;
     // Our own write-back is on the pool. Its rename has possibly landed and
     // its `lastMtimeMs` certainly has not — that is recorded in the callback
     // — so the mtime in hand can be OUR bytes reading as an external edit,
@@ -1112,7 +1112,7 @@ export class FileBindings {
         // that write must still look like a change worth reading.
         binding.lastMtimeMs = res.exists ? res.mtimeMs : undefined;
         binding.pendingMtimeMs = undefined;
-        this.reconcileFromDisk(room, binding, res);
+        this.reconcileFromDisk(doc, binding, res);
       });
     }, READ_DEBOUNCE_MS);
   }
@@ -1217,21 +1217,21 @@ export class FileBindings {
    * unchanged.
    */
   reparseFromDisk(docId: string): { ok: boolean; error?: 'not-found' | 'no-binding' | 'missing' } {
-    const room = this.p.room(docId);
-    if (!room) return { ok: false, error: 'not-found' };
-    this.touchDoc(room.docId);
+    const doc = this.p.doc(docId);
+    if (!doc) return { ok: false, error: 'not-found' };
+    this.touchDoc(doc.docId);
     // PINNED diff docs have no file binding — their content is pinned to a
     // commit. Recover by re-reading the file at the target hash from the
     // repo. (Working-tree diff docs have a live binding and fall through to
     // the normal flat-text path below.)
-    if (room.meta.type === 'diff' && room.meta.diffTarget) {
-      const { workspaceRoot, diffTarget, relPath, diffStatus } = room.meta;
+    if (doc.meta.type === 'diff' && doc.meta.diffTarget) {
+      const { workspaceRoot, diffTarget, relPath, diffStatus } = doc.meta;
       if (!workspaceRoot || !diffTarget || !relPath) return { ok: false, error: 'no-binding' };
       if (diffStatus === 'deleted') return { ok: true };
       const text = showFile(workspaceRoot, diffTarget, relPath);
       if (text === null) return { ok: false, error: 'missing' };
-      const content = room.ydoc.getText('content');
-      room.ydoc.transact(() => {
+      const content = doc.ydoc.getText('content');
+      doc.ydoc.transact(() => {
         content.delete(0, content.length);
         content.insert(0, text);
       }, 'file-watch');
@@ -1243,14 +1243,10 @@ export class FileBindings {
     // straight into the live doc, the exact incident originRepoGuard closes on
     // the poll path — and a doc parked at hydrate has no binding at all,
     // with reparse documented as one of its two recovery verbs.
-    if (
-      room.meta.docHome &&
-      !isBoardOwnedDoc(room.docId) &&
-      contentKind(room.meta.type) === 'prose'
-    ) {
+    if (doc.meta.docHome && !isBoardOwnedDoc(doc.docId) && contentKind(doc.meta.type) === 'prose') {
       const bound = this.bindings.get(docId);
-      if (!bound) this.maybeRebindHome(room, { force: true });
-      else if (this.originRepoGuard(room, bound) === 'parked')
+      if (!bound) this.maybeRebindHome(doc, { force: true });
+      else if (this.originRepoGuard(doc, bound) === 'parked')
         return { ok: false, error: 'missing' };
     }
     const binding = this.bindings.get(docId);
@@ -1273,9 +1269,9 @@ export class FileBindings {
     } catch {
       return { ok: false, error: 'missing' };
     }
-    if (contentKind(room.meta.type) === 'flat') {
-      const content = room.ydoc.getText('content');
-      room.ydoc.transact(() => {
+    if (contentKind(doc.meta.type) === 'flat') {
+      const content = doc.ydoc.getText('content');
+      doc.ydoc.transact(() => {
         content.delete(0, content.length);
         content.insert(0, md);
       }, 'file-watch');
@@ -1284,8 +1280,8 @@ export class FileBindings {
       return { ok: true };
     }
     if (prose.parseMarkdownBlocks(md).length === 0) return { ok: false, error: 'missing' };
-    const fragment = prose.getProseFragment(room.ydoc);
-    room.ydoc.transact(() => {
+    const fragment = prose.getProseFragment(doc.ydoc);
+    doc.ydoc.transact(() => {
       // Block-level diff, not delete-all + push: blocks the rewrite didn't
       // touch keep their Y.XmlText identity, so their thread anchors keep
       // resolving instead of every thread in the doc orphaning.
@@ -1296,7 +1292,7 @@ export class FileBindings {
     // serializes to the same `## …`) is correctly seen as unchanged and kept.
     // reparse is the documented recovery tool, so repair those here — without
     // it, force-pulling a legacy doc still left its headings rendering as h1.
-    prose.normalizeHeadingLevels(room.ydoc);
+    prose.normalizeHeadingLevels(doc.ydoc);
     // Serializer-space, not raw disk bytes — see attachFile (RC1).
     binding.lastWritten = prose.serializeFragmentToMarkdown(fragment);
     binding.lastSyncError = undefined;
@@ -1310,7 +1306,7 @@ export class FileBindings {
    * observer knows not to re-flush (which would bounce back here).
    */
   private reconcileFromDisk(
-    room: DocRoom,
+    doc: LiveDoc,
     binding: FileBinding,
     preread?: PrereadFile,
   ): 'in-sync' | 'catch-up' | 'apply' | 'conflict' | 'missing' {
@@ -1318,7 +1314,7 @@ export class FileBindings {
     // pinned doc's old path rewrites the file, the poll sees an mtime change,
     // and the OTHER branch's copy gets applied into the live doc — the read
     // half of the same incident the write half guards against.
-    if (this.originRepoGuard(room, binding) !== 'ok') return 'missing';
+    if (this.originRepoGuard(doc, binding) !== 'ok') return 'missing';
     let md: string;
     if (preread) {
       if (!preread.exists) return 'missing';
@@ -1343,8 +1339,8 @@ export class FileBindings {
     // so 'conflict' is impossible for them; editable (writeBack) bindings
     // get the same keep-live/backup/reassert arm the prose path has — a
     // blind replace here would eat the reviewer's in-flight keystrokes.
-    if (contentKind(room.meta.type) === 'flat') {
-      const content = room.ydoc.getText('content');
+    if (contentKind(doc.meta.type) === 'flat') {
+      const content = doc.ydoc.getText('content');
       const current = content.toString();
       const decision = decideReconcile({
         disk: md,
@@ -1357,10 +1353,10 @@ export class FileBindings {
         return decision;
       }
       if (decision === 'conflict' && binding.writeBack) {
-        this.recordConflictReassert(room, binding, md);
+        this.recordConflictReassert(doc, binding, md);
         return decision;
       }
-      room.ydoc.transact(() => {
+      doc.ydoc.transact(() => {
         content.delete(0, content.length);
         content.insert(0, md);
       }, 'file-watch');
@@ -1368,7 +1364,7 @@ export class FileBindings {
       binding.lastSyncError = undefined;
       return decision;
     }
-    const fragment = prose.getProseFragment(room.ydoc);
+    const fragment = prose.getProseFragment(doc.ydoc);
     const currentSerialized = prose.serializeFragmentToMarkdown(fragment);
     const decision = decideReconcile({
       disk: md,
@@ -1401,7 +1397,7 @@ export class FileBindings {
         // Disk holds a formatting-variant of our LAST write — no semantic
         // external change, so the un-flushed live edits are not in
         // conflict. Re-arm the flush; the pending write carries them out.
-        this.scheduleFileWrite(room, binding);
+        this.scheduleFileWrite(doc, binding);
         return 'catch-up';
       }
       // An external write collided with un-flushed live edits. A blind
@@ -1411,7 +1407,7 @@ export class FileBindings {
       // BUT the reassert overwrites the external version on disk — so back it
       // up first, or "recoverable with reparse_from_disk" is a lie (disk
       // would already hold our reassert by the time anyone reparses).
-      this.recordConflictReassert(room, binding, md);
+      this.recordConflictReassert(doc, binding, md);
       return decision;
     }
     // decision === 'apply' — disk changed externally and the live doc is clean.
@@ -1424,20 +1420,20 @@ export class FileBindings {
       // getDoc can report WHY it's stale. The fragment is left untouched
       // (we never started the transact), so the next edit retries cleanly.
       const message = err instanceof Error ? err.message : String(err);
-      this.recordSyncError(room, binding, `parse failed: ${message}`);
-      console.error(`[doc-store] ${room.docId}: disk→doc parse failed for ${binding.path}:`, err);
+      this.recordSyncError(doc, binding, `parse failed: ${message}`);
+      console.error(`[doc-store] ${doc.docId}: disk→doc parse failed for ${binding.path}:`, err);
       return decision;
     }
     if (blocks.length === 0) {
       // Don't wipe to empty on a parse that produced nothing — but DON'T
       // do it silently either (the old behavior). Surface it.
       this.recordSyncError(
-        room,
+        doc,
         binding,
         'disk content parsed to zero blocks; live doc left unchanged',
       );
       console.warn(
-        `[doc-store] ${room.docId}: disk→doc reconcile yielded 0 blocks from ${binding.path}; keeping prior state`,
+        `[doc-store] ${doc.docId}: disk→doc reconcile yielded 0 blocks from ${binding.path}; keeping prior state`,
       );
       return decision;
     }
@@ -1453,7 +1449,7 @@ export class FileBindings {
     // pending sids so the drop can be recorded below (syncError pattern; a
     // snippet-match re-anchor sweep for suggestions is out of scope for v1).
     const sidsBefore = new Set(suggestOps.scanSuggestions(fragment).keys());
-    room.ydoc.transact(() => {
+    doc.ydoc.transact(() => {
       prose.applyMarkdownToFragment(fragment, md);
     }, 'file-watch');
     const sidsAfter = new Set(suggestOps.scanSuggestions(fragment).keys());
@@ -1461,7 +1457,7 @@ export class FileBindings {
     // Same as reparseFromDisk: a block whose only defect is a legacy string
     // heading level serializes identically, so the diff keeps it and the
     // attribute has to be repaired separately. Idempotent and cheap.
-    prose.normalizeHeadingLevels(room.ydoc);
+    prose.normalizeHeadingLevels(doc.ydoc);
     // Serializer-space, NOT the raw disk bytes (RC1): parse→serialize is not
     // byte-identity, so storing `md` here left `currentSerialized ≠
     // lastWritten` forever after — and the NEXT external edit was misjudged
@@ -1473,23 +1469,23 @@ export class FileBindings {
       // dropped — record which, so agents/UI can report the loss instead of
       // the suggestions just vanishing. Cleared by the next clean reconcile.
       this.recordSyncError(
-        room,
+        doc,
         binding,
         `external edit dropped pending suggestion(s): ${droppedSids.join(', ')}`,
       );
       console.warn(
-        `[doc-store] ${room.docId}: external edit to ${binding.path} dropped suggestion(s) ${droppedSids.join(', ')}`,
+        `[doc-store] ${doc.docId}: external edit to ${binding.path} dropped suggestion(s) ${droppedSids.join(', ')}`,
       );
     } else {
       binding.lastSyncError = undefined;
     }
     console.log(
-      `[doc-store] ${room.docId}: applied external edit from ${binding.path} (${blocks.length} blocks)`,
+      `[doc-store] ${doc.docId}: applied external edit from ${binding.path} (${blocks.length} blocks)`,
     );
     return decision;
   }
 
-  private scheduleFileWrite(room: DocRoom, binding: FileBinding): void {
+  private scheduleFileWrite(doc: LiveDoc, binding: FileBinding): void {
     // A pending flush makes the binding active (see `bindingIsActive`), so the
     // sweep must be running to see it — it may have stopped itself while the
     // doc was idle.
@@ -1497,7 +1493,7 @@ export class FileBindings {
     if (binding.writeTimer) clearTimeout(binding.writeTimer);
     binding.writeTimer = setTimeout(() => {
       binding.writeTimer = null;
-      this.writeBoundFileNow(room, binding);
+      this.writeBoundFileNow(doc, binding);
     }, WRITE_BACK_MS);
   }
 
@@ -1517,7 +1513,7 @@ export class FileBindings {
    * stop the whole thing answering.
    */
   private writeBoundFileNow(
-    room: DocRoom,
+    doc: LiveDoc,
     binding: FileBinding,
     how: 'pool' | 'sync' = 'pool',
   ): void {
@@ -1527,7 +1523,7 @@ export class FileBindings {
       // current". A retarget already carried this flush's content out (the
       // export) or re-armed one on the new binding; parked means the bytes
       // stay in the live doc.
-      if (this.originRepoGuard(room, binding) !== 'ok') return;
+      if (this.originRepoGuard(doc, binding) !== 'ok') return;
       // Guard (RC2a): the poll has already SEEN an external change and is
       // holding it behind the read debounce. It advanced `lastMtimeMs` the
       // instant it saw the change, so the mtime guard below now compares disk
@@ -1547,7 +1543,7 @@ export class FileBindings {
         // 'in-sync' means the bytes never actually changed — an mtime touch,
         // or a formatting-variant of our own last write. This flush's content
         // still has to reach disk, so fall through instead of dropping it.
-        if (this.reconcileFromDisk(room, binding) !== 'in-sync') return;
+        if (this.reconcileFromDisk(doc, binding) !== 'in-sync') return;
       }
       // Guard (RC2b): if disk moved since we last read or wrote it, we'd be
       // overwriting bytes we have never seen — the poll just hasn't caught
@@ -1562,19 +1558,19 @@ export class FileBindings {
           const mtimeMs = statSync(binding.path).mtimeMs;
           if (mtimeMs !== binding.lastMtimeMs) {
             binding.lastMtimeMs = mtimeMs;
-            this.reconcileFromDisk(room, binding);
+            this.reconcileFromDisk(doc, binding);
             return;
           }
         } catch {}
       }
       const md =
-        contentKind(room.meta.type) === 'flat'
-          ? room.ydoc.getText('content').toString()
-          : prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
+        contentKind(doc.meta.type) === 'flat'
+          ? doc.ydoc.getText('content').toString()
+          : prose.serializeFragmentToMarkdown(prose.getProseFragment(doc.ydoc));
       if (md === binding.lastWritten) {
         // Nothing to write means nothing to reassert after a restart either.
-        this.failedWrites.delete(room.docId);
-        this.p.clearPendingFileWrite(room.docId);
+        this.failedWrites.delete(doc.docId);
+        this.p.clearPendingFileWrite(doc.docId);
         return;
       }
       // Atomic: write-temp-then-rename, so a crash mid-write can't leave
@@ -1588,7 +1584,7 @@ export class FileBindings {
         // would be the newer content. Re-arm instead: the debounce that
         // brought us here will bring us back with whatever the doc says then.
         if (binding.writeInFlight) {
-          this.scheduleFileWrite(room, binding);
+          this.scheduleFileWrite(doc, binding);
           return;
         }
         binding.writeInFlight = true;
@@ -1599,7 +1595,7 @@ export class FileBindings {
         void boundFiles
           .write(binding.path, md)
           .then((res) => {
-            if (this.bindings.get(room.docId) !== binding) return;
+            if (this.bindings.get(doc.docId) !== binding) return;
             // A synchronous flush ran while this write was still on the pool.
             // Both renames target the same file and the order is the pool's
             // to choose, so disk may hold either version and we cannot say
@@ -1609,19 +1605,19 @@ export class FileBindings {
             // the `.ydoc` holds the newer content either way, and a restart
             // puts it back on disk.
             if (binding.writeSeq !== seq) {
-              this.failedWrites.add(room.docId);
+              this.failedWrites.add(doc.docId);
               return;
             }
             if (res.status !== 'ok') {
-              this.failedWrites.add(room.docId);
+              this.failedWrites.add(doc.docId);
               return;
             }
             binding.lastWritten = md;
             // Record our own write's mtime so the poll doesn't treat the
             // write-back as an external edit and schedule a redundant reconcile.
             if (res.exists) binding.lastMtimeMs = res.mtimeMs;
-            this.failedWrites.delete(room.docId);
-            this.p.clearPendingFileWrite(room.docId);
+            this.failedWrites.delete(doc.docId);
+            this.p.clearPendingFileWrite(doc.docId);
           })
           .finally(() => {
             // Always reached, and the flag's correctness depends on it: a
@@ -1650,7 +1646,7 @@ export class FileBindings {
       // check alone cannot see it — a merely slow file reaches the sync
       // write with nothing to stop it.
       if (boundFiles.quarantined(binding.path) || boundFiles.busy()) {
-        this.failedWrites.add(room.docId);
+        this.failedWrites.add(doc.docId);
         return;
       }
       // Take the generation before writing: a pool write already on the
@@ -1678,13 +1674,13 @@ export class FileBindings {
       // The edit is on disk now, so a restart has nothing to repair. Note
       // this is NOT in a `finally`: a write that THREW must keep the flag,
       // because that is exactly the doc a restart still has to reassert.
-      this.failedWrites.delete(room.docId);
-      this.p.clearPendingFileWrite(room.docId);
+      this.failedWrites.delete(doc.docId);
+      this.p.clearPendingFileWrite(doc.docId);
     } catch (err) {
       // Sticky, because the caller cannot see this: the throw is swallowed
       // here and the write timer is already cleared, so nothing downstream
       // can tell a failed write from a finished one.
-      this.failedWrites.add(room.docId);
+      this.failedWrites.add(doc.docId);
       console.error(`[doc-store] file write failed for ${binding.path}:`, err);
     }
   }
@@ -1705,11 +1701,11 @@ export class FileBindings {
    * happened to look, an unexplained dirty working tree. The provenance check
    * is advisory only: it never changes which side wins.
    */
-  private recordConflictReassert(room: DocRoom, binding: FileBinding, external: string): void {
-    const backupPath = this.backupExternalVersion(room.docId, external);
+  private recordConflictReassert(doc: LiveDoc, binding: FileBinding, external: string): void {
+    const backupPath = this.backupExternalVersion(doc.docId, external);
     const gitHint = gitConflictHint(binding.path, external);
     this.recordSyncError(
-      room,
+      doc,
       binding,
       'external file change collided with un-flushed live edits; kept live edits and reasserted them to disk. ' +
         (backupPath
@@ -1719,11 +1715,11 @@ export class FileBindings {
       backupPath,
     );
     console.warn(
-      `[doc-store] ${room.docId}: disk↔doc conflict for ${binding.path}; kept live edits, reasserting to disk` +
+      `[doc-store] ${doc.docId}: disk↔doc conflict for ${binding.path}; kept live edits, reasserting to disk` +
         (backupPath ? ` (external version backed up to ${backupPath})` : '') +
         (gitHint ? ' — the overwritten bytes came from git, not an editor save' : ''),
     );
-    this.scheduleFileWrite(room, binding);
+    this.scheduleFileWrite(doc, binding);
   }
 
   /**
@@ -1740,24 +1736,24 @@ export class FileBindings {
    * where the watchers already are (proposed on a board ticket, 2026-08).
    */
   private recordSyncError(
-    room: DocRoom,
+    doc: LiveDoc,
     binding: FileBinding,
     message: string,
     backupPath?: string | null,
   ): void {
     const at = Date.now();
     binding.lastSyncError = { message, at };
-    room.seq++;
+    doc.seq++;
     const decorate = (m: DocMeta) => this.p.decorate(m);
-    this.p.broadcast(room, {
+    this.p.broadcast(doc, {
       event: 'doc.sync_error',
-      docId: room.docId,
-      doc: decorate(room.meta),
-      path: room.meta.relPath ?? binding.path,
+      docId: doc.docId,
+      doc: decorate(doc.meta),
+      path: doc.meta.relPath ?? binding.path,
       ...(backupPath ? { backupPath } : {}),
       message,
       at,
-      seq: room.seq,
+      seq: doc.seq,
     });
   }
 
@@ -1819,12 +1815,12 @@ export class FileBindings {
   reconcileNow(
     docId: string,
   ): 'in-sync' | 'catch-up' | 'apply' | 'conflict' | 'no-binding' | 'missing' {
-    const room = this.p.room(docId);
+    const doc = this.p.doc(docId);
     // Every keyed lookup below takes the RESOLVED id: `docId` may be an
-    // alias, which resolves to a room but keys no binding and no clock.
-    const binding = room ? this.bindings.get(room.docId) : undefined;
-    if (!room || !binding) return 'no-binding';
-    this.touchDoc(room.docId);
+    // alias, which resolves to a doc but keys no binding and no clock.
+    const binding = doc ? this.bindings.get(doc.docId) : undefined;
+    if (!doc || !binding) return 'no-binding';
+    this.touchDoc(doc.docId);
     if (boundFiles.quarantined(binding.path)) return 'missing';
     if (!existsSync(binding.path)) return 'missing';
     // Advance the poll baseline the same way the poll itself would, so this
@@ -1836,7 +1832,7 @@ export class FileBindings {
       clearTimeout(binding.readTimer);
       binding.readTimer = null;
     }
-    return this.reconcileFromDisk(room, binding);
+    return this.reconcileFromDisk(doc, binding);
   }
 
   /** The doc's pending sync trouble, if any — conflicts, parse failures. */
@@ -1876,7 +1872,7 @@ export class FileBindings {
   }
 
   // ---------------------------------------------------------------------
-  // What the room lifecycle asks the bindings. Each of these replaces a
+  // What the doc lifecycle asks the bindings. Each of these replaces a
   // reach into the binding map from `doc-store.ts`; the map itself never leaves
   // this file.
   // ---------------------------------------------------------------------
@@ -1940,10 +1936,10 @@ export class FileBindings {
 
   /**
    * Run one doc's armed write-back NOW instead of waiting out the debounce —
-   * the shutdown path. The timer is cleared whether or not the room is still
-   * in memory: a timer left armed on an evicted room fires into nothing.
+   * the shutdown path. The timer is cleared whether or not the doc is still
+   * in memory: a timer left armed on an evicted doc fires into nothing.
    */
-  flushWrite(docId: string, room: DocRoom | undefined): void {
+  flushWrite(docId: string, doc: LiveDoc | undefined): void {
     const binding = this.bindings.get(docId);
     // An armed timer OR a write already on the pool. The second is the one
     // that used to be skipped: `flush()` has no way to await it, so the only
@@ -1953,7 +1949,7 @@ export class FileBindings {
     if (!binding || (!binding.writeTimer && !binding.writeInFlight)) return;
     if (binding.writeTimer) clearTimeout(binding.writeTimer);
     binding.writeTimer = null;
-    if (room) this.writeBoundFileNow(room, binding, 'sync');
+    if (doc) this.writeBoundFileNow(doc, binding, 'sync');
   }
 
   /**
@@ -1962,15 +1958,15 @@ export class FileBindings {
    * loud and does NOT stop the eviction — the `.ydoc` is the durable record,
    * and refusing to evict here would pin a wedged doc in memory forever.
    */
-  flushWriteBeforeEvict(room: DocRoom): void {
-    const binding = this.bindings.get(room.docId);
+  flushWriteBeforeEvict(doc: LiveDoc): void {
+    const binding = this.bindings.get(doc.docId);
     if (!binding || (!binding.writeTimer && !binding.writeInFlight)) return;
     if (binding.writeTimer) clearTimeout(binding.writeTimer);
     binding.writeTimer = null;
     try {
-      this.writeBoundFileNow(room, binding, 'sync');
+      this.writeBoundFileNow(doc, binding, 'sync');
     } catch (err) {
-      console.error(`[doc-store] evict ${room.docId}: write-back failed:`, err);
+      console.error(`[doc-store] evict ${doc.docId}: write-back failed:`, err);
     }
   }
 

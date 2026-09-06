@@ -279,7 +279,7 @@ export async function handleDocsTool(
         markdown: string;
         confirmOverwriteHumanEdits?: boolean;
       };
-      // Author: sent so a rewrite of a `task:<id>` body room can be
+      // Author: sent so a rewrite of a `task:<id>` body doc can be
       // attributed the way `rewrite_task` is — and so the stale-write guard
       // can judge this caller by its own get_doc reads instead of the blunt
       // 10-minute window. The confirm flag is forwarded only when true:

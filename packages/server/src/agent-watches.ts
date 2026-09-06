@@ -201,7 +201,7 @@ export class AgentWatches {
 
   /**
    * The agent's live watch set, with dead keys dropped. `exists` decides
-   * liveness — the server passes "is there a room / workspace by this key",
+   * liveness — the server passes "is there a doc / workspace by this key",
    * because the store itself knows nothing about docs.
    */
   list(agentId: string, exists: (key: string) => boolean): ListResult {

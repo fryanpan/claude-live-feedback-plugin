@@ -268,7 +268,7 @@ export interface BoardTask {
     promptVersion?: number;
     estimatedAt?: number;
   };
-  /** Folded-up human attention on this ticket's body room. Absent means not
+  /** Folded-up human attention on this ticket's body doc. Absent means not
    *  measured — never measured at zero. */
   readingTime?: TaskReadingTime;
 }
@@ -337,7 +337,7 @@ export interface BoardGoal {
   assignee?: string;
   ownerKind?: BoardOwnerKind;
   /**
-   * The goal's live description room — `task:<goalId>`, the same prefix a
+   * The goal's live description doc — `task:<goalId>`, the same prefix a
    * task's body uses (settled in the goals-as-a-task-type design: goal ids
    * are `g-…` and task ids are `t-…`, so one namespace holds both and every
    * piece of body machinery applies unchanged).
@@ -352,7 +352,7 @@ export interface BoardGoal {
   /** The description, capped by the projection the way a task's is. */
   body?: string;
   /** Whether that cap bit. Only the pre-mount fallback can be short — the
-   *  room is not capped, and the editor reads the room. */
+   *  doc is not capped, and the editor reads the doc. */
   bodyTruncated?: boolean;
   /** How many comments the goal's discussion holds. Absent means none; the
    *  band says nothing rather than saying zero. */

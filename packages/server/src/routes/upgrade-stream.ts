@@ -230,7 +230,7 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
         const addressed = decodeURIComponent(pathname.slice('/audio/'.length));
         if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
         const docId = docStore.get(addressed)?.docId ?? addressed;
-        // Unlike `/y/`, this never conjures a room: a meeting belongs to a
+        // Unlike `/y/`, this never conjures a doc: a meeting belongs to a
         // doc that already exists, and auto-creating one here would let a
         // typo start a billed session against a doc nobody can find.
         if (!docStore.get(docId)) return j(404, { error: 'doc not found' });
@@ -255,7 +255,7 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
             // closed the editor and left an open microphone running a
             // billed transcription session against a doc the person may no
             // longer read. `DocStore.trackShareSocket` is the other half: this
-            // socket is in no room's `conns` for a sweep to walk.
+            // socket is in no doc's `conns` for a sweep to walk.
             ...(visitorShareId ? { shareId: visitorShareId } : {}),
             ...(visitorMemberKey ? { shareMember: visitorMemberKey } : {}),
             ...(audioReadOnly ? { readOnly: true } : {}),
@@ -279,7 +279,7 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
         if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
         // `ws.data.docId` is re-resolved on every frame, so it must be the
         // canonical id — a socket opened by alias would otherwise sync a
-        // room of its own.
+        // doc of its own.
         const docId = docStore.get(addressed)?.docId ?? addressed;
         const type = url.searchParams.get('type') as DocType | null;
         const sourceUrl = url.searchParams.get('sourceUrl') ?? undefined;
@@ -289,7 +289,7 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
         // created upfront via POST /api/docs (which auto-attaches a file).
         // The browser navigating to /review/<docId> before the agent has
         // created the doc gets a clean 404 from /review's own handler.
-        // Decided BEFORE the creation below, not after it. Creating a room
+        // Decided BEFORE the creation below, not after it. Creating a doc
         // and filing a workspace row is a write like any other, and it used
         // to run above this line: a browser that had proven nobody could
         // open `/y/<any-new-id>?type=mockup` and make the server create a
@@ -408,7 +408,7 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
         if (!exists) return j(404, { error: 'workspace not found' });
         // A share visitor's stream carries the §3.3 visitor-contract view
         // of every board event (display names, projected tasks) — the SSE
-        // feed is the second door next to the ws room, and redacting one
+        // feed is the second door next to the ws doc, and redacting one
         // transport but not the other is how the DocMeta leak shipped.
         // An agent's MCP child names itself here; a browser tab does not.
         // A visitor never counts as one — their stream is authorized by a
@@ -429,14 +429,14 @@ export function createUpgradeStream(ctx: UpgradeStreamContext): UpgradeStream {
       if (pathname.startsWith('/events/')) {
         const addressed = decodeURIComponent(pathname.slice('/events/'.length));
         if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
-        const eventsRoom = docStore.get(addressed);
-        if (!eventsRoom) return j(404, { error: 'doc not found' });
+        const eventsDoc = docStore.get(addressed);
+        if (!eventsDoc) return j(404, { error: 'doc not found' });
         // The CHANNEL is the doc's own id: a watcher that opened the stream
         // by the readable name and a writer that fired on the canonical one
         // have to meet, and they only do if both spellings collapse here.
         return openSseStream(
           sse,
-          eventsRoom.docId,
+          eventsDoc.docId,
           visitorShareId ?? undefined,
           undefined,
           undefined,

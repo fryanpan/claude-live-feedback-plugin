@@ -217,7 +217,7 @@ export async function bootBoard(env: BoardBootEnv): Promise<void> {
     maps: () => ({ tasks: tasksMap, ws: wsMap }),
   });
   // The REST read above already knows whether this board is retired, and the
-  // board room's first sync can be a second away on a cold connection. Paint
+  // board doc's first sync can be a second away on a cold connection. Paint
   // it now so nobody reads a retired board as live in that window.
   syncHeader();
 
@@ -241,7 +241,7 @@ export async function bootBoard(env: BoardBootEnv): Promise<void> {
     renderPresenceRegion: () => renderPresenceRegion(),
   });
 
-  // ── Realtime: the ws:<id> board room ────────────────────────────────────
+  // ── Realtime: the ws:<id> board doc ────────────────────────────────────
   const client = connect(wsUrl(`ws:${workspaceId}`, 'workspace'));
   installStaleClientNotice(client);
   // The board had no reading of its own connection at all, in any viewport —

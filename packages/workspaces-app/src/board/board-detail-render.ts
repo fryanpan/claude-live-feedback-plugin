@@ -551,9 +551,9 @@ export function renderTransitionRow(t: BoardTransition): HTMLLIElement {
  * The description's place in the panel, and what it holds before (or without)
  * the live editor.
  *
- * `board-app.ts` mounts the real Tiptap editor over the task's body room INTO
+ * `board-app.ts` mounts the real Tiptap editor over the task's body doc INTO
  * this element, so what the reader types merges with what an agent writes
- * through `set_doc_content` / `find_and_replace` on the same room. Until that
+ * through `set_doc_content` / `find_and_replace` on the same doc. Until that
  * mount lands — and if it never does — the slot shows the projection's text,
  * which is the whole description for anything under the projection cap and an
  * honest note when it is not.
@@ -562,7 +562,7 @@ export function renderTransitionRow(t: BoardTransition): HTMLLIElement {
  * The row a description belongs to, whatever kind of row that is.
  *
  * A task and a goal reach this with the same three fields and the same body
- * room (`task:<id>` for both — the approved design's naming decision), so the
+ * doc (`task:<id>` for both — the approved design's naming decision), so the
  * slot is built once rather than twice. `dataset.taskId` keeps its name on
  * both: it is the key `TaskBodyEditorHost.sync` matches on, and renaming it to
  * something kind-neutral would be a rename across two files to say nothing
@@ -591,7 +591,7 @@ export function bodySlot(row: BodyRow): HTMLElement {
   slot.append(desc);
   if (row.bodyTruncated) {
     // Only the pre-mount fallback can be short: the projection caps a body,
-    // the room does not, and the editor reads the room.
+    // the doc does not, and the editor reads the doc.
     const more = document.createElement('p');
     more.className = 'board-detail-body-more';
     more.textContent = 'Shortened here — the full description is in the task doc.';
@@ -1286,7 +1286,7 @@ export interface PanelReviewItem {
    *  agent watching that thread. Absent on the task's own decision, which is
    *  answered through `answer_decision`. */
   threadId?: string;
-  /** Which doc the thread lives in — a task's threads live in its body room,
+  /** Which doc the thread lives in — a task's threads live in its body doc,
    *  but the item is carried verbatim rather than re-derived. */
   docId?: string;
   /** The comment carrying the declaration, so the answer is written against

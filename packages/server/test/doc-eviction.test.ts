@@ -92,11 +92,11 @@ describe('evicting an idle doc', () => {
     // stubbing of the writer under test.
     chmodSync(srcDir, 0o500);
     try {
-      // `evictRoom`, not the idle sweep: the sweep holds a doc with a pending
+      // `evictDoc`, not the idle sweep: the sweep holds a doc with a pending
       // write (that is one of the four guards), so the flush-on-evict path
       // belongs to the direct callers — the boot migration and the summary
       // backfill, both of which put back every doc they had to open.
-      expect(docStore.evictRoom('wedged')).toBe(true);
+      expect(docStore.evictDoc('wedged')).toBe(true);
       expect(resident('wedged')).toBe(false);
       // Control: the write really did fail — disk still holds the old line.
       expect(onDisk(path)).toContain('first line');
@@ -138,7 +138,7 @@ describe('evicting an idle doc', () => {
     );
     chmodSync(srcDir, 0o500);
     try {
-      expect(docStore.evictRoom('wedged')).toBe(true);
+      expect(docStore.evictDoc('wedged')).toBe(true);
       expect(onDisk(path)).toContain('first line');
     } finally {
       chmodSync(srcDir, 0o700);
@@ -193,17 +193,17 @@ describe('evicting an idle doc', () => {
   });
 
   it('still resolves every docId after eviction, by id and by alias', () => {
-    const room = docStore.getOrCreate('minted-id', { type: 'markdown', alias: 'readable-name' });
-    expect(room.meta.alias).toBe('readable-name');
+    const doc = docStore.getOrCreate('minted-id', { type: 'markdown', alias: 'readable-name' });
+    expect(doc.meta.alias).toBe('readable-name');
     docStore.flush();
 
     clock += 3 * DAY;
     expect(docStore.evictIdleDocs()).toEqual(['minted-id']);
     // Control: it really is gone from memory, so the lookups below are doing
-    // work rather than reading a room that never left.
+    // work rather than reading a doc that never left.
     expect(resident('minted-id')).toBe(false);
 
-    // A captured alias URL must not 404. `teardownRoom` releases aliases;
+    // A captured alias URL must not 404. `teardownDoc` releases aliases;
     // eviction must not.
     expect(docStore.get('readable-name')?.docId).toBe('minted-id');
     expect(docStore.get('minted-id')?.docId).toBe('minted-id');
@@ -282,7 +282,7 @@ describe('evicting an idle doc', () => {
     // Control: it is genuinely still pending — nothing has written it yet.
     expect(onDisk(path)).not.toContain('the sentence that must survive');
 
-    expect(docStore.evictRoom('flushme')).toBe(true);
+    expect(docStore.evictDoc('flushme')).toBe(true);
     expect(resident('flushme')).toBe(false);
     expect(onDisk(path)).toContain('the sentence that must survive');
 
@@ -295,7 +295,7 @@ describe('evicting an idle doc', () => {
   it('re-attaches a re-opened doc so it still writes back', async () => {
     const path = bound('rebind');
     docStore.flush();
-    expect(docStore.evictRoom('rebind')).toBe(true);
+    expect(docStore.evictDoc('rebind')).toBe(true);
     expect(resident('rebind')).toBe(false);
 
     // Re-open, then edit. The 2026-05-09 bug is a doc that comes back
@@ -343,7 +343,7 @@ describe('evicting an idle doc', () => {
     expect(onDisk(path)).not.toContain('from the editor');
 
     // Evicted mid-edit.
-    expect(docStore.evictRoom('both')).toBe(true);
+    expect(docStore.evictDoc('both')).toBe(true);
     expect(resident('both')).toBe(false);
 
     // The flush landed, so the external editor sees the in-memory edit.
@@ -449,7 +449,7 @@ describe('booting against docs that are not loaded', () => {
 
   it('deleting or archiving BY ALIAS acts on the file the alias names', () => {
     // The other half of making lookups alias-aware, and the dangerous half:
-    // `deleteDoc('readable-name')` now resolves the room, but every
+    // `deleteDoc('readable-name')` now resolves the doc, but every
     // filesystem verb after it still took the raw argument — so it purged
     // `readable-name.ydoc`, which does not exist, reported ok, and the doc
     // came back on the next boot. Same shape in `archiveDoc`.
@@ -517,7 +517,7 @@ describe('booting against docs that are not loaded', () => {
   });
 
   it('frees a cold review member NAME when the review is archived', () => {
-    // `teardownRoom` is what released a doc's aliases, and archiving a review
+    // `teardownDoc` is what released a doc's aliases, and archiving a review
     // only tore down members that happened to be resident. After a lazy boot
     // that is none of them — so the name stayed pointed at an archived file
     // for the life of the process, and `claimAlias` refuses to move a name
@@ -540,7 +540,7 @@ describe('booting against docs that are not loaded', () => {
       expect(second.peek('the-name')?.docId ?? second.get('the-name')?.docId).toBe('member-a');
       // ...and cold again before archiving, so the member really is not
       // resident when `archiveReview` walks it.
-      second.evictRoom('member-a');
+      second.evictDoc('member-a');
       expect(second.residentCount()).toBe(0);
 
       const archived = second.archiveReview(setId, { archivedBy: 'test' });
@@ -559,7 +559,7 @@ describe('booting against docs that are not loaded', () => {
   });
 
   it('pairs a diff member with its companion when NEITHER is loaded', () => {
-    // Caught by review, not by a test: `companionOf` asked the room map, so
+    // Caught by review, not by a test: `companionOf` asked the doc map, so
     // after a lazy boot a diff member and its editable companion stopped
     // knowing about each other. The visible cost is quiet — the companion's
     // comments drop out of the member's `/threads` and out of its event

@@ -23,7 +23,7 @@ import { waitFor } from './wait-for.ts';
 
 interface Metrics {
   rssMb: number;
-  rooms: number;
+  residentDocs: number;
   bindings: number;
   activeBindings: number;
   awareness: number;
@@ -67,7 +67,7 @@ describe('GET /api/metrics', () => {
     return (await res.json()) as Metrics;
   }
 
-  it('counts the rooms and bindings a seeded fixture actually creates', async () => {
+  it('counts the docs and bindings a seeded fixture actually creates', async () => {
     const before = await metrics();
 
     for (let i = 0; i < 5; i++) {
@@ -84,15 +84,15 @@ describe('GET /api/metrics', () => {
     // The positive control: the numbers MOVE. A route hard-wired to zero, or
     // reading a DocStore that is not the serving one, would pass every shape
     // assertion below and fail this one.
-    // Five docs plus the board workspace room they get filed under, so the
-    // room count moves by more than five — but the BINDING count is exact:
-    // a board-owned room is never file-bound.
-    expect(after.rooms).toBeGreaterThanOrEqual(before.rooms + 5);
+    // Five docs plus the board workspace doc they get filed under, so the
+    // doc count moves by more than five — but the BINDING count is exact:
+    // a board-owned doc is never file-bound.
+    expect(after.residentDocs).toBeGreaterThanOrEqual(before.residentDocs + 5);
     expect(after.bindings).toBe(before.bindings + 5);
     // Creating a doc reaches for it, so those five are in the fast lane; the
     // count is bounded by the bindings that exist either way.
     expect(after.activeBindings).toBeLessThanOrEqual(after.bindings);
-    // Nobody has opened a websocket, so no room has built an Awareness.
+    // Nobody has opened a websocket, so no doc has built an Awareness.
     expect(after.awareness).toBe(0);
     // Timers do NOT scale with the corpus — the point of the change. Right
     // after five creates the count is briefly higher: each doc has a 200ms
@@ -111,7 +111,7 @@ describe('GET /api/metrics', () => {
       },
       { describe: 'the per-doc persist timers to drain back to a constant' },
     );
-    expect(settled.rooms).toBe(after.rooms);
+    expect(settled.residentDocs).toBe(after.residentDocs);
   });
 
   it('reports plausible memory and uptime', async () => {

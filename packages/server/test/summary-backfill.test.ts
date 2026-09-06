@@ -3,7 +3,7 @@
  * existed when generation shipped.
  *
  * Tested through a real server and re-read over HTTP for the same reason
- * `summary-route.test.ts` is: the sweep walks rooms, builds the per-thread
+ * `summary-route.test.ts` is: the sweep walks docs, builds the per-thread
  * `apply` closure, and persists — three hand-written steps between "a summary
  * was generated" and "a card shows it", none of which a unit test on
  * `ThreadSummarizer.backfill` can see. The pacing itself is covered in
@@ -223,7 +223,7 @@ describe('DocStore.backfillSummaries', () => {
     expect((await getThread(docId, threadId)).summary).toBeUndefined();
 
     // POSITIVE CONTROL: the very same thread IS queued once generation is on,
-    // so the zero above is the switch and not an empty room map.
+    // so the zero above is the switch and not an empty doc map.
     process.env.CW_SUMMARIES = '1';
     const { queued } = handle.docStore.backfillSummaries({ windowMs: 0 });
     expect(queued).toBeGreaterThanOrEqual(1);

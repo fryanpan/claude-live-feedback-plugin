@@ -4,7 +4,7 @@
  * `board-app.ts` holds the boot sequence as `bootBoard(env)`; this file is the one
  * place that calls it with the real browser. They are separate files so the
  * board's boot can be IMPORTED by a test — a module that boots at its top level
- * cannot be, because importing it would build the shell, open the board room
+ * cannot be, because importing it would build the shell, open the board doc
  * and start polling against whatever document the runner happens to have. See
  * `board-boot.test.ts`.
  *

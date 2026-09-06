@@ -111,7 +111,7 @@ describe('doc ids', () => {
       };
       expect(listed.tasks.find((t) => t.id === task.id)?.body).toContain('must survive');
 
-      // ...and the body room was never bound to the decoy file, which is the
+      // ...and the body doc was never bound to the decoy file, which is the
       // half that would have kept writing after the request returned.
       const status = (await (
         await local(`/api/docs/${encodeURIComponent(`task:${task.id}`)}/status`)

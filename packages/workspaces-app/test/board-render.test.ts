@@ -3835,7 +3835,7 @@ describe('the description slot the editor mounts into', () => {
     expect(slot()?.textContent).toContain('Second.');
   });
 
-  // A live editor is bound to ONE room. Carrying its node onto another task
+  // A live editor is bound to ONE doc. Carrying its node onto another task
   // would show task A's description on task B and write B's typing into A.
   it('replaces the slot when the panel moves to another task', () => {
     const a = task({ body: 'A.' });

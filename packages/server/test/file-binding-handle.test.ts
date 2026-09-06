@@ -1,9 +1,9 @@
 /**
  * The bindings, driven through a FAKE host.
  *
- * `FileBindings` is the disk half of a room: the mtime poll, the debounced
+ * `FileBindings` is the disk half of a doc: the mtime poll, the debounced
  * write-back, and the reconcile that arbitrates when both sides moved. It
- * reaches the room lifecycle only through `FileBindingHost`, and this file is
+ * reaches the doc lifecycle only through `FileBindingHost`, and this file is
  * what pins that boundary — a real binding over a real file, but with a
  * hand-built host that records every call in order.
  *
@@ -35,15 +35,15 @@ import { join } from 'node:path';
 import { type DocMeta, type WebhookPayload, prose } from '@feedback/core';
 import * as Y from 'yjs';
 import { DOC_STORE_TIMINGS } from '../src/doc-store-timings.ts';
-import type { DocRoom } from '../src/doc-store.ts';
+import type { LiveDoc } from '../src/doc-store.ts';
 import { type FileBindingHost, FileBindings } from '../src/file-binding.ts';
 import { waitFor } from './wait-for.ts';
 
 const DOC_ID = 'bound-doc';
 
-/** A room with only the parts a binding touches: the ydoc, the meta it
+/** A doc with only the parts a binding touches: the ydoc, the meta it
  *  stamps `sourceUrl` on, and the `seq` a sync-error broadcast bumps. */
-function fakeRoom(docId: string): DocRoom {
+function fakeDoc(docId: string): LiveDoc {
   const ydoc = new Y.Doc();
   const meta = { docId, type: 'markdown', createdAt: Date.now() } as unknown as DocMeta;
   return {
@@ -56,7 +56,7 @@ function fakeRoom(docId: string): DocRoom {
     conns: new Set(),
     meta,
     seq: 0,
-  } as unknown as DocRoom;
+  } as unknown as LiveDoc;
 }
 
 type Recorder = {
@@ -67,18 +67,18 @@ type Recorder = {
   advance(ms: number): void;
 };
 
-function recorder(dataDir: string, room: DocRoom): Recorder {
+function recorder(dataDir: string, doc: LiveDoc): Recorder {
   const calls: string[] = [];
   const broadcasts: WebhookPayload[] = [];
   const touched = new Map<string, number>();
   let clock = 1_000_000;
   const host: FileBindingHost = {
     dataDir: () => dataDir,
-    room: (docId) => {
-      calls.push(`room(${docId})`);
-      return docId === room.docId ? room : undefined;
+    doc: (docId) => {
+      calls.push(`doc(${docId})`);
+      return docId === doc.docId ? doc : undefined;
     },
-    residentRoom: (docId) => (docId === room.docId ? room : undefined),
+    residentDoc: (docId) => (docId === doc.docId ? doc : undefined),
     ydocPath: (docId) => join(dataDir, `${docId}.ydoc`),
     schedulePersist: () => calls.push('schedulePersist'),
     persistNow: () => calls.push('persistNow'),
@@ -89,7 +89,7 @@ function recorder(dataDir: string, room: DocRoom): Recorder {
       calls.push('noteTouched');
       touched.set(docId, at);
     },
-    broadcast: (_room, payload) => {
+    broadcast: (_doc, payload) => {
       calls.push(`broadcast(${payload.event})`);
       broadcasts.push(payload);
     },
@@ -128,24 +128,24 @@ function writeExternal(path: string, content: string): void {
   if (statSync(path).mtimeMs === before) throw new Error('mtime did not move');
 }
 
-function proseText(room: DocRoom): string {
-  return prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
+function proseText(doc: LiveDoc): string {
+  return prose.serializeFragmentToMarkdown(prose.getProseFragment(doc.ydoc));
 }
 
 /** An edit the way an agent's edit tool makes one: a string origin that is
  *  neither of the binding's own two, so the write-back observer arms. */
-function edit(room: DocRoom, markdown: string): void {
-  const fragment = prose.getProseFragment(room.ydoc);
-  room.ydoc.transact(() => {
+function edit(doc: LiveDoc, markdown: string): void {
+  const fragment = prose.getProseFragment(doc.ydoc);
+  doc.ydoc.transact(() => {
     prose.applyMarkdownToFragment(fragment, markdown);
   }, 'agent-edit');
 }
 
-describe('a binding drives its room only through the host', () => {
+describe('a binding drives its doc only through the host', () => {
   let dataDir: string;
   let srcDir: string;
   let filePath: string;
-  let room: DocRoom;
+  let doc: LiveDoc;
   let rec: Recorder;
   let bindings: FileBindings;
 
@@ -154,8 +154,8 @@ describe('a binding drives its room only through the host', () => {
     srcDir = mkdtempSync(join(tmpdir(), 'fb-src-'));
     filePath = join(srcDir, 'doc.md');
     writeFileSync(filePath, '# Doc\n\nfrom disk\n');
-    room = fakeRoom(DOC_ID);
-    rec = recorder(dataDir, room);
+    doc = fakeDoc(DOC_ID);
+    rec = recorder(dataDir, doc);
     bindings = new FileBindings(rec.host);
   });
 
@@ -166,15 +166,15 @@ describe('a binding drives its room only through the host', () => {
     rmSync(srcDir, { recursive: true, force: true });
   });
 
-  it('attaches through the host: resolves the room, seeds it, records the path', () => {
+  it('attaches through the host: resolves the doc, seeds it, records the path', () => {
     const res = bindings.attachFile(DOC_ID, filePath);
     expect(res).toMatchObject({ ok: true, seeded: true, resolvedPath: filePath });
-    // The room came from the host, not from a field the bindings hold.
-    expect(rec.calls[0]).toBe(`room(${DOC_ID})`);
+    // The doc came from the host, not from a field the bindings hold.
+    expect(rec.calls[0]).toBe(`doc(${DOC_ID})`);
     // `sourceUrl` is sidecar state, so recording it asks the host to persist.
     expect(rec.calls).toContain('schedulePersist');
-    expect(room.meta.sourceUrl).toBe(filePath);
-    expect(proseText(room)).toContain('from disk');
+    expect(doc.meta.sourceUrl).toBe(filePath);
+    expect(proseText(doc)).toContain('from disk');
     expect(bindings.has(DOC_ID)).toBe(true);
     expect(bindings.pathOf(DOC_ID)).toBe(filePath);
   });
@@ -183,7 +183,7 @@ describe('a binding drives its room only through the host', () => {
     bindings.attachFile(DOC_ID, filePath);
     rec.calls.length = 0;
 
-    edit(room, '# Doc\n\nlive edit\n');
+    edit(doc, '# Doc\n\nlive edit\n');
     // Control: the edit really armed a write-back. Without this the ordering
     // assertion below would pass on a binding that never scheduled anything.
     expect(bindings.pendingWriteDocIds()).toEqual([DOC_ID]);
@@ -205,7 +205,7 @@ describe('a binding drives its room only through the host', () => {
   it('a disk change while the doc is DIRTY takes the reconcile path: backup, sync_error, reassert', () => {
     bindings.attachFile(DOC_ID, filePath);
     // Un-flushed live edits: the doc has diverged from what we last wrote.
-    edit(room, '# Doc\n\nlive edit nobody has flushed\n');
+    edit(doc, '# Doc\n\nlive edit nobody has flushed\n');
     expect(bindings.hasPendingWrite(DOC_ID)).toBe(true);
     rec.calls.length = 0;
 
@@ -215,7 +215,7 @@ describe('a binding drives its room only through the host', () => {
     expect(bindings.reconcileNow(DOC_ID)).toBe('conflict');
 
     // The live edits won and were re-armed for disk...
-    expect(proseText(room)).toContain('live edit nobody has flushed');
+    expect(proseText(doc)).toContain('live edit nobody has flushed');
     expect(bindings.hasPendingWrite(DOC_ID)).toBe(true);
     // ...the overwritten external version was snapshotted first...
     const backups = readdirSync(join(dataDir, 'clobber-backups'));
@@ -223,7 +223,7 @@ describe('a binding drives its room only through the host', () => {
     expect(readFileSync(join(dataDir, 'clobber-backups', backups[0]), 'utf8')).toContain(
       'external edit',
     );
-    // ...and the loss was announced on the room, through the host.
+    // ...and the loss was announced on the doc, through the host.
     expect(rec.calls).toContain('broadcast(doc.sync_error)');
     const announced = rec.broadcasts.at(-1) as { message?: string } | undefined;
     expect(announced?.message ?? '').toContain('collided with un-flushed live edits');
@@ -241,7 +241,7 @@ describe('a binding drives its room only through the host', () => {
     writeFileSync(filePath, '# Doc\n\nexternal edit\n');
 
     expect(bindings.reconcileNow(DOC_ID)).toBe('apply');
-    expect(proseText(room)).toContain('external edit');
+    expect(proseText(doc)).toContain('external edit');
     expect(bindings.getSyncError(DOC_ID)).toBeUndefined();
     expect(rec.calls.filter((c) => c.startsWith('broadcast'))).toEqual([]);
     expect(existsSync(join(dataDir, 'clobber-backups'))).toBe(false);
@@ -267,7 +267,7 @@ describe('a binding drives its room only through the host', () => {
     // An external write reaches the doc through the shared sweep, and the
     // poll's own promotion is another host stamp.
     writeExternal(filePath, '# Doc\n\nseen by the poll\n');
-    await waitFor(() => proseText(room).includes('seen by the poll'), {
+    await waitFor(() => proseText(doc).includes('seen by the poll'), {
       describe: 'the mtime poll to pull the external edit in',
       timeout: DOC_STORE_TIMINGS.filePollMs + DOC_STORE_TIMINGS.readDebounceMs + 4000,
     });
@@ -275,7 +275,7 @@ describe('a binding drives its room only through the host', () => {
 
   it('discard lets go of the file: no binding, no timers, no further writes', () => {
     bindings.attachFile(DOC_ID, filePath);
-    edit(room, '# Doc\n\nnever flushed\n');
+    edit(doc, '# Doc\n\nnever flushed\n');
     expect(bindings.pendingWriteDocIds()).toEqual([DOC_ID]);
 
     bindings.discard(DOC_ID);

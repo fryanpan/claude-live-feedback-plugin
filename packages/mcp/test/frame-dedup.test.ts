@@ -9,9 +9,9 @@
  *
  * What identifies an event, in order: the server's `eid` (one per broadcast,
  * unique across restarts by construction), then `${event}#${docId}#${seq}`
- * for a server older than that stamp. `doc-store.ts` bumps a PER-ROOM monotonic
- * `seq` on every thread and suggestion event, so two events in one room can
- * never share it and two rooms freely can — which is why docId has to be in
+ * for a server older than that stamp. `doc-store.ts` bumps a PER-DOC monotonic
+ * `seq` on every thread and suggestion event, so two events in one doc can
+ * never share it and two docs freely can — which is why docId has to be in
  * the fallback key and why seq alone is not a key at all. And because that
  * counter restarts with the SERVER, the fallback is bounded by a reconnect
  * and by a clock; see the "across a server restart" block below, which is the
@@ -27,7 +27,7 @@
 import { describe, expect, it } from 'vitest';
 import { createFrameDedup } from '../src/frame-dedup.ts';
 
-/** A thread frame as `broadcastToRoom` stamps it. */
+/** A thread frame as `broadcastToDoc` stamps it. */
 function threadFrame(docId: string, seq: number) {
   return { docId, threadId: 't-1', seq, thread: { comments: [{ text: 'hello' }] } };
 }
@@ -66,7 +66,7 @@ describe('createFrameDedup', () => {
     expect(shouldForward('task.created', task)).toBe(true);
   });
 
-  // POSITIVE CONTROL 3 — seq is per-room, so two docs share seq numbers as a
+  // POSITIVE CONTROL 3 — seq is per-doc, so two docs share seq numbers as a
   // matter of course. Keying on seq alone would silently eat the second doc's
   // first-ever comment.
   it('forwards both when two different docs share a seq', () => {
@@ -76,7 +76,7 @@ describe('createFrameDedup', () => {
   });
 
   // A frame with no docId cannot be identified either — forward it rather
-  // than risk colliding two rooms under one empty key.
+  // than risk colliding two docs under one empty key.
   it('forwards frames with a seq but no docId', () => {
     const { shouldForward } = createFrameDedup();
     expect(shouldForward('thread.created', { seq: 3 })).toBe(true);
@@ -116,11 +116,11 @@ describe('createFrameDedup', () => {
   });
 
   /**
-   * THE REGRESSION THIS SUITE MISSED. `room.seq` is a plain field on the room
+   * THE REGRESSION THIS SUITE MISSED. `doc.seq` is a plain field on the doc
    * object, initialised to 0 in `doc-store.ts` `getOrCreate` and never persisted
    * into the `.ydoc` — so every server start (a deploy, a `bun --watch`
    * reload, a `delete_workspace` + re-create of the same id) rebuilds every
-   * room counting from 1 again, while this process and its `seen` set live
+   * doc counting from 1 again, while this process and its `seen` set live
    * for days. A key of `event#docId#seq` alone is therefore NOT unique across
    * a server epoch: Bryan's next comment reproduces a key already held, the
    * frame is suppressed, and the agent hears nothing — the exact
@@ -133,11 +133,11 @@ describe('createFrameDedup', () => {
    * drops the whole window.
    */
   describe('across a server restart', () => {
-    it('forwards a repeated seq after a reconnect, because the room counter restarted', () => {
+    it('forwards a repeated seq after a reconnect, because the doc counter restarted', () => {
       const { shouldForward, reset } = createFrameDedup();
       expect(shouldForward('thread.created', threadFrame('doc-alpha', 1))).toBe(true);
       // Prod is redeployed. Every SSE loop's fetch ends and retries; the
-      // rooms come back counting from 1.
+      // docs come back counting from 1.
       reset();
       // A DIFFERENT, real comment that happens to reproduce the old key.
       expect(shouldForward('thread.created', threadFrame('doc-alpha', 1))).toBe(true);
@@ -148,7 +148,7 @@ describe('createFrameDedup', () => {
       const { shouldForward } = createFrameDedup({ ttlMs: 30_000, now: () => now });
       expect(shouldForward('thread.created', threadFrame('doc-alpha', 1))).toBe(true);
       now += 30_001;
-      // No reconnect was observed (a room can also be destroyed and rebuilt
+      // No reconnect was observed (a doc can also be destroyed and rebuilt
       // at seq 0 under a live server), so the clock is the backstop.
       expect(shouldForward('thread.created', threadFrame('doc-alpha', 1))).toBe(true);
     });

@@ -112,7 +112,7 @@ describe('the landing page is a list of active workspaces', () => {
     // that can put Beta on top, which is what makes this non-vacuous.
     await tick();
     await makeTask(alphaId, 'newest task mutation');
-    // Comment on Beta's task discussion — the same `task:<id>` room the
+    // Comment on Beta's task discussion — the same `task:<id>` doc the
     // board's own thread UI uses. The gap makes the comment strictly newer
     // than Alpha's task, so it alone decides the order below.
     await tick();

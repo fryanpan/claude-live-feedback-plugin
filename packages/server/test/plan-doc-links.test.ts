@@ -55,10 +55,10 @@ describe('plan-doc linkage (routes)', () => {
    *  `agent`-shaped origin, then the settle (which commits the debounce the
    *  way a create-from-doc or the timer would). Returns the new revision. */
   const editDoc = (docId: string): number => {
-    const room = handle.docStore.get(docId);
-    if (!room) throw new Error(`no room for ${docId}`);
-    room.ydoc.transact(() => {
-      room.ydoc.getText('content').insert(0, 'x');
+    const doc = handle.docStore.get(docId);
+    if (!doc) throw new Error(`no doc for ${docId}`);
+    doc.ydoc.transact(() => {
+      doc.ydoc.getText('content').insert(0, 'x');
     }, 'agent');
     return handle.docStore.settledContentRevision(docId) ?? -1;
   };
@@ -279,11 +279,11 @@ describe('plan-doc linkage (routes)', () => {
     });
 
     it('a row created mid-burst stamps the settled (post-edit) revision, so its own source words never flag it', async () => {
-      const room = handle.docStore.get(docId);
-      if (!room) throw new Error('room gone');
+      const doc = handle.docStore.get(docId);
+      if (!doc) throw new Error('doc gone');
       // An authoring burst that has NOT settled yet…
-      room.ydoc.transact(() => {
-        room.ydoc.getText('content').insert(0, 'y');
+      doc.ydoc.transact(() => {
+        doc.ydoc.getText('content').insert(0, 'y');
       }, 'agent');
       // …and a create from the doc before the debounce fires.
       const r = await post(`/workspaces/${wsId}/tasks/batch`, {
@@ -383,13 +383,13 @@ describe('plan-doc linkage (routes)', () => {
   describe('the plan gate is server-authoritative', () => {
     it("a peer's CRDT write to planState or contentRevision is reverted on the spot", () => {
       handle.docStore.getOrCreate('guarded-plan', { type: 'markdown' });
-      const room = handle.docStore.get('guarded-plan');
-      if (!room) throw new Error('room gone');
-      const meta = room.ydoc.getMap('meta');
+      const doc = handle.docStore.get('guarded-plan');
+      if (!doc) throw new Error('doc gone');
+      const meta = doc.ydoc.getMap('meta');
       // A peer write arrives under the connection object's origin — any
       // non-server origin takes this path.
       const peer = { fake: 'conn' };
-      room.ydoc.transact(() => {
+      doc.ydoc.transact(() => {
         meta.set('planState', 'approved');
         meta.set('planApprovedBy', 'Mallory');
         meta.set('contentRevision', 999);
@@ -398,15 +398,15 @@ describe('plan-doc linkage (routes)', () => {
       expect(meta.get('planState')).toBeUndefined();
       expect(meta.get('planApprovedBy')).toBeUndefined();
       expect(meta.get('contentRevision')).toBeUndefined();
-      expect(room.meta.planState).toBeUndefined();
+      expect(doc.meta.planState).toBeUndefined();
       // Positive control: the server's own write takes, through the same map.
       const set = handle.docStore.setPlanState('guarded-plan', 'pending');
       expect(set.ok).toBe(true);
       expect(meta.get('planState')).toBe('pending');
       // And a peer cannot flip it back off pending either.
-      room.ydoc.transact(() => meta.set('planState', 'approved'), peer);
+      doc.ydoc.transact(() => meta.set('planState', 'approved'), peer);
       expect(meta.get('planState')).toBe('pending');
-      expect(room.meta.planState).toBe('pending');
+      expect(doc.meta.planState).toBe('pending');
     });
   });
 

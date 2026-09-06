@@ -240,7 +240,7 @@ describe('legacy docs are migrated, not grandfathered', () => {
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
 
-    // Loading the room is what triggers the migration.
+    // Loading the doc is what triggers the migration.
     const doc = await (
       await fetch(`${base}/api/docs/legacy`, { headers: { host: `localhost:${handle.port}` } })
     ).json();
