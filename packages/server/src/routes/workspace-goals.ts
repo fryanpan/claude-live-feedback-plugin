@@ -80,10 +80,23 @@ export async function handleWorkspaceGoals(
   const goalCascadeMatch = pathname.match(/^\/workspaces\/[^/]+\/goals\/([^/]+)\/cascade$/);
   if (goalCascadeMatch && req.method === 'GET') {
     const goalId = decodeURIComponent(goalCascadeMatch[1] ?? '');
-    // No existence check here any more. `middleware/workspace-scope.ts` has
-    // already asked which board holds this band and refused the request when
-    // the answer was "none" or "a different one" — which is the whole of what
-    // this line used to do, minus the half it could not do at all.
+    // The board question is answered above: `middleware/workspace-scope.ts`
+    // has already asked which board holds this row and refused "none" or "a
+    // different one". What it CANNOT ask is the narrower half this route
+    // needs. Its `workspaceOfRow` resolves a goal band and a TASK — they
+    // share the `task:<id>` id space, which is what lets one lookup cover
+    // both collections — so `/workspaces/<A>/goals/<taskIdOnA>` passes it.
+    //
+    // Nothing is disclosed by that (`goalCascade` walks the tasks filed under
+    // a band and a task has none, so the answer is an empty list), but the
+    // reading is wrong: a caller that named a row which is not a band gets
+    // "this band has no tasks" instead of "there is no such band", and the
+    // confirmation the board shows before an archive is built from this walk.
+    // The write verbs already refuse it; this is the read catching up.
+    //
+    // Refused with the middleware's own body, so an id that is a task, an id
+    // on another board and an id nothing knows are indistinguishable.
+    if (!taskStore.getGoalRow(goalId)) return j(404, { error: 'not-found' });
     return j(200, taskStore.goalCascade(goalId));
   }
   const goalArchiveMatch = pathname.match(/^\/workspaces\/[^/]+\/goals\/([^/]+)\/archive$/);
