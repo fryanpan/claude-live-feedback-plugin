@@ -33,6 +33,7 @@ import {
   RUN_ID_ENV,
   UsageError,
   describeStaleProfiles,
+  extraChromeArgs,
   findStaleProfiles,
   parseArgs,
   parseSize,
@@ -130,6 +131,26 @@ describe('ui-shot Chrome binary resolution', () => {
     );
     expect(() => resolveChromeBin(undefined, { CW_CHROME_BIN: '/nope' }, exists([]))).toThrow(
       /CW_CHROME_BIN/,
+    );
+  });
+});
+
+describe('ui-shot extra Chrome flags', () => {
+  it('is empty when the variable is unset or blank, so a laptop keeps its sandbox', () => {
+    expect(extraChromeArgs({})).toEqual([]);
+    expect(extraChromeArgs({ CW_CHROME_ARGS: '   ' })).toEqual([]);
+  });
+
+  it('splits the CI pair on whitespace', () => {
+    expect(extraChromeArgs({ CW_CHROME_ARGS: '--no-sandbox  --disable-dev-shm-usage' })).toEqual([
+      '--no-sandbox',
+      '--disable-dev-shm-usage',
+    ]);
+  });
+
+  it('refuses a bare word, which Chrome would open as a URL', () => {
+    expect(() => extraChromeArgs({ CW_CHROME_ARGS: '--no-sandbox http://evil' })).toThrow(
+      /must be a --flag/,
     );
   });
 });

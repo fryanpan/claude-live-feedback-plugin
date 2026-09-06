@@ -23,6 +23,10 @@
  *   --scale <n>            deviceScaleFactor (default 1)
  *   --chrome <bin>         Chrome binary; else $CW_CHROME_BIN; else the /Applications path
  *
+ * $CW_CHROME_ARGS adds launch flags (CI containers want
+ * `--no-sandbox --disable-dev-shm-usage`); unset on a laptop, so the sandbox
+ * stays on there.
+ *
  * Why this exists. Resizing a real Chrome window cannot reach a phone
  * viewport (Chrome floors the window near 500px) and every attempt to drive a
  * real window has landed in the owner's own browser. `--headless=new` with a
@@ -62,6 +66,7 @@ import {
   type ShotOptions,
   USAGE,
   UsageError,
+  extraChromeArgs,
   parseArgs,
   profilePrefix,
   resolveChromeBin,
@@ -217,6 +222,8 @@ async function launchChrome(
       '--disable-background-timer-throttling',
       '--hide-scrollbars',
       `--window-size=${o.width},${o.height}`,
+      // CI only, and empty everywhere else — see extraChromeArgs.
+      ...extraChromeArgs(),
       'about:blank',
     ],
     { stdio: ['ignore', 'ignore', 'pipe'] },

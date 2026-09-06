@@ -76,6 +76,8 @@ export const USAGE = `usage: bun run ui:shot --url <url> [--preset ipad|phone | 
   --scale       deviceScaleFactor (default ${DEFAULTS.scale})
   --chrome      Chrome binary; else $CW_CHROME_BIN; else the /Applications path
 
+$CW_CHROME_ARGS adds extra Chrome launch flags (space separated, each --flag).
+
 Prints ONE JSON object on stdout: viewport, innerWidth/innerHeight and
 devicePixelRatio as the page saw them, the screenshot path, and \`result\`
 for --eval. Diagnostics go to stderr. Exit 2 = usage, 1 = runtime failure.`;
@@ -237,6 +239,37 @@ export function resolveChromeBin(
     );
   }
   return chosen;
+}
+
+/** Env var carrying extra Chrome flags, space separated. */
+export const CHROME_ARGS_ENV = 'CW_CHROME_ARGS';
+
+/**
+ * Extra flags to hand Chrome, from `CW_CHROME_ARGS`.
+ *
+ * It exists for CI containers, where the sandbox has no usable namespace and
+ * `/dev/shm` is small — `--no-sandbox --disable-dev-shm-usage` is the standard
+ * pair, and both WEAKEN the browser, which is why they are opt-in through the
+ * environment rather than baked into the launch. On a person's machine the
+ * variable is unset and the sandbox stays on.
+ *
+ * Only `--flags` are accepted. A bare word in this variable would be handed to
+ * Chrome as a URL to open, so a typo becoming a navigation is refused rather
+ * than passed along.
+ */
+export function extraChromeArgs(env: Record<string, string | undefined> = process.env): string[] {
+  const raw = (env[CHROME_ARGS_ENV] ?? '').trim();
+  if (!raw) return [];
+  const parts = raw.split(/\s+/);
+  const bad = parts.filter((p) => !p.startsWith('--'));
+  if (bad.length > 0) {
+    throw new UsageError(
+      `${CHROME_ARGS_ENV}: every entry must be a --flag; got ${bad
+        .map((b) => JSON.stringify(b))
+        .join(', ')}`,
+    );
+  }
+  return parts;
 }
 
 /* ===== Throwaway Chrome profiles ===== */
