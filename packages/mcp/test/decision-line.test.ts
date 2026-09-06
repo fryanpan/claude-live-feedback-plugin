@@ -10,17 +10,19 @@
  * unconditional clause survived in the first place), and the BUNDLE must carry
  * the guard, because peers load `packages/plugin/mcp/index.js` and never the
  * source.
+ *
+ * The bundle half used to be `BUNDLE.toContain('Array.isArray(p.links) && …')`.
+ * A minifier that spelt the same test differently would have failed it, and a
+ * guard whose result was thrown away would have passed it. It now pushes both
+ * shapes of the frame down the running bundle's event stream and reads the
+ * sentence a session receives.
  */
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { decisionAnsweredLine } from '../src/decision-line.ts';
+import { type BundleHarness, restoredWatches, startBundle } from './harness/mcp-bundle.ts';
 import { readMcpSource } from './harness/mcp-source.ts';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = readMcpSource();
-const BUNDLE = readFileSync(join(HERE, '../../plugin/mcp/index.js'), 'utf8');
 
 const CLAUSE = 'walk its links as the propagation checklist';
 const ANSWERED = {
@@ -76,10 +78,54 @@ describe('the channel switch and the shipped bundle both use it', () => {
     expect(arm()).not.toContain(CLAUSE);
   });
 
-  it('ships the guard in the artifact peers actually load', () => {
-    // Positive control first: the bundle is a real build that contains the
-    // clause at all, so "no unconditional clause" cannot be "wrong file".
-    expect(BUNDLE).toContain(CLAUSE);
-    expect(BUNDLE).toContain('Array.isArray(p.links) && p.links.length > 0');
-  });
+  it('ships the guard in the artifact peers actually load', async () => {
+    let h: BundleHarness | undefined;
+    try {
+      h = await startBundle((req) =>
+        req.method === 'GET' && /\/watches$/.test(req.path) ? restoredWatches('doc-1') : {},
+      );
+      await h.streamOpen();
+
+      // Positive control FIRST, and it is a real frame rather than a literal:
+      // an answered decision that DOES annotate something must carry the
+      // clause, or "no clause on an empty list" could just be a bundle that
+      // lost the sentence altogether.
+      h.pushFrame({
+        id: 'd:1',
+        event: 'decision.answered',
+        data: {
+          event: 'decision.answered',
+          eid: 'e-linked',
+          docId: 'doc-1',
+          taskId: 't-linked',
+          answer: 'Rebuild after the freeze.',
+          actor: { id: 'a-someone-else' },
+          links: [{ id: 't-other' }],
+        },
+      });
+      const linked = await h.waitForChannel((c) => c.content.includes('t-linked'));
+      expect(linked.content).toContain(CLAUSE);
+
+      // The measurement: the same event with an empty `links` — which is what
+      // the store emits for most decisions — must not send the reader off to
+      // walk a list that has nothing in it.
+      h.pushFrame({
+        id: 'd:2',
+        event: 'decision.answered',
+        data: {
+          event: 'decision.answered',
+          eid: 'e-bare',
+          docId: 'doc-1',
+          taskId: 't-bare',
+          answer: 'Rebuild after the freeze.',
+          actor: { id: 'a-someone-else' },
+          links: [],
+        },
+      });
+      const bare = await h.waitForChannel((c) => c.content.includes('t-bare'));
+      expect(bare.content).not.toContain(CLAUSE);
+    } finally {
+      await h?.stop();
+    }
+  }, 60_000);
 });
