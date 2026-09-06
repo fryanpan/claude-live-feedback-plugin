@@ -40,7 +40,7 @@
  * disappear from the denominator.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -126,6 +126,25 @@ export interface ChunkResult {
   ms: number;
 }
 
+/** Flags that swallow the argument after them, when written apart from it. */
+const TAKES_VALUE = new Set(['--jobs', '--shard', '--coverage-dir']);
+
+/**
+ * The positional arguments: substring filters over the file list, as
+ * `bun test packages/server/test board` filters.
+ *
+ * Only the flags that TAKE a value swallow the argument after them.
+ * `--coverage` and `--bail` do not, and treating them as if they did ate the
+ * filter in `bun run test:server --coverage board`.
+ */
+export function filterArgs(argv: string[]): string[] {
+  return argv.filter((a, i) => {
+    if (a.startsWith('--')) return false;
+    const prev = argv[i - 1];
+    return !(prev !== undefined && TAKES_VALUE.has(prev));
+  });
+}
+
 function flagValue(argv: string[], name: string): string | undefined {
   const eq = argv.find((a) => a.startsWith(`${name}=`));
   if (eq) return eq.slice(name.length + 1);
@@ -133,7 +152,7 @@ function flagValue(argv: string[], name: string): string | undefined {
   return i === -1 ? undefined : argv[i + 1];
 }
 
-/** Concatenate every worker's lcov into one. See the header for why that is sound. */
+/** Concatenate every chunk's lcov into one. See the header for why that is sound. */
 export function mergeLcov(dirs: string[], outDir: string): number {
   const parts: string[] = [];
   for (const dir of dirs) {
@@ -154,12 +173,7 @@ async function main(): Promise<void> {
   const coverageDir = flagValue(argv, '--coverage-dir');
   const bail = argv.includes('--bail');
 
-  const consumed = new Set(['--jobs', '--shard', '--coverage', '--coverage-dir', '--bail']);
-  const filters = argv.filter((a, i) => {
-    if (a.startsWith('--')) return false;
-    const prev = argv[i - 1];
-    return !(prev !== undefined && consumed.has(prev) && !prev.includes('='));
-  });
+  const filters = filterArgs(argv);
 
   let files = interleave(discover(REPO_ROOT, SUITE_DIR));
   if (filters.length > 0) files = files.filter((f) => filters.some((s) => f.includes(s)));
@@ -178,7 +192,10 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const covRoot = coverageDir ? resolve(REPO_ROOT, coverageDir) : null;
+  // `bun test --coverage` writes to `coverage/` by default, and every chunk
+  // would write over the last one there. So --coverage always gets a root of
+  // its own to spread chunks under, named or not.
+  const covRoot = coverage ? resolve(REPO_ROOT, coverageDir ?? 'coverage') : null;
   if (covRoot) rmSync(covRoot, { recursive: true, force: true });
 
   const label = `${files.length} file(s) across ${jobs} process(es)`;
@@ -215,12 +232,15 @@ async function main(): Promise<void> {
       ]);
       const result: ChunkResult = {
         files: chunk,
-        exitCode: code,
+        // A chunk the OOM killer stopped exits with no code at all. That is a
+        // failure, not a zero — the whole value of this runner is that it
+        // cannot report a pass over files that did not finish.
+        exitCode: code ?? 1,
         output: `${out}${err}`,
         ms: Date.now() - started,
       };
       results.push(result);
-      if (code !== 0) failed = true;
+      if (result.exitCode !== 0) failed = true;
       // Flushed whole, when the chunk finishes: four processes writing to one
       // terminal as they go would interleave mid-line and no failure would be
       // attributable to the file that produced it.
@@ -237,7 +257,7 @@ async function main(): Promise<void> {
   if (covRoot) {
     const merged = mergeLcov(chunkDirs, covRoot);
     console.log(
-      `\ncoverage: merged ${merged} of ${chunkDirs.length} chunk lcov file(s) into ${coverageDir}/lcov.info`,
+      `\ncoverage: merged ${merged} of ${chunkDirs.length} chunk lcov file(s) into ${relative(REPO_ROOT, covRoot)}/lcov.info`,
     );
     // A short merge means the number would be measured from part of the suite,
     // which is the one way this can be wrong without looking wrong. Only worth
