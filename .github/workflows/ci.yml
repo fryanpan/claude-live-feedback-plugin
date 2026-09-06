@@ -26,6 +26,14 @@ jobs:
           # between Bun releases. Bump this deliberately, alongside a rebuild.
           bun-version: 1.3.10
       - run: bun install --frozen-lockfile
+      # THIS STEP IS WHY THE LIST BELOW CAN BE TRUSTED. `bun run verify` is the
+      # one command CLAUDE.md tells a builder to run before pushing, and its
+      # member list lives in scripts/verify.ts. This asserts that every
+      # `bun run` in this job is one of those members — so adding a gate here
+      # without adding it there fails, loudly, on the PR that added it, rather
+      # than on somebody else's PR weeks later.
+      - name: Local `bun run verify` covers this job
+        run: bun run verify:parity
       - name: Typecheck
         run: bun run typecheck
       - name: Lint
@@ -105,17 +113,10 @@ jobs:
       # anyway, since HEAD and the base are the same commit.
       - name: Plugin version bumped
         run: bun run check:plugin-version --base origin/${{ github.event.pull_request.base.ref || 'main' }} $CONCURRENT_ARGS
+      # Was eight lines of inline shell here. It is a script so that this job and
+      # `bun run verify` run the SAME check instead of two hand-copied versions.
       - name: MCP bundle matches source
-        run: |
-          bun run build:mcp
-          if ! git diff --quiet -- packages/plugin/mcp/index.js; then
-            echo "::error::packages/plugin/mcp/index.js is stale — it does not match a fresh build of packages/mcp/src."
-            echo "Peers load the committed bundle, not the TypeScript source, so an unrebuilt bundle ships nothing."
-            echo "Fix: bun run build:mcp && git add packages/plugin/mcp/index.js"
-            git diff --stat -- packages/plugin/mcp/index.js
-            exit 1
-          fi
-          echo "packages/plugin/mcp/index.js matches a fresh build."
+        run: bun run check:mcp-bundle
 
   # The note-taking behaviour, on three ticks of one real meeting.
   #
