@@ -11,8 +11,8 @@ residue that is true of THIS repo and nowhere else.
 
 - **This project's ship skill is `ship-it`**, not the fleet default `ship-auto`.
   It runs the code review, opens the PR, and follows CI and Copilot. Invoke it
-  once implementation is done and the four gates in `CLAUDE.md` pass, before
-  handing control back.
+  once implementation is done and `bun run verify` passes, before handing
+  control back.
 - **The multi-agent recipe that actually worked here is written down.** Grep
   `docs/process/learnings.md` for "Multi-agent workflow implementation" before
   fanning a plan out with the `Workflow` tool. It carries the shape that shipped
