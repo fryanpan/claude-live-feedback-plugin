@@ -389,9 +389,12 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
   const out: Y.XmlElement[] = [];
   let i = 0;
 
+  // These read a line that has already had its indent stripped by the
+  // caller. The indent-aware forms — `isListItemLine`, `indentOf` — are
+  // below with the list builder, and list detection uses only those now:
+  // a column-anchored `isBullet` sent an indented item into the paragraph
+  // fallback, which then swallowed every sibling after it.
   const isHeading = (s: string) => /^#{1,6}\s+/.test(s);
-  const isBullet = (s: string) => /^[-*]\s+/.test(s);
-  const isNumbered = (s: string) => /^\d+\.\s+/.test(s);
   const isQuote = (s: string) => /^>\s?/.test(s);
   const isFence = (s: string) => /^```/.test(s);
   const isRule = (s: string) => /^(---|\*\*\*|___)\s*$/.test(s);
@@ -404,15 +407,28 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
   // run through inline emphasis parsing (which would mangle `_` in URLs).
   const isImage = (s: string) => /^!\[[^\]]*\]\([^)]*\)\s*$/.test(s.trim());
 
-  const isBlockStart = (s: string) =>
-    isHeading(s) ||
-    isBullet(s) ||
-    isNumbered(s) ||
-    isQuote(s) ||
-    isFence(s) ||
-    isRule(s) ||
-    isImage(s) ||
-    isTableRow(s);
+  // A block starter ALWAYS interrupts a paragraph, wherever it sits on the
+  // line. The predicates above anchor at column 0, which is what a plain
+  // markdown grammar wants; but the paragraph gatherer used them directly,
+  // so a `### heading` or a `- item` carrying any leading whitespace was
+  // read as more prose and glued into the paragraph as literal characters.
+  // That is the "one slip flattens forty lines" shape: once in the
+  // paragraph fallback nothing stopped it, and the markdown syntax showed
+  // on screen. CommonMark: a heading (and a list item) interrupts a
+  // paragraph. Fences stay column-anchored — the closing-fence scan below
+  // is column-anchored too, and widening only one end never closes.
+  const isBlockStart = (s: string) => {
+    const t = s.trimStart();
+    return (
+      isHeading(t) ||
+      isListItemLine(s) ||
+      isQuote(t) ||
+      isFence(s) ||
+      isRule(t) ||
+      isImage(t) ||
+      isTableRow(s)
+    );
+  };
 
   const mkParagraph = (text: string): Y.XmlElement => {
     const p = new Y.XmlElement('paragraph');
@@ -469,6 +485,12 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
       if (j >= lines.length) return k;
       const ind = indentOf(lines[j] ?? '');
       if (ind <= baseIndent) return k; // back to sibling level or shallower
+      // A heading ends the item's content, indented or not. It used to fall
+      // into the paragraph gatherer below, which had no heading rule at all
+      // — so `### …` and everything after it landed inside the item as
+      // literal text. Hand it back to the top-level loop, which now reads an
+      // indented ATX heading as a heading.
+      if (isHeading((lines[j] ?? '').trimStart())) return k;
       k = j; // consume intervening blanks now that we know content follows
       if (isListItemLine(lines[k] ?? '')) {
         const [sub, next] = parseListAt(k, ind);
@@ -503,6 +525,7 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
           (lines[k] ?? '').trim() !== '' &&
           indentOf(lines[k] ?? '') > baseIndent &&
           !isListItemLine(lines[k] ?? '') &&
+          !isHeading((lines[k] ?? '').trimStart()) &&
           !isFence((lines[k] ?? '').trim())
         ) {
           paraLines.push((lines[k] ?? '').trim());
@@ -581,8 +604,8 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
       continue;
     }
 
-    if (isHeading(line)) {
-      const m = line.match(/^(#{1,6})\s+(.*)$/);
+    if (isHeading(line.trimStart())) {
+      const m = line.trimStart().match(/^(#{1,6})\s+(.*)$/);
       const level = Math.min(6, Math.max(1, m?.[1]?.length ?? 1));
       const text = m?.[2] ?? '';
       const h = new Y.XmlElement('heading');
@@ -597,7 +620,7 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
       continue;
     }
 
-    if (isRule(line)) {
+    if (isRule(line.trimStart())) {
       out.push(new Y.XmlElement('horizontalRule'));
       i++;
       continue;
@@ -622,17 +645,20 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
       continue;
     }
 
-    if (isBullet(line) || isNumbered(line)) {
+    // Indent-aware: a list whose items carry leading whitespace is still a
+    // list. Column-anchored detection here sent an indented item into the
+    // paragraph fallback, which then swallowed every sibling item after it.
+    if (isListItemLine(line)) {
       const [list, next] = parseListAt(i, indentOf(line));
       out.push(list);
       i = next;
       continue;
     }
 
-    if (isQuote(line)) {
+    if (isQuote(line.trimStart())) {
       const quoted: string[] = [];
-      while (i < lines.length && isQuote(lines[i] ?? '')) {
-        quoted.push((lines[i] ?? '').replace(/^>\s?/, ''));
+      while (i < lines.length && isQuote((lines[i] ?? '').trimStart())) {
+        quoted.push((lines[i] ?? '').trimStart().replace(/^>\s?/, ''));
         i++;
       }
       const bq = new Y.XmlElement('blockquote');
@@ -666,12 +692,17 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
     // Default: a paragraph. Gather consecutive non-blank, non-block-start
     // lines and join with a space so soft-wrapped prose becomes one
     // paragraph (standard markdown convention).
-    const paraLines: string[] = [line];
+    // `trimStart`, not `trim`: the leading whitespace has to go, because a
+    // continuation line's indent would otherwise be joined into the prose as
+    // characters. Trailing whitespace has to STAY, because two spaces at the
+    // end of a line is markdown's hard line break, and trimming it silently
+    // rewrote the author's line breaks on the next write-back.
+    const paraLines: string[] = [line.trimStart()];
     i++;
     while (i < lines.length) {
       const nxt = lines[i] ?? '';
       if (nxt.trim() === '' || isBlockStart(nxt)) break;
-      paraLines.push(nxt);
+      paraLines.push(nxt.trimStart());
       i++;
     }
     out.push(mkParagraph(paraLines.join(' ')));

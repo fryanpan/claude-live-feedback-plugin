@@ -153,7 +153,16 @@ export interface ReplaceResult {
     | 'out-of-range'
     | 'occurrence-out-of-range'
     | 'replace-all-with-occurrence'
-    | 'table-shape-mismatch';
+    | 'table-shape-mismatch'
+    | 'block-markdown-in-replacement';
+  /** On `block-markdown-in-replacement`: the offending line of `replace`,
+   *  so the caller can see which one it was without re-reading its payload. */
+  blockLine?: string;
+  /** A sentence the caller can act on, naming the verb that does the job this
+   *  one refused. The MCP client interpolates this whole result into the Error
+   *  it throws, so an `error` code alone reaches the agent as a slug with no
+   *  next move in it; this field is what makes the refusal actionable. */
+  message?: string;
   /** For ambiguous results, a short preview of each candidate's neighbourhood. */
   candidates?: Array<{ docOffset: number; preview: string }>;
   /** replaceAll only: how many occurrences were replaced. */
@@ -346,6 +355,59 @@ export function insertTextWithMarks(
  * / `*italic*` / `` `code` `` / `~~strike~~` syntax in the `replace`
  * string as marks on the inserted text (instead of literal characters).
  */
+/**
+ * The first line of a replacement that is block-level markdown, or null.
+ *
+ * Deliberately narrow, in two tiers. A heading, a fence or a thematic break
+ * is block-level wherever it appears — no sentence begins `### `. A list
+ * marker or a `>` quote is only read as block-level in a MULTI-LINE
+ * replacement, because a one-line replacement may legitimately start with a
+ * hyphen or an angle bracket (`- 5 degrees`), and refusing that would block
+ * an edit this verb has always done correctly.
+ *
+ * A bare `\n\n` is NOT block markdown — it has always meant "a paragraph
+ * break inside this block" here, and callers rely on it.
+ *
+ * Both markers are narrower than markdown's own grammar on purpose, because
+ * a false refusal here blocks an edit that was always correct while the miss
+ * it guards against is only a literal-character insert the integrity check
+ * then reports. So an ordered marker is at most two digits: CommonMark would
+ * read `2026. A year` as a list, and prose writes years far more often than
+ * it writes hundred-item lists.
+ */
+/**
+ * A line that OPENS or CLOSES a fenced code block, as opposed to one that
+ * merely begins with an inline code span.
+ *
+ * A bare `^```` refused `` ```**kwargs``` is Python `` — a perfectly ordinary
+ * inline replacement — because the span happened to sit at the head of the
+ * line. A real fence line carries an info string at most, so no further
+ * backtick follows it; a span always closes on the same line.
+ */
+function isFenceLine(line: string): boolean {
+  return /^```[^`]*$/.test(line) || /^~~~/.test(line);
+}
+
+function blockMarkdownLine(replace: string): string | null {
+  const lines = replace.split('\n');
+  const multi = lines.length > 1;
+  for (const raw of lines) {
+    const line = raw.trimStart();
+    if (line.length === 0) continue;
+    const always =
+      /^#{1,6}\s+\S/.test(line) || // ATX heading
+      isFenceLine(line) ||
+      /^(?:---+|\*\*\*+|___+)\s*$/.test(line); // thematic break
+    const whenMulti =
+      multi &&
+      (/^[-*+]\s+\S/.test(line) || // bullet item
+        /^\d{1,2}[.)]\s+\S/.test(line) || // ordered item
+        /^>\s?\S/.test(line)); // blockquote
+    if (always || whenMulti) return raw.trim();
+  }
+  return null;
+}
+
 export function findAndReplace(
   doc: Y.Doc,
   opts: {
@@ -363,6 +425,26 @@ export function findAndReplace(
     transactionOrigin?: unknown;
   },
 ): ReplaceResult {
+  const blockLine = blockMarkdownLine(opts.replace);
+  if (blockLine != null) {
+    // A replacement is spliced INTO one Y.XmlText. Inline syntax can become
+    // marks on those characters; a heading, a list item or a rule cannot —
+    // it has no home inside a block, so it landed on screen as literal `###`
+    // with the block count unchanged, ok:true, and a correct file on disk.
+    // Refusing is the only honest answer available here: turning one block
+    // into several is `insert_blocks_*`'s job, and doing it silently from
+    // this verb is the corruption, not the cure.
+    return {
+      ok: false,
+      error: 'block-markdown-in-replacement',
+      blockLine,
+      message:
+        `replace contains block-level markdown ("${blockLine}"), which cannot go inside an ` +
+        'existing block — it would land in the doc as literal characters. Use ' +
+        'insert_blocks_after_thread or insert_blocks_at_anchor to add new blocks, and keep ' +
+        'find_and_replace for inline text.',
+    };
+  }
   if (opts.replaceAll === true && opts.occurrence != null) {
     // The two answer opposite questions — "which one" vs "all of them" —
     // and guessing which the caller meant would silently do the other.
