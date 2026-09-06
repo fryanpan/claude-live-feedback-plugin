@@ -135,16 +135,21 @@ where height is the scarce axis) and **430** wide, per
 
 *Check:* no check yet.
 
-## 6. The four gates, and what each one catches
+## 6. The gates, and what each one catches
 
-Four separate commands. None is a subset of another — run all four before you
-push.
+`bun run verify` runs all of them. None is a subset of another, and this table
+is not the list to work from — `bun run verify --list` is, because it cannot
+go stale (`bun run verify:parity` fails the build if it does). The four rows
+below are the ones a test author is most likely to be reasoning about.
 
 | Gate | Catches what the others miss |
 | --- | --- |
-| `bunx vitest run` | unit + client suites (workspaces-app, core, widget) |
-| `bun test packages/server/test` | the server suite; vitest does not run it |
-| `bun run typecheck` | type errors; neither runner typechecks |
-| `bun run lint` | biome; nothing else formats |
+| `test:vitest` | unit + client suites (workspaces-app, core, widget) |
+| `test:server` | the server suite; vitest does not run it |
+| `typecheck` | type errors; neither runner typechecks |
+| `test:audit` | the mechanical half of this file, ratcheted |
 
-`bun run test:audit` is the fifth check and runs in CI alongside them.
+The other eleven — lint, coverage, `loc:audit`, the import-direction and
+architecture gates, the widget build and its size budget, the build-id and
+MCP-bundle checks, the leak-gate self-test, the plugin-version gate — are
+members of the same command. This table names four; `verify` runs fifteen.

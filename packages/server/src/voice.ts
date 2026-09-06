@@ -252,6 +252,9 @@ export class VoiceRouter {
   private taskCommentDoc: VoiceTaskCommentDoc | undefined;
   private docTitle: ((workspaceId: string, docId: string) => string | undefined) | undefined;
   private queue: ((workspaceId: string) => StatusQueueRow[]) | undefined;
+  /** The router's own instructions, read per utterance. Absent means the
+   *  shipped `DEFAULT_VOICE_SYSTEM`. */
+  private instructions: (() => string) | undefined;
   /** Recent text writes, keyed by workspace + verb + target + exact words —
    *  see `once`. Pruned on every write, so it cannot grow without bound. */
   private recentWrites = new Map<string, number>();
@@ -283,6 +286,13 @@ export class VoiceRouter {
     /** What is waiting on a person board-wide — the Home queue, as the
      *  review-items route ships it. Feeds "brief status" only. */
     queue?: (workspaceId: string) => StatusQueueRow[];
+    /**
+     * What the classifier is told, read PER UTTERANCE rather than captured
+     * here. A thunk, because the router is built once at boot and an edit
+     * saved on the settings page has to reach the next utterance without a
+     * restart.
+     */
+    instructions?: () => string;
     /** The clock, for the "which one?" window. Tests move it. */
     now?: () => number;
   }) {
@@ -294,6 +304,7 @@ export class VoiceRouter {
     this.taskCommentDoc = opts.taskCommentDoc;
     this.docTitle = opts.docTitle;
     this.queue = opts.queue;
+    this.instructions = opts.instructions;
   }
 
   /**
@@ -821,7 +832,9 @@ export class VoiceRouter {
         docTitles,
       };
       try {
-        const reply = await this.complete(buildVoicePrompt(index, transcript, context, resource));
+        const reply = await this.complete(
+          buildVoicePrompt(index, transcript, context, resource, this.instructions?.()),
+        );
         classification = parseVoiceReply(reply);
         if (!classification) fastPathDown = true;
       } catch (err) {

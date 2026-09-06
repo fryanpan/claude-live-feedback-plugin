@@ -154,6 +154,50 @@ def public_commit_identities(remote_glob: Optional[str] = None) -> set:
     return {line.strip() for line in out.splitlines() if line.strip()}
 
 
+def _identity_name(identity: str) -> str:
+    """`Ada Lovelace <ada@example.invalid>` -> `Ada Lovelace`."""
+    return identity.split("<", 1)[0].strip()
+
+
+def published_author_names(remote_glob: Optional[str] = None) -> set:
+    """Display names on commits the remote already carries."""
+    return {
+        name
+        for name in (_identity_name(i) for i in public_commit_identities(remote_glob))
+        if name
+    }
+
+
+def maintainer_names(remote_glob: Optional[str] = None) -> set:
+    """Names the Haiku layer must not read as a leak in THIS repository.
+
+    The narrower `redact_public_identities` below fixed the same class of
+    false positive one layer up (PR #198): the gate flagged the commit author
+    trailer of every already-public commit. This is that fix for prose. A
+    maintainer's own name in their own public repository's documentation is
+    not a leak — it is already in hundreds of tracked files — but the scanner
+    was told it was safe only in standard metadata, so every documentation
+    change that quoted them by name failed the push, and the only exits were
+    to redact their own words or switch the gate off. A gate that fires on
+    the normal path trains people to bypass it.
+
+    Two conditions, and the intersection is the point:
+
+    * the name is the identity this checkout commits under, so it names the
+      person doing the pushing rather than anyone they wrote about; and
+    * this repository has already published commits under it, so setting
+      `user.name` to a colleague's name buys no exemption — they would have
+      to be a published author here already.
+
+    Empty set means no exemption and the scanner behaves exactly as before,
+    which is what CI and any fresh clone get.
+    """
+    local = _git(["git", "config", "user.name"]).strip()
+    if not local:
+        return set()
+    return {local} & published_author_names(remote_glob)
+
+
 def redact_public_identities(patch: str, identities: Iterable[str]) -> str:
     """Blank commit-metadata identity lines the remote has already published.
 

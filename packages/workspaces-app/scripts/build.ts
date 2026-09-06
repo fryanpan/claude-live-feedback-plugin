@@ -29,6 +29,7 @@ const HASHED = [
   'app.js',
   'board.js',
   'signin.js',
+  'settings.js',
   'landing.js',
   'sentry.js',
   'sw.js',
@@ -36,6 +37,7 @@ const HASHED = [
   'doc.css',
   'board.css',
   'signin.css',
+  'settings.css',
   'tokens.css',
   'index.html',
 ];
@@ -138,6 +140,28 @@ async function emit(buildId: string): Promise<boolean> {
     return false;
   }
 
+  // The settings page: its own entry (served at /app/settings.js by the shell
+  // the server renders for /settings/*). Splitting off — the page is a list
+  // and a textarea, and it deliberately shares nothing with the board's
+  // bundle: it is reached from the board, not part of it.
+  const settingsResult = await Bun.build({
+    entrypoints: [join(pkgRoot, 'src', 'settings', 'settings-app.ts')],
+    outdir: dist,
+    target: 'browser',
+    format: 'esm',
+    splitting: false,
+    sourcemap: 'external',
+    define,
+    naming: { entry: 'settings.js', chunk: '[name]-[hash].js', asset: '[name].[ext]' },
+    minify: process.env.NODE_ENV !== 'dev' && !isWatch,
+  });
+  if (!settingsResult.success) {
+    console.error('settings build failed:');
+    for (const m of settingsResult.logs) console.error(m);
+    if (!isWatch) process.exit(1);
+    return false;
+  }
+
   // The landing page: its own entry (served at /app/landing.js by the shell
   // renderLanding emits). It defines <meeting-banner> and nothing else —
   // splitting off because the page is a list and one self-styling element.
@@ -215,6 +239,10 @@ async function emit(buildId: string): Promise<boolean> {
   // stylesheet the shells name by URL has to exist under that name.
   cpSync(join(pkgRoot, 'src', 'board.css'), join(dist, 'board.css'));
   cpSync(join(pkgRoot, 'src', 'signin.css'), join(dist, 'signin.css'));
+  // The settings page's own rules, loaded by the settings shell on top of
+  // styles.css. Copied rather than bundled for the same reason the others
+  // are: a stylesheet the shells name by URL has to exist under that name.
+  cpSync(join(pkgRoot, 'src', 'settings.css'), join(dist, 'settings.css'));
   // The Open Props trial layer: the vendored subset (self-hosted — a strict
   // CSP and offline tailnet use forbid CDN hosts) concatenated with the
   // mapping in src/tokens.css, served as one file at /app/tokens.css so a

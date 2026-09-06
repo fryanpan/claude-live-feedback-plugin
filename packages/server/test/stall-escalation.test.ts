@@ -23,6 +23,7 @@ import { join } from 'node:path';
 import { taskReviewItems } from '../src/review-queue.ts';
 import {
   STALL_ESCALATION_FILENAME,
+  STALL_ESCALATION_SETTLE_DEFAULT_MS,
   StallEscalations,
   buildStallEscalationReview,
 } from '../src/stall-escalation.ts';
@@ -34,6 +35,10 @@ const PERSON = { id: 'known-robin', name: 'Robin Vale', kind: 'person' };
 const AGENT = { id: 'agent-tide-runner', name: 'Tide Runner', kind: 'agent' };
 /** Short enough to be a number in a test, long enough to be a real window. */
 const ESCALATE_MS = 60 * 60_000;
+/** The default minimum life of a filed item, which every test here runs
+ *  against — the constructor takes `min(settleMs, escalateMs)` and no test
+ *  sets `settleMs`. */
+const SETTLE_MS = STALL_ESCALATION_SETTLE_DEFAULT_MS;
 
 function row(task: Task, bucket: string, quietMs = 90 * 60_000): StalledRow {
   return { id: task.id, title: task.title, bucket, quietMs };
@@ -197,6 +202,100 @@ describe('a told row that has not moved escalates to the reader', () => {
     expect(openItems(a.id)).toHaveLength(0);
     expect(items(a.id)[0]?.review.withdrawnAt).toBeGreaterThan(0);
     expect(escalations.filedCount()).toBe(0);
+  });
+
+  it('does not escalate a row its own lead has been working since it was told', () => {
+    const a = make('Re-point the digest at the new bucket');
+    // The shape the field produced: the lead was told about this row a day and
+    // a half ago and has been on it since — it commented, then moved it to
+    // in-progress twenty-five minutes back. `ToldRow.toldAt` is stamped once
+    // and never refreshed, so the told clock still reads 33h while the row's
+    // own clock reads 25m.
+    const told = toldMap([[a.id, now - 33 * 60 * 60_000]]);
+    escalations.onBoard(board(wsId, { stalled: [row(a, 'in-progress', 25 * 60_000)] }), told, now);
+
+    // Nothing filed: a row whose newest write is its own lead's is the lead
+    // being reachable on it, which is the absence this module escalates for.
+    expect(items(a.id)).toHaveLength(0);
+    expect(queued()).toHaveLength(0);
+    expect(escalations.filedCount()).toBe(0);
+  });
+
+  it('does not take an item back because the row posted one note', () => {
+    const a = make('Drain the retry queue');
+    const told = toldMap([[a.id, now - ESCALATE_MS - 60_000]]);
+    escalations.onBoard(board(wsId, { unfiled: [row(a, 'blocked-on-owner-unfiled')] }), told, now);
+    const filed = openItems(a.id)[0]?.id ?? '';
+    expect(filed).not.toBe('');
+
+    // The commonest write on any live board: the row's own agent posting its
+    // end-of-turn note. It bumps `updatedAt`, which is the only signal the
+    // anchor test has — and on the field board it withdrew the ask sixty
+    // seconds after it was filed, while a watching session was still telling
+    // the reader something was waiting for them.
+    //
+    // The STORE's clock is pinned a second on, for the reason the asked-back
+    // test below gives: `appendNote` stamps `updatedAt` with `Date.now()` and
+    // ignores the `ts` it is handed, so left to the real clock the note lands
+    // in the same millisecond as the filing, `anchorUntouched` stays true for
+    // a reason that has nothing to do with this fix, and the assertion passes
+    // vacuously.
+    setSystemTime(Date.now() + 1_000);
+    store.appendNote(a.id, {
+      kind: 'status',
+      text: 'Still on the retry queue; the consumer restart is next.',
+      agent: AGENT.name,
+      ts: now + 30_000,
+    });
+    escalations.onBoard(board(wsId), told, now + 60_000);
+
+    expect(openItems(a.id).map((i) => i.id)).toEqual([filed]);
+    expect(queued().map((r) => r.reviewItemId)).toEqual([filed]);
+  });
+
+  it('does take it back once the item has stood and the row is still being written', () => {
+    const a = make('Split the importer in two');
+    const told = toldMap([[a.id, now - ESCALATE_MS - 60_000]]);
+    escalations.onBoard(board(wsId, { unfiled: [row(a, 'blocked-on-owner-unfiled')] }), told, now);
+    expect(openItems(a.id)).toHaveLength(1);
+
+    // The other half of the settle window, so it does not read as "an ask is
+    // never retracted". Past it, a written-to anchor with nothing else
+    // qualifying is the board's rows moving again, and the item goes.
+    //
+    // Clock pinned for the same reason as the test above — `appendNote` dates
+    // `updatedAt` from `Date.now()`, not from the `ts` it is given.
+    setSystemTime(Date.now() + 1_000);
+    store.appendNote(a.id, {
+      kind: 'status',
+      text: 'Picked it back up; PR open.',
+      agent: AGENT.name,
+      ts: now + SETTLE_MS + 30_000,
+    });
+    escalations.onBoard(board(wsId), told, now + SETTLE_MS + 60_000);
+
+    expect(openItems(a.id)).toHaveLength(0);
+    expect(items(a.id)[0]?.review.withdrawnAt).toBeGreaterThan(0);
+    expect(escalations.filedCount()).toBe(0);
+  });
+
+  it('escalates an unfiled ask its row keeps restating, whose silence is seconds', () => {
+    const a = make('Decide which of the two writers stays');
+    const told = toldMap([[a.id, now - ESCALATE_MS - 60_000]]);
+    // What the gate hands over for a `blocked-on-owner-unfiled` row whose ask
+    // lives in its notes: the agent restated it this minute, so `quietMs` is
+    // seconds, while the ask nobody filed is hours old. The hours are the
+    // finding, and `stuckMs` is where the gate puts them.
+    escalations.onBoard(
+      board(wsId, {
+        unfiled: [{ ...row(a, 'blocked-on-owner-unfiled', 30_000), stuckMs: 3 * 60 * 60_000 }],
+      }),
+      told,
+      now,
+    );
+
+    expect(openItems(a.id)).toHaveLength(1);
+    expect(openItems(a.id)[0]?.review.detail ?? '').toContain('Quiet 3h');
   });
 
   it('keeps the item open while the anchor is masked by the item itself', () => {
@@ -386,6 +485,42 @@ describe('a told row that has not moved escalates to the reader', () => {
     expect(rows.map((r) => r.reviewItemId)).toEqual([filed]);
     expect(rows[0]?.taskId).toBe(a.id);
     expect(rows[0]?.review.detail ?? '').toContain(b.id);
+    expect(items(b.id)).toHaveLength(0);
+  });
+
+  it('still holds the reader\u2019s thread when the ask is older than the settle window', () => {
+    const a = make('Merge the two ingest paths');
+    const b = make('Delete the shim the old path needed');
+    const told = toldMap([[a.id, now - ESCALATE_MS - 60_000]]);
+    escalations.onBoard(board(wsId, { unfiled: [row(a, 'blocked-on-owner-unfiled')] }), told, now);
+    const filed = openItems(a.id)[0]?.id ?? '';
+
+    // The same scenario as the test above, run PAST the settle window on
+    // purpose. Inside it nothing may re-anchor at all, so that test can no
+    // longer tell whether `ownActivityAt` still discounts the reader's own
+    // question — it passes with the question ignored. This one is the control
+    // for that: here the item is old enough to be re-anchored, so the only
+    // thing keeping it on `a` is the module reading the reader's question as
+    // its own item's write rather than as the row moving.
+    const asked = Date.now() + 1000;
+    setSystemTime(asked);
+    store.requestMoreInfoOnReview(a.id, filed, 'Which of these is holding the other up?', {
+      actor: PERSON,
+      threadId: 'th-reader-asked-back-late',
+    });
+    expect(queued()).toHaveLength(0);
+
+    setSystemTime(asked + 1000);
+    told.set(b.id, { at: now - ESCALATE_MS - 60_000, delivered: true });
+    escalations.onBoard(
+      board(wsId, { stalled: [row(b, 'in-progress')] }),
+      told,
+      now + SETTLE_MS + 60_000,
+    );
+
+    const rows = queued();
+    expect(rows.map((r) => r.reviewItemId)).toEqual([filed]);
+    expect(rows[0]?.taskId).toBe(a.id);
     expect(items(b.id)).toHaveLength(0);
   });
 

@@ -1,0 +1,412 @@
+/* ===== THE SETTINGS PAGE'S OWN STYLESHEET =====
+   Everything /settings/* paints, and nothing any other page does. Its own
+   file for the reason hub.css is its own file: appending to the end of one
+   long shared stylesheet is what makes two branches conflict over a line
+   neither cares about.
+
+   Loaded AFTER styles.css, which carries the design tokens every rule below
+   reads (--fg, --bg-panel, --accent, --radius, --sans, --mono). Nothing here
+   redefines a token; a settings page that invented its own palette would
+   drift from the board the first time the board's moved.
+
+   Put a rule under the `===== ` banner it belongs to. */
+
+/* ===== SHELL: rail + page, the board's own two-column frame ===== */
+body.settings-body {
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--fg);
+  background: var(--bg);
+  overflow: hidden;
+}
+.settings-shell {
+  display: flex;
+  height: 100vh;
+}
+.settings-rail {
+  flex: none;
+  width: 148px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 6px;
+  border-right: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+.settings-rail-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.settings-rail-item:hover {
+  background: var(--bg-hover);
+}
+.settings-rail-item[aria-current="page"] {
+  background: var(--bg-hover);
+  font-weight: 600;
+}
+.settings-rail-icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7;
+}
+.settings-rail-spacer {
+  flex: 1;
+}
+.settings-page {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ===== TOPBAR ===== */
+.settings-topbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border);
+}
+.settings-topbar h1 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+.settings-back {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 8px 0 4px;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+.settings-back:hover {
+  background: var(--bg-hover);
+}
+/* The editor's back-to-the-list arrow is on every width: the list is one tap
+   up from the prompt, and on the iPad the rail beside it goes to the BOARD,
+   which is a different journey. */
+.settings-back.settings-back--up {
+  display: flex;
+}
+
+.settings-body-row {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.settings-subnav {
+  flex: none;
+  width: 172px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 8px;
+  border-right: 1px solid var(--border);
+}
+.settings-subnav a {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border-radius: var(--radius);
+  color: var(--fg);
+  text-decoration: none;
+}
+.settings-subnav a:hover {
+  background: var(--bg-hover);
+}
+.settings-subnav a[aria-current="page"] {
+  background: var(--bg-hover);
+  font-weight: 600;
+}
+.settings-main {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 14px 20px 24px;
+  display: flex;
+  flex-direction: column;
+}
+/* The inner column claims the pane's full height so the editor below can hand
+   its leftover room to the textarea. On the iPad height is the scarce axis and
+   a prompt box parked at its 220px floor under 400px of empty pane is the
+   wrong way to spend it. */
+.settings-main-inner {
+  flex: 1;
+  min-height: 0;
+  max-width: 820px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ===== THE LIST OF PROMPTS ===== */
+.prompt-list {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.prompt-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 52px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.prompt-row:hover {
+  background: var(--bg-panel);
+  border-color: var(--border-strong);
+}
+.prompt-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.prompt-name {
+  font-weight: 600;
+}
+.prompt-purpose {
+  color: var(--fg-muted);
+}
+/* The one marker on a row: which of these he has changed. It is how you find
+   what you broke last week, and it is the only state a row carries. */
+.prompt-edited {
+  flex: none;
+  color: var(--accent);
+  font-weight: 600;
+}
+.prompt-chev {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  stroke: var(--fg-muted);
+  fill: none;
+  stroke-width: 2;
+}
+
+/* ===== THE EDITOR ===== */
+.prompt-editor {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 10px;
+}
+.prompt-editor-head {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.prompt-editor-head h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+.prompt-editor-head .prompt-purpose {
+  flex: 1;
+  min-width: 180px;
+}
+.prompt-editor-head .prompt-edited {
+  align-self: baseline;
+}
+.prompt-box {
+  flex: 1;
+  min-height: 220px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  resize: none;
+}
+.prompt-box:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+.prompt-box:disabled {
+  background: var(--bg-panel);
+  color: var(--fg-muted);
+}
+.prompt-actions {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.prompt-btn {
+  min-height: 44px;
+  padding: 4px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+.prompt-btn:hover {
+  background: var(--bg-hover);
+}
+.prompt-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.prompt-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.prompt-btn-primary:hover:not(:disabled) {
+  background: #2569b5;
+}
+.prompt-default-view {
+  flex: none;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.prompt-default-view summary {
+  cursor: pointer;
+  color: var(--accent);
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+}
+.prompt-default-view pre {
+  margin: 8px 0 0;
+  max-height: 190px;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  color: var(--fg-muted);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+/* Read-only prompts show their words and nothing to type in: the thread
+   summary is versioned, and an edit marks every stored summary stale. */
+.prompt-readonly {
+  flex: 1;
+  min-height: 220px;
+  margin: 0;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+/* ===== THE ONE-LINE REPORT ===== */
+.settings-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 60;
+  max-width: min(92vw, 520px);
+  padding: 8px 14px;
+  border-radius: var(--radius-pill);
+  background: rgba(27, 31, 35, 0.92);
+  color: #fff;
+  box-shadow: var(--shadow-lg);
+}
+.settings-toast[hidden] {
+  display: none;
+}
+
+/* ===== MOBILE (<=1100) ===== */
+@media (max-width: 1100px) {
+  .settings-rail,
+  .settings-subnav {
+    display: none;
+  }
+  .settings-back {
+    display: flex;
+  }
+  body.settings-body {
+    font-size: 16px;
+  }
+  .settings-main {
+    padding: 12px 14px 20px;
+  }
+  .prompt-row {
+    min-height: 56px;
+  }
+  /* At 430px the purpose wraps to three lines and a vertically centred badge
+     lands in the middle of the sentence, reading as a word inserted into it.
+     Aligned to the top it sits beside the name, which is the row it labels. */
+  .prompt-edited,
+  .prompt-chev {
+    align-self: flex-start;
+    margin-top: 2px;
+  }
+  .prompt-editor-head {
+    gap: 4px 8px;
+  }
+  .prompt-editor-head .prompt-purpose {
+    flex-basis: 100%;
+  }
+  .prompt-actions .prompt-btn {
+    flex: 1 1 auto;
+  }
+  /* 16px, not the desktop 12.5px: iOS Safari zooms the whole page in when a
+     field under 16px takes focus, and a prompt is the one field on this page
+     someone types a paragraph into. Same reason the composer's own input
+     carries the floor (hub.css, "so iOS Safari doesn't zoom the field"). */
+  .prompt-box {
+    font-size: 16px;
+  }
+  /* The back link already says "Prompts"; the h1 beside it repeated the word
+     for no one. Where you ARE is the prompt named in the h2 below. */
+  .settings-topbar h1.settings-title--editing {
+    display: none;
+  }
+}

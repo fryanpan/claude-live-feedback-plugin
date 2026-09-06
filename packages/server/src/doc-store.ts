@@ -719,6 +719,44 @@ export class DocStore {
   }
 
   /**
+   * Model process death: drop every write this store still owes — the
+   * debounced `.md` write-backs, the `.ydoc` saves and the revision bumps
+   * that persist index rows — then stop.
+   *
+   * A TEST SEAM, and deliberately not what `stop()` does: a graceful shutdown
+   * FLUSHES (that is what `flush()` is for), and dropping writes there would
+   * be the keystroke loss the sync-clobber suite exists about. It is here
+   * because the state it builds — the `.ydoc` saved, the `.md` not — is
+   * otherwise reachable only as a race between two debounces, and a test that
+   * has to land inside a few hundred milliseconds is one loaded runner away
+   * from red.
+   *
+   * `stop()` alone is not enough, and the reason is worth keeping: a stopped
+   * store still holds its doc-level debounces, and a revision bump firing
+   * afterwards REWRITES the index row — the row that carries the
+   * un-flushed-write marker. Measured while building this: 400ms after
+   * `stop()` the marker was gone and the next boot found nothing to reassert.
+   * A crashed process writes nothing more, so neither does this.
+   *
+   * What it leaves on disk is exactly what a crash leaves: the `.ydoc` as
+   * last persisted, its index row with `pendingFileWrite` still set, and a
+   * `.md` that never got the edit.
+   */
+  simulateCrash(): void {
+    for (const doc of this.docs.values()) {
+      if (doc.revisionTimer) clearTimeout(doc.revisionTimer);
+      doc.revisionTimer = null;
+      doc.pendingRevisionBump = false;
+    }
+    for (const [docId, timer] of this.saveTimers) {
+      clearTimeout(timer);
+      this.saveTimers.delete(docId);
+    }
+    for (const docId of this.bindings.pendingWriteDocIds()) this.bindings.discard(docId);
+    this.stop();
+  }
+
+  /**
    * docId → its listing row, resident.
    *
    * The rows are what a board actually reads, and they are ~400 bytes each
