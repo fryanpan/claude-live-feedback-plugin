@@ -88,13 +88,35 @@ export function shardOf(files: string[], index: number, total: number): string[]
 }
 
 /**
- * Guided self-scheduling: a worker takes about 1/2n of what is left, so the
- * first chunks are big (module loading is paid once per chunk) and the last
- * are single files (nobody is left holding a long tail). No weights file to
- * go stale — a suite that changes shape rebalances itself on the next run.
+ * Guided self-scheduling: a chunk is about 1/2n of what is left, so the first
+ * chunks are big (module loading is paid once per chunk) and the last are
+ * single files (nobody is left holding a long tail). No weights file to go
+ * stale — a suite that changes shape rebalances itself on the next run.
  */
 export function nextChunkSize(remaining: number, jobs: number): number {
   return Math.max(1, Math.floor(remaining / (jobs * 2)));
+}
+
+/**
+ * The chunks, decided BEFORE any of them runs.
+ *
+ * Which worker picks a chunk up still depends on when it finishes the last
+ * one; which files are in a chunk must not. Deciding the split as workers
+ * grab from a shared cursor would have made the grouping depend on machine
+ * speed, so the same commit would run its tests in different company on two
+ * runs — and a file that only passes beside (or apart from) another would
+ * fail intermittently, with nothing in the run to say why. Each chunk is its
+ * own bun process, so a fixed chunk list is a fixed grouping.
+ */
+export function planChunks(files: string[], jobs: number): string[][] {
+  const chunks: string[][] = [];
+  let cursor = 0;
+  while (cursor < files.length) {
+    const size = nextChunkSize(files.length - cursor, jobs);
+    chunks.push(files.slice(cursor, cursor + size));
+    cursor += size;
+  }
+  return chunks;
 }
 
 export interface ChunkResult {
@@ -162,21 +184,19 @@ async function main(): Promise<void> {
   const label = `${files.length} file(s) across ${jobs} process(es)`;
   console.log(`${SUITE_DIR} — ${label}${shard ? ` (shard ${shard})` : ''}\n`);
 
-  let cursor = 0;
+  const plan = planChunks(files, jobs);
+  let next = 0;
   let failed = false;
   const results: ChunkResult[] = [];
-  const chunkDirs: string[] = [];
+  const chunkDirs = covRoot ? plan.map((_, i) => join(covRoot, `chunk-${i + 1}`)) : [];
 
-  let chunkNo = 0;
   const worker = async (): Promise<void> => {
     for (;;) {
       if (bail && failed) return;
-      const size = nextChunkSize(files.length - cursor, jobs);
-      const chunk = files.slice(cursor, cursor + size);
-      cursor += chunk.length;
-      if (chunk.length === 0) return;
-      const dir = covRoot ? join(covRoot, `chunk-${++chunkNo}`) : null;
-      if (dir) chunkDirs.push(dir);
+      const index = next++;
+      const chunk = plan[index];
+      if (chunk === undefined) return;
+      const dir = chunkDirs[index] ?? null;
       const args = ['test'];
       if (coverage) {
         args.push('--coverage', '--coverage-reporter=lcov');
@@ -212,12 +232,18 @@ async function main(): Promise<void> {
   await Promise.all(Array.from({ length: jobs }, () => worker()));
   const ms = Date.now() - started;
 
+  const bad = results.filter((r) => r.exitCode !== 0);
+
   if (covRoot) {
     const merged = mergeLcov(chunkDirs, covRoot);
     console.log(
       `\ncoverage: merged ${merged} of ${chunkDirs.length} chunk lcov file(s) into ${coverageDir}/lcov.info`,
     );
-    if (merged !== chunkDirs.length) {
+    // A short merge means the number would be measured from part of the suite,
+    // which is the one way this can be wrong without looking wrong. Only worth
+    // saying when nothing else failed: a red chunk (or --bail) explains the
+    // missing lcov by itself, and a second error on top of it buries the first.
+    if (merged !== chunkDirs.length && bad.length === 0 && !bail) {
       console.error(
         `❌ ${chunkDirs.length - merged} chunk(s) produced no lcov — the coverage number would be measured from part of the suite.`,
       );
@@ -225,10 +251,9 @@ async function main(): Promise<void> {
     }
   }
 
-  const bad = results.filter((r) => r.exitCode !== 0);
   console.log(`\n${'─'.repeat(72)}`);
   console.log(
-    `${SUITE_DIR}: ${files.length} file(s), ${results.length} chunk(s), ${jobs} process(es), ${(ms / 1000).toFixed(1)}s`,
+    `${SUITE_DIR}: ${files.length} file(s), ${plan.length} chunk(s), ${jobs} process(es), ${(ms / 1000).toFixed(1)}s`,
   );
   if (bad.length === 0) {
     console.log('✅ server suite passed.');
