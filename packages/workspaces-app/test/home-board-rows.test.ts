@@ -21,8 +21,6 @@
  *
  * All fixtures are synthetic.
  */
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type BoardFilters,
@@ -32,12 +30,8 @@ import {
   DEFAULT_DONE_WINDOW,
   boardSections,
 } from '../src/board/board-model.ts';
-import { BOARD_BOOT_SOURCES } from './support/board-boot-sources.ts';
+import { WS, boardRow, bootTestBoard, resetBoardServer } from './support/board-drive.ts';
 import { type ShimHandlers as BoardHandlers, disposeBoards, renderBoard } from './support/board.ts';
-
-const BOARD_APP = BOARD_BOOT_SOURCES.map((m) =>
-  readFileSync(resolve(import.meta.dirname, `../src/board/${m}.ts`), 'utf8'),
-).join('\n');
 
 const NOW = 1_700_000_000_000;
 
@@ -130,10 +124,60 @@ describe('the board island’s pane gate', () => {
   });
 });
 
+/**
+ * The gate, on a real board rather than on the render shim.
+ *
+ * DRIVEN, NOT GREPPED. This used to read the seventeen board boot modules as
+ * one string, cut `renderBoardRegion` out with a regex and match
+ * `boardData.value = { … pane: state.pane,` inside it. That is a claim about
+ * how the signal write is SPELLED: `pane` reaching the island from anywhere
+ * else, or reaching it hard-coded, satisfies it — and the measurement that
+ * started this ticket was a DOM query (70 zero-height `.board-task-row` nodes
+ * answering selectors on a page showing none), so make the same query.
+ *
+ * The four cases above drive the island directly and are the gate's own unit
+ * tests. These two are the wiring: the real boot, on the real route, and the
+ * rows counted in the document.
+ */
 describe('the board wires the pane through', () => {
-  it('renderBoardRegion writes state.pane into the signal, so the gate cannot be bypassed', () => {
-    const body = BOARD_APP.match(/function renderBoardRegion\([\s\S]*?\n {2}\}\n/)?.[0] ?? '';
-    expect(body, 'renderBoardRegion went missing from board-app.ts').not.toBe('');
-    expect(body).toMatch(/boardData\.value = \{[\s\S]*?pane: state\.pane,/);
+  beforeEach(resetBoardServer);
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  const rowsInDocument = () => document.querySelectorAll('.board-task-row').length;
+  const booted = Array.from({ length: 6 }, (_, i) => boardRow(`t-${i + 1}`, { order: i + 1 }));
+
+  it('a boot on /tasks paints the rows — the control the Home case is measured against', async () => {
+    await bootTestBoard({ url: `https://board.test/workspaces/${WS}/tasks`, tasks: booted });
+    expect(rowsInDocument()).toBe(booted.length);
+  });
+
+  it('a boot on /home paints none of them, not a hidden set', async () => {
+    // The 998px scrollHeight on a 932px viewport: rows that answer queries on
+    // a page showing none. `document`, not the island's container, because
+    // "anything that reads the board by selector" is the thing that broke.
+    await bootTestBoard({ url: `https://board.test/workspaces/${WS}/home`, tasks: booted });
+    expect(rowsInDocument()).toBe(0);
+    // Positive control: the projection really did land — the rows are absent
+    // because the pane says so, not because the board has no tasks.
+    expect(document.getElementById('board-home')?.classList.contains('hidden')).toBe(false);
+    expect(document.getElementById('board-main')?.classList.contains('board-main--home')).toBe(
+      true,
+    );
+  });
+
+  it('walking Home → board → Home builds them and takes them away again', async () => {
+    // The signal write is per-paint, so the gate has to hold on every arrival,
+    // not only on the one the boot happened to start at.
+    const board = await bootTestBoard({
+      url: `https://board.test/workspaces/${WS}/home`,
+      tasks: booted,
+    });
+    expect(rowsInDocument()).toBe(0);
+    await board.traverseTo(`https://board.test/workspaces/${WS}/tasks`);
+    expect(rowsInDocument()).toBe(booted.length);
+    await board.traverseTo(`https://board.test/workspaces/${WS}/home`);
+    expect(rowsInDocument()).toBe(0);
   });
 });
