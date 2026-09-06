@@ -233,8 +233,8 @@
   color: var(--accent, #2e7dd7);
   font-weight: 600;
 }
-/* Left the review (file deleted, or its change reverted) but kept because it
-   still holds comments. Dimmed and struck through, never hidden — a stranded
+/* Left the attachment set (file deleted, or its change reverted) but kept
+   because it still holds comments. Dimmed and struck through, never hidden — a stranded
    thread you can't see is a thread that gets lost. Stays fully clickable, and
    the active state still reads as active. */
 .tree-file a.stale .tree-name,
@@ -3121,7 +3121,7 @@ body.code-mode .cm-editor .cm-deletedChunk .cm-deletedText {
   background: rgba(45, 164, 78, 0.16);
 }
 
-/* In-This-Review panel: wider by default (320px) and drag-resizable on
+/* Attachment-set panel: wider by default (320px) and drag-resizable on
    desktop — grab the right edge; double-click resets. */
 #set-pane {
   position: relative;
