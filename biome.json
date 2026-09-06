@@ -46,6 +46,22 @@
       }
     }
   },
+  "overrides": [
+    {
+      "include": ["packages/workspaces-app/src/board/**"],
+      "ignore": ["packages/workspaces-app/src/board/board-entry.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedGlobals": {
+              "level": "error",
+              "options": { "deniedGlobals": ["location"] }
+            }
+          }
+        }
+      }
+    }
+  ],
   "formatter": {
     "enabled": true,
     "indentStyle": "space",

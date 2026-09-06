@@ -23,6 +23,9 @@ export interface FakeLocation extends BootLocation {
    *  and `href = url` alike, because the board uses both and a test asserting
    *  "it left for the next board" should not care which. */
   readonly navigations: string[];
+  /** How many times the boot asked for a reload. Its own counter rather than a
+   *  `navigations` entry: a reload names no destination. */
+  readonly reloads: { count: number };
   /**
    * Move the address the way a history traversal does: the browser has already
    * changed it by the time `popstate` fires, so a test firing that event must
@@ -33,6 +36,7 @@ export interface FakeLocation extends BootLocation {
 
 export function fakeLocation(url: string): FakeLocation {
   const navigations: string[] = [];
+  const reloads = { count: 0 };
   let parsed = new URL(url);
   return {
     get pathname(): string {
@@ -59,10 +63,14 @@ export function fakeLocation(url: string): FakeLocation {
     assign(next: string): void {
       navigations.push(next);
     },
+    reload(): void {
+      reloads.count += 1;
+    },
     moveTo(next: string): void {
       parsed = new URL(next, parsed.origin);
     },
     navigations,
+    reloads,
   };
 }
 

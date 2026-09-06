@@ -10,6 +10,17 @@
  *
  * Nothing may be added below. A step that belongs to the boot belongs in
  * `bootBoard`, where it can be tested.
+ *
+ * This is also the ONE file under `src/board/` allowed to name the ambient
+ * `location`. `biome.json` denies that global everywhere else in the directory
+ * and exempts this file by name, so a module inside the boot cannot navigate
+ * past the injection the way `startHuddle` used to: in a browser the ambient
+ * object and the injected one are the same, so the board worked and only the
+ * test could not see where the press had sent the reader. If lint stops you on
+ * a `location` here, take it from your deps object — every region already
+ * threads one. The rule reads bare identifiers only, so `window.location` and
+ * `globalThis.location` are spellings it cannot see; neither appears under
+ * `src/board/` today, and both would be the same bug.
  */
 import { connect } from '@feedback/core';
 import { browserStorage } from '../boot-env.ts';

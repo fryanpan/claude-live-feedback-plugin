@@ -51,6 +51,7 @@ function actions() {
     renderDetail: vi.fn(),
     renderLead: vi.fn(),
     focusTitle: vi.fn(),
+    location: { assign: vi.fn() },
   } as BoardActionDeps;
   return createBoardActions(deps);
 }

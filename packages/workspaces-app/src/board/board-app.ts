@@ -284,6 +284,7 @@ export async function bootBoard(env: BoardBootEnv): Promise<void> {
     renderDetail: () => renderDetail(),
     renderLead: () => renderLead(),
     focusTitle: (taskId) => setFocusTitle(taskId),
+    location,
   });
   const { newTask, startHuddle, archiveTask } = actions;
 
@@ -554,7 +555,7 @@ export async function bootBoard(env: BoardBootEnv): Promise<void> {
 
   // ── The chrome cluster ──────────────────────────────────────────────────
   const { peopleFromAwareness, renderPresenceRegion, renderMe, renderSettingsPanel } =
-    createBoardChromeRegion({ state, user, el, awareness: client.awareness });
+    createBoardChromeRegion({ state, user, el, awareness: client.awareness, location });
 
   function renderAll(): void {
     // Mounted, not rendered: `renderQuickActions` is a no-op after the first
@@ -671,6 +672,7 @@ export async function bootBoard(env: BoardBootEnv): Promise<void> {
     loadHome,
     loadReviewItems,
     loadDiscussion,
+    location,
   });
 
   // Controls.
