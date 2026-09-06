@@ -100,7 +100,7 @@ export function signInRequiredBody(): {
  * MCP child runs under node, so a predicate that counted it read every MCP
  * tool call as a browser: with the sign-in flag on that would have refused
  * every agent write, and the binding routes (which refuse browsers
- * unconditionally) refused the MCP bundle's own `create_review_doc` the day
+ * unconditionally) refused the MCP bundle's own `attach_markdown` the day
  * they were closed. The list is "what browsers send that clients don't",
  * and this header failed the second half.
  */

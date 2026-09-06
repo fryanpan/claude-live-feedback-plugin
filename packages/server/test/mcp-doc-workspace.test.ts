@@ -93,7 +93,7 @@ describe('the MCP tools file a doc in a workspace, through the real bundle', () 
     pending = new Map();
   });
 
-  it('create_review_doc forwards a caller-named workspace all the way to the store', async () => {
+  it('attach_markdown forwards a caller-named workspace all the way to the store', async () => {
     const ws = (await callTool('create_workspace', {
       name: 'mcp-named-ws',
       goal: 'Ship it.',
@@ -106,7 +106,7 @@ describe('the MCP tools file a doc in a workspace, through the real bundle', () 
 
     const path = join(dataDir, 'mcp-named.md');
     writeFileSync(path, '# Named\n\nBody.\n');
-    const res = (await callTool('create_review_doc', {
+    const res = (await callTool('attach_markdown', {
       docId: 'mcp-doc-named',
       path,
       hubWorkspaceId: wsId,
@@ -121,10 +121,10 @@ describe('the MCP tools file a doc in a workspace, through the real bundle', () 
     expect(handle.docStore.get('mcp-doc-named')?.docId).toBe(docId);
   });
 
-  it('create_review_doc with no workspace still lands the doc in one, in a single call', async () => {
+  it('attach_markdown with no workspace still lands the doc in one, in a single call', async () => {
     const path = join(dataDir, 'mcp-unfiled.md');
     writeFileSync(path, '# Unfiled\n\nBody.\n');
-    const res = (await callTool('create_review_doc', {
+    const res = (await callTool('attach_markdown', {
       docId: 'mcp-doc-unfiled',
       path,
     })) as { docId?: string; hubWorkspaceId?: string; meta?: { reviewUrl?: string } };

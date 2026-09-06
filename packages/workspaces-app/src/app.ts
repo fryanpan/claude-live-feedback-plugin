@@ -57,8 +57,12 @@ export interface AppBootEnv {
  * file starts the page. The destructure re-binds each injected thing to the
  * name it had as a global, so the sequence reads as it did and what changed is
  * only where those names come from.
+ *
+ * Returns the router's `stop()`. The page never calls it (it owns the tab for
+ * its lifetime); a caller that is not a page must, or the mount stays live with
+ * its debounced timers armed — see `app-boot.test.ts` for what that costs.
  */
-export async function bootApp(env: AppBootEnv): Promise<void> {
+export async function bootApp(env: AppBootEnv): Promise<() => void> {
   const { document, location, localStorage, window, connect } = env;
 
   const DEFAULT_WS_PATH = (docId: string, type: string) =>
@@ -128,7 +132,7 @@ export async function bootApp(env: AppBootEnv): Promise<void> {
     writeAccess.canWrite ? {} : { suppressNamePrompt: true },
   );
   registerMarkdownMount(mountMarkdown);
-  startRouter({
+  return startRouter({
     user,
     // The answer is already in hand — every mount gets it as a value rather
     // than asking again. A mount that re-asks is editable while it waits.

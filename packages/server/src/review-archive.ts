@@ -42,7 +42,7 @@ export interface ArchivedReview {
 
 /**
  * The same record for ONE doc that belongs to no review — a markdown doc from
- * `create_review_doc`, a mockup from `bind_mock`.
+ * `attach_markdown`, a mockup from `bind_mock`.
  *
  * It needs a manifest for a different reason than a review does. A review's
  * membership is only knowable from `docStore.list()`, so without a manifest the

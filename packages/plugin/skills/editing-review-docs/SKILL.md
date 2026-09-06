@@ -8,7 +8,7 @@ description: Use whenever you're about to edit a markdown file that might be und
 The claude-workspaces plugin's mental model is one rule:
 **every markdown review doc is a file on disk.**
 
-When an agent calls `create_review_doc(docId, path)`, the server reads
+When an agent calls `attach_markdown(docId, path)`, the server reads
 the `.md`, parses it into the live editor, and sets up bidirectional
 sync. From that point on:
 
@@ -95,7 +95,7 @@ Pick the smallest tool that does the job:
   threads on them survive, and the result flushes to the `.md` like
   any other edit. **Never** `Write` the bound file and
   `reparse_from_disk` after, and **never** do
-  `delete_doc → Write → create_review_doc` — both race the ~1s
+  `delete_doc → Write → attach_markdown` — both race the ~1s
   write-back (they have clobbered real files), and the latter orphans
   every comment thread.
 - **Insert a new block after a comment's block** →
@@ -176,7 +176,7 @@ the reviewer.
 ## Creating a new review doc
 
 If a `.md` file isn't under review yet and you want to bring it into
-the editor, call `create_review_doc(docId, path, title?, setId?)`. The
+the editor, call `attach_markdown(docId, path, title?, setId?)`. The
 doc must not already exist server-side; pick a fresh `docId`. The
 server will read the file, parse it, attach the watcher, and return a
 `reviewUrl` you can hand to a human. How you spell that link depends on
@@ -191,14 +191,14 @@ from the doc title on mobile). Hand the human the URL of any one
 doc in the set; they hop between siblings via the sidebar.
 
 ```
-create_review_doc({ docId: "auth-rfc",     path: "/abs/auth-rfc.md",     setId: "feb-2026-rfcs" })
-create_review_doc({ docId: "billing-rfc",  path: "/abs/billing-rfc.md",  setId: "feb-2026-rfcs" })
-create_review_doc({ docId: "schema-rfc",   path: "/abs/schema-rfc.md",   setId: "feb-2026-rfcs" })
+attach_markdown({ docId: "auth-rfc",     path: "/abs/auth-rfc.md",     setId: "feb-2026-rfcs" })
+attach_markdown({ docId: "billing-rfc",  path: "/abs/billing-rfc.md",  setId: "feb-2026-rfcs" })
+attach_markdown({ docId: "schema-rfc",   path: "/abs/schema-rfc.md",   setId: "feb-2026-rfcs" })
 # share /review/auth-rfc?as=bryan — sidebar lists all three.
 ```
 
 `setId` is just a tag — pick any short string. No setup step needed
-before using one. Calling `create_review_doc` again on an existing
+before using one. Calling `attach_markdown` again on an existing
 docId with a different `setId` re-tags it (handy for rebatching).
 
 **A doc you authored opens with a provenance header:** author and what
@@ -231,12 +231,12 @@ nothing, which is the difference that makes this the routine verb.
 Because it is reversible, you don't have to be sure. A doc that has
 been quiet for a day and *might* still be wanted is exactly the case
 to archive — one call brings it back if you were wrong. Use
-`list_archived_reviews` to see what is parked (archived docs come back
+`list_archived_attachments` to see what is parked (archived docs come back
 under `docs`, reviews under `archived`).
 
 Two neighbours worth knowing:
 
-- **`archive_review({ setId, reason })`** for a whole diff review or
+- **`archive_attachment_set({ setId, reason })`** for a whole diff review or
   bound folder. `archive_doc` refuses a doc that belongs to one, with
   `error: "review-member"` and the `setId` to call instead.
 - **`delete_doc({ docId })`** is the destructive one — it purges the

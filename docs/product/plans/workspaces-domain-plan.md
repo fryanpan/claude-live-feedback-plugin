@@ -205,7 +205,7 @@ it. Steps 1–3 are reversible; step 6 is the one that changes what agents paste
    | `https://workspaces.fryanpan.com/` after Access | 200, landing page |
    | `https://mac-mini.<tailnet>.ts.net/` | 200, unchanged — **this is the control** |
    | `http://localhost:8787/` | 200, unchanged |
-   | a `reviewUrl` from a fresh `create_review_doc` | starts `https://workspaces.fryanpan.com` |
+   | a `reviewUrl` from a fresh `attach_markdown` | starts `https://workspaces.fryanpan.com` |
 7. **Add `fryanpan.com` to `trustedPreviewDomains`** in
    `.claude/live-feedback.json` so agents can navigate to the new URL.
 8. **Roll back** by reinstalling with the previous `CW_PUBLIC_BASE_URL` and

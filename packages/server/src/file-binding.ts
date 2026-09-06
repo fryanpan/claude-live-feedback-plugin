@@ -87,6 +87,7 @@ export interface PrereadFile {
   exists: boolean;
   text?: string;
   mtimeMs?: number;
+  size?: number;
 }
 
 export interface AttachOpts {
@@ -122,8 +123,30 @@ interface FileBinding {
    * that spotted the change lands — see `applyPolledMtime`.
    */
   lastMtimeMs?: number;
+  /**
+   * The size that came back with `lastMtimeMs`, and the second half of the
+   * poll's change test.
+   *
+   * mtime ALONE is not enough. A filesystem stamps a file from a clock whose
+   * granularity is coarser than the gap between "the server stats a file it
+   * has just bound" and "somebody writes it" — one millisecond is already
+   * enough on macOS, and a kernel stamping from a coarse tick gives a wider
+   * window still. A write that lands inside that granule leaves the mtime it
+   * found, so `mtimeMs === lastMtimeMs` and the poll concludes nothing
+   * happened — permanently, because that mtime never moves again. The edit is
+   * invisible to every reader of the doc and nothing is logged.
+   *
+   * Size closes the case that matters: almost every real edit changes the
+   * byte count. What remains uncovered is a same-granule change that is also
+   * exactly the same length, which is a far smaller hole than the one this
+   * replaced. Content-hashing every tick would close it completely and is
+   * exactly the per-tick read the mtime poll exists to avoid.
+   */
+  lastSize?: number;
   /** An mtime spotted by the stat whose reconcile read has not landed yet. */
   pendingMtimeMs?: number;
+  /** The size spotted alongside `pendingMtimeMs`. */
+  pendingSize?: number;
   /** The serialized markdown we last wrote or last read from disk.
    *  Both directions guard against this to break echo loops. */
   lastWritten?: string;
@@ -135,7 +158,7 @@ interface FileBinding {
   lastSyncError?: { message: string; at: number };
   /** The observeDeep callback wired by attachFile. Kept so a re-attach can
    *  unobserve it — without this, every re-attach (hydrate, re-run
-   *  create_review_doc) stacked another write-back scheduler holding stale
+   *  attach_markdown) stacked another write-back scheduler holding stale
    *  binding state. */
   observer?: Parameters<Y.XmlFragment['observeDeep']>[0];
   /** True when this flat binding writes doc edits back to the file (the
@@ -419,7 +442,7 @@ export class FileBindings {
     return {
       ...opts,
       preread: res.exists
-        ? { exists: true, text: res.text, mtimeMs: res.mtimeMs }
+        ? { exists: true, text: res.text, mtimeMs: res.mtimeMs, size: res.size }
         : { exists: false },
     };
   }
@@ -488,7 +511,11 @@ export class FileBindings {
     // A re-attach must replace the write-back observer, not stack another —
     // each leaked observer is a duplicate scheduler holding a stale binding.
     if (existing?.observer) fragment.unobserveDeep(existing.observer);
-    const binding: FileBinding = { path: abs, lastMtimeMs: existing?.lastMtimeMs };
+    const binding: FileBinding = {
+      path: abs,
+      lastMtimeMs: existing?.lastMtimeMs,
+      lastSize: existing?.lastSize,
+    };
     this.bindings.set(docId, binding);
     // sourceUrl records the bound path. It stays OUT of the CRDT (an absolute
     // host path is exactly what a share visitor must not sync) — the sidecar
@@ -499,7 +526,7 @@ export class FileBindings {
     }
 
     // Attaching a NON-empty fragment (hydrate after a restart, or a re-run
-    // create_review_doc): honor the sync contract's "the file is the source
+    // attach_markdown): honor the sync contract's "the file is the source
     // of truth at rest". Without this, an edit made while the server was down
     // was never picked up — and the next flush overwrote it on disk.
     if (!seeded && fileExists()) {
@@ -978,6 +1005,7 @@ export class FileBindings {
     if (preread) {
       if (!preread.exists) return;
       binding.lastMtimeMs = preread.mtimeMs;
+      binding.lastSize = preread.size;
       binding.pollArmed = true;
       this.ensureFilePollTicker();
       return;
@@ -991,7 +1019,9 @@ export class FileBindings {
     if (boundFiles.quarantined(binding.path)) return;
     if (!existsSync(binding.path)) return;
     try {
-      binding.lastMtimeMs = statSync(binding.path).mtimeMs;
+      const st = statSync(binding.path);
+      binding.lastMtimeMs = st.mtimeMs;
+      binding.lastSize = st.size;
     } catch {}
     // Armed, but deliberately not marked as ACCESSED. Hydration re-binds
     // every bound doc at boot; if arming warmed them, the first minute of
@@ -1050,7 +1080,7 @@ export class FileBindings {
       .then((res) => {
         if (res.status !== 'ok') return; // quarantined, busy, or never answered
         if (!res.exists) return; // the ordinary case: a deleted worktree
-        this.applyPolledMtime(docId, binding, res.mtimeMs);
+        this.applyPolledStat(docId, binding, res.mtimeMs, res.size);
       })
       .finally(() => {
         binding.statInFlight = false;
@@ -1061,7 +1091,12 @@ export class FileBindings {
    * The rest of `pollBinding`, once the stat has come back. Split out only so
    * the stat can be awaited; the decisions below are unchanged.
    */
-  private applyPolledMtime(docId: string, binding: FileBinding, mtimeMs: number): void {
+  private applyPolledStat(
+    docId: string,
+    binding: FileBinding,
+    mtimeMs: number,
+    size: number,
+  ): void {
     const doc = this.p.residentDoc(docId);
     if (!doc) return;
     // Our own write-back is on the pool. Its rename has possibly landed and
@@ -1072,12 +1107,16 @@ export class FileBindings {
     // ended up with, and the next sweep then sees no change at all.
     if (binding.writeInFlight) return;
     if (this.bindings.get(docId) !== binding) return;
-    if (mtimeMs === binding.lastMtimeMs) return;
-    // A reconcile for this exact mtime is already on the debounce; re-arming
+    // BOTH halves, or an edit that lands in the same timestamp granule as the
+    // stamp we recorded is invisible for good — see `lastSize`.
+    if (mtimeMs === binding.lastMtimeMs && size === binding.lastSize) return;
+    // A reconcile for this exact stamp is already on the debounce; re-arming
     // it on every tick would push the read further away the longer the file
     // sits changed.
-    if (mtimeMs === binding.pendingMtimeMs && binding.readTimer) return;
+    if (mtimeMs === binding.pendingMtimeMs && size === binding.pendingSize && binding.readTimer)
+      return;
     binding.pendingMtimeMs = mtimeMs;
+    binding.pendingSize = size;
     // An external write IS somebody reaching for the doc — the editor or the
     // git operation that made it is usually about to make another. Promote
     // the binding to the fast lane so the next few writes are seen in one
@@ -1105,13 +1144,16 @@ export class FileBindings {
           // would make the change look already-handled and lose the external
           // edit for as long as nobody touched the file a second time.
           binding.pendingMtimeMs = undefined;
+          binding.pendingSize = undefined;
           return;
         }
-        // Commit the mtime of the bytes we actually got, not the one the stat
+        // Commit the stamp of the bytes we actually got, not the one the stat
         // reported — the file may have been written again in between, and
         // that write must still look like a change worth reading.
         binding.lastMtimeMs = res.exists ? res.mtimeMs : undefined;
+        binding.lastSize = res.exists ? res.size : undefined;
         binding.pendingMtimeMs = undefined;
+        binding.pendingSize = undefined;
         this.reconcileFromDisk(doc, binding, res);
       });
     }, READ_DEBOUNCE_MS);
@@ -1555,9 +1597,10 @@ export class FileBindings {
         existsSync(binding.path)
       ) {
         try {
-          const mtimeMs = statSync(binding.path).mtimeMs;
-          if (mtimeMs !== binding.lastMtimeMs) {
-            binding.lastMtimeMs = mtimeMs;
+          const st = statSync(binding.path);
+          if (st.mtimeMs !== binding.lastMtimeMs || st.size !== binding.lastSize) {
+            binding.lastMtimeMs = st.mtimeMs;
+            binding.lastSize = st.size;
             this.reconcileFromDisk(doc, binding);
             return;
           }
@@ -1615,7 +1658,10 @@ export class FileBindings {
             binding.lastWritten = md;
             // Record our own write's mtime so the poll doesn't treat the
             // write-back as an external edit and schedule a redundant reconcile.
-            if (res.exists) binding.lastMtimeMs = res.mtimeMs;
+            if (res.exists) {
+              binding.lastMtimeMs = res.mtimeMs;
+              binding.lastSize = res.size;
+            }
             this.failedWrites.delete(doc.docId);
             this.p.clearPendingFileWrite(doc.docId);
           })
@@ -1669,7 +1715,9 @@ export class FileBindings {
       // Record our own write's mtime so the poll doesn't treat the
       // write-back as an external edit and schedule a redundant reconcile.
       try {
-        binding.lastMtimeMs = statSync(binding.path).mtimeMs;
+        const st = statSync(binding.path);
+        binding.lastMtimeMs = st.mtimeMs;
+        binding.lastSize = st.size;
       } catch {}
       // The edit is on disk now, so a restart has nothing to repair. Note
       // this is NOT in a `finally`: a write that THREW must keep the flag,
@@ -1826,7 +1874,9 @@ export class FileBindings {
     // Advance the poll baseline the same way the poll itself would, so this
     // manual reconcile doesn't get replayed on the next tick.
     try {
-      binding.lastMtimeMs = statSync(binding.path).mtimeMs;
+      const st = statSync(binding.path);
+      binding.lastMtimeMs = st.mtimeMs;
+      binding.lastSize = st.size;
     } catch {}
     if (binding.readTimer) {
       clearTimeout(binding.readTimer);

@@ -327,9 +327,9 @@ export const TOOL_LIST: ListToolsResult = {
       },
     },
     {
-      name: 'create_review_doc',
+      name: 'attach_markdown',
       description:
-        'Bring a markdown file under live review: the server parses it into the editor and keeps file and doc in sync both ways, within about a second. The file must already exist and path should be absolute. Once bound, never Write/Edit that file — route edits through find_and_replace or set_doc_content, or the next flush silently overwrites them. Returns the minted docId — store that, not the name you passed — plus the review URL. Auto-subscribes you to its comments.',
+        'Attach a markdown file to a board as a live document: the server parses it into the editor and keeps file and doc in sync both ways, within about a second. The file must already exist and path should be absolute. Once bound, never Write/Edit that file — route edits through find_and_replace or set_doc_content, or the next flush silently overwrites them. Returns the minted docId — store that, not the name you passed — plus the review URL. Auto-subscribes you to its comments.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -440,7 +440,7 @@ export const TOOL_LIST: ListToolsResult = {
             type: 'array',
             items: { type: 'string' },
             description:
-              "Path prefixes (relative to the folder) to keep out of the review, e.g. ['node_modules', 'vendor']. Persisted, so refresh_review replays it.",
+              "Path prefixes (relative to the folder) to keep out of the review, e.g. ['node_modules', 'vendor']. Persisted, so refresh_attachment_set replays it.",
           },
           workspaceId: { type: 'string' },
           hubWorkspaceId: {
@@ -468,7 +468,7 @@ export const TOOL_LIST: ListToolsResult = {
     {
       name: 'create_diff_review',
       description:
-        'Review a git diff PR-style: one doc per changed file, unified diffs with line-anchored comments. By default it diffs base against the working tree and re-renders within a second as you keep editing — the live-loop mode; pass target to freeze it at a commit, or omit base to browse a folder with no diff. Once the review exists prefer refresh_review, which re-reads without re-minting docIds. Hand the human entryUrl. Narrow a large repo with exclude before raising maxFiles.',
+        'Review a git diff PR-style: one doc per changed file, unified diffs with line-anchored comments. By default it diffs base against the working tree and re-renders within a second as you keep editing — the live-loop mode; pass target to freeze it at a commit, or omit base to browse a folder with no diff. Once the attachment set exists prefer refresh_attachment_set, which re-reads without re-minting docIds. Hand the human entryUrl. Narrow a large repo with exclude before raising maxFiles.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -529,15 +529,16 @@ export const TOOL_LIST: ListToolsResult = {
       },
     },
     {
-      name: 'delete_review',
+      name: 'delete_attachment_set',
       description:
-        'Retire a whole review — a diff review or a folder bind — as one unit. It archives by default: live docs stop, the review drops off the workspace listing and any board, source files are untouched, and unarchive_review reverses it. Prefer archive_review, which takes a reason and needs no force. purge: true is the destructive path; it removes the records the activity analyses are rebuilt from. Refuses all-or-nothing while any member has open threads.',
+        'Retire a whole attachment set — a diff review or an attached folder — as one unit. It archives by default: live docs stop, the set drops off the workspace listing and any board, source files are untouched, and unarchive_attachment_set reverses it. Prefer archive_attachment_set, which takes a reason and needs no force. purge: true is the destructive path; it removes the records the activity analyses are rebuilt from. Refuses all-or-nothing while any member has open threads.',
       inputSchema: {
         type: 'object',
         properties: {
           setId: {
             type: 'string',
-            description: 'reviewId from create_diff_review, or setId from attach_folder.',
+            description:
+              'The attachment set: reviewId from create_diff_review, or setId from attach_folder.',
           },
           force: {
             type: 'boolean',
@@ -553,28 +554,29 @@ export const TOOL_LIST: ListToolsResult = {
       },
     },
     {
-      name: 'archive_review',
+      name: 'archive_attachment_set',
       description:
-        'Retire a finished review without deleting anything — the verb for when the work a diff review covered has merged. Members drop off the workspace listing and stop costing a poll; nothing is destroyed, and unarchive_review restores the whole thing, threads and board links included. Open threads do not block it; that is the point. Pass a reason — usually the PR that merged.',
+        'Retire a finished attachment set without deleting anything — the verb for when the work a diff review covered has merged. Members drop off the workspace listing and stop costing a poll; nothing is destroyed, and unarchive_attachment_set restores the whole thing, threads and board links included. Open threads do not block it; that is the point. Pass a reason — usually the PR that merged.',
       inputSchema: {
         type: 'object',
         properties: {
           setId: {
             type: 'string',
-            description: 'reviewId from create_diff_review, or setId from attach_folder.',
+            description:
+              'The attachment set: reviewId from create_diff_review, or setId from attach_folder.',
           },
           reason: {
             type: 'string',
-            description: 'Why this review is finished — e.g. "merged in #301".',
+            description: 'Why this attachment set is finished — e.g. "merged in #301".',
           },
         },
         required: ['setId'],
       },
     },
     {
-      name: 'unarchive_review',
+      name: 'unarchive_attachment_set',
       description:
-        'Bring an archived review back: every member returns with its threads, its file bindings and its board rows intact. This is what makes archive_review safe to call. restore-collision means a docId was re-minted while it was away and nothing moved.',
+        'Bring an archived attachment set back: every member returns with its threads, its file bindings and its board rows intact. This is what makes archive_attachment_set safe to call. restore-collision means a docId was re-minted while it was away and nothing moved.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -586,7 +588,7 @@ export const TOOL_LIST: ListToolsResult = {
     {
       name: 'archive_doc',
       description:
-        'Retire one finished doc — a bound markdown doc or a mockup — without deleting anything. It drops off the workspace listing and any board and stops costing a poll; the source file and the record are untouched, and unarchive_doc restores it. Prefer this over delete_doc, which purges. Use archive_review instead if the doc belongs to a review; task bodies and board docs cannot be archived.',
+        'Retire one finished doc — a bound markdown doc or a mockup — without deleting anything. It drops off the workspace listing and any board and stops costing a poll; the source file and the record are untouched, and unarchive_doc restores it. Prefer this over delete_doc, which purges. Use archive_attachment_set instead if the doc belongs to an attachment set; task bodies and board docs cannot be archived.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -612,9 +614,9 @@ export const TOOL_LIST: ListToolsResult = {
       },
     },
     {
-      name: 'list_archived_reviews',
+      name: 'list_archived_attachments',
       description:
-        'Everything archived on this server, newest first, in two keys: archived for whole reviews (feed to unarchive_review) and docs for single docs (feed to unarchive_doc). Each carries when, by whom, the reason, and the boards it will return to. This is the answer to "what can I bring back".',
+        'Everything archived on this server, newest first, in two keys: archived for whole attachment sets (feed to unarchive_attachment_set) and docs for single docs (feed to unarchive_doc). Each carries when, by whom, the reason, and the boards it will return to. This is the answer to "what can I bring back".',
       inputSchema: { type: 'object', properties: {} },
     },
     {
@@ -639,24 +641,25 @@ export const TOOL_LIST: ListToolsResult = {
       },
     },
     {
-      name: 'refresh_review',
+      name: 'refresh_attachment_set',
       description:
-        'Re-reconcile an existing review against what is on disk now, without re-minting any docId — so every comment thread survives. Use it instead of re-running the bind when files have moved under the review. Files you changed since join it; a file reverted, deleted or renamed away is marked stale rather than removed. Read stale after a rename — those threads are stranded on a file nobody will open. Pinned reviews are refused; their content is a commit.',
+        'Re-reconcile an existing attachment set against what is on disk now, without re-minting any docId — so every comment thread survives. Use it instead of re-attaching when files have moved under it. Files you changed since join it; a file reverted, deleted or renamed away is marked stale rather than removed. Read stale after a rename — those threads are stranded on a file nobody will open. Pinned sets are refused; their content is a commit.',
       inputSchema: {
         type: 'object',
         properties: {
           setId: {
             type: 'string',
-            description: 'reviewId from create_diff_review, or setId from attach_folder.',
+            description:
+              'The attachment set: reviewId from create_diff_review, or setId from attach_folder.',
           },
         },
         required: ['setId'],
       },
     },
     {
-      name: 'set_review_groups',
+      name: 'set_attachment_groups',
       description:
-        'Re-group an existing diff review\'s file list in place, so you can organise it without tearing the review down and losing its comments. Groups claim files by exact path or directory prefix, first group wins, and anything unclaimed lands in "Other". Pass an empty array to fall back to the built-in heuristic. Optional per-group details is a one- or two-sentence intro; over 500 chars is rejected.',
+        'Re-group an existing diff review\'s file list in place, so you can organise it without tearing the attachment set down and losing its comments. Groups claim files by exact path or directory prefix, first group wins, and anything unclaimed lands in "Other". Pass an empty array to fall back to the built-in heuristic. Optional per-group details is a one- or two-sentence intro; over 500 chars is rejected.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -942,7 +945,7 @@ export const TOOL_LIST: ListToolsResult = {
     {
       name: 'watch_doc',
       description:
-        "Subscribe this session to a doc's comment events, delivered as channel messages. Usually unnecessary — create_review_doc, attach_mockup and most docId-bearing tools subscribe you already, and set_workspace_lead covers every doc on your board. Reach for it for a doc you have not otherwise touched, such as a peer's review you only want to observe. persisted: false means a restart will drop it.",
+        "Subscribe this session to a doc's comment events, delivered as channel messages. Usually unnecessary — attach_markdown, attach_mockup and most docId-bearing tools subscribe you already, and set_workspace_lead covers every doc on your board. Reach for it for a doc you have not otherwise touched, such as a peer's review you only want to observe. persisted: false means a restart will drop it.",
       inputSchema: {
         type: 'object',
         properties: { docId: { type: 'string' } },

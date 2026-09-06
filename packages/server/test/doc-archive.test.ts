@@ -1,9 +1,9 @@
 /**
- * Archiving ONE free-standing doc — the half `archive_review` cannot reach.
+ * Archiving ONE free-standing doc — the half `archive_attachment_set` cannot reach.
  *
  * `archiveReview` retires a whole review, and every refusal and guarantee it
  * has is written against a MEMBER LIST. The docs it cannot express are the
- * ones with no review at all: a markdown doc bound by `create_review_doc`, a
+ * ones with no review at all: a markdown doc bound by `attach_markdown`, a
  * mockup bound by `bind_mock`. There are a few hundred of those on the
  * production box and, before this verb, the only thing that could remove one
  * was `delete_doc` — a purge, which is the thing the project rule forbids.
@@ -62,7 +62,7 @@ describe('DocStore.archiveDoc / unarchiveDoc', () => {
     mdPath = join(folder, 'notes.md');
     writeFileSync(mdPath, '# Notes\n\nthe unique md line\n');
     docStore = makeDocStore(dataDir);
-    // What `create_review_doc` produces: one bound markdown doc, no review.
+    // What `attach_markdown` produces: one bound markdown doc, no review.
     docStore.getOrCreate('solo', { type: 'markdown', sourceUrl: mdPath, title: 'Notes' });
     expect(docStore.attachFile('solo', mdPath).ok).toBe(true);
   });
@@ -223,7 +223,7 @@ describe('DocStore.archiveDoc / unarchiveDoc', () => {
     if (!res.ok) expect(res.error).toBe('not-found');
   });
 
-  it('refuses a doc that belongs to a review — that is archive_review’s job', () => {
+  it('refuses a doc that belongs to a review — that is archive_attachment_set’s job', () => {
     docStore.getOrCreate('member', {
       type: 'markdown',
       sourceUrl: mdPath,

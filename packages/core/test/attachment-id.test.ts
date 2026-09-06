@@ -38,7 +38,7 @@ describe('isAttachmentMember', () => {
 
   it('is false for a batch-registered set with no relPath', () => {
     // 129 such docs exist in the live data dir (measured 2026-08-21): docs
-    // registered together by create_review_doc for one sidebar, never a folder
+    // registered together by attach_markdown for one sidebar, never a folder
     // or a diff. They must not surface as reviews.
     expect(isAttachmentMember(meta({ setId: 'sprint-notes' }))).toBe(false);
   });
