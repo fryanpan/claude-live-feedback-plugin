@@ -97,6 +97,10 @@ describe('plugin MCP launcher', () => {
     // The version a client sees had drifted three minor releases behind the
     // plugin manifest, because nothing tied the two together.
     const manifest = JSON.parse(
+      // audit: not-source — the manifest is JSON.parse'd and only its
+      // `version` and `name` fields are compared to the handshake the running
+      // server just answered with; catches the two drifting apart, and asserts
+      // on no source text.
       readFileSync(resolve(REPO, 'packages/plugin/.claude-plugin/plugin.json'), 'utf8'),
     );
     expect(reply.result.serverInfo.version).toBe(manifest.version);
@@ -182,6 +186,9 @@ describe('plugin MCP registration', () => {
     // the old entries; peers re-approve once. Pin it to the manifest so it can
     // only ever move again on purpose.
     const pluginName = JSON.parse(
+      // audit: not-source — parsed for its `name` alone, then compared to the
+      // key in `.mcp.json`; catches a rename that moves one artifact and
+      // leaves the other, which invalidates every approved tool permission.
       readFileSync(resolve(REPO, 'packages/plugin/.claude-plugin/plugin.json'), 'utf8'),
     ).name;
     expect(Object.keys(config.mcpServers)).toEqual([pluginName]);

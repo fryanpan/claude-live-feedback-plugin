@@ -370,6 +370,48 @@ function providesTransitively(rel: string, seen = new Set<string>()): boolean {
 }
 
 /**
+ * A `// audit: not-source — <reason>` marker exempts ONE read site.
+ *
+ * WHY A SECOND EXEMPTION EXISTS. The module-level `audit: no-text` marker
+ * answers "this harness does not hand source text to its importers". It has
+ * nothing to say about the other way this check reports a site it should not:
+ * a read whose PATH is not repo source at all. Two shapes of that are already
+ * in the tree and neither is a source grep —
+ *
+ *  - `readFileSync(join(rel.markdownAppDir, 'app.js'))` in
+ *    `client-release.test.ts`, where the directory is a tmpdir the test
+ *    published into a moment earlier. The bare filename `'app.js'` is what
+ *    matches, and restricting `.js` to literals containing a slash would hide
+ *    the real stylesheet sites, which are bare filenames too (`'board.css'`).
+ *  - `JSON.parse(readFileSync('packages/plugin/.claude-plugin/plugin.json'))`
+ *    in `launcher.test.ts`, which compares two artifacts' PARSED fields and
+ *    asserts on no text at all.
+ *
+ * WHAT KEEPS IT FROM BECOMING A HIDING PLACE. Three things, and the first two
+ * are the same discipline `// timed:` runs on:
+ *
+ *  - The marker is a claim a reviewer reads, sitting on the line or in the
+ *    comment block directly above it, so a diff that adds one is a diff that
+ *    argues for it.
+ *  - A REASON is required. `// audit: not-source` alone exempts nothing —
+ *    the regex needs a dash and a non-empty word after it, so the marker
+ *    cannot be pasted in as a bare silencer.
+ *  - It reaches the DIRECT read form only, never the harness-import form.
+ *    A test that reaches source through a reading module still counts, and
+ *    still has to make its case at the module, where the exemption can be
+ *    checked against what the module exports rather than believed.
+ */
+const NOT_SOURCE_MARKER = /\/\/\s*audit:\s*not-source\s*[—-]\s*\S/;
+
+function isNotSource(lines: string[], i: number): boolean {
+  if (NOT_SOURCE_MARKER.test(lines[i] ?? '')) return true;
+  for (let j = i - 1; j >= 0 && COMMENT_LINE.test(lines[j] ?? ''); j--) {
+    if (NOT_SOURCE_MARKER.test(lines[j] ?? '')) return true;
+  }
+  return false;
+}
+
+/**
  * An assertion on a value the test read out of a file.
  *
  * `toBe`/`toEqual`/`toStrictEqual` and the ordered comparisons join
@@ -388,7 +430,7 @@ function sourceShape(): Check {
     lines.forEach((text, i) => {
       if (COMMENT_LINE.test(text)) return;
       if (readsSourceOnLine(text)) {
-        sites.push({ file, line: i + 1, text: text.trim() });
+        if (!isNotSource(lines, i)) sites.push({ file, line: i + 1, text: text.trim() });
         return;
       }
       for (const m of text.matchAll(IMPORT_SPECIFIER)) {
@@ -411,7 +453,9 @@ function sourceShape(): Check {
       'line holding nothing but the marker `audit: no-text`, every exported value carrying an explicit ' +
       'type or return annotation, and no annotation naming string. An unannotated export is not evidence, ' +
       'so it counts (packages/workspaces-app/test/css-harness.ts returns computed styles and is the ' +
-      'module the exemption exists for)',
+      'module the exemption exists for). A DIRECT read is exempt when it carries ' +
+      '`// audit: not-source — <reason>` on its own line or in the comment block above it — the reason ' +
+      'is required, and the marker never reaches the harness-import form',
     sites,
   };
 }
