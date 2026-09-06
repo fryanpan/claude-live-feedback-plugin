@@ -159,6 +159,21 @@ export async function handleDocsTool(
       );
       return ok(res);
     }
+    case 'edit_comment': {
+      const { docId, threadId, commentId, text, reason } = a as {
+        docId: string;
+        threadId: string;
+        commentId: string;
+        text: string;
+        reason?: string;
+      };
+      const res = await http(
+        'POST',
+        `${board()}/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/edit-comment`,
+        { author: AUTHOR, commentId, text, ...(reason !== undefined ? { reason } : {}) },
+      );
+      return ok(res);
+    }
     case 'post_status': {
       // A status is a NOTE on the row (kind `status`, beside the hooks'
       // `turn` and `denial`), never a comment: the same body the Stop hook

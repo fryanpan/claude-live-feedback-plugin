@@ -2055,6 +2055,17 @@ export class DocStore {
     );
   }
 
+  /** Replace a posted comment's words, keeping the old ones on its trail. */
+  editCommentText(
+    docId: string,
+    threadId: string,
+    commentId: string,
+    text: string,
+    opts: { actor: User; reason?: string },
+  ): { ok: true; thread: Thread } | { ok: false; error: 'no-doc' | 'not-found' | 'unchanged' } {
+    return this.docThreads.editCommentText(docId, threadId, commentId, text, opts);
+  }
+
   reviseCommentReview(
     docId: string,
     threadId: string,

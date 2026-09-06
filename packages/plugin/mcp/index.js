@@ -15180,6 +15180,31 @@ var TOOL_LIST = {
       }
     },
     {
+      name: "edit_comment",
+      description: "Replace the words of a comment that is already posted, keeping what it said before on the comment's edit trail. Use it to repair a comment — a link that no longer resolves, a name that changed, a figure you got wrong — not to change what somebody asked: correcting a review item is revise_review_item, which re-runs the quality gate. Any author's comment may be edited and the editor is recorded on the trail, because the sweeps this exists for fix links other people wrote. Refused when the text is identical to what is already there.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
+          docId: { type: "string" },
+          threadId: { type: "string" },
+          commentId: {
+            type: "string",
+            description: "Which comment on the thread — get_thread lists them with their ids."
+          },
+          text: { type: "string", description: "The words the comment should say now." },
+          reason: {
+            type: "string",
+            description: "Why you changed it, kept on the trail entry beside the old words. One line."
+          }
+        },
+        required: ["workspaceId", "docId", "threadId", "commentId", "text"]
+      }
+    },
+    {
       name: "post_status",
       description: "One line to a few sentences on where the work stands; lands on the task's Activity tab, never as a comment. Omit taskId to post to your current in-progress task. Your end-of-turn message already reaches the same tab on its own, so this is for a milestone worth naming — started, blocked on what, PR open, done. Refused when empty or over 4000 chars.",
       inputSchema: {
@@ -17135,6 +17160,11 @@ async function handleDocsTool(name, a, ctx) {
       const res = await http("POST", `${board()}/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/comments`, { author: AUTHOR, text, ...review !== undefined ? { review } : {} });
       return ok2(res);
     }
+    case "edit_comment": {
+      const { docId, threadId, commentId, text, reason } = a;
+      const res = await http("POST", `${board()}/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/edit-comment`, { author: AUTHOR, commentId, text, ...reason !== undefined ? { reason } : {} });
+      return ok2(res);
+    }
     case "post_status": {
       const { text, taskId } = a;
       const body = typeof text === "string" ? text.trim() : "";
@@ -18837,7 +18867,7 @@ var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.174";
+var PLUGIN_VERSION = "0.1.175";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",

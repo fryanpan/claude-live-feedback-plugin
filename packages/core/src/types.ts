@@ -433,11 +433,40 @@ export type Anchor =
   | SubjectAnchor
   | ReviewItemAnchor;
 
+/**
+ * What a comment said BEFORE somebody replaced its words.
+ *
+ * A comment's text used to be immutable — there was no operation that could
+ * change it, which read as a guarantee but was really an absence. The absence
+ * bit when the canonical-routes cutover left hundreds of dead `/review/<id>`
+ * links sitting inside comment bodies: they no longer parse as links at all,
+ * so they degrade to plain text rather than 404, and nobody reports plain
+ * text. There was no way to fix them.
+ *
+ * The replacement keeps the guarantee that mattered: the previous words are
+ * never destroyed. Every edit pushes what the comment said onto `edits`, so
+ * the record of what was actually written is still there to read.
+ */
+export interface CommentEdit {
+  /** What the comment said before this edit. */
+  text: string;
+  at: number;
+  /** Who replaced the words — not necessarily the author. */
+  by: string;
+  /** Why, in the editor's words. */
+  reason?: string;
+}
+
 export interface Comment {
   id: string;
   author: User;
   text: string;
   ts: number;
+  /**
+   * Every previous version of `text`, oldest first — present only on a
+   * comment somebody has edited. See `CommentEdit`.
+   */
+  edits?: CommentEdit[];
   /**
    * Present when this comment DECLARES that it needs a person — the Review
    * Item. Absent on an ordinary comment, which is the overwhelming majority
