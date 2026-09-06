@@ -85,7 +85,35 @@ suggestions, anchors, presence, live notes. Agents hold no replica, so an agent
 edit is a REST call the server applies to the doc. *REST* carries what needs the
 server as an authority — sign-in, binds, diffs, shares, deploys, and the board,
 where a write is a decision with an author and a gate rather than a merged
-value. *SSE* pushes changes to anyone holding no Yjs socket for them.
+value. *SSE* pushes changes to anyone holding no Yjs socket for them: one stream per
+document at `/events/<docId>`, and one per board at
+`/workspaces/<id>/events:stream`, which carries every thread event on any
+member doc of that board or diff review — what an agent's `watch_doc` holds
+instead of a stream per file (`routes/upgrade-stream.ts`, and
+`board/board-live-wiring.ts` in `workspaces-app`). Both the colon and the
+`/workspaces` prefix are deliberate, and the board stream moved to this
+address on 2026-09-05 to get them: a bare `events` segment under a board path
+is the activity feed's name, and a workspace id sitting outside `/workspaces`
+could not be read by the guard that reads every other board path. The address
+it moved off is recorded once, in [glossary.md](glossary.md).
+
+**Board state is server-owned, and Yjs only mirrors it.** The rows live in the
+sidecar-backed `TaskStore` (`tasks.ts`, JSON on disk). The `ws:<workspaceId>`
+doc's `tasks` and `workspace` maps are a read-only PROJECTION of that store
+(`task-projection.ts`), so the board renders in realtime without Yjs becoming
+the record: the server observes those maps and reverts any transaction whose
+Yjs origin is not its own `PROJECTION_ORIGIN` — firing no `task.*` event for
+it, because events come only from store mutations — and reasserts the whole
+projection from the store on hydrate, so a crash cannot leave forged board
+state standing. `isBoardOwnedDoc` (`doc-ids.ts`) is the prefix authority for
+which docs those are, `ws:` and `task:`, and none of them is ever file-bound.
+That is why editing a task chip inside a document does not write the task —
+the edit is reverted a moment later and the board changes only through the
+named REST routes, which is the consequence [security.md](security.md) records
+under "The board's own live doc is different". Task BODIES are the deliberate
+exception: each is an ordinary live `task:<taskId>` doc so every edit tool,
+thread and anchor applies unchanged, and the store's `body` string is a
+debounced snapshot of it.
 
 ## Layers inside `server`
 
