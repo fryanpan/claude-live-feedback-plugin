@@ -43,11 +43,13 @@ export const SHELL_ASSETS = [
   'board.js',
   'landing.js',
   'signin.js',
+  'settings.js',
   'sentry.js',
   'styles.css',
   'doc.css',
   'board.css',
   'signin.css',
+  'settings.css',
   'tokens.css',
 ] as const;
 

@@ -11,7 +11,7 @@ arranged. Read it before non-trivial work.
 ```mermaid
 flowchart TB
   subgraph browser[Browser]
-    app["workspaces-app<br/>5 bundles: doc · board · signin · landing · sentry"]
+    app["workspaces-app<br/>6 bundles: doc · board · settings · signin · landing · sentry"]
     wid["widget<br/>injectable web component"]
   end
   plug["plugin<br/>skills · hooks · bundled mcp"]
@@ -23,6 +23,7 @@ flowchart TB
     meet["Meetings<br/>meetings.ts · meeting-*.ts · notes-*.ts<br/>transcribe-*.ts · recall*.ts"]
     keep["Keep-moving<br/>stall-wiring · stall-gate · stall-nudge<br/>stall-escalation · note-ask · keep-moving"]
     ident["Identity and sharing<br/>auth/ · share/ · identities.ts"]
+    prompts["Model prompts<br/>prompt-catalog.ts · prompt-store.ts<br/>routes/prompts.ts"]
     ops["Ops<br/>deploy*.ts · client-release.ts · plugin-release.ts · sentry.ts"]
   end
   core["core — pure shared library"]
@@ -33,7 +34,9 @@ flowchart TB
   wid -->|REST| edge
   plug --> mcp
   mcp -->|"REST · SSE"| edge
-  edge --> docs & board & meet & ident & ops
+  edge --> docs & board & meet & ident & ops & prompts
+  board & meet & keep --> prompts
+  prompts --> disk
   board --> keep
   docs <--> files
   docs & board & meet --> disk
@@ -45,10 +48,25 @@ flowchart TB
 | --- | --- | --- |
 | `core` | Wire types, the Yjs⇄markdown document model, anchors, attachment-set ids (`attachment.ts`), review-item rules, goal arithmetic, schedule rules and their English, prompts. | Imports no other workspace package. No `node:` I/O beyond path math, no DOM. |
 | `server` | The one process: data dir, the doc store, board, meetings, auth, sharing, deploys. | The only writer of durable state. Everything else asks it. |
-| `workspaces-app` | The browser client, five bundles from `scripts/build.ts`. | Ships as static assets the server publishes as a numbered release. |
+| `workspaces-app` | The browser client, six bundles from `scripts/build.ts`. | Ships as static assets the server publishes as a numbered release. |
 | `mcp` | The stdio MCP server agents talk to — a **client** of the server's REST and SSE. | No business logic the server does not also enforce. |
 | `widget` | The injectable comment widget for mockups and dev servers. | 40 KB gzipped (`check:widget-size`). Vanilla JS, no framework deps. |
 | `plugin` | Skills, hooks, and a bundled copy of `mcp`. | Version bumped in three places; see CLAUDE.md. |
+
+**Model prompts are a subsystem, not a scatter of literals.** Every set of
+words this server sends to a model is one row of `prompt-catalog.ts`, and
+`prompt-store.ts` keeps whatever the owner has rewritten in
+`<dataDir>/prompts.json`. Each caller — the notes composer, the meeting
+capture extractor, the note-ask judge, the voice router — takes its
+instructions as a **thunk** and calls it per tick, so an edit made on
+`/settings/prompts` reaches the next model call without a restart or a
+deploy. The shipped default for each stays beside the code that builds the
+rest of its message (`notes-prompt-store.ts`, `meeting-capture-prompt.ts`,
+`voice-prompt.ts`, `core/summary-prompt.ts`), and the catalog imports them;
+the store never holds a default, only an override. Two of the seven are
+fields on a **board** rather than on the server and keep being written
+through `PUT /api/workspaces/<id>/settings` — `routes/prompts.ts` says so
+with `scope` rather than serving them twice, and the client hides the split.
 
 **Where a route lives.** Everything that decides which URL paths it answers is
 under `routes/`, `server.ts` composes and delegates to it and matches nothing

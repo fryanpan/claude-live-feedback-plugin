@@ -44,7 +44,7 @@ import { type AssetManifest, assetHref } from '@feedback/core/asset-manifest';
  * human opens, not per route: `/workspaces/<id>/home`, `/tasks` and `/mine`
  * are all the board.
  */
-export type PageType = 'board' | 'doc' | 'mockup' | 'landing' | 'signin';
+export type PageType = 'board' | 'doc' | 'mockup' | 'landing' | 'signin' | 'settings';
 
 export interface BrowserSentryConfig {
   /** `CW_SENTRY_DSN`. Absent config is `null`, not an empty string. */

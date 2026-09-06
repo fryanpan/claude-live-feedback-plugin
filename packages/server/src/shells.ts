@@ -337,6 +337,50 @@ export function renderSigninShell(
 </html>`;
 }
 
+/**
+ * The settings page's shell — `/settings/prompts` and `/settings/prompts/<id>`.
+ *
+ * Server-rendered like the board's and the sign-in page's, so the address
+ * answers whether or not the app bundle has been built, and every behaviour
+ * lives in `/app/settings.js`.
+ *
+ * It names no board and carries no state: which board the reader came from
+ * rides on `?ws=` and is read by the bundle, because it is context for the
+ * rail's links rather than anything this server decides. Same reason the
+ * board shell hands over only an id and a name.
+ */
+export function renderSettingsShell(
+  sentry: BrowserSentryConfig | null,
+  assets: AssetManifest = {},
+): string {
+  const sentryTags = sentryHeadTags(sentry, 'settings', assets);
+  const sentryMeta = sentryTags ? `\n    ${sentryTags}` : '';
+  const settingsJs = assetHref(assets, 'settings.js');
+  const stylesCss = assetHref(assets, 'styles.css');
+  const settingsCss = assetHref(assets, 'settings.css');
+  const tokensCss = assetHref(assets, 'tokens.css');
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+    <title>Prompts · Settings</title>
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="theme-color" content="#2e7dd7" />${sentryMeta}
+    <link rel="stylesheet" href="${stylesCss}" />
+    <!-- The page's own rules between the two, exactly where the board's and
+         the sign-in page's sit: after the shared tokens they read, before the
+         Open Props remap. -->
+    <link rel="stylesheet" href="${settingsCss}" />
+    <link rel="stylesheet" href="${tokensCss}" />
+  </head>
+  <body class="settings-body">
+    <div id="settings-root"></div>
+    <script type="module" src="${settingsJs}"></script>
+  </body>
+</html>`;
+}
+
 export function renderBoardNotFound(workspaceId: string): string {
   const safe = escape(workspaceId);
   return `<!doctype html><meta charset="utf-8"><title>Workspace not found · Workspaces</title>

@@ -46,6 +46,7 @@ import {
   migrateParkedRows,
 } from './park-migration.ts';
 import { parkNoteText } from './park-note.ts';
+import { createPromptStore } from './prompt-store.ts';
 import { publicBaseUrl } from './public-host.ts';
 import { createPushAnnounce } from './push-announce.ts';
 import type { NudgeTally } from './ready-nudge.ts';
@@ -82,6 +83,7 @@ import {
   handleSummaryBackfillRoute,
   handleWebhookLogRoute,
 } from './routes/ops.ts';
+import { type PromptRoutesContext, handlePromptRoutes } from './routes/prompts.ts';
 import {
   type RecallWebhookRoutesContext,
   handleRecallWebhookRoute,
@@ -256,6 +258,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const port = opts.port ?? DEFAULT_PORT;
   const hostname = opts.hostname;
   const dataDir = opts.dataDir ?? join(process.cwd(), 'data');
+  // The words every prompt on this server runs on. `bin.ts` hands its own
+  // store down so one instance serves the routes, the notes composer and the
+  // classifiers; a server spun up without one builds its own, because reading
+  // a file beside the data dir is not the kind of dependency the seam rule is
+  // about (see ServerOptions.promptStore).
+  const promptStore = opts.promptStore ?? createPromptStore({ dataDir });
   const slowRequestMs = opts.slowRequestMs ?? 500;
   const clientReleaseRootDir = opts.clientReleaseRootDir ?? null;
   const widgetDist = opts.widgetDistDir ?? null;
@@ -1057,6 +1065,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // was injected; changes go to the attached agent (or the on-disk queue).
   const voiceRouter = new VoiceRouter({
     tasks: taskStore,
+    // Read per utterance, so an edit on the settings page reaches the next
+    // thing spoken without a restart.
+    instructions: () => promptStore.read('voice-router'),
     ...(opts.voiceComplete ? { complete: opts.voiceComplete } : {}),
     // What a doc in view HOLDS, read through the one review-item builder this
     // server already has. Voice must not grow a second notion of "what is
@@ -1489,6 +1500,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     safeJson,
     requestAddress: (req) => server.requestIP(req)?.address,
   };
+
+  /** The words this server's prompts run on — the settings page's data. */
+  const promptRoutesCtx: PromptRoutesContext = { promptStore, j, safeJson };
 
   /** A review's own files — thread roll-up, grouped diff, tree, lazy opens. */
   const reviewFileRoutesCtx: ReviewFileRoutesContext = { docStore, j, safeJson };
@@ -2184,6 +2198,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             refuseCategoryAuthor,
             metaFor,
             withTaskChips,
+          });
+          if (handled) return handled;
+        }
+
+        // --- REST: the prompt settings --- see ./routes/prompts.ts.
+        // Top-level rather than under a board: `/settings/prompts` is a page
+        // outside any board, and five of the seven prompts belong to the
+        // server rather than to one of them.
+        {
+          const handled = await handlePromptRoutes(promptRoutesCtx, {
+            req,
+            pathname,
+            visitor,
+            authorFor,
           });
           if (handled) return handled;
         }
