@@ -148,11 +148,38 @@ describe('sign-in page css', () => {
     expect(bar.display).toBe('flex');
     // The doc shell declares its own rows, so the bar's row has to be
     // declared too — otherwise it lands inside the topbar's 48px and clips.
-    // Four tracks: the bar, the topbar, the meeting strip's auto row, the doc.
+    // Four tracks: the topbar, the bar, the meeting strip's auto row, the doc.
     document.body.className = 'signin-gated';
     expect(styleOf(attach('', { attrs: { id: 'shell' } })).gridTemplateRows).toBe(
-      'auto 48px auto 1fr',
+      '48px auto auto minmax(0, 1fr)',
     );
+    // …and a track list on its own is HALF the contract, which is how the dead
+    // band came back. The other three children stay pinned 1/2/3 by the
+    // signed-in rules, so the bar — the only child left unplaced — auto-placed
+    // into row 2 and `#main` stayed in row 3 of a four-track grid: the
+    // flexible track last and EMPTY, `#main` ending 3px above the bottom of
+    // the window at 1180x820 and 55px at 430px, that band hit-testing to
+    // `#shell` rather than to the editor. Read through the real cascade,
+    // because the question is whether `body.signin-gated #main` actually
+    // OUTRANKS `#main` — which reading the file as text cannot answer.
+    // `gridRow`, not `gridRowStart`: happy-dom does not expand the shorthand,
+    // so the longhand reads '' however the cascade resolved — a check written
+    // against it would have passed on every posture and every value.
+    const rowOf = (cls: string, attrs: Record<string, string> = {}) =>
+      styleOf(attach(cls, { attrs })).gridRow;
+    expect(rowOf('', { id: 'topbar' })).toBe('1');
+    expect(rowOf('signin-bar')).toBe('2');
+    expect(rowOf('', { id: 'meeting-strip' })).toBe('3');
+    expect(rowOf('', { id: 'main' })).toBe('4');
+    // Control: the same elements with the class OFF. Every value above would
+    // also be satisfied by a stylesheet that had simply renumbered the base
+    // rules — which would fix this posture by breaking the one signed-in
+    // readers see.
+    document.body.className = '';
+    expect(rowOf('', { id: 'topbar' })).toBe('1');
+    expect(rowOf('', { id: 'meeting-strip' })).toBe('2');
+    expect(rowOf('', { id: 'main' })).toBe('3');
+    document.body.className = 'signin-gated';
     // The fallback for a surface with no header still floats, and docks to
     // the bottom rather than to the band the doc title lives in — an unset
     // `top` is what "not the top band" computes to.
