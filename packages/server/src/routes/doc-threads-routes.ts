@@ -281,6 +281,42 @@ export async function handleDocThreadRoutes(
       }
       return j(200, { thread: res.thread });
     }
+    // Replacing the WORDS of a posted comment — the other verb that
+    // did not exist. `/revise` corrects an ASK; this corrects what a
+    // comment says, and it is the only route that touches `text`.
+    //
+    // Addressed by commentId like `/answer` and `/revise` above, and
+    // open to any author for the reason `editCommentText` gives: the
+    // sweep it exists for repairs links other people wrote. The old
+    // words are kept on the comment's edit trail, so this destroys
+    // nothing — see `setCommentText`.
+    if (threadRest === '/edit-comment' && req.method === 'POST') {
+      const body = await safeJson(req);
+      const user = authorFor(body?.author);
+      const commentId = body?.commentId as string | undefined;
+      const text = body?.text;
+      if (!user || !commentId) return j(400, { error: 'author + commentId required' });
+      if (isCategoryAuthor(user)) return refuseCategoryAuthor();
+      if (typeof text !== 'string' || text.trim() === '') {
+        return j(400, {
+          error: 'text required',
+          message: 'an edit replaces the words; use withdraw or resolve to retire a comment',
+        });
+      }
+      const res = docStore.editCommentText(docId, threadId, commentId, text, {
+        actor: user,
+        ...(typeof body?.reason === 'string' ? { reason: body.reason } : {}),
+      });
+      if (!res.ok) {
+        return j(res.error === 'no-doc' || res.error === 'not-found' ? 404 : 409, {
+          error: res.error,
+          ...(res.error === 'unchanged'
+            ? { message: 'the comment already says exactly this' }
+            : {}),
+        });
+      }
+      return j(200, { thread: res.thread });
+    }
     // Correcting a review item raised on a doc thread — the verb
     // that did not exist, and whose absence forced an agent that
     // found its own advice wrong to file a SECOND item, leaving the

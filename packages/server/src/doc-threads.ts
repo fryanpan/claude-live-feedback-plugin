@@ -17,6 +17,7 @@ import {
   replaceAnchor as schemaReplaceAnchor,
   setStatus as schemaSetStatus,
   setCommentReview,
+  setCommentText,
   storedJudgement,
   withRevision,
   withdrawReview,
@@ -296,6 +297,61 @@ export class DocThreads {
     });
     const replied = await this.postComment(docId, threadId, author, text, undefined, opts);
     return replied ? { ok: true, thread: replied } : { ok: false, error: 'reply-failed' };
+  }
+
+  /**
+   * Replace the words of a comment that is already posted.
+   *
+   * This verb did not exist, and its absence read as a guarantee: a comment
+   * said what it said for good. What it actually meant was that a comment
+   * containing a broken link stayed broken. The canonical-routes cutover
+   * turned hundreds of `/review/<docId>` links across every board into text
+   * that no longer parses as a link — they do not 404, so nobody reports
+   * them — and comment bodies were the one place they could not be fixed.
+   *
+   * The guarantee worth keeping survives: `setCommentText` pushes the old
+   * words onto the comment's edit trail in the same transaction that writes
+   * the new ones, so nothing is destroyed and the record of what was actually
+   * written is still readable.
+   *
+   * Deliberately NOT restricted to the comment's own author. The sweep this
+   * was built for fixes links written by other agents and by the owner, and
+   * an operation that could only repair your own comments would leave the
+   * majority of them broken. The editor is named on every trail entry
+   * instead, which is the honest version of the same protection.
+   *
+   * A review payload riding on the comment is untouched. Correcting an ASK is
+   * `reviseCommentReview`, which re-runs the quality gate; this changes only
+   * what the comment says.
+   */
+  editCommentText(
+    docId: string,
+    threadId: string,
+    commentId: string,
+    text: string,
+    opts: { actor: User; reason?: string },
+  ): { ok: true; thread: Thread } | { ok: false; error: 'no-doc' | 'not-found' | 'unchanged' } {
+    const doc = this.p.residentDoc(docId);
+    if (!doc) return { ok: false, error: 'no-doc' };
+    const thread = this.getThread(docId, threadId);
+    const target = thread?.comments.find((c) => c.id === commentId);
+    if (!target) return { ok: false, error: 'not-found' };
+    // An edit that changes nothing would still push a trail entry, which
+    // would read as a correction somebody made — so it is refused rather
+    // than recorded. A sweep that re-runs is the caller that hits this.
+    if (target.text === text) return { ok: false, error: 'unchanged' };
+    if (
+      !setCommentText(doc.ydoc, threadId, commentId, text, {
+        name: opts.actor.name,
+        at: Date.now(),
+        ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
+      })
+    ) {
+      // The comment went between the read and the write — a race.
+      return { ok: false, error: 'not-found' };
+    }
+    const after = this.getThread(docId, threadId);
+    return after ? { ok: true, thread: after } : { ok: false, error: 'not-found' };
   }
 
   /**

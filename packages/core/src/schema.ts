@@ -4,6 +4,7 @@ import { readStoredSummary } from './thread-summary.ts';
 import type {
   Anchor,
   Comment,
+  CommentEdit,
   DocMeta,
   StoredSummary,
   Thread,
@@ -157,6 +158,24 @@ export function initDocMeta(doc: Y.Doc, meta: DocMeta): void {
   });
 }
 
+/**
+ * A comment's edit trail, read as defensively as `review` beside it: this map
+ * is written by whatever peer made the edit, so a malformed entry degrades to
+ * "no trail" rather than reaching a renderer. An empty trail reads as absent,
+ * which keeps an unedited comment's shape exactly what it always was.
+ */
+function readCommentEdits(raw: unknown): CommentEdit[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const edits: CommentEdit[] = [];
+  for (const e of raw) {
+    if (!e || typeof e !== 'object') continue;
+    const { text, at, by, reason } = e as Record<string, unknown>;
+    if (typeof text !== 'string' || typeof at !== 'number' || typeof by !== 'string') continue;
+    edits.push({ text, at, by, ...(typeof reason === 'string' ? { reason } : {}) });
+  }
+  return edits.length > 0 ? edits : undefined;
+}
+
 export function readThread(threadMap: Y.Map<unknown>, threadId: string): Thread | null {
   const anchor = threadMap.get('anchor') as Anchor | undefined;
   const status = threadMap.get('status') as ThreadStatus | undefined;
@@ -179,7 +198,15 @@ export function readThread(threadMap: Y.Map<unknown>, threadId: string): Thread 
         // authoritative, so a malformed payload must degrade to "an ordinary
         // comment" rather than reach a renderer.
         const review = readReviewPayload(c.get('review'));
-        comments.push({ id, author, text, ts, ...(review ? { review } : {}) });
+        const edits = readCommentEdits(c.get('edits'));
+        comments.push({
+          id,
+          author,
+          text,
+          ts,
+          ...(review ? { review } : {}),
+          ...(edits ? { edits } : {}),
+        });
       }
     }
   }
@@ -302,6 +329,55 @@ export function setCommentReview(
   for (const c of comments) {
     if (c.get('id') !== commentId) continue;
     doc.transact(() => c.set('review', review));
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Replace a comment's words, keeping what it said before.
+ *
+ * The one operation that changes a posted comment's text. It pushes the
+ * current text onto the comment's `edits` trail in the SAME transaction that
+ * writes the new words, so there is no instant in which the old version is
+ * not recorded somewhere — the never-hard-delete rule applied to the one
+ * field that had no undo.
+ *
+ * Nothing else about the comment moves: not `ts`, not `author`, not a review
+ * payload riding on it. An edit is a correction to what a comment SAYS, and
+ * every question of who asked and when is answered by fields this does not
+ * touch.
+ *
+ * Returns false when the comment has gone between the caller's read and this
+ * write — a race, not an error the caller caused.
+ */
+export function setCommentText(
+  doc: Y.Doc,
+  threadId: string,
+  commentId: string,
+  text: string,
+  by: { name: string; at: number; reason?: string },
+): boolean {
+  const threadMap = getThreads(doc).get(threadId);
+  const comments = threadMap?.get('comments') as Y.Array<Y.Map<unknown>> | undefined;
+  if (!comments) return false;
+  for (const c of comments) {
+    if (c.get('id') !== commentId) continue;
+    const previous = c.get('text');
+    if (typeof previous !== 'string') return false;
+    const trail = readCommentEdits(c.get('edits')) ?? [];
+    doc.transact(() => {
+      c.set('edits', [
+        ...trail,
+        {
+          text: previous,
+          at: by.at,
+          by: by.name,
+          ...(by.reason !== undefined ? { reason: by.reason } : {}),
+        },
+      ]);
+      c.set('text', text);
+    });
     return true;
   }
   return false;
