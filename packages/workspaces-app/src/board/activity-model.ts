@@ -1,3 +1,4 @@
+import { api } from '../doc-path.ts';
 import {
   type BoardGoal,
   type BoardNote,
@@ -315,7 +316,7 @@ export function activityCommentRequest(
     .map((line) => `> ${line}`)
     .join('\n');
   return {
-    path: `/api/docs/${encodeURIComponent(`task:${taskId}`)}/threads`,
+    path: api(`docs/${encodeURIComponent(`task:${taskId}`)}/threads`),
     body: { text: `${quote}\n\n${text}`, anchor: { kind: 'subject' } },
   };
 }

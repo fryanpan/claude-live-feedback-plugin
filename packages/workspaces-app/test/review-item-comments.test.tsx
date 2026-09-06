@@ -182,6 +182,9 @@ async function select(el: HTMLElement, phrase: string): Promise<void> {
 }
 
 beforeEach(() => {
+  // The board every route in this file is built under — `api()` reads it off
+  // the address bar, and the boot harness puts the same one there.
+  history.replaceState(null, '', `/workspaces/${WS}/home`);
   document.body.replaceChildren();
   root = document.createElement('div');
   document.body.append(root);
@@ -197,7 +200,7 @@ describe('the model: where a question on an item goes, and what a revision carri
     const q = reviewQueue([], [ticketRow()], NOW);
     const req = reviewItemAskRequest(q.items[0] as ReviewItem, 'ships the other', 'Which other?');
     expect(req).toEqual({
-      path: '/api/docs/task%3Atk-1/threads',
+      path: `/workspaces/${WS}/docs/task%3Atk-1/threads`,
       body: {
         text: 'Which other?',
         anchor: { kind: 'review-item', reviewItemId: 'r-1', snippet: { text: 'ships the other' } },
@@ -244,7 +247,7 @@ describe('the model: where a question on an item goes, and what a revision carri
       reviewItemAskRequest(item, 'Green or blue?', 'Which other?'),
     );
     expect(reviewItemQuestionRequest(item, 'Which other?')?.path).toBe(
-      '/api/docs/task%3Atk-1/threads',
+      `/workspaces/${WS}/docs/task%3Atk-1/threads`,
     );
     // Not the more-info route: that one records no thread, and only a
     // THREADED question takes the item off the queue (`reviewItemState`).
@@ -655,7 +658,7 @@ describe('every asking surface makes the same request and lets the item go', () 
       detail: 'the build ships the OTHER (blue).',
     },
   };
-  const THREAD_PATH = '/api/docs/task%3At-1/threads';
+  const THREAD_PATH = `/workspaces/${WS}/docs/task%3At-1/threads`;
 
   beforeEach(() => {
     resetBoardServer();
@@ -839,7 +842,7 @@ describe('the model: a ticket’s own decision asks, waits and comes back like a
     expect(item?.kind).toBe('decision');
     expect(wholeItemPhrase(item as ReviewItem)).toBe('Pick a retry budget');
     expect(reviewItemQuestionRequest(item as ReviewItem, 'What does a blip cost?')).toEqual({
-      path: '/api/docs/task%3Atk-9/threads',
+      path: `/workspaces/${WS}/docs/task%3Atk-9/threads`,
       body: {
         text: 'What does a blip cost?',
         anchor: {

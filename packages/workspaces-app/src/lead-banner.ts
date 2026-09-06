@@ -1,3 +1,4 @@
+import { LEAD_PRESENCE_EVENT, type LeadPresence } from '@feedback/core';
 /**
  * The meeting doc's "nobody is listening" line.
  *
@@ -16,7 +17,7 @@
  * Unknown (the GET failed) shows nothing: a false alarm on a doc whose
  * board is fine would teach people to ignore the line.
  */
-import { LEAD_PRESENCE_EVENT, type LeadPresence } from '@feedback/core';
+import { api } from './doc-path.ts';
 
 export interface LeadBannerOpts {
   docId: string;
@@ -138,7 +139,7 @@ export function mountLeadBanner(opts: LeadBannerOpts): LeadBanner {
   };
 
   const unsubscribe = subscribe(opts.docId, apply);
-  const ready = fetchJson(`/api/docs/${encodeURIComponent(opts.docId)}/lead-presence`)
+  const ready = fetchJson(api(`docs/${encodeURIComponent(opts.docId)}/lead-presence`))
     .then((body) => {
       const parsed = parseLeadPresence(body);
       if (parsed) apply(parsed);

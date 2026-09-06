@@ -14,8 +14,12 @@ import { mountReviewFloat } from '../src/review-float.ts';
 
 const JORDAN: User = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#336699' };
 
+/** The board the page is standing on — every resource route is under it. */
+const WS = 'w-1';
+
 let root: HTMLElement;
 beforeEach(() => {
+  history.replaceState(null, '', `/workspaces/${WS}/docs/d-h`);
   root = document.createElement('div');
   document.body.replaceChildren(root);
 });
@@ -181,7 +185,7 @@ describe('mountReviewFloat', () => {
     btn()?.click();
     await new Promise((r) => setTimeout(r, 0));
     const post = stub.calls.find((c) => c.init?.method === 'POST');
-    expect(post?.url).toBe('/api/docs/d-h/review-request');
+    expect(post?.url).toBe(`/workspaces/${WS}/docs/d-h/review-request`);
     expect(JSON.parse(String(post?.init?.body)).author.name).toBe('Jordan');
     expect(float.face()).toBe('requested');
     expect(btn()?.disabled).toBe(true);

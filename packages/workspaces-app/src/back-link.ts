@@ -6,7 +6,7 @@
  * destination for a doc reached from a workspace board: the board is where
  * the work is, and returning to the index means finding the board again.
  *
- * The board can only come from the server (`backTo` on `/api/docs/<id>`),
+ * The board can only come from the server (`backTo` on /workspaces/<ws>/docs/<id>),
  * because the page itself knows nothing about who linked to it — a doc URL
  * pasted into a message arrives with no referrer at all. So this module is
  * the small half: take the resolved board and point the arrow at it.

@@ -1,3 +1,4 @@
+import { type Thread, type User, authorLabel, formatTime } from '@feedback/core';
 /**
  * The two places a person writes on an attachment: the comment composer
  * that opens off a selection, and the full-screen thread view with its reply
@@ -12,7 +13,7 @@
  * Everything the writing surfaces need is passed in; nothing here reaches back
  * into `mountReviewChrome`.
  */
-import { type Thread, type User, authorLabel, formatTime } from '@feedback/core';
+import { api } from '../doc-path.ts';
 import {
   attachMarkdownComposer,
   blurMarkdownComposer,
@@ -225,7 +226,7 @@ export function wireReviewComposer(opts: ComposerOptions): ComposerHandle {
     // while the request is in flight, on top of the disabled-button guard.
     composerText.disabled = true;
     try {
-      const res = await fetch(`/api/docs/${encodeURIComponent(docId)}/threads`, {
+      const res = await fetch(api(`docs/${encodeURIComponent(docId)}/threads`), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ author: user, text, anchor, requestId }),
@@ -315,7 +316,7 @@ export function wireReviewComposer(opts: ComposerOptions): ComposerHandle {
         // blip. Yjs sync re-renders panel + highlights once status flips.
         try {
           const res = await fetch(
-            `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(t.id)}/${action}`,
+            api(`docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(t.id)}/${action}`),
             { method: 'POST' },
           );
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -355,7 +356,7 @@ export function wireReviewComposer(opts: ComposerOptions): ComposerHandle {
     const id = threadViewId;
     threadViewReplyText.value = '';
     await fetch(
-      `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/comments`,
+      api(`docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/comments`),
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },

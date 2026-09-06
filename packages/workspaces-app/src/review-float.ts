@@ -30,6 +30,7 @@
  */
 
 import type { LeadPresence, User } from '@feedback/core';
+import { api } from './doc-path.ts';
 import { floatDock } from './float-dock.ts';
 import { leadReceiptSuffix } from './lead-banner.ts';
 
@@ -105,7 +106,7 @@ async function defaultFetchJson(url: string, init?: RequestInit): Promise<unknow
 export function mountReviewFloat(opts: ReviewFloatOpts): ReviewFloatHandle {
   const { docId, root, user, canWrite } = opts;
   const fetchJson = opts.fetchJson ?? defaultFetchJson;
-  const docUrl = `/api/docs/${encodeURIComponent(docId)}`;
+  const docUrl = api(`docs/${encodeURIComponent(docId)}`);
 
   const float = document.createElement('button');
   float.type = 'button';

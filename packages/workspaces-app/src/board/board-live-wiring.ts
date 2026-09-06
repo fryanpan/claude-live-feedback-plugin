@@ -1,3 +1,6 @@
+import { connect } from '@feedback/core';
+import type { BootLocation } from '../boot-env.ts';
+import { renderLiveStaleNotice, watchConnection, watchLiveSync } from '../connection-state.ts';
 /**
  * Everything that makes the board move without anybody touching it: the two
  * ydoc observers, the awareness feed the presence strip reads, the SSE
@@ -15,9 +18,7 @@
  * is stale now". Crossing the two would paint a peer's transition twice, from
  * two sources.
  */
-import { connect } from '@feedback/core';
-import type { BootLocation } from '../boot-env.ts';
-import { renderLiveStaleNotice, watchConnection, watchLiveSync } from '../connection-state.ts';
+import { currentWorkspaceId, docHref } from '../doc-path.ts';
 import { staleTaskLinkStatuses } from '../link-titles.ts';
 import type { BoardState } from './board-actions.ts';
 import { discussionIsBusy } from './board-discussion-render.ts';
@@ -154,7 +155,7 @@ export function wireBoardLive(deps: BoardLiveDeps): void {
       const [moved] = peopleFromAwareness()
         .filter((p) => presenceIdentity(p) === identity && p.docId)
         .sort((a, b) => b.lastActive - a.lastActive);
-      if (moved?.docId) location.assign(`/review/${encodeURIComponent(moved.docId)}`);
+      if (moved?.docId) location.assign(docHref(moved.docId, currentWorkspaceId()));
     }
   });
   let lastActivePush = 0;

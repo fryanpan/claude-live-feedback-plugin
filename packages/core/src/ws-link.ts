@@ -15,16 +15,19 @@
  * back to its raw text, so the permissiveness costs nothing.
  *
  * Path shapes mirror `doc-path.ts` (client) and the canonical block in
- * `server.ts`: `/workspaces/<ws>[/docs|mockups|reviews/<id>]`, the legacy
- * `/review/<id>` and `/mockup/<id>`, and the board's `?task=<id>` deep link.
+ * `server.ts`: `/workspaces/<ws>[/docs|mockups|reviews/<id>]` and the board's
+ * `?task=<id>` deep link. Every shape names a workspace, which is what lets
+ * the resolver refuse an address that lies about where a resource lives —
+ * `/review/<id>` and `/mockup/<id>` named none, and are gone with the rest of
+ * the pre-cutover paths.
  */
 
 export type WorkspaceLink =
   | { kind: 'workspace'; workspaceId: string }
   | { kind: 'task'; workspaceId: string; taskId: string }
   | { kind: 'goal'; workspaceId: string; goalId: string }
-  | { kind: 'doc'; workspaceId: string | null; docId: string }
-  | { kind: 'mockup'; workspaceId: string | null; docId: string }
+  | { kind: 'doc'; workspaceId: string; docId: string }
+  | { kind: 'mockup'; workspaceId: string; docId: string }
   | { kind: 'review'; workspaceId: string; reviewId: string };
 
 // The optional suffix is the board's nav destinations: the board keeps its
@@ -32,7 +35,6 @@ export type WorkspaceLink =
 // the same task a link copied from the bare path does.
 const WS_PATH = /^\/workspaces\/([^/?#]+)(?:\/(?:home|tasks|mine|activity))?\/?$/;
 const WS_CHILD_PATH = /^\/workspaces\/([^/?#]+)\/(docs|mockups|reviews)\/([^/?#]+)\/?$/;
-const LEGACY_PATH = /^\/(review|mockup)\/([^/?#]+)\/?$/;
 
 function decode(part: string): string {
   try {
@@ -77,14 +79,6 @@ export function parseWorkspaceLink(urlOrPath: string): WorkspaceLink | null {
     if (child[2] === 'docs') return { kind: 'doc', workspaceId, docId: id };
     if (child[2] === 'mockups') return { kind: 'mockup', workspaceId, docId: id };
     return { kind: 'review', workspaceId, reviewId: id };
-  }
-
-  const legacy = u.pathname.match(LEGACY_PATH);
-  if (legacy?.[1] && legacy[2]) {
-    const id = decode(legacy[2]);
-    return legacy[1] === 'review'
-      ? { kind: 'doc', workspaceId: null, docId: id }
-      : { kind: 'mockup', workspaceId: null, docId: id };
   }
 
   return null;

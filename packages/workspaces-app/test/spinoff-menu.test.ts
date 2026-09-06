@@ -18,7 +18,7 @@
  * Fixtures are synthetic (jordan@partner.example register).
  */
 import type { User } from '@feedback/core';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
   POINTER_PILL_ACTIONS,
   SPINOFF_ACTIONS,
@@ -30,6 +30,13 @@ import {
   runSpinoff,
   taskLinkHref,
 } from '../src/spinoff-menu.ts';
+
+/** The board the page is standing on — every resource route is under it. */
+const WS = 'w-1';
+
+beforeEach(() => {
+  history.replaceState(null, '', `/workspaces/${WS}/docs/d-huddle`);
+});
 
 const JORDAN: User = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#336699' };
 const ANCHOR: SpinoffAnchor = {
@@ -331,14 +338,14 @@ describe('runSpinoff', () => {
         placeholder: true,
       });
       // ONE round trip, to the doc — no create anywhere.
-      expect(calls.map((c) => c.url)).toEqual(['/api/docs/d-huddle/research-request']);
+      expect(calls.map((c) => c.url)).toEqual([`/workspaces/${WS}/docs/d-huddle/research-request`]);
     });
 
     it('sends the presser, the selection as the anchor, and the topic as a title', async () => {
       const { deps: d, calls } = deps({ quote: 'Does Cloudflare Access cover the mockup route?' });
       await runSpinoff('research', d);
       const ask = created(calls);
-      expect(ask?.url).toBe('/api/docs/d-huddle/research-request');
+      expect(ask?.url).toBe(`/workspaces/${WS}/docs/d-huddle/research-request`);
       expect(ask?.body.author).toEqual(JORDAN);
       expect(ask?.body.anchor).toEqual(ANCHOR);
       // The topic is the selection read as a title — marker and trailing

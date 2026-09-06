@@ -1,8 +1,9 @@
 import type { HuddleKind } from '@feedback/core';
+import { api } from './doc-path.ts';
 import type { DocMeta } from './mount-context.ts';
 
 /**
- * Read a doc's persisted type + paths from `/api/docs/<id>` before a surface
+ * Read a doc's persisted type + paths from /workspaces/<ws>/docs/<id> before a surface
  * mounts.
  *
  * It lives in its own module rather than inside `app.ts` because `app.ts` runs
@@ -24,7 +25,7 @@ export async function fetchDocMeta(docId: string): Promise<DocMeta> {
     diffTarget: '',
   };
   try {
-    const res = await fetch(`/api/docs/${encodeURIComponent(docId)}`);
+    const res = await fetch(api(`docs/${encodeURIComponent(docId)}`));
     if (!res.ok) return fallback;
     const data = (await res.json()) as {
       meta?: {

@@ -127,11 +127,12 @@ describe('renderRelatedLinks', () => {
       '/workspaces/w-test/docs/d-plan',
       '/workspaces/w-test/docs/d-other',
     ]);
-    // No workspace id: the legacy shape, same fallback the old Source-doc
-    // field used.
-    const legacy = renderRelatedLinks([{ docId: 'd-plan' }]);
-    expect(legacy?.querySelector('.board-related-link')?.getAttribute('href')).toBe(
-      '/review/d-plan',
+    // No workspace id: there is no second address to fall back to since the
+    // cutover deleted `/review/<docId>`, so the segment is left empty and the
+    // link 404s at the router rather than resolving somewhere plausible.
+    const noBoard = renderRelatedLinks([{ docId: 'd-plan' }]);
+    expect(noBoard?.querySelector('.board-related-link')?.getAttribute('href')).toBe(
+      '/workspaces//docs/d-plan',
     );
   });
 
@@ -139,8 +140,8 @@ describe('renderRelatedLinks', () => {
     // `primeLinkTitle(url, null)` is the server saying "asked, and there is
     // nothing" (as opposed to never having asked) — the AC is title-only
     // links, so the raw doc id must never be the steady-state text.
-    primeLinkTitle('/review/d-blank', null, null);
-    const el = renderRelatedLinks([{ docId: 'd-blank' }]);
+    primeLinkTitle('/workspaces/w-test/docs/d-blank', null, null);
+    const el = renderRelatedLinks([{ docId: 'd-blank' }], 'w-test');
     expect(el?.querySelector('.board-related-link')?.textContent).toBe('Untitled doc');
   });
 

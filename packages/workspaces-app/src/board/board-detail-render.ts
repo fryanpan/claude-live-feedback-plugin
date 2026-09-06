@@ -109,13 +109,12 @@ function assigneePicker(
  *  and both catch the answer regardless of which is mounted when it lands. */
 const DOC_TITLE_LINK_CLASS = 'board-doc-title-link';
 
-/** The canonical href for a doc: workspace-scoped when a workspaceId is
- *  known (what every fresh link should be), the legacy `/review/<id>` shape
- *  otherwise — the same fallback the old Source-doc field used. */
+/** The canonical href for a doc. The board this renderer draws is itself
+ *  workspace-scoped, so `workspaceId` is always there in practice; an absent
+ *  one produces a link that 404s rather than the legacy `/review/<id>` shape,
+ *  which is deleted. */
 function docLinkHref(docId: string, workspaceId?: string): string {
-  return workspaceId !== undefined
-    ? `/workspaces/${encodeURIComponent(workspaceId)}/docs/${encodeURIComponent(docId)}`
-    : `/review/${encodeURIComponent(docId)}`;
+  return `/workspaces/${encodeURIComponent(workspaceId ?? '')}/docs/${encodeURIComponent(docId)}`;
 }
 
 /** The canonical href for a task: the board's own deep link. Without a

@@ -1,5 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadDocSpeakers, loadDocVoices, postSpeakerName } from '../src/speaker-voices.ts';
+
+/** The board the page is standing on — every resource route is under it. */
+const WS = 'w-1';
+
+beforeEach(() => {
+  history.replaceState(null, '', `/workspaces/${WS}/docs/d-1`);
+});
 
 const ok = (body: unknown) =>
   ({ ok: true, status: 200, json: () => Promise.resolve(body) }) as unknown as Response;
@@ -56,7 +63,7 @@ describe('loadDocVoices', () => {
       return ok({ meetings: [] });
     });
     await loadDocVoices('a/b', fetchImpl as unknown as typeof fetch);
-    expect(seen[0]).toBe('/api/docs/a%2Fb/meetings');
+    expect(seen[0]).toBe(`/workspaces/${WS}/docs/a%2Fb/meetings`);
   });
 });
 
@@ -92,7 +99,7 @@ describe('postSpeakerName', () => {
       fetchImpl as unknown as typeof fetch,
     );
     expect(took).toBe(true);
-    expect(calls[0]?.[0]).toBe('/api/docs/a%2Fb/meetings/m%201/speakers');
+    expect(calls[0]?.[0]).toBe(`/workspaces/${WS}/docs/a%2Fb/meetings/m%201/speakers`);
     expect(calls[0]?.[1].method).toBe('POST');
     expect(JSON.parse(String(calls[0]?.[1].body))).toEqual({ speaker: 'B', name: 'Priya' });
   });

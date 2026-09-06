@@ -1,3 +1,4 @@
+import type { User } from '@feedback/core';
 /**
  * The five writes a comment card can make, and what the reader is told when
  * one fails.
@@ -16,7 +17,7 @@
  * showing the outcome and a "try again" over an already-done undo reads as a
  * broken button.
  */
-import type { User } from '@feedback/core';
+import { api } from '../doc-path.ts';
 import { type ChromeSelection, anchorBody } from './anchor-body.ts';
 import { showToast } from './chrome-dom.ts';
 
@@ -68,7 +69,7 @@ export interface ThreadActions {
 export function createThreadActions(deps: ThreadActionDeps): ThreadActions {
   const { docId, user } = deps;
   const threadUrl = (threadId: string, suffix: string) =>
-    `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}${suffix}`;
+    api(`docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}${suffix}`);
 
   return {
     async reply(threadId, text, answersCommentId, optionId) {

@@ -1,3 +1,5 @@
+import { type CaptureMode, type HuddleKind, type User, parseWorkspaceLink } from '@feedback/core';
+import type { BootLocation } from '../boot-env.ts';
 /**
  * Every REST write the board performs, and the working state they mutate.
  *
@@ -16,8 +18,7 @@
  * `send`, `fetchJson` and `showToast` come along because every verb ends in
  * one of them — a write that lands, or a one-line report that it did not.
  */
-import { type CaptureMode, type HuddleKind, type User, parseWorkspaceLink } from '@feedback/core';
-import type { BootLocation } from '../boot-env.ts';
+import { api } from '../doc-path.ts';
 import { HUDDLE_MODE_PARAM } from '../huddle-entry.ts';
 import type { RelatedEntry, TaskDiscussion } from './board-detail-render.ts';
 import {
@@ -270,7 +271,7 @@ export function createBoardActions(deps: BoardActionDeps) {
   }
 
   async function transitionTask(task: BoardTask, to: BoardTask['status']): Promise<void> {
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/transition`, 'POST', {
+    const res = await send(api(`tasks/${encodeURIComponent(task.id)}/transition`), 'POST', {
       to,
       author,
     });
@@ -286,7 +287,7 @@ export function createBoardActions(deps: BoardActionDeps) {
   }
 
   async function assignTask(task: BoardTask, assignee: string): Promise<void> {
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/assignee`, 'POST', {
+    const res = await send(api(`tasks/${encodeURIComponent(task.id)}/assignee`), 'POST', {
       assignee,
       author,
     });
@@ -303,7 +304,7 @@ export function createBoardActions(deps: BoardActionDeps) {
    * band for no reason the reader gave.
    */
   async function setTaskGoal(task: BoardTask, goal: string): Promise<void> {
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/goal`, 'POST', {
+    const res = await send(api(`tasks/${encodeURIComponent(task.id)}/goal`), 'POST', {
       goal,
       author,
     });
@@ -313,7 +314,7 @@ export function createBoardActions(deps: BoardActionDeps) {
   /** The panel's Due field. `null` clears — the route reads it as the explicit
    *  clear it is, rather than as a missing value. */
   async function setTaskDue(task: BoardTask, dueAt: number | null): Promise<void> {
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/due`, 'POST', {
+    const res = await send(api(`tasks/${encodeURIComponent(task.id)}/due`), 'POST', {
       dueAt,
       author,
     });
@@ -331,7 +332,7 @@ export function createBoardActions(deps: BoardActionDeps) {
    * success would blank it and lose their words.
    */
   async function setTaskSchedule(task: BoardTask, next: ScheduleWrite): Promise<boolean> {
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/schedule`, 'POST', {
+    const res = await send(api(`tasks/${encodeURIComponent(task.id)}/schedule`), 'POST', {
       ...(next === null ? { rule: null } : next),
       author,
     });
@@ -393,7 +394,7 @@ export function createBoardActions(deps: BoardActionDeps) {
         showToast('A ticket cannot wait on itself');
         return;
       }
-      const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/park`, 'POST', {
+      const res = await send(api(`tasks/${encodeURIComponent(task.id)}/park`), 'POST', {
         blockedBy: [blockedBy],
         author,
       });
@@ -404,7 +405,7 @@ export function createBoardActions(deps: BoardActionDeps) {
       parsed?.kind === 'doc' || parsed?.kind === 'mockup'
         ? { kind: 'doc', docId: parsed.docId }
         : { kind: 'url', url };
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/links`, 'POST', {
+    const res = await send(api(`tasks/${encodeURIComponent(task.id)}/links`), 'POST', {
       ref,
       author,
     });
@@ -427,7 +428,7 @@ export function createBoardActions(deps: BoardActionDeps) {
    */
   async function removeRelatedLink(task: BoardTask, entry: RelatedEntry): Promise<void> {
     if (entry.kind === 'blocker') {
-      const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/after`, 'POST', {
+      const res = await send(api(`tasks/${encodeURIComponent(task.id)}/after`), 'POST', {
         after: task.after.filter((id) => id !== entry.taskId),
         ...(task.afterEnforce !== undefined
           ? { afterEnforce: task.afterEnforce.filter((id) => id !== entry.taskId) }
@@ -439,7 +440,7 @@ export function createBoardActions(deps: BoardActionDeps) {
     }
     const ref =
       entry.kind === 'doc' ? { kind: 'doc', docId: entry.docId } : { kind: 'url', url: entry.url };
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/links`, 'DELETE', {
+    const res = await send(api(`tasks/${encodeURIComponent(task.id)}/links`), 'DELETE', {
       ref,
       author,
     });
@@ -461,7 +462,7 @@ export function createBoardActions(deps: BoardActionDeps) {
    * left the board is a surface with no way to explain itself.
    */
   async function archiveTask(task: BoardTask): Promise<void> {
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/archive`, 'POST', { author });
+    const res = await send(api(`tasks/${encodeURIComponent(task.id)}/archive`), 'POST', { author });
     if (!res.ok) {
       showToast('Archiving failed — the task is still on the board');
       return;
@@ -480,7 +481,7 @@ export function createBoardActions(deps: BoardActionDeps) {
   /** Put an archived task back. The Undo button, the panel's Restore, and the
    *  restore list's rows are all this one call. */
   async function restoreTask(task: BoardTask): Promise<void> {
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/restore`, 'POST', { author });
+    const res = await send(api(`tasks/${encodeURIComponent(task.id)}/restore`), 'POST', { author });
     if (!res.ok) {
       showToast('Restoring failed — the task is still archived');
       return;
@@ -582,7 +583,7 @@ export function createBoardActions(deps: BoardActionDeps) {
    * board-model.ts).
    */
   async function placeTask(task: BoardTask, target: ReorderTarget): Promise<void> {
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/goal`, 'POST', {
+    const res = await send(api(`tasks/${encodeURIComponent(task.id)}/goal`), 'POST', {
       goal: target.goal,
       after: target.after,
       author,
@@ -594,7 +595,7 @@ export function createBoardActions(deps: BoardActionDeps) {
   }
 
   async function renameTask(task: BoardTask, title: string): Promise<void> {
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/title`, 'POST', {
+    const res = await send(api(`tasks/${encodeURIComponent(task.id)}/title`), 'POST', {
       title,
       author,
     });
@@ -653,7 +654,7 @@ export function createBoardActions(deps: BoardActionDeps) {
    * panel says so before the reader picks it.
    */
   async function transitionGoal(goalId: string, to: BoardTask['status']): Promise<void> {
-    const res = await send(`/api/tasks/${encodeURIComponent(goalId)}/transition`, 'POST', {
+    const res = await send(api(`tasks/${encodeURIComponent(goalId)}/transition`), 'POST', {
       to,
       author,
     });

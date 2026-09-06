@@ -7,7 +7,7 @@ import {
   suggestOps,
 } from '@feedback/core';
 import type { EditorView } from '@tiptap/pm/view';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
 import { wireThreadRangeClicks } from '../src/doc/chrome-panels.ts';
@@ -31,6 +31,13 @@ import { MORPH_MS } from '../src/thread-morph.ts';
  * (unit-tested separately, and the real-browser pass is a manual step per
  * the plan).
  */
+
+/** The board the page is standing on — every resource route is under it. */
+const WS = 'w-1';
+
+beforeEach(() => {
+  history.replaceState(null, '', `/workspaces/${WS}/docs/d1`);
+});
 
 const open: Array<() => void> = [];
 afterEach(() => {
@@ -562,7 +569,7 @@ describe('mountMarkupMargin — comment balloons', () => {
       expect(resolveBtn?.getAttribute('aria-label')).toBe('Resolve thread');
       resolveBtn?.click();
       expect(fetchSpy).toHaveBeenCalledWith(
-        expect.stringContaining(`/api/docs/d1/threads/${thread.id}/resolve`),
+        expect.stringContaining(`/workspaces/${WS}/docs/d1/threads/${thread.id}/resolve`),
         expect.objectContaining({ method: 'POST' }),
       );
     } finally {
@@ -606,7 +613,7 @@ describe('mountMarkupMargin — comment balloons', () => {
       );
       replyBtn?.click();
       expect(fetchSpy).toHaveBeenCalledWith(
-        expect.stringContaining(`/api/docs/d1/threads/${thread.id}/comments`),
+        expect.stringContaining(`/workspaces/${WS}/docs/d1/threads/${thread.id}/comments`),
         expect.objectContaining({
           method: 'POST',
           body: expect.stringContaining('A reply from the balloon'),
@@ -1378,7 +1385,9 @@ describe('mountMarkupMargin — suggestion balloons', () => {
       const acceptBtn = balloon.querySelector('.cw-suggest-accept') as HTMLButtonElement;
       acceptBtn.click();
       expect(fetchSpy).toHaveBeenCalledWith(
-        expect.stringContaining(`/api/docs/d1/suggestions/${res.ok ? res.sid : ''}/accept`),
+        expect.stringContaining(
+          `/workspaces/${WS}/docs/d1/suggestions/${res.ok ? res.sid : ''}/accept`,
+        ),
         expect.objectContaining({ method: 'POST' }),
       );
       // Optimistically removed on click — doesn't wait for the round trip.

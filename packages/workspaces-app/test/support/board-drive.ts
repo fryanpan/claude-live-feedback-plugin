@@ -130,12 +130,28 @@ export interface BootOptions {
   noSync?: boolean;
 }
 
+/**
+ * Put the REAL address bar on the same URL as the injected one.
+ *
+ * Not everything the board reaches reads the injected `BootLocation`: since
+ * the canonical-routes cutover, every resource path is built by `api()` /
+ * `docHref()` from `currentWorkspaceId()`, which reads the page's own
+ * `location`. Left on the harness default, those come out with an empty
+ * workspace segment — a 404 shape rather than the board under test.
+ */
+function mirrorAddressBar(url: string): void {
+  const u = new URL(url, 'https://board.test');
+  globalThis.history.replaceState(null, '', u.pathname + u.search);
+}
+
 /** Boot the real board against the fakes and hand back what it touched. */
 export async function bootTestBoard(opts: BootOptions = {}): Promise<Booted> {
   const sockets = fakeSockets();
   const storage = fakeStorage({ [NAME_KEY]: 'Ada', ...opts.storage });
-  const location = fakeLocation(opts.url ?? `https://board.test/workspaces/${WS}/tasks`);
+  const bootUrl = opts.url ?? `https://board.test/workspaces/${WS}/tasks`;
+  const location = fakeLocation(bootUrl);
   const history = fakeHistory();
+  mirrorAddressBar(bootUrl);
   const window = new EventTarget();
   document.body.innerHTML = '<div id="board-root"></div>';
   const env: BoardBootEnv = {
@@ -167,6 +183,7 @@ export async function bootTestBoard(opts: BootOptions = {}): Promise<Booted> {
     },
     async traverseTo(url) {
       location.moveTo(url);
+      mirrorAddressBar(url);
       window.dispatchEvent(new Event('popstate'));
       await settle();
     },

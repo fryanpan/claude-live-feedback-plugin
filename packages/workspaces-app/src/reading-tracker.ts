@@ -1,4 +1,5 @@
 import type { User } from '@feedback/core';
+import { api } from './doc-path.ts';
 import { asBackgroundWrite } from './signin/write-gate.ts';
 
 /**
@@ -128,7 +129,7 @@ function randomSessionId(): string {
  */
 export function startReadingTracker(opts: ReadingTrackerOptions): () => void {
   const base = opts.apiBase ?? '';
-  const postUrl = `${base}/api/docs/${encodeURIComponent(opts.docId)}/activity`;
+  const postUrl = `${base}${api(`docs/${encodeURIComponent(opts.docId)}/activity`)}`;
 
   const post = (type: 'read_session' | 'doc_open', payload: Record<string, unknown>): void => {
     const body = JSON.stringify({ type, payload, author: opts.user });

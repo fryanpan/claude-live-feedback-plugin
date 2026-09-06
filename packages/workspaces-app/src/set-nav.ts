@@ -3,13 +3,14 @@
  * and which of the answer to keep.
  *
  * Both lived inside `renderSetNav`'s closure, where the cost of the first one
- * was invisible — it fetched `/api/docs` whole (4,205,683 bytes across 4,062
+ * was invisible — it fetched /workspaces/<ws>/docs whole (4,205,683 bytes across 4,062
  * rows, measured 2026-08-21 on the live server) so that a `.filter` could pick
  * out the six docs sharing a setId. Out here they are two named functions with
  * a test each.
  */
+import { api } from './doc-path.ts';
 
-/** The subset of a `/api/docs` row this sidebar reads. */
+/** The subset of a /workspaces/<ws>/docs row this sidebar reads. */
 export interface SetDoc {
   docId: string;
   type: string;
@@ -22,7 +23,7 @@ export interface SetDoc {
 
 /** The listing URL scoped to one attachment set. */
 export function setDocsUrl(setId: string): string {
-  return `/api/docs?setId=${encodeURIComponent(setId)}`;
+  return api(`docs?setId=${encodeURIComponent(setId)}`);
 }
 
 /**

@@ -1,3 +1,4 @@
+import type { ReviewPayload, User } from '@feedback/core';
 /**
  * A row's comments: where they live, how they are read, and how one is posted.
  *
@@ -21,7 +22,7 @@
  * primitives every board write ends in, imported the way `board-actions.ts`
  * exports them.
  */
-import type { ReviewPayload, User } from '@feedback/core';
+import { api } from '../doc-path.ts';
 import { type BoardState, fetchJson, send, showToast } from './board-actions.ts';
 import type { TaskThread } from './board-detail-render.ts';
 
@@ -60,7 +61,7 @@ export interface BoardDiscussion {
  * Prefers what the projection sent, and falls back to deriving it. The
  * fallback is not defensive padding: a board served by a server that predates
  * the goal-body projection carries no `bodyDocId`, and without it the panel
- * would fetch `/api/docs//threads` and mount an editor on nothing. Deriving is
+ * would fetch /workspaces/<ws>/docs//threads and mount an editor on nothing. Deriving is
  * safe because the shape is a DECISION rather than a lookup — `task:<goalId>`,
  * settled in the goals-as-a-task-type design.
  */
@@ -94,7 +95,7 @@ export function createBoardDiscussion(deps: BoardDiscussionDeps): BoardDiscussio
           review?: ReviewPayload;
         }>;
       }>;
-    }>(`/api/docs/${encodeURIComponent(task.bodyDocId)}/threads`);
+    }>(api(`docs/${encodeURIComponent(task.bodyDocId)}/threads`));
     // The reader may have moved on while this was in flight.
     if (state.discussionTaskId !== task.id) return;
     // Only the id and the words. The payload also carries each thread's
@@ -131,14 +132,14 @@ export function createBoardDiscussion(deps: BoardDiscussionDeps): BoardDiscussio
   ): Promise<boolean> {
     const doc = encodeURIComponent(task.bodyDocId);
     const res = threadId
-      ? await send(`/api/docs/${doc}/threads/${encodeURIComponent(threadId)}/comments`, 'POST', {
+      ? await send(api(`docs/${doc}/threads/${encodeURIComponent(threadId)}/comments`), 'POST', {
           author,
           text,
         })
       : // No anchor to point at — the comment is about the task itself, which
         // is what a subject anchor means. A task's description is often empty,
         // so there is frequently nothing in it to point at at all.
-        await send(`/api/docs/${doc}/threads`, 'POST', {
+        await send(api(`docs/${doc}/threads`), 'POST', {
           author,
           text,
           anchor: { kind: 'subject' },
