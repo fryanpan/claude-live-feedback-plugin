@@ -1,17 +1,19 @@
 ---
 allowed-tools: Bash(curl *)
 description: List open comment threads on a claude-workspaces doc
-argument-hint: [docId]
+argument-hint: [docId] [workspaceId]
 ---
 
 ## Context
 
 - Running feedback server port: !`/usr/bin/lsof -iTCP -sTCP:LISTEN 2>/dev/null | /usr/bin/grep -E "bun" | /usr/bin/head -3`
-- Threads: !`/usr/bin/curl -s "http://127.0.0.1:${FEEDBACK_PORT:-8787}/api/docs/${1:-default}/threads?status=open"`
+- Threads: !`/usr/bin/curl -s "http://127.0.0.1:${FEEDBACK_PORT:-8787}/workspaces/${2:-default}/docs/${1:-default}/threads?status=open"`
 
 ## Your task
 
-Summarize any open threads on the doc `$1` (default `default`). For each
+Summarize any open threads on the doc `$1` under the board `$2`. A doc is
+addressed under the board that owns it, so both are needed — `get_workspace`
+names the board this session is attached to. For each
 thread, print:
 
 - Thread ID

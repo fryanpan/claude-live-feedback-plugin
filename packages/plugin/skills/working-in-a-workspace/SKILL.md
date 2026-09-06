@@ -32,7 +32,7 @@ The purpose of a workspace is to provide a significantly better agent and human 
          4. Either way the ask carries the context of the work it came from. Ten decisions filed as ten fresh rows, each severed from the work behind it, read as a quiz instead of a plan
       4. Writing the ask
          1. The option label is the contract — the reviewer answers the label, not the reasoning under it. Plain words, phone-readable.
-         2. The item has to be actionable on its own. The Home card renders the payload and nothing around it, so every link the reviewer needs goes in the payload's `detail` as an inline markdown link (`[the diff](/review/d-xxxx)`) — a link that lives only in the surrounding comment text never reaches the card, and the reviewer is left scrolling the comments for it.
+         2. The item has to be actionable on its own. The Home card renders the payload and nothing around it, so every link the reviewer needs goes in the payload's `detail` as an inline markdown link (`[the diff](/workspaces/w-xxxx/docs/d-xxxx)`) — a link that lives only in the surrounding comment text never reaches the card, and the reviewer is left scrolling the comments for it.
       5. Anything the reviewer still owes an answer to is a filed review item BEFORE your turn ends — answerable where they read, with chat carrying at most a pointer to it. A "still waiting on you" list in chat is the failure mode this rule exists for: audited sessions filed 18 chat-only asks in a day, and 13 died unanswered.
 3. The workspace is where you share status: on the task's Activity tab, never in its comments. Your end-of-turn message reaches the tab by itself — the Stop hook posts it in full — and `post_status(text, taskId?)` adds a milestone worth naming: started, blocked on what, PR open, done. Comments are for asks (review items, decisions), replies to a person, and anything a person must read and answer.
 
@@ -199,7 +199,7 @@ the item already answers.
 
 - Each resource (task, workspace, document, mockup, folder diff) has a unique identifier and URL.
 - When you share links in a workspace, use relative URLs and make them inline using appropriate link text instead of the Raw URL
-  - e.g. `[this link](/review/board-skill-one-row-per-pass?thread=nsk4yl4m6sqn)`
+  - e.g. `[this link](/workspaces/<workspaceId>/docs/board-skill-one-row-per-pass?thread=nsk4yl4m6sqn)`
 - In terminal chat, send the absolute URL bare on its own line, with no markdown around it — autolinkers mangle a wrapped URL.
 - Link the thing under review, not the workspace: hand over the `reviewUrl` / `entryUrl` the tool returned, rewriting only the host to the Tailscale name. Link the workspace only when the workspace itself is the subject.
 - A workspace URL is not a durable address — the embedded workspace id dies when the workspace is recreated. Durable artifacts (committed docs, exports, anything sent onward) cite repo paths or GitHub URLs; live chat, thread replies, and hand-offs use the URL, because it is being clicked now.

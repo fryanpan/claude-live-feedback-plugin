@@ -197,11 +197,11 @@ and the shape of a hold cannot drift apart:
 
 | Filing path | Where the row lands | Judged? | How a hold is lifted |
 |---|---|---|---|
-| `add_review_item` → `POST /api/tasks/:id/review-items` | `task-review` | yes | `revise_review_item(taskId, reviewItemId)` |
+| `add_review_item` → `POST /workspaces/:workspaceId/tasks/:id/review-items` | `task-review` | yes | `revise_review_item(taskId, reviewItemId)` |
 | `create_tasks` / `POST …/tasks` with `review` | `task-review` | yes (batched, bounded concurrency) | same |
 | `revise_review_item` ticket form | `task-review` | yes, on every revision | same |
-| `create_thread(review)` → `POST /api/docs/:id/threads` | `task-thread` / `doc-thread` | yes | `revise_review_item(docId, threadId, commentId)` |
-| `POST /api/docs/:id/threads/by_find` with `review` | `doc-thread` | yes | same |
+| `create_thread(review)` → `POST /workspaces/:workspaceId/docs/:id/threads` | `task-thread` / `doc-thread` | yes | `revise_review_item(docId, threadId, commentId)` |
+| `POST /workspaces/:workspaceId/docs/:id/threads/by_find` with `review` | `doc-thread` | yes | same |
 | `post_reply(review)` → `…/threads/:id/comments` | `task-thread` / `doc-thread` | yes | same |
 | `revise_review_item` doc form → `…/threads/:id/revise` | as above | yes, on every revision | same |
 | `…/threads/:id/withdraw/undo` (reinstate) | as above | **exempt** — no new words | the hold placed on those words still stands, so a reinstated held item stays off the queue and is not announced |
@@ -252,7 +252,7 @@ copies of an address is how one of them ends up naming a verb that refuses.
 
 **The reader can overrule the judge.** The held note on the ticket names
 who filed the item and how long the hold has stood, and carries "Ask me
-anyway" — `POST /api/tasks/:taskId/review-items/:itemId/release`, which
+anyway" — `POST /workspaces/:workspaceId/tasks/:taskId/review-items/:itemId/release`, which
 records an `ok` verdict naming the person and puts the item on the queue
 the way any passed item reaches it. The gate is not disarmed by it: the
 next revision goes past the judge like any other. Added after a UX review
