@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   SUITE_DIR,
   discover,
+  filterArgs,
   interleave,
   mergeLcov,
   nextChunkSize,
@@ -139,6 +140,25 @@ describe('nextChunkSize', () => {
       expect(chunks).toBeLessThan(1000);
     }
     expect(remaining).toBe(0);
+  });
+});
+
+describe('filterArgs', () => {
+  it('keeps a filter written after a flag that takes no value', () => {
+    // The bug: `--coverage` and `--bail` were treated as value-taking, so the
+    // filter after them was read as their argument and silently dropped —
+    // which runs the WHOLE suite when you asked for two files.
+    expect(filterArgs(['--coverage', 'board'])).toEqual(['board']);
+    expect(filterArgs(['--bail', 'board'])).toEqual(['board']);
+  });
+
+  it('does not mistake a flag’s value for a filter', () => {
+    expect(filterArgs(['--jobs', '8', '--coverage-dir', '.coverage/server'])).toEqual([]);
+    expect(filterArgs(['--shard', '1/4'])).toEqual([]);
+  });
+
+  it('reads the joined form too', () => {
+    expect(filterArgs(['--jobs=8', 'board'])).toEqual(['board']);
   });
 });
 
