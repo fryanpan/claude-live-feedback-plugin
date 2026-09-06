@@ -13,6 +13,15 @@ import { describe, expect, it } from 'vitest';
  * affordance. Read as text because a layout-free runner cannot evaluate a
  * media query; each probe asserts it FOUND the rule before judging where it
  * sits, so a renamed selector fails loudly rather than passing empty.
+ *
+ * PERMANENT SOURCE-SHAPE SITES, and counted as such. Two of the audit's
+ * source-shape floor lives here (scripts/test-audit.baseline.json names all
+ * three). A `:hover` treatment inside `@media (hover: hover)` needs a real layout engine, and the only browser this repo
+ * has is `bun run ui:shot`, which is a local dev tool: it wants a Chrome
+ * binary and a running server, and CI runs neither. Moving this there would
+ * not convert the test — it would retire it, swapping a gate that runs on
+ * every PR for one nobody runs. It carries no `audit: not-source` marker
+ * because it IS a source read; what it is not is an unconverted leftover.
  */
 
 // The board's cascade is two files since the board block moved to board.css:
