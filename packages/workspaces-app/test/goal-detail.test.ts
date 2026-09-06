@@ -289,7 +289,7 @@ describe('renderGoalDetail', () => {
    * *"Goals are missing a bunch of the usual ticket behaviour -- no
    * description? no comments?"*
    *
-   * Both are the TASK panel's own machinery pointed at the goal's body room,
+   * Both are the TASK panel's own machinery pointed at the goal's body doc,
    * which is `task:<goalId>` by the approved design's naming decision. So
    * these assert the seams the app wires into — the slot the live editor
    * mounts on, and the stream/composer the discussion renders — rather than
