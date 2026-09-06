@@ -31,6 +31,15 @@ SCRUB = os.path.join(HERE, "scrub-check.py")
 sys.path.insert(0, HERE)
 import scrub_git  # noqa: E402
 
+# `scrub-haiku.py` is not an importable module name, and the prompt it builds
+# is the surface this suite asserts on — the Haiku call itself is never made
+# here, so nothing below spends an API key.
+_HAIKU_SPEC = importlib.util.spec_from_file_location(
+    "scrub_haiku", os.path.join(HERE, "scrub-haiku.py"),
+)
+haiku = importlib.util.module_from_spec(_HAIKU_SPEC)
+_HAIKU_SPEC.loader.exec_module(haiku)
+
 # Invented names. `zephyr-*` is not a real project and never will be; the
 # hyphen matters because the scanner drops short unhyphenated names as too
 # generic to match safely.
@@ -425,6 +434,107 @@ def check_identity_redaction() -> None:
         expected = want if want is not None else line
         expect(f"identity redaction: {label}", 0 if got == expected else 1, 0,
                f"got {got!r}, wanted {expected!r}")
+
+
+def check_maintainer_names(tmp: str) -> None:
+    """The maintainer exemption stays narrow: this committer, already published here.
+
+    The Haiku layer refused a documentation branch because two ported lines
+    quoted the repo's own maintainer by name — their own words, in their own
+    public repository, where the name is already in hundreds of tracked files.
+    The prompt called that safe only in standard metadata, so every future
+    documentation change quoting them failed the same way and the only exits
+    were to redact their own words or switch the gate off.
+
+    Widening it must not become a miss. Two conditions have to hold together,
+    and the cases below are the control for each: a published author who is
+    not this committer earns nothing, and a `user.name` this repository has
+    never published earns nothing either. Set `user.name` to a colleague and
+    the exemption still does not appear.
+    """
+    root = os.path.join(tmp, "maintainer-repo")
+    bare = os.path.join(tmp, "maintainer-remote.git")
+    os.makedirs(root, exist_ok=True)
+    clean = clean_git_env()
+
+    def g(*args: str, cwd: str = root) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=cwd, check=True,
+            capture_output=True, text=True, env=clean,
+        ).stdout.strip()
+
+    def commit_as(name: str, email: str, body: str) -> None:
+        with open(os.path.join(root, "README.md"), "w") as f:
+            f.write(body)
+        g("add", "-A")
+        g("-c", f"user.name={name}", "-c", f"user.email={email}",
+          "commit", "-qm", f"from {name}")
+
+    g("init", "-q", "--bare", bare, cwd=tmp)
+    g("init", "-q")
+    commit_as("Scrub Selftest", "selftest@example.invalid", "seed\n")
+    commit_as("Wren Halloway", "wren@example.invalid", "seed\nand more\n")
+    g("remote", "add", "origin", bare)
+    g("push", "-q", "origin", "HEAD:refs/heads/main")
+    g("fetch", "-q", "origin")
+
+    # `scrub_git._git` runs in the process cwd and inherits the process env,
+    # so the fixture has to own both for the duration — the same GIT_DIR leak
+    # `clean_git_env` exists for, one layer further in.
+    saved_cwd = os.getcwd()
+    saved_env = dict(os.environ)
+    try:
+        os.environ.clear()
+        os.environ.update(clean)
+        os.chdir(root)
+
+        published = scrub_git.published_author_names()
+        expect("maintainer: both authors are published on the remote",
+               0 if published == {"Scrub Selftest", "Wren Halloway"} else 1, 0,
+               f"got {sorted(published)!r}")
+
+        g("config", "user.name", "Scrub Selftest")
+        names = scrub_git.maintainer_names()
+        expect("maintainer: this committer, already published, is exempt",
+               0 if names == {"Scrub Selftest"} else 1, 0, f"got {sorted(names)!r}")
+        expect("maintainer: a published author who is NOT this committer is not exempt",
+               0 if "Wren Halloway" not in names else 1, 0, f"got {sorted(names)!r}")
+
+        g("config", "user.name", "Wren Halloway")
+        borrowed = scrub_git.maintainer_names()
+        expect("maintainer: naming yourself after another published author exempts only them-as-you",
+               0 if borrowed == {"Wren Halloway"} else 1, 0, f"got {sorted(borrowed)!r}")
+
+        g("config", "user.name", "Never Committed Here")
+        stranger = scrub_git.maintainer_names()
+        expect("maintainer: a user.name this repo never published earns nothing",
+               0 if stranger == set() else 1, 0, f"got {sorted(stranger)!r}")
+
+        # Unsetting it locally does not mean git has no answer — it falls
+        # through to the machine's global config, which on a developer's box
+        # is a real name. So this asserts the interesting half: whatever git
+        # falls back to, a name this repository never published is not exempt.
+        g("config", "--unset", "user.name")
+        fallback = scrub_git.maintainer_names()
+        expect("maintainer: a global user.name this repo never published is not exempt",
+               0 if fallback == set() else 1, 0, f"got {sorted(fallback)!r}")
+    finally:
+        os.chdir(saved_cwd)
+        os.environ.clear()
+        os.environ.update(saved_env)
+
+    prompt = haiku.system_prompt({"Scrub Selftest"})
+    expect("maintainer prompt: the resolved name is listed",
+           0 if "- Scrub Selftest" in prompt else 1, 0)
+    expect("maintainer prompt: every other real name is still a leak",
+           0 if "Every OTHER real person's name is still a leak" in prompt else 1, 0)
+    expect("maintainer prompt: only non-name content on the line can make it a leak",
+           0 if "BESIDES the name" in prompt else 1, 0)
+    empty = haiku.system_prompt(set())
+    expect("maintainer prompt: with nobody resolved, every real name flags as before",
+           0 if "treat EVERY real personal name as a potential leak" in empty else 1, 0)
+    expect("maintainer prompt: nobody is named when nobody resolved",
+           0 if "Scrub Selftest" not in empty else 1, 0)
 
 
 def check_push_range(registry: str, denylist: str) -> None:
@@ -1045,6 +1155,8 @@ def main() -> int:
     check_decision_table()
     check_push_rev_args()
     check_identity_redaction()
+    with tempfile.TemporaryDirectory() as tmp:
+        check_maintainer_names(tmp)
     with tempfile.TemporaryDirectory() as tmp:
         registry = os.path.join(tmp, "registry.yaml")
         denylist = os.path.join(tmp, "denylist.txt")
