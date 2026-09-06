@@ -29,7 +29,7 @@ export async function handleWorkspaceDelete(
   ctx: WorkspaceRoutesContext,
   rq: WorkspaceDeleteRequest,
 ): Promise<Response | undefined> {
-  const { taskStore, taskProjection, j } = ctx;
+  const { taskStore, taskProjection, docStore, j } = ctx;
   const { req, pathname, url } = rq;
   const wsDeleteMatch = pathname.match(/^\/workspaces\/([^/]+)$/);
   if (wsDeleteMatch && req.method === 'DELETE') {
@@ -59,6 +59,9 @@ export async function handleWorkspaceDelete(
       // that skipped them would orphan those files under a board that
       // no longer exists — the exact outcome the staging step exists to
       // prevent.
+      // The docs this board LINKED, captured before the delete: the board
+      // record is the only thing that remembers them.
+      const linkedDocIds = taskStore.getWorkspace(workspaceId)?.docIds ?? [];
       const taskIds = taskStore.listTasks(workspaceId, { includeArchived: true }).map((t) => t.id);
       if (!taskProjection.stageWorkspaceFiles(workspaceId, taskIds).ok) {
         taskProjection.unstageWorkspaceFiles(workspaceId, taskIds);
@@ -74,7 +77,32 @@ export async function handleWorkspaceDelete(
         return j(board.error === 'persist-failed' ? 500 : 404, board);
       }
       taskProjection.dropWorkspaceDocs(workspaceId, board.taskIds);
-      return j(200, { ok: true, deletedTasks: board.deletedTasks });
+      // A linked doc that ANOTHER board still holds keeps working and is left
+      // exactly as it was — that is what `attachDoc` being a link means, and
+      // the test above pins it.
+      //
+      // A doc this board was the ONLY holder of is the case that reasoning
+      // never covered. It has just lost its last address: a doc is reachable
+      // only THROUGH a board, so it would sit in the live store holding its
+      // content and its comment threads with no URL in the product reaching
+      // either, and nothing would ever surface it. Archive it instead —
+      // reversible with `unarchiveDoc`, and the markdown on disk is untouched
+      // either way. Eleven docs reached exactly this state on this deployment.
+      //
+      // The refusals answer themselves and are meant to be ignored here: a
+      // review's member archives with its set rather than alone, and
+      // `task:`/`ws:` docs were already torn down by the staging above.
+      const stillHeld = new Set(taskStore.listWorkspaces().flatMap((w) => w.docIds ?? []));
+      let archivedDocs = 0;
+      for (const docId of linkedDocIds) {
+        if (stillHeld.has(docId)) continue;
+        const res = docStore.archiveDoc(docId, {
+          archivedBy: 'board deleted',
+          reason: `the only board holding it (${workspaceId}) was deleted`,
+        });
+        if (res.ok) archivedDocs++;
+      }
+      return j(200, { ok: true, deletedTasks: board.deletedTasks, archivedDocs });
     }
     return j(404, { ok: false, error: 'not-found' });
   }
