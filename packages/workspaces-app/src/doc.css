@@ -2210,6 +2210,21 @@ body.is-reading-width #editor > .live-zone {
   margin: 0;
   overflow-wrap: anywhere;
 }
+/* The transcript steps down with the notes, not on its own breakpoint. The
+   notes drop to 16px at exactly this width (`#editor > .ProseMirror` in
+   styles.css), so without this rule the 3px the transcript is marked
+   secondary by at reading width collapses to 1px on a phone — 16px notes
+   against a 15px transcript — and the type stops carrying the distinction.
+   720px is the notes' own breakpoint and the approved settle mock's; the
+   pair is what keeps the gap at 2-3px across every width. Measured at 430px:
+   15px/23.25px before, 14px/21px after. */
+@media (max-width: 720px) {
+  .lz-lines,
+  .lz-chunk-lines {
+    font-size: 14px;
+    line-height: 1.5;
+  }
+}
 .lz-turn {
   display: inline;
 }
