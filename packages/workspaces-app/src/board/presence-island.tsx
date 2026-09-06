@@ -47,7 +47,10 @@ export interface PresenceHandlers {
   onOverflow?: (hidden: PresenceChip[]) => void;
 }
 
-const LONG_PRESS_MS = 550;
+/** How long a press must be held before it follows rather than jumps.
+ *  Exported so a driven test holds the press the board's own threshold asks
+ *  for, rather than a number copied out of here that can drift from it. */
+export const LONG_PRESS_MS = 550;
 
 /** Compact mode caps the strip at this many circles; past it the last slot
  *  becomes a "+N" that names the rest. Chosen so the cluster's worst case

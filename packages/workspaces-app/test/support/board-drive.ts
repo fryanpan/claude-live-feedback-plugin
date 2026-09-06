@@ -16,8 +16,10 @@
  * whatever it finds — see `installFakeServer`. Vitest isolates a module
  * registry per test file, so one install per file is what happens.
  */
+import { vi } from 'vitest';
 import { type BoardBootEnv, bootBoard } from '../../src/board/board-app.ts';
 import type { BoardGoal, BoardTask } from '../../src/board/board-model.ts';
+import { LONG_PRESS_MS } from '../../src/board/presence-island.tsx';
 import {
   type FakeClient,
   type FakeHistory,
@@ -198,6 +200,76 @@ export function el(id: string): HTMLElement {
 /** Click something the boot built and let the handlers run. */
 export async function click(target: Element): Promise<void> {
   (target as HTMLElement).click();
+  await settle();
+}
+
+/**
+ * What is still out of reach from here, so the next gesture lands knowingly.
+ *
+ * Two board actions cannot be driven through this DOM, and neither is a
+ * missing helper — both want a browser that lays pages out:
+ *
+ *  - **Drag to reorder a row** (`board-island.tsx` `onHandleDown`). The drop
+ *    target comes from `document.elementFromPoint` and `getBoundingClientRect`
+ *    on the rows under the finger, and happy-dom lays nothing out: every rect
+ *    is zero and there is no element at any point. The ACTION is still
+ *    reachable — Alt+Arrow on the row and the arrow keys on the focused handle
+ *    run the same `onReorder`, and `dropIndexFor` is a pure function with its
+ *    own tests in `board-model.test.ts` — so what is untestable here is the
+ *    drag, not the reordering.
+ *  - **Comment on a selection** (`selection-pill.ts`, `review-item-phrase.ts`,
+ *    and the `getSelection` reads in the task-detail, home-activity and
+ *    walkthrough islands). It needs a live `Selection` over rendered text;
+ *    the suites that touch it stub `document.getSelection` instead (see the
+ *    note in `inline-rename.ts`), and a driven version would need a real
+ *    engine rather than a new helper here.
+ */
+
+/**
+ * Press and hold something the boot built, long enough to arm a long-press.
+ *
+ * The board's one long-press is the presence circle's follow, and it is a
+ * `pointerdown` that arms a `setTimeout` and any of `pointerup` /
+ * `pointercancel` / `pointerleave` that disarms it (`presence-island.tsx`).
+ * So the gesture is a real event sequence over a real clock, and the only
+ * part a driver has to fake is the wait: `settle` turns the microtask queue
+ * and `holdMs` is a threshold, not a duration to sleep through. Vitest's fake
+ * clock is what lets the press be held for 550ms without the suite taking
+ * 550ms — and only around the hold, so the boot's own intervals (the 30s
+ * presence tick, the home clock) keep running on the real one.
+ *
+ * `holdMs` defaults past the board's own threshold, imported rather than
+ * copied; pass a shorter one to drive a press that is released too early,
+ * which is the control for any test asserting the long-press did something.
+ *
+ * The release goes to the element AND to `board.window`, because the fake env
+ * splits the two: `document` is a real DOM the press bubbles through, but the
+ * boot's `window` is a bare EventTarget, and the repaint guard listens for the
+ * release there (`createRepaintGuard({ dom: document, win: window })`). In a
+ * browser one `pointerup` reaches both. Skipping the window copy leaves the
+ * guard armed and parks every background repaint until its 10s watchdog.
+ */
+export async function longPress(
+  board: Booted,
+  target: Element,
+  holdMs = LONG_PRESS_MS + 50,
+): Promise<void> {
+  // A test may already be driving the clock; leave it as it found it.
+  const borrowed = !vi.isFakeTimers();
+  if (borrowed) vi.useFakeTimers();
+  try {
+    target.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(holdMs);
+  } finally {
+    if (borrowed) vi.useRealTimers();
+  }
+  // The finger lifts, and the browser synthesizes the click that follows it.
+  // Both are driven: a long-press that fired must not ALSO count as a tap,
+  // and that is decided in the click handler.
+  target.dispatchEvent(new Event('pointerup', { bubbles: true }));
+  board.window.dispatchEvent(new Event('pointerup'));
+  target.dispatchEvent(new Event('click', { bubbles: true }));
+  board.window.dispatchEvent(new Event('click'));
   await settle();
 }
 
