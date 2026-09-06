@@ -2611,7 +2611,24 @@ export class DocStore {
     if (!entry?.pendingFileWrite) return;
     const { pendingFileWrite: _drop, ...rest } = entry;
     this.docIndex.set(docId, rest);
-    writeDocIndex(this.cfg.dataDir, docId, rest);
+    // Guarded, because the only caller that matters is a POOL WRITE-BACK'S
+    // async callback (`file-binding.ts`, `writeBoundFileNow`). A throw there
+    // is an unhandled rejection, and under `bun test` an unhandled rejection
+    // arriving between tests is charged to whichever test happens to be
+    // running — so an unwritable data dir failed an innocent, unrelated test
+    // and hid a real result behind a name that had nothing to do with it (CI
+    // 34013067801/1). The `.ydoc` persist beside it has always caught its own
+    // failure; this write was the one that did not.
+    //
+    // Failing SAFE means leaving the flag set on disk: the row is what tells
+    // the next boot to reassert this write-back, and a flag left set costs
+    // one doc's hydration while a flag cleared too eagerly loses the edit it
+    // was guarding.
+    try {
+      writeDocIndex(this.cfg.dataDir, docId, rest);
+    } catch (err) {
+      console.error(`[doc-store] could not clear the pending-write flag for ${docId}:`, err);
+    }
   }
 
   /**
