@@ -204,7 +204,10 @@ button {
   grid-row: 2;
 }
 #main {
-  grid-row: 3;
+  /* DELIBERATE BREAK — reverted in the next commit. The three explicit
+     placements are what keep #main in the last track when the meeting strip
+     is display:none; without this one it auto-places into the strip's track
+     and the last track goes empty. */
 }
 
 /* ================= TOP BAR ================= */
