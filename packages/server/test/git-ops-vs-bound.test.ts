@@ -112,6 +112,12 @@ describe('git operations against a bound doc', () => {
   });
 
   afterEach(() => {
+    // Stop BEFORE the directories go. A store left running keeps sweeping its
+    // bindings and keeps firing write-backs and `.ydoc` persists into paths
+    // that no longer exist, for the whole rest of the 404-file run — which is
+    // where this file's ENOENT log spam comes from, and how one such write
+    // reached an unrelated test as an unhandled rejection.
+    docStore.stop();
     rmSync(root, { recursive: true, force: true });
     rmSync(dataDir, { recursive: true, force: true });
   });
@@ -425,6 +431,12 @@ describe('a flush inside the read debounce cannot overwrite unread bytes', () =>
   });
 
   afterEach(() => {
+    // Stop BEFORE the directories go. A store left running keeps sweeping its
+    // bindings and keeps firing write-backs and `.ydoc` persists into paths
+    // that no longer exist, for the whole rest of the 404-file run — which is
+    // where this file's ENOENT log spam comes from, and how one such write
+    // reached an unrelated test as an unhandled rejection.
+    docStore.stop();
     rmSync(root, { recursive: true, force: true });
     rmSync(dataDir, { recursive: true, force: true });
   });
