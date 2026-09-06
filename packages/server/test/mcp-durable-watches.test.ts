@@ -803,13 +803,20 @@ describe('a restore that could not reach the server fails loudly, then recovers'
     // The backoff is doing something: an immediate second call does not spend
     // another attempt on a server that was unreachable milliseconds ago.
     const again = (await second.tool('list_watched_docs')) as {
-      restore: { status: string; attempts: number };
+      restore: { status: string; attempts: number; error?: string };
     };
     expect(again.restore.status).toBe('failed');
+    // The load-bearing line, and it needs no wall-clock window beside it. A
+    // machine slow enough to have left the backoff would have RUN the retry,
+    // failed it against the still-dead port, and left `attempts` at 2 — so a
+    // lapsed window fails here, loudly, on the assertion that carries the
+    // coverage. The `Date.now() - failedAt` delta that used to sit under this
+    // line restated the same fact in the one form that could also go red on a
+    // loaded CI box for no reason at all.
     expect(again.restore.attempts).toBe(1);
-    // Asserted about the WINDOW, so a machine slow enough to have left it
-    // fails loudly instead of passing the line above for the wrong reason.
-    expect(Date.now() - failedAt).toBeLessThan(FIRST_BACKOFF_MS);
+    // Nothing else moved either: the recorded failure is the FIRST one, not a
+    // second attempt's identical-looking result.
+    expect(again.restore.error).toBe(failed.restore.error);
 
     // Bring the same origin back, over the same data dir — so the set the
     // first child persisted is there to be restored.

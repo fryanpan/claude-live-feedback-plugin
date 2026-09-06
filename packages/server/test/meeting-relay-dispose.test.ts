@@ -24,6 +24,18 @@ import type { TranscriptionEngine, TranscriptionSession } from '../src/transcrib
 /** Give an awaited continuation a chance to run. */
 const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
+/**
+ * A marker due before the relay's own shutdown drain (`DISPOSE_DRAIN_MS`, 5s,
+ * in `meeting-protocol.ts`).
+ *
+ * Both timers are scheduled from the same instant and the event loop fires
+ * timers in DUE order, so this one lands first however loaded the machine is.
+ * That ordering — not a measured duration — is what lets the wedged-meeting
+ * test below say "dispose is still draining" without a wall clock in an
+ * assertion, and it is why a slow CI box cannot turn it red.
+ */
+const DRAIN_FLOOR_MS = 4_000;
+
 describe('meeting relay dispose', () => {
   let dataDir: string;
 
@@ -163,12 +175,20 @@ describe('meeting relay dispose', () => {
     await settle();
     relay.onClose(ws);
 
-    const startedAt = Date.now();
-    await relay.dispose();
-    const waited = Date.now() - startedAt;
-    // Bounded, and it did wait rather than skipping the drain outright.
-    expect(waited).toBeGreaterThanOrEqual(4_000);
-    expect(waited).toBeLessThan(15_000);
+    let disposed = false;
+    const disposing = relay.dispose().then(() => {
+      disposed = true;
+    });
+    // timed: the marker is the assertion — see DRAIN_FLOOR_MS above.
+    await new Promise((r) => setTimeout(r, DRAIN_FLOOR_MS));
+    // It did WAIT rather than skipping the drain outright: the marker is due
+    // before the drain's own timer, so dispose cannot have resolved yet.
+    expect(disposed).toBe(false);
+    // …and it is BOUNDED: it finishes even though the wedged handshake never
+    // answers. A relay that waited on it forever hangs here and the test's own
+    // 20s deadline says so.
+    await disposing;
+    expect(disposed).toBe(true);
     // The doc is claimable again even though the meeting never finished.
     expect(
       store.start({ docId: 'wedged-doc', engine: 'wedged', sampleRate: 16000, mode: 'solo' }),

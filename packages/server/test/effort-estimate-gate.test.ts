@@ -292,16 +292,36 @@ describe('effort-estimate scoring', () => {
   it('the route answers before the estimator resolves — scoring never slows an edit', async () => {
     const { workspaceId } = await board();
     verdict = 'defer';
-    const started = Date.now();
-    const res = await post(`/workspaces/${workspaceId}/tasks`, {
+    // Ordered, not timed. The estimator is not released until the route has
+    // already answered, so what is asserted is "the response came FIRST" —
+    // not "the response came inside two seconds", which was a budget for this
+    // machine's speed and which a route that genuinely awaited a fast scorer
+    // could have met anyway.
+    const order: string[] = [];
+    const pending = post(`/workspaces/${workspaceId}/tasks`, {
       title: 'A ticket whose scoring never returns',
       author: FILER,
+    }).then((r) => {
+      order.push('route answered');
+      return r;
     });
+    // The estimator HAS been called, and this test holds the only handle to
+    // its resolution.
+    const release = await until(() => parked[0]);
+    // A route that waited on scoring never gets past this line: nothing has
+    // released the estimator, and nothing will until the next statement.
+    const res = await pending;
     expect(res.status).toBe(200);
-    // The estimator promise is still parked — nothing has resolved it — so
-    // a route that waited on scoring would still be hanging right now.
-    expect(Date.now() - started).toBeLessThan(2_000);
+    const { task } = (await res.json()) as { task: { id: string } };
+
+    release({ handsOnSeconds: 111, wallClockSeconds: 222 });
+    order.push('estimator answered');
+    expect(order).toEqual(['route answered', 'estimator answered']);
     expect(parked.length).toBe(1);
+    // Positive control on the release: that really was the live estimator's
+    // resolver, so "it had not answered yet" is a claim about a call that was
+    // genuinely outstanding and not about a stub nobody was waiting on.
+    await until(() => handle.tasks.getTask(task.id)?.effortEstimate);
   });
 
   it("a slow answer to OLDER words never overwrites a newer edit's own answer", async () => {
