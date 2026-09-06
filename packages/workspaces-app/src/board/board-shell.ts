@@ -123,6 +123,13 @@ export function buildShell(
             <button type="button" id="board-review-criteria-default" class="board-btn">Use the default</button>
           </div>
         </div>
+        <!-- The way into the prompts page. A link and not a panel: five of
+             the seven prompts belong to the SERVER rather than to this board,
+             so they cannot live inside a per-board popover, and the words are
+             paragraphs — a textarea apiece in here would bury the three
+             settings that are genuinely this board's. -->
+        <a class="board-settings-row board-settings-row--link" id="board-prompts-link"
+           href="/settings/prompts?ws=${encodeURIComponent(workspaceId)}">Prompts</a>
         <!-- How many builders this board's lead may dispatch at once
              (Bryan, by voice: "add support for limiting parallelism in the
              workspace"). register_dispatch enforces the number server-side;
