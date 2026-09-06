@@ -10,11 +10,21 @@
  * All fixtures are synthetic.
  */
 
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
-import { type ParallelismCap, mountParallelismCap } from '../src/board/parallelism-cap.ts';
-import { BOARD_BOOT_SOURCES } from './support/board-boot-sources.ts';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  type ParallelismCap,
+  mountParallelismCap,
+  parallelismCapNote,
+} from '../src/board/parallelism-cap.ts';
+import {
+  WS,
+  boardRow,
+  bootTestBoard,
+  click,
+  el,
+  resetBoardServer,
+  server,
+} from './support/board-drive.ts';
 
 function dom() {
   document.body.innerHTML = `
@@ -195,33 +205,107 @@ describe('the parallelism cap field', () => {
 
 /**
  * A module nobody mounts is the same bug review-criteria's own test found for
- * its sibling field: pinned here so the panel is proven to actually carry it,
- * not just that the field behaves correctly in isolation.
+ * its sibling field: the panel has to be proven to actually carry it, not just
+ * that the field behaves correctly in isolation.
+ *
+ * DRIVEN, NOT GREPPED. This used to read the seventeen board boot modules as
+ * one string, slice out the settings panel's markup and match `id="..."` on
+ * it, plus `mountParallelismCap({` and `parallelismCap.refresh()`. Every one
+ * of those is a claim about how the boot is WRITTEN. The bug it stands in for
+ * was found by a reviewer running a SELECTOR against the open gear panel and
+ * getting nothing back — so run that selector. The field wired to a route
+ * that answers nothing, or a gear press that never opens the panel, leaves
+ * all four strings in the source and the reviewer's query still empty.
  */
 describe('the settings panel carries the field', () => {
-  const shell = BOARD_BOOT_SOURCES.map((m) =>
-    readFileSync(resolve(import.meta.dirname, `../src/board/${m}.ts`), 'utf8'),
-  ).join('\n');
+  const CAP_SETTINGS = {
+    parallelismCap: { value: 4, isDefault: false },
+    dispatchesInUse: 2,
+  };
 
-  it('has the input, its note and both buttons inside the settings panel', () => {
-    const panel = shell.slice(
-      shell.indexOf('id="board-settings-panel"'),
-      shell.indexOf('id="board-connection"'),
-    );
-    expect(panel).not.toBe('');
+  beforeEach(() => {
+    resetBoardServer();
+    server.on(`/workspaces/${WS}/settings`, CAP_SETTINGS);
+  });
+
+  // The panel is a popover with document-level listeners; leaving it open
+  // would let a later test's unrelated click reach a torn-down handler.
+  afterEach(async () => {
+    const panel = document.getElementById('board-settings-panel');
+    if (panel && !panel.classList.contains('hidden')) await click(el('board-settings'));
+    document.body.innerHTML = '';
+  });
+
+  /** Press the gear the way a reader does, and hand back the panel. */
+  async function openSettings(): Promise<HTMLElement> {
+    await bootTestBoard({ tasks: [boardRow('t-1')] });
+    await click(el('board-settings'));
+    const panel = el('board-settings-panel');
+    expect(panel.classList.contains('hidden'), 'the gear did not open the panel').toBe(false);
+    return panel;
+  }
+
+  it('has the input, its note and both buttons inside the open panel', async () => {
+    const panel = await openSettings();
     for (const id of [
       'board-parallelism-cap',
       'board-parallelism-cap-note',
       'board-parallelism-cap-save',
       'board-parallelism-cap-default',
     ]) {
-      expect(panel).toContain(`id="${id}"`);
+      expect(panel.querySelector(`#${id}`), `#${id} is not in the settings panel`).not.toBeNull();
     }
-    expect(panel).toContain('id="board-review-criteria"');
+    // The reviewer's own query, against the open panel — this is the read
+    // that came back empty and started the ticket.
+    expect(panel.querySelectorAll('[id*=parallelism]').length).toBeGreaterThan(0);
+    // Control: the sibling field the same panel carries is found the same way,
+    // so a panel that matched nothing at all could not pass this.
+    expect(panel.querySelector('#board-review-criteria')).not.toBeNull();
   });
 
-  it('mounts it and refreshes it when the panel opens', () => {
-    expect(shell).toContain('mountParallelismCap({');
-    expect(shell).toContain('parallelismCap.refresh()');
+  it('mounts it and fills it from the board when the panel opens', async () => {
+    const panel = await openSettings();
+    const box = panel.querySelector('#board-parallelism-cap') as HTMLInputElement;
+    const note = panel.querySelector('#board-parallelism-cap-note') as HTMLElement;
+    // A mounted field carries the BOARD's cap, not a placeholder: the read
+    // ran, resolved, and reached the DOM.
+    expect(box.value).toBe('4');
+    expect(box.disabled).toBe(false);
+    // Read off the module rather than hand-copied, so the note cannot pass by
+    // matching a string this test invented.
+    expect(note.textContent).toBe(
+      parallelismCapNote({ ...CAP_SETTINGS.parallelismCap, inUse: CAP_SETTINGS.dispatchesInUse }),
+    );
+    expect(note.textContent).toContain('2 of 4 in use');
+  });
+
+  it('re-reads on every open, so a cap moved from a tool lands here', async () => {
+    // The reason `refresh()` is on the open rather than on the mount: an
+    // agent can move the cap from an MCP tool while this tab sits here, and a
+    // stale box that got saved would write the old number back.
+    const panel = await openSettings();
+    const box = panel.querySelector('#board-parallelism-cap') as HTMLInputElement;
+    expect(box.value).toBe('4');
+
+    server.on(`/workspaces/${WS}/settings`, {
+      parallelismCap: { value: 1, isDefault: false },
+      dispatchesInUse: 1,
+    });
+    await click(el('board-settings')); // close
+    await click(el('board-settings')); // and open again
+    expect(box.value).toBe('1');
+  });
+
+  it('a settings read that answers nothing disables the field rather than emptying it', async () => {
+    // A failed READ must never become a destructive WRITE — the control that
+    // says the two cases above are the read landing, not a default painted
+    // over an unanswered route.
+    server.on(`/workspaces/${WS}/settings`, {});
+    const panel = await openSettings();
+    const box = panel.querySelector('#board-parallelism-cap') as HTMLInputElement;
+    expect(box.disabled).toBe(true);
+    expect(panel.querySelector('#board-parallelism-cap-note')?.textContent).toContain(
+      'Could not read the cap',
+    );
   });
 });

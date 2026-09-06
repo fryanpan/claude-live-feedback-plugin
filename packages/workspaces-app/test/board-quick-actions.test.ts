@@ -1,10 +1,19 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type DetailHandlers } from '../src/board/board-detail-render.ts';
 import { type BoardTask, CHORES_ID } from '../src/board/board-model.ts';
 import { renderQuickActions } from '../src/board/board-render.ts';
-import { BOARD_BOOT_SOURCES } from './support/board-boot-sources.ts';
+import { HUDDLE_MODE_PARAM } from '../src/huddle-entry.ts';
+import {
+  WS,
+  boardRow,
+  bootTestBoard,
+  click,
+  closeDetailPanel,
+  el,
+  resetBoardServer,
+  server,
+  settle,
+} from './support/board-drive.ts';
 import { disposeTaskDetail, renderTaskDetail } from './support/task-detail.ts';
 
 /**
@@ -268,80 +277,153 @@ describe('the panel opens an untitled task with the title ready to type', () => 
 });
 
 /**
- * Which button calls which verb, pinned by source text. The board's boot is
- * driveable now (board-boot.test.ts), but these two buttons open a route rather
- * than change the page, so the wiring is easier to READ than to observe.
+ * Which button calls which verb, on a real board.
+ *
+ * DRIVEN, NOT GREPPED. This used to read the seventeen boot modules as one
+ * string, cut `newTask` and `startHuddle` out of `board-actions.ts` with a
+ * regex, and match `untitled: true`, `location.assign(`, `HUDDLE_MODE_PARAM`
+ * and `'.board-quick-new'` inside them. Every one of those is a claim about
+ * how the verb is WRITTEN, and the two that matter most are ABSENCES —
+ * `not.toContain('assignee')` over a function body, which any rename or any
+ * move of the same behaviour into a helper satisfies. What is in question is
+ * the request that leaves the page and the address the browser is sent to,
+ * so press the buttons and read the fake server's log.
+ *
+ * The buttons above are the island's own unit tests. These are the wiring.
  */
-describe('board-app wires the two buttons to the two routes', () => {
-  const BOARD_APP = BOARD_BOOT_SOURCES.map((m) =>
-    readFileSync(resolve(import.meta.dirname, `../src/board/${m}.ts`), 'utf8'),
-  ).join('\n');
-  // The REST verbs themselves moved to `board-actions.ts`; what stays in the
-  // entry is which button calls which verb, so the two reads are split.
-  const BOARD_ACTIONS = readFileSync(
-    resolve(import.meta.dirname, '../src/board/board-actions.ts'),
-    'utf8',
-  );
-  const SHORTCUTS = readFileSync(
-    resolve(import.meta.dirname, '../src/board/board-shortcuts.ts'),
-    'utf8',
-  );
-  const fn = (name: string): string => {
-    const m = BOARD_ACTIONS.match(
-      new RegExp(`async function ${name}\\([^)]*\\)[\\s\\S]*?\\n {2}\\}\\n`),
-    );
-    return m?.[0] ?? '';
-  };
+describe('board-app wires the three buttons to their routes', () => {
+  const NEW_ID = 't-new';
 
-  it('mounts the buttons into the quick slot and no longer mounts the box', () => {
-    expect(BOARD_APP).toContain("renderQuickActions(el('board-quick')");
-    expect(BOARD_APP).not.toContain('renderQuickAdd(');
+  beforeEach(() => {
+    resetBoardServer();
+    server.on(`/workspaces/${WS}/tasks`, { task: { id: NEW_ID } });
+    server.on(`/workspaces/${WS}/huddles`, { url: `/workspaces/${WS}/docs/d-huddle` });
+  });
+  afterEach(() => {
+    document.body.innerHTML = '';
   });
 
-  it('New task posts an untitled row as the person, with nobody else assigned', () => {
-    const body = fn('newTask');
-    expect(body, 'newTask went missing').not.toBe('');
-    expect(body).toContain('untitled: true');
-    expect(body).toContain('author');
+  /**
+   * Where the huddle press sent the browser.
+   *
+   * `startHuddle` calls the AMBIENT `location.assign`, not the `location` the
+   * boot was handed — the only navigation in the boot that does. In a browser
+   * the two are the same object, so nothing is wrong on the board; it does
+   * mean the harness's fake location cannot see this hop, and that the old
+   * `expect(body).toContain('location.assign(')` could not tell the two
+   * apart. Stub the global, which is what the page actually calls.
+   */
+  async function navigatingPress(cls: string): Promise<string[]> {
+    const seen: string[] = [];
+    const real = globalThis.location.assign;
+    Object.defineProperty(globalThis.location, 'assign', {
+      configurable: true,
+      writable: true,
+      value: (u: string) => {
+        seen.push(u);
+      },
+    });
+    try {
+      await click(quick(cls));
+    } finally {
+      Object.defineProperty(globalThis.location, 'assign', {
+        configurable: true,
+        writable: true,
+        value: real,
+      });
+    }
+    return seen;
+  }
+
+  /** The one POST the press made to `path`, or undefined. */
+  const posted = (path: string) =>
+    server.calls.find((c) => c.method === 'POST' && c.url.includes(path));
+
+  const quick = (cls: string) =>
+    document.querySelector(`.board-quick-actions .${cls}`) as HTMLButtonElement;
+
+  it('mounts the three buttons into the quick slot and no text box', async () => {
+    await bootTestBoard({ tasks: [boardRow('t-1')] });
+    const slot = el('board-quick');
+    expect(slot.querySelector('.board-quick-new'), 'no New task button').not.toBeNull();
+    expect(slot.querySelector('.board-huddle-start'), 'no Make a plan button').not.toBeNull();
+    expect(slot.querySelector('.board-conversation-start'), 'no meeting button').not.toBeNull();
+    // The box it replaced: an input in the slot is the thing that went away.
+    expect(slot.querySelector('input')).toBeNull();
+    expect(slot.querySelector('.board-quick-input')).toBeNull();
+  });
+
+  it('New task posts an untitled row as the person, with nobody else assigned', async () => {
+    await bootTestBoard({ tasks: [boardRow('t-1')] });
+    await click(quick('board-quick-new'));
+    const call = posted(`/workspaces/${WS}/tasks`);
+    expect(call, 'New task filed nothing').toBeDefined();
+    const body = call?.body as Record<string, unknown>;
+    expect(body.untitled).toBe(true);
     // The old capture box handed every idea to the lead agent. An empty row
     // Bryan is about to type into is his — the route assigns it to the author
-    // when nobody is named.
-    expect(body).not.toContain('assignee');
-    // Opens the panel on the new id; the row itself arrives over the ydoc and
-    // renderDetail paints it when it lands, the way a boot deep link does.
-    expect(body).toContain('state.detailTaskId = ');
-    expect(body).toContain('renderDetail()');
+    // when nobody is named, so the request must not name one.
+    expect(body.author, 'the row was filed by nobody').toBeDefined();
+    expect(Object.keys(body), 'the press named an assignee').not.toContain('assignee');
   });
 
-  it('the panel is told to open in rename for exactly the row New task filed', () => {
-    expect(BOARD_APP).toMatch(/focusTitle:\s*focusTitleTaskId === task\.id/);
-  });
-
-  it('Make a plan posts to the huddle route and leaves with the mic flag', () => {
-    const body = fn('startHuddle');
-    expect(body, 'startHuddle went missing').not.toBe('');
-    expect(body).toMatch(/\/huddles`/);
-    expect(body).toContain('location.assign(');
-    expect(body).toMatch(/huddle=1/);
-    // The mode goes on the address too: the press on THIS page is the only
-    // thing that knows whether anyone else is in the room, and the editor
-    // that opens the mic is a different page.
-    expect(body).toContain('HUDDLE_MODE_PARAM');
-    // The KIND rides the request body: the server seeds a plan doc with the
-    // Goal heading and stamps `huddleKind`, so the editor can dress the two
-    // flows differently without re-deriving intent from the mode.
-    expect(body).toContain('kind');
-  });
-
-  it('the two buttons are the same route with different kinds and modes', () => {
-    expect(BOARD_APP).toContain("onStartHuddle: () => startHuddle('plan', 'solo')");
-    expect(BOARD_APP).toContain(
-      "onStartConversation: () => startHuddle('discussion', 'conversation')",
+  it('the panel opens on exactly the row New task filed, in rename', async () => {
+    const board = await bootTestBoard({ tasks: [boardRow('t-1', { title: 'Measure it' })] });
+    await click(quick('board-quick-new'));
+    // The address is the board's one record of which panel is open.
+    expect(board.history.url(), 'the panel did not open on the filed row').toContain(
+      `task=${NEW_ID}`,
     );
+    // The row itself arrives over the ydoc afterwards, the way a boot deep
+    // link's does — and when it lands the title is an empty focused input.
+    await board.project([
+      boardRow('t-1', { title: 'Measure it' }),
+      boardRow(NEW_ID, { title: 'Untitled task', untitled: true, order: 2 }),
+    ]);
+    const input = document.querySelector('.board-detail-title input') as HTMLInputElement | null;
+    expect(input, 'the panel did not open in rename').not.toBeNull();
+    expect(input?.value).toBe('');
+
+    // …and for exactly that row: the panel opened on any OTHER task is not in
+    // rename, which is what `focusTitleTaskId === task.id` buys.
+    await board.traverseTo(`https://board.test/workspaces/${WS}/tasks?task=t-1`);
+    expect(document.querySelector('.board-detail-title input')).toBeNull();
+    await closeDetailPanel(board);
   });
 
-  it('the c shortcut presses New task now that there is no box to focus', () => {
-    expect(SHORTCUTS).toContain("'.board-quick-new'");
-    expect(SHORTCUTS).not.toContain('.board-quick-input');
+  it('Make a plan posts a plan huddle and leaves with the mic flag and the mode', async () => {
+    await bootTestBoard({ tasks: [boardRow('t-1')] });
+    const went = await navigatingPress('board-huddle-start');
+    expect((posted(`/workspaces/${WS}/huddles`)?.body as { kind?: string })?.kind).toBe('plan');
+    // The KIND rides the request body — the server seeds a plan doc with the
+    // Goal heading — and the MODE rides the address, because the press on
+    // THIS page is the only thing that knows whether anyone else is in the
+    // room and the editor that opens the mic is a different page.
+    expect(went, 'the press never left the board').toHaveLength(1);
+    const left = new URL(went[0] as string, 'https://board.test');
+    expect(left.pathname).toBe(`/workspaces/${WS}/docs/d-huddle`);
+    expect(left.searchParams.get('huddle')).toBe('1');
+    expect(left.searchParams.get(HUDDLE_MODE_PARAM)).toBe('solo');
+  });
+
+  it('Have a meeting is the same route with the other kind and the other mode', async () => {
+    await bootTestBoard({ tasks: [boardRow('t-1')] });
+    const went = await navigatingPress('board-conversation-start');
+    expect((posted(`/workspaces/${WS}/huddles`)?.body as { kind?: string })?.kind).toBe(
+      'discussion',
+    );
+    expect(went, 'the press never left the board').toHaveLength(1);
+    const left = new URL(went[0] as string, 'https://board.test');
+    expect(left.pathname).toBe(`/workspaces/${WS}/docs/d-huddle`);
+    expect(left.searchParams.get('huddle')).toBe('1');
+    expect(left.searchParams.get(HUDDLE_MODE_PARAM)).toBe('conversation');
+  });
+
+  it('the c shortcut presses New task now that there is no box to focus', async () => {
+    await bootTestBoard({ tasks: [boardRow('t-1')] });
+    expect(posted(`/workspaces/${WS}/tasks`), 'a row was filed before the key').toBeUndefined();
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', bubbles: true }));
+    await settle();
+    expect(posted(`/workspaces/${WS}/tasks`), 'c filed nothing').toBeDefined();
   });
 });

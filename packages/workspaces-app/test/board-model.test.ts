@@ -1,7 +1,5 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { reviewItemBodyMarkdown } from '@feedback/core';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   type BoardFilters,
   type BoardGoal,
@@ -40,6 +38,7 @@ import {
 } from '../src/board/board-presence-model.ts';
 import {
   type BlockerRow,
+  LEGACY_REVIEW_ITEM_ID,
   type ReviewItem,
   type ReviewThreadItem,
   answeredByLine,
@@ -56,7 +55,14 @@ import {
   reviewReplyRequest,
   reviewRow,
 } from '../src/board/board-review-model.ts';
-import { BOARD_BOOT_SOURCES } from './support/board-boot-sources.ts';
+import {
+  WS,
+  boardRow,
+  bootTestBoard,
+  closeDetailPanel,
+  resetBoardServer,
+  server,
+} from './support/board-drive.ts';
 
 /** All fixtures are synthetic — invented names, jordan@partner.example register. */
 
@@ -2216,25 +2222,81 @@ describe('unplacedNotice — the quiet bucket says how many and how long', () =>
 /**
  * The panel's ask rows come from `panelAsks`, not from an inline filter.
  *
- * A source-text assertion, because this is the ONE thing the unit test above
- * cannot see: `panelAsks` can be perfectly correct while nothing calls it. The
- * inline `state.reviewItems.filter((i) => i.taskId === task.id)` that used to
- * sit here is what fed ticket-borne rows — which carry no `threadId` — into a
- * panel whose option buttons answer by posting a comment on one.
+ * DRIVEN, NOT GREPPED. This used to read the seventeen boot modules as one
+ * string and assert `panelAsks(state.reviewItems, task.id)` was in it and
+ * `state.reviewItems.filter` was not. `panelAsks` can be perfectly correct
+ * while nothing calls it — but a source read cannot tell "calls it" from
+ * "mentions it", and the ABSENCE half is satisfied by the same inline filter
+ * written any other way. What the rule decides is which CARDS a reader sees
+ * under a ticket, so open the panel and count them.
  *
- * Paired with a positive control in the same read, so a mistyped path or an
- * empty file cannot read as a clean result.
+ * The rule's own cases are unit-tested on `panelAsks` in
+ * board-review-model.test.ts. This is the wiring.
  */
 describe('the detail panel takes its asks through panelAsks', () => {
-  const boardApp = BOARD_BOOT_SOURCES.map((m) =>
-    readFileSync(resolve(import.meta.dirname, `../src/board/${m}.ts`), 'utf8'),
-  ).join('\n');
+  /** A ticket-borne row as the review-items route ships one. */
+  const askRow = (reviewItemId: string, headline: string) => ({
+    kind: 'task-review',
+    taskId: 't-1',
+    docId: 'task:t-1',
+    key: `task-review:t-1:${reviewItemId}`,
+    reviewItemId,
+    askedBy: 'Index Keeper',
+    askedAt: NOW - 60_000,
+    since: NOW - 60_000,
+    declared: true,
+    review: { shape: 'review', headline, options: [{ label: 'Yes' }, { label: 'No' }] },
+  });
 
-  it('calls panelAsks and no longer filters reviewItems by taskId inline', () => {
-    // Positive control: the read found the real file.
-    expect(boardApp).toContain('state.reviewItems');
-    expect(boardApp).toContain('panelAsks(state.reviewItems, task.id)');
-    expect(boardApp).not.toContain('state.reviewItems.filter');
+  beforeEach(resetBoardServer);
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('renders the ticket-borne ask and NOT the derived legacy copy of the decision', async () => {
+    // A legacy `needs: 'decision'` ticket arrives twice: once as the board's
+    // own decision row off the projection, and once as an `r-legacy`
+    // task-review row on the REST route. The inline filter admitted both, so
+    // the reader got one question under two sets of option buttons — with
+    // only one of them recording an answer.
+    server.on(`/workspaces/${WS}/review-items`, {
+      items: [askRow(LEGACY_REVIEW_ITEM_ID, 'the derived copy'), askRow('ri-1', 'Green or blue?')],
+    });
+    const board = await bootTestBoard({
+      url: `https://board.test/workspaces/${WS}/tasks?task=t-1`,
+      tasks: [boardRow('t-1', { title: 'Pick a hob', needs: 'decision' })],
+    });
+    const panel = document.getElementById('board-detail') as HTMLElement;
+    expect(panel.classList.contains('hidden'), 'the panel never opened').toBe(false);
+
+    // Positive control: the panel really did read the route — the genuine
+    // ticket-borne ask is on screen, which is the row this door was widened
+    // for ("add_review_item is a silent no-op").
+    expect(panel.textContent).toContain('Green or blue?');
+    // And the derived copy is not, so the decision is asked once.
+    expect(panel.textContent, 'the legacy copy is back on the card').not.toContain(
+      'the derived copy',
+    );
+    // Two cards, not three: the board's own decision and the ticket-borne ask.
+    expect(panel.querySelectorAll('.board-decide-card')).toHaveLength(2);
+    expect(panel.querySelector('.board-decide-count')?.textContent).toContain('1 of 2');
+    await closeDetailPanel(board);
+  });
+
+  it('a row about another ticket never reaches this panel', async () => {
+    // The `i.taskId !== taskId` door, which is the half an inline filter did
+    // get right — asserted so the case above cannot pass by rendering nothing.
+    server.on(`/workspaces/${WS}/review-items`, {
+      items: [{ ...askRow('ri-2', 'Belongs to t-2'), taskId: 't-2', docId: 'task:t-2' }],
+    });
+    const board = await bootTestBoard({
+      url: `https://board.test/workspaces/${WS}/tasks?task=t-1`,
+      tasks: [boardRow('t-1', { title: 'Pick a hob' }), boardRow('t-2', { title: 'Order it' })],
+    });
+    const panel = document.getElementById('board-detail') as HTMLElement;
+    expect(panel.textContent).not.toContain('Belongs to t-2');
+    expect(panel.querySelectorAll('.board-decide-card')).toHaveLength(0);
+    await closeDetailPanel(board);
   });
 });
 
