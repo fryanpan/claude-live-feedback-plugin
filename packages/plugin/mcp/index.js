@@ -15125,7 +15125,8 @@ var TOOL_LIST = {
             type: "boolean",
             description: "Return the whole doc meta for each row on this page (bind configuration, diff fields, owner, provenance) instead of the compact row. Default false."
           }
-        }
+        },
+        required: ["workspaceId"]
       }
     },
     {
@@ -15134,10 +15135,14 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: { type: "string" },
           status: { type: "string", enum: ["open", "resolved"] }
         },
-        required: ["docId"]
+        required: ["workspaceId", "docId"]
       }
     },
     {
@@ -15146,10 +15151,14 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: { type: "string" },
           threadId: { type: "string" }
         },
-        required: ["docId", "threadId"]
+        required: ["workspaceId", "docId", "threadId"]
       }
     },
     {
@@ -15158,12 +15167,16 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: { type: "string" },
           threadId: { type: "string" },
           text: { type: "string" },
           review: REVIEW_ITEM_SCHEMA
         },
-        required: ["docId", "threadId", "text"]
+        required: ["workspaceId", "docId", "threadId", "text"]
       }
     },
     {
@@ -15172,6 +15185,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD the row is on. Required WITH taskId — that note is addressed as /workspaces/<workspaceId>/tasks/<taskId>/notes. Without taskId the note goes to your current claim, which the server resolves, and no board is named or needed: this is the one tool where the board follows the id beside it."
+          },
           text: { type: "string" },
           taskId: {
             type: "string",
@@ -15187,6 +15204,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: {
             type: "string",
             description: `Doc id. A task's discussion lives on "task:<taskId>".`
@@ -15201,7 +15222,7 @@ var TOOL_LIST = {
           text: { type: "string" },
           review: REVIEW_ITEM_SCHEMA
         },
-        required: ["docId", "text"]
+        required: ["workspaceId", "docId", "text"]
       }
     },
     {
@@ -15210,10 +15231,14 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: { type: "string" },
           threadId: { type: "string" }
         },
-        required: ["docId", "threadId"]
+        required: ["workspaceId", "docId", "threadId"]
       }
     },
     {
@@ -15222,6 +15247,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: { type: "string" },
           threadId: { type: "string" },
           force: {
@@ -15229,7 +15258,7 @@ var TOOL_LIST = {
             description: "Regenerate even when the stored summary is already current. Use when the existing line reads wrong, not routinely — it is a billed call."
           }
         },
-        required: ["docId", "threadId"]
+        required: ["workspaceId", "docId", "threadId"]
       }
     },
     {
@@ -15238,10 +15267,14 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: { type: "string" },
           threadId: { type: "string" }
         },
-        required: ["docId", "threadId"]
+        required: ["workspaceId", "docId", "threadId"]
       }
     },
     {
@@ -15249,8 +15282,14 @@ var TOOL_LIST = {
       description: "Read a doc's plain text and block structure. The plain text is the surface find_and_replace matches against and reflects concurrent edits. The result is body-sized and has run to 320KB on a real doc — if the question is health or shape rather than text, call doc_status.",
       inputSchema: {
         type: "object",
-        properties: { docId: { type: "string" } },
-        required: ["docId"]
+        properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
+          docId: { type: "string" }
+        },
+        required: ["workspaceId", "docId"]
       }
     },
     {
@@ -15258,8 +15297,14 @@ var TOOL_LIST = {
       description: "Cheap doc health check — metadata and counts, no body, a few hundred bytes where get_doc can run to hundreds of KB. Use it to ask whether a doc is still bound and where, whether the last sync wedged (syncError), how big get_doc would be, and whether anything is waiting.",
       inputSchema: {
         type: "object",
-        properties: { docId: { type: "string" } },
-        required: ["docId"]
+        properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
+          docId: { type: "string" }
+        },
+        required: ["workspaceId", "docId"]
       }
     },
     {
@@ -15268,6 +15313,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: {
             type: "string",
             description: "A readable name for the doc, not its address — the server mints the real id and returns it, and the name becomes an alias that also works. Store the returned id. Reusing a name reuses that doc. `task:`, `ws:` and `goal:` are the server's namespaces and are refused."
@@ -15276,10 +15325,6 @@ var TOOL_LIST = {
           title: { type: "string" },
           setId: { type: "string" },
           subscribe: { type: "boolean" },
-          hubWorkspaceId: {
-            type: "string",
-            description: 'Optional board to file this under — the id `create_workspace` returned, not a grouping/review id. Omit it and it still lands on a board: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went.'
-          },
           producedBy: {
             type: "object",
             description: "Optional provenance for the activity event stream: {agentId?, sessionId?}. Captured into doc meta so hands-on activity events can attribute the doc to the producing agent + session. If omitted, agentId is derived from the owner cwd and sessionId stays null.",
@@ -15289,7 +15334,7 @@ var TOOL_LIST = {
             }
           }
         },
-        required: ["docId", "path"]
+        required: ["workspaceId", "docId", "path"]
       }
     },
     {
@@ -15298,6 +15343,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: { type: "string" },
           markdown: { type: "string", description: "Full replacement markdown for the doc." },
           confirmOverwriteHumanEdits: {
@@ -15305,7 +15354,7 @@ var TOOL_LIST = {
             description: "Acknowledge a 409 stale-write refusal AFTER re-reading the doc and re-applying your change onto its current content. Never pass it pre-emptively — it disables the guard that keeps a stale copy from destroying a human’s concurrent edits."
           }
         },
-        required: ["docId", "markdown"]
+        required: ["workspaceId", "docId", "markdown"]
       }
     },
     {
@@ -15313,8 +15362,14 @@ var TOOL_LIST = {
       description: "Force-pull a bound file from disk into the live doc — recovery for when an external edit did not propagate. Destructive: un-flushed live edits are overwritten and anchors in replaced regions can orphan. Reach for it when get_doc returns stale content or a syncError, not routinely.",
       inputSchema: {
         type: "object",
-        properties: { docId: { type: "string" } },
-        required: ["docId"]
+        properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
+          docId: { type: "string" }
+        },
+        required: ["workspaceId", "docId"]
       }
     },
     {
@@ -15323,34 +15378,38 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: { type: "string" },
           force: {
             type: "boolean",
             description: "Delete even if open threads exist. Default false."
           }
         },
-        required: ["docId"]
+        required: ["workspaceId", "docId"]
       }
     },
     {
       name: "attach_mockup",
-      description: "Serve an HTML mockup at /mockup/<docId> and bind it for comments — the server reads the file at sourceHtmlPath on each request, so edits show up on reload, and captures what it read so the link keeps working after your scratch directory is cleaned up. An unreadable sourceHtmlPath fails HERE rather than 404ing later in front of the reviewer. Hand the returned meta.reviewUrl to a person. Single-file mockups only: relative CSS/JS siblings will not resolve. Idempotent.",
+      description: "Serve an HTML mockup at /workspaces/<workspaceId>/mockups/<docId> and bind it for comments — the server reads the file at sourceHtmlPath on each request, so edits show up on reload, and captures what it read so the link keeps working after your scratch directory is cleaned up. An unreadable sourceHtmlPath fails HERE rather than 404ing later in front of the reviewer. Hand the returned meta.reviewUrl to a person. Single-file mockups only: relative CSS/JS siblings will not resolve. Idempotent.",
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: {
             type: "string",
             description: "A readable name for the doc, not its address — the server mints the real id and returns it, and the name becomes an alias that also works. Store the returned id. Reusing a name reuses that doc. `task:`, `ws:` and `goal:` are the server's namespaces and are refused."
           },
           sourceHtmlPath: { type: "string" },
           title: { type: "string" },
-          subscribe: { type: "boolean" },
-          hubWorkspaceId: {
-            type: "string",
-            description: 'Optional board to file this under — the id `create_workspace` returned, not a grouping/review id. Omit it and it still lands on a board: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went.'
-          }
+          subscribe: { type: "boolean" }
         },
-        required: ["docId", "sourceHtmlPath"]
+        required: ["workspaceId", "docId", "sourceHtmlPath"]
       }
     },
     {
@@ -15359,16 +15418,19 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           folderPath: { type: "string" },
           exclude: {
             type: "array",
             items: { type: "string" },
             description: "Path prefixes (relative to the folder) to keep out of the review, e.g. ['node_modules', 'vendor']. Persisted, so refresh_attachment_set replays it."
           },
-          workspaceId: { type: "string" },
-          hubWorkspaceId: {
+          setId: {
             type: "string",
-            description: 'Optional board to file this under — the id `create_workspace` returned, not a grouping/review id. Omit it and it still lands on a board: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went.'
+            description: "The attachment SET's own id, to re-use rather than mint one — the id this call returned last time. It was spelled `workspaceId` here until the routes cutover, which is the word every other tool uses for the BOARD; this call is the one that takes both, so they are spelled apart."
           },
           title: { type: "string" },
           include: { type: "array", items: { type: "string" } },
@@ -15383,7 +15445,7 @@ var TOOL_LIST = {
             }
           }
         },
-        required: ["folderPath"]
+        required: ["workspaceId", "folderPath"]
       }
     },
     {
@@ -15392,6 +15454,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           repo: { type: "string", description: "Absolute path to the local git repo/worktree." },
           base: {
             type: "string",
@@ -15404,10 +15470,6 @@ var TOOL_LIST = {
           reviewId: {
             type: "string",
             description: "Optional review/workspace id. Defaults to <repo-basename>-<base7>-<target7|live>."
-          },
-          hubWorkspaceId: {
-            type: "string",
-            description: 'Optional board to file this under — the id `create_workspace` returned, not a grouping/review id. Omit it and it still lands on a board: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went.'
           },
           title: { type: "string" },
           exclude: {
@@ -15439,7 +15501,7 @@ var TOOL_LIST = {
             }
           }
         },
-        required: ["repo"]
+        required: ["workspaceId", "repo"]
       }
     },
     {
@@ -15448,6 +15510,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           setId: {
             type: "string",
             description: "The attachment set: reviewId from create_diff_review, or setId from attach_folder."
@@ -15461,7 +15527,7 @@ var TOOL_LIST = {
             description: "Destroy the persisted state instead of archiving it. Default false, and leaving it false is almost always right — a purged .ydoc cannot be restored and silently shortens the history the weekly analyses read."
           }
         },
-        required: ["setId"]
+        required: ["workspaceId", "setId"]
       }
     },
     {
@@ -15470,6 +15536,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           setId: {
             type: "string",
             description: "The attachment set: reviewId from create_diff_review, or setId from attach_folder."
@@ -15479,7 +15549,7 @@ var TOOL_LIST = {
             description: 'Why this attachment set is finished — e.g. "merged in #301".'
           }
         },
-        required: ["setId"]
+        required: ["workspaceId", "setId"]
       }
     },
     {
@@ -15488,9 +15558,13 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           setId: { type: "string" }
         },
-        required: ["setId"]
+        required: ["workspaceId", "setId"]
       }
     },
     {
@@ -15499,13 +15573,17 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: { type: "string" },
           reason: {
             type: "string",
             description: 'Why this doc is finished — e.g. "draft published".'
           }
         },
-        required: ["docId"]
+        required: ["workspaceId", "docId"]
       }
     },
     {
@@ -15514,15 +15592,28 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: { type: "string" }
         },
-        required: ["docId"]
+        required: ["workspaceId", "docId"]
       }
     },
     {
       name: "list_archived_attachments",
       description: 'Everything archived on this server, newest first, in two keys: archived for whole attachment sets (feed to unarchive_attachment_set) and docs for single docs (feed to unarchive_doc). Each carries when, by whom, the reason, and the boards it will return to. This is the answer to "what can I bring back".',
-      inputSchema: { type: "object", properties: {} }
+      inputSchema: {
+        type: "object",
+        properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          }
+        },
+        required: ["workspaceId"]
+      }
     },
     {
       name: "delete_workspace",
@@ -15549,12 +15640,16 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           setId: {
             type: "string",
             description: "The attachment set: reviewId from create_diff_review, or setId from attach_folder."
           }
         },
-        required: ["setId"]
+        required: ["workspaceId", "setId"]
       }
     },
     {
@@ -15563,6 +15658,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           setId: {
             type: "string",
             description: "reviewId from create_diff_review."
@@ -15581,7 +15680,7 @@ var TOOL_LIST = {
             }
           }
         },
-        required: ["setId", "groups"]
+        required: ["workspaceId", "setId", "groups"]
       }
     },
     {
@@ -15590,6 +15689,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: { type: "string" },
           find: { type: "string" },
           replace: { type: "string" },
@@ -15606,7 +15709,7 @@ var TOOL_LIST = {
             description: "Propose the change instead of applying it. Returns { suggestionId } instead of ok:true."
           }
         },
-        required: ["docId", "find", "replace"]
+        required: ["workspaceId", "docId", "find", "replace"]
       }
     },
     {
@@ -15615,6 +15718,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: { type: "string" },
           threadId: { type: "string" },
           replacement: { type: "string" },
@@ -15624,7 +15731,7 @@ var TOOL_LIST = {
             description: "Propose the rewrite instead of applying it. Returns { suggestionId } instead of ok:true."
           }
         },
-        required: ["docId", "threadId", "replacement"]
+        required: ["workspaceId", "docId", "threadId", "replacement"]
       }
     },
     {
@@ -15633,9 +15740,13 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: { type: "string" }
         },
-        required: ["docId"]
+        required: ["workspaceId", "docId"]
       }
     },
     {
@@ -15644,10 +15755,14 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: { type: "string" },
           sid: { type: "string" }
         },
-        required: ["docId", "sid"]
+        required: ["workspaceId", "docId", "sid"]
       }
     },
     {
@@ -15656,10 +15771,14 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: { type: "string" },
           sid: { type: "string" }
         },
-        required: ["docId", "sid"]
+        required: ["workspaceId", "docId", "sid"]
       }
     },
     {
@@ -15668,11 +15787,15 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: { type: "string" },
           action: { type: "string", enum: ["accept", "reject"] },
           authorId: { type: "string" }
         },
-        required: ["docId", "action"]
+        required: ["workspaceId", "docId", "action"]
       }
     },
     {
@@ -15681,11 +15804,15 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: { type: "string" },
           threadId: { type: "string" },
           text: { type: "string" }
         },
-        required: ["docId", "threadId", "text"]
+        required: ["workspaceId", "docId", "threadId", "text"]
       }
     },
     {
@@ -15694,6 +15821,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: { type: "string" },
           threadId: { type: "string" },
           markdown: { type: "string" },
@@ -15703,7 +15834,7 @@ var TOOL_LIST = {
             description: "Where to splice. Default 'after-block' inserts after the anchor's innermost block, which nests under a list item when the anchor sits in one. Pass 'top-level' to insert after the whole containing list or table."
           }
         },
-        required: ["docId", "threadId", "markdown"]
+        required: ["workspaceId", "docId", "threadId", "markdown"]
       }
     },
     {
@@ -15712,6 +15843,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: { type: "string" },
           find: { type: "string" },
           contextBefore: { type: "string" },
@@ -15719,7 +15854,7 @@ var TOOL_LIST = {
           occurrence: { type: "number" },
           label: { type: "string" }
         },
-        required: ["docId", "find"]
+        required: ["workspaceId", "docId", "find"]
       }
     },
     {
@@ -15728,6 +15863,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: { type: "string" },
           anchorId: { type: "string" },
           op: {
@@ -15739,7 +15878,7 @@ var TOOL_LIST = {
             required: ["kind", "text"]
           }
         },
-        required: ["docId", "anchorId", "op"]
+        required: ["workspaceId", "docId", "anchorId", "op"]
       }
     },
     {
@@ -15748,6 +15887,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: { type: "string" },
           anchorId: { type: "string" },
           markdown: { type: "string" },
@@ -15757,7 +15900,7 @@ var TOOL_LIST = {
             description: "Where to splice. Default 'after-block' inserts after the anchor's innermost block, which nests under a list item when the anchor sits in one. Pass 'top-level' to insert after the whole containing list or table."
           }
         },
-        required: ["docId", "anchorId", "markdown"]
+        required: ["workspaceId", "docId", "anchorId", "markdown"]
       }
     },
     {
@@ -15765,8 +15908,15 @@ var TOOL_LIST = {
       description: "Remove a previously-created agent anchor. Useful for cleanup between tasks.",
       inputSchema: {
         type: "object",
-        properties: { docId: { type: "string" }, anchorId: { type: "string" } },
-        required: ["docId", "anchorId"]
+        properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
+          docId: { type: "string" },
+          anchorId: { type: "string" }
+        },
+        required: ["workspaceId", "docId", "anchorId"]
       }
     },
     {
@@ -15775,11 +15925,15 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: { type: "string" },
           threadId: { type: "string" },
           anchorId: { type: "string" }
         },
-        required: ["docId"]
+        required: ["workspaceId", "docId"]
       }
     },
     {
@@ -15788,6 +15942,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: { type: "string" },
           startFind: { type: "string" },
           endFind: { type: "string" },
@@ -15796,7 +15954,7 @@ var TOOL_LIST = {
           startOccurrence: { type: "number" },
           endOccurrence: { type: "number" }
         },
-        required: ["docId", "startFind", "endFind"]
+        required: ["workspaceId", "docId", "startFind", "endFind"]
       }
     },
     {
@@ -15805,12 +15963,16 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           docId: { type: "string" },
           heading: { type: "string" },
           level: { type: "number" },
           occurrence: { type: "number" }
         },
-        required: ["docId", "heading"]
+        required: ["workspaceId", "docId", "heading"]
       }
     },
     {
@@ -15818,7 +15980,9 @@ var TOOL_LIST = {
       description: "Return the SSE URL that streams live thread events for a doc. Useful for long-running agents.",
       inputSchema: {
         type: "object",
-        properties: { docId: { type: "string" } },
+        properties: {
+          docId: { type: "string" }
+        },
         required: ["docId"]
       }
     },
@@ -15827,7 +15991,9 @@ var TOOL_LIST = {
       description: "Subscribe this session to a doc's comment events, delivered as channel messages. Usually unnecessary — attach_markdown, attach_mockup and most docId-bearing tools subscribe you already, and set_workspace_lead covers every doc on your board. Reach for it for a doc you have not otherwise touched, such as a peer's review you only want to observe. persisted: false means a restart will drop it.",
       inputSchema: {
         type: "object",
-        properties: { docId: { type: "string" } },
+        properties: {
+          docId: { type: "string" }
+        },
         required: ["docId"]
       }
     },
@@ -15836,14 +16002,19 @@ var TOOL_LIST = {
       description: "Stop pushing channel events for this doc, and forget it on the server so a respawn does not bring it back.",
       inputSchema: {
         type: "object",
-        properties: { docId: { type: "string" } },
+        properties: {
+          docId: { type: "string" }
+        },
         required: ["docId"]
       }
     },
     {
       name: "list_watched_docs",
       description: "What this session is subscribed to — and, more usefully, what it is missing. coverage.unattachedBoards names boards you follow but are not live on, with what is queued for their lead and the remedy for each: set_workspace_lead when the seat is empty, heartbeat when it is yours and you went quiet, attach_agent when a live peer holds it. restore.status tells an empty list apart from a failed restore. coverage absent means unknown, never all-clear.",
-      inputSchema: { type: "object", properties: {} }
+      inputSchema: {
+        type: "object",
+        properties: {}
+      }
     },
     {
       name: "share_workspace",
@@ -15853,7 +16024,7 @@ var TOOL_LIST = {
         properties: {
           workspaceId: {
             type: "string",
-            description: "The BOARD to share — the id create_workspace returned, or the hubWorkspaceId attach_folder / create_diff_review reported. NOT a review/review id."
+            description: "The BOARD to share — the id create_workspace returned, the same one every other tool takes as workspaceId. NOT a review/attachment-set id."
           },
           ttlSeconds: {
             type: "number",
@@ -15896,14 +16067,19 @@ var TOOL_LIST = {
     {
       name: "list_shares",
       description: "Every share of every board: the links, who has redeemed each one and when, and whether each is live, revoked or expired — plus any shares still on the retired per-hostname mode, with their hostnames and allowed domains.",
-      inputSchema: { type: "object", properties: {} }
+      inputSchema: {
+        type: "object",
+        properties: {}
+      }
     },
     {
       name: "unshare",
       description: "Revoke a share by id. For a share link this stops anyone NEW redeeming it and leaves the people who already joined as members — use remove_share_member to eject somebody. For a share on the retired per-hostname mode it deletes the Cloudflare Access app and policy and removes the entry. Use it for early teardown; a link with a TTL otherwise lapses on its own, and one without never does.",
       inputSchema: {
         type: "object",
-        properties: { shareId: { type: "string" } },
+        properties: {
+          shareId: { type: "string" }
+        },
         required: ["shareId"]
       }
     },
@@ -15968,7 +16144,9 @@ var TOOL_LIST = {
       description: "Bring a retired board back. It ranks again, takes new work again, and stops warning readers. Nothing has to be restored — retiring only ever wrote one field — so this is a plain reversal and not a recovery.",
       inputSchema: {
         type: "object",
-        properties: { workspaceId: { type: "string", description: "Board workspace id." } },
+        properties: {
+          workspaceId: { type: "string", description: "Board workspace id." }
+        },
         required: ["workspaceId"]
       }
     },
@@ -16141,7 +16319,7 @@ var TOOL_LIST = {
             description: "The criteria, as prose the judge will read. Up to 4,000 characters. Omit to restore the default."
           }
         },
-        required: []
+        required: ["workspaceId"]
       }
     },
     {
@@ -16149,7 +16327,9 @@ var TOOL_LIST = {
       description: "Read a board's goals in priority order, with per-goal task counts, plus the parallelism cap — its value, slots in use and free, and who last moved it and when. First row is the highest band. Call it before deciding what to work on — list_tasks returns goal ids only, so without this the ordering is invisible. Cheap by design: pair it with next_tasks, which carries the tasks themselves.",
       inputSchema: {
         type: "object",
-        properties: { workspaceId: { type: "string" } },
+        properties: {
+          workspaceId: { type: "string" }
+        },
         required: ["workspaceId"]
       }
     },
@@ -16228,6 +16408,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           taskId: { type: "string" },
           to: { type: "string", enum: [...TASK_STATUSES] },
           note: { type: "string" },
@@ -16239,7 +16423,7 @@ var TOOL_LIST = {
             }
           }
         },
-        required: ["taskId", "to"]
+        required: ["workspaceId", "taskId", "to"]
       }
     },
     {
@@ -16248,6 +16432,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           taskId: { type: "string" },
           assignee: {
             type: "string",
@@ -16259,7 +16447,7 @@ var TOOL_LIST = {
             description: "'person' or 'agent' — say which whenever `assignee` is a name that is not your own. The board cannot tell a person from an agent of the same name and will not guess, so an undeclared owner shows as \"not recorded\". Not needed for yourself or for 'human'."
           }
         },
-        required: ["taskId", "assignee"]
+        required: ["workspaceId", "taskId", "assignee"]
       }
     },
     {
@@ -16268,13 +16456,17 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           taskId: { type: "string" },
           blockedBy: {
             description: "The task id, or ids, this row waits on. Each must be a task on the same board; an unknown id is refused rather than recorded, because a dangling edge blocks nothing and says it does.",
             oneOf: [{ type: "string" }, { type: "array", items: { type: "string" } }]
           }
         },
-        required: ["taskId", "blockedBy"]
+        required: ["workspaceId", "taskId", "blockedBy"]
       }
     },
     {
@@ -16283,13 +16475,17 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           taskId: { type: "string" },
           reason: {
             type: "string",
             description: 'Why, in one line — e.g. "duplicate of the index row" or "the goal moved past this". Capped at 200 characters. Optional, and the row is archived either way; it is the half a later reader acts on.'
           }
         },
-        required: ["taskId"]
+        required: ["workspaceId", "taskId"]
       }
     },
     {
@@ -16297,8 +16493,14 @@ var TOOL_LIST = {
       description: "Put an archived task back — it rejoins its band at the position, status and owner it always had. Find archived rows with list_tasks(includeArchived: true). A row that was not archived answers changed: false rather than erroring.",
       inputSchema: {
         type: "object",
-        properties: { taskId: { type: "string" } },
-        required: ["taskId"]
+        properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
+          taskId: { type: "string" }
+        },
+        required: ["workspaceId", "taskId"]
       }
     },
     {
@@ -16307,6 +16509,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           taskId: { type: "string" },
           title: {
             type: "string",
@@ -16321,7 +16527,7 @@ var TOOL_LIST = {
             description: 'Why you are rewriting, in one line — e.g. "title named the artifact, not the outcome". Recorded on the audit row and rendered in the activity feed, so the filer can see what the rewrite was for.'
           }
         },
-        required: ["taskId", "reason"]
+        required: ["workspaceId", "taskId", "reason"]
       }
     },
     {
@@ -16330,6 +16536,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           taskId: { type: "string" },
           goal: { type: "string", description: 'Goal id, or "chores".' },
           position: { type: "number" },
@@ -16338,7 +16548,7 @@ var TOOL_LIST = {
             description: "Echo the batchId from the `workspace.goals_changed` event this placement answers. It ties the move to the goal edit that prompted it, so the activity view reads N moves as one edit instead of N unexplained rereviews."
           }
         },
-        required: ["taskId", "goal"]
+        required: ["workspaceId", "taskId", "goal"]
       }
     },
     {
@@ -16414,10 +16624,14 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           taskId: { type: "string", description: "The ticket the question hangs on." },
           review: TASK_REVIEW_ITEM_SCHEMA
         },
-        required: ["taskId", "review"]
+        required: ["workspaceId", "taskId", "review"]
       }
     },
     {
@@ -16426,6 +16640,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           taskId: { type: "string" },
           reviewItemId: {
             type: "string",
@@ -16437,7 +16655,7 @@ var TOOL_LIST = {
             description: "The id of the option they picked, if they picked one. The answer is still `text` — pass the option's label as the text. Omit when they answered in their own words."
           }
         },
-        required: ["text"]
+        required: ["workspaceId", "text"]
       }
     },
     {
@@ -16446,6 +16664,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           taskId: { type: "string" },
           reviewItemId: {
             type: "string",
@@ -16453,7 +16675,7 @@ var TOOL_LIST = {
           },
           question: { type: "string", description: "What they want to know, verbatim." }
         },
-        required: ["question"]
+        required: ["workspaceId", "question"]
       }
     },
     {
@@ -16462,6 +16684,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           taskId: {
             type: "string",
             description: "Ticket form: the ticket. With reviewItemId, one of the items filed on it; alone, the ticket's OWN decision."
@@ -16496,7 +16722,7 @@ var TOOL_LIST = {
             required: ["start", "end"]
           }
         },
-        required: []
+        required: ["workspaceId"]
       }
     },
     {
@@ -16505,6 +16731,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           reviewItemId: {
             type: "string",
             description: "The item, by its id — from the queue row, the ticket, or add_review_item. Addresses either surface; no other id needed."
@@ -16531,7 +16761,7 @@ var TOOL_LIST = {
             description: "Put a withdrawn item back in front of the reader."
           }
         },
-        required: []
+        required: ["workspaceId"]
       }
     },
     {
@@ -16540,6 +16770,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           taskId: { type: "string" },
           text: { type: "string", description: "The human's verbatim answer." },
           optionId: {
@@ -16551,7 +16785,7 @@ var TOOL_LIST = {
             description: "Which of the ticket's review items is being answered. Omit — as every caller before this field existed does — and the answer lands on the ticket's own decision, exactly as it always has."
           }
         },
-        required: ["taskId", "text"]
+        required: ["workspaceId", "taskId", "text"]
       }
     },
     {
@@ -16560,6 +16794,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           taskId: { type: "string", description: "The BLOCKED task — the one that waits." },
           after: {
             type: "array",
@@ -16572,7 +16810,7 @@ var TOOL_LIST = {
             description: "Subset of `after` that hard-blocks transitions while open. Every id here MUST also appear in `after` — the call is refused rather than silently widening `after`."
           }
         },
-        required: ["taskId", "after"]
+        required: ["workspaceId", "taskId", "after"]
       }
     },
     {
@@ -16597,10 +16835,14 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           taskId: { type: "string" },
           ref: { type: "object" }
         },
-        required: ["taskId", "ref"]
+        required: ["workspaceId", "taskId", "ref"]
       }
     },
     {
@@ -16609,10 +16851,14 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           taskId: { type: "string" },
           ref: { type: "object" }
         },
-        required: ["taskId", "ref"]
+        required: ["workspaceId", "taskId", "ref"]
       }
     },
     {
@@ -16671,13 +16917,17 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           taskId: { type: "string", description: "The task the builder is working." },
           worktreePath: {
             type: "string",
             description: "Absolute path to the builder's git worktree on this machine."
           }
         },
-        required: ["taskId", "worktreePath"]
+        required: ["workspaceId", "taskId", "worktreePath"]
       }
     },
     {
@@ -16686,9 +16936,13 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           taskId: { type: "string", description: "The task whose dispatch to close." }
         },
-        required: ["taskId"]
+        required: ["workspaceId", "taskId"]
       }
     },
     {
@@ -16710,7 +16964,10 @@ var TOOL_LIST = {
     {
       name: "request_plugin_refresh",
       description: "Ask this machine to fetch the newest plugin from the marketplace. Call it when a board's settings panel says sessions are running an older bundle. It requests rather than forces — the update rewrites a version-keyed cache, so nothing running is interrupted and each session picks it up at its next restart. changed: false with matching versions means the cache was already current.",
-      inputSchema: { type: "object", properties: {} }
+      inputSchema: {
+        type: "object",
+        properties: {}
+      }
     },
     {
       name: "get_unfiled_ask_count",
@@ -16718,11 +16975,16 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           agent: {
             type: "string",
             description: "Display name to read; defaults to this session's own (CW_AGENT_NAME)."
           }
-        }
+        },
+        required: ["workspaceId"]
       }
     },
     {
@@ -16731,6 +16993,10 @@ var TOOL_LIST = {
       inputSchema: {
         type: "object",
         properties: {
+          workspaceId: {
+            type: "string",
+            description: "The BOARD this resource is on — every address is /workspaces/<workspaceId>/…, so a call without it names no resource. The id create_workspace returned; get_workspace lists what you are attached to."
+          },
           day: { type: "string", description: "Audited day, YYYY-MM-DD. Defaults to today." },
           entries: {
             type: "array",
@@ -16753,7 +17019,7 @@ var TOOL_LIST = {
             }
           }
         },
-        required: ["entries"]
+        required: ["workspaceId", "entries"]
       }
     },
     {
@@ -16761,19 +17027,34 @@ var TOOL_LIST = {
       description: "List the agents attached to a board workspace with their derived state: active, 'process up, agent unresponsive' (fresh heartbeat, stale tool calls), or 'away — requests queue'. The ambient-awareness read: who is where, and is anyone wedged.",
       inputSchema: {
         type: "object",
-        properties: { workspaceId: { type: "string" } },
+        properties: {
+          workspaceId: { type: "string" }
+        },
         required: ["workspaceId"]
       }
     }
   ]
 };
 
+// packages/mcp/src/board-path.ts
+function boardIdOf(toolName, args) {
+  const workspaceId = typeof args.workspaceId === "string" ? args.workspaceId.trim() : "";
+  if (workspaceId === "") {
+    const now2 = DEPRECATED_TOOL_ALIASES[toolName] ?? toolName;
+    throw new Error(`${now2} needs a workspaceId — every resource is addressed under the board that owns it. Pass the board id create_workspace returned; get_workspace lists what you are attached to.`);
+  }
+  return workspaceId;
+}
+function boardPathOf(toolName, args) {
+  return `/workspaces/${encodeURIComponent(boardIdOf(toolName, args))}`;
+}
+
 // packages/mcp/src/thread-create.ts
-function threadCreateRequest(input, author) {
+function threadCreateRequest(input, author, board) {
   const doc2 = encodeURIComponent(input.docId);
   if (input.find === undefined) {
     return {
-      path: `/api/docs/${doc2}/threads`,
+      path: `${board}/docs/${doc2}/threads`,
       body: {
         author,
         text: input.text,
@@ -16783,7 +17064,7 @@ function threadCreateRequest(input, author) {
     };
   }
   return {
-    path: `/api/docs/${doc2}/threads/by_find`,
+    path: `${board}/docs/${doc2}/threads/by_find`,
     body: {
       author,
       text: input.text,
@@ -16818,12 +17099,12 @@ async function handleDocsTool(name, a, ctx) {
     IDENTITY_IS_SHARED,
     SHARED_IDENTITY_REASON
   } = ctx;
+  const boardId = () => boardIdOf(name, a);
+  const board = () => boardPathOf(name, a);
   switch (name) {
     case "list_docs": {
-      const { workspaceId, kind, query, sourcePrefix, limit, cursor, full } = a;
+      const { kind, query, sourcePrefix, limit, cursor, full } = a;
       const params = new URLSearchParams;
-      if (workspaceId)
-        params.set("workspaceId", workspaceId);
       if (kind)
         params.set("kind", kind);
       if (query)
@@ -16835,23 +17116,23 @@ async function handleDocsTool(name, a, ctx) {
         params.set("cursor", cursor);
       if (full)
         params.set("full", "1");
-      const res = await http("GET", `/api/docs?${params.toString()}`);
+      const res = await http("GET", `${board()}/docs?${params.toString()}`);
       return ok2(res);
     }
     case "list_threads": {
       const { docId, status } = a;
       const qs = status ? `?status=${encodeURIComponent(status)}` : "";
-      const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/threads${qs}`);
+      const res = await http("GET", `${board()}/docs/${encodeURIComponent(docId)}/threads${qs}`);
       return ok2(res);
     }
     case "get_thread": {
       const { docId, threadId } = a;
-      const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}`);
+      const res = await http("GET", `${board()}/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}`);
       return ok2(res);
     }
     case "post_reply": {
       const { docId, threadId, text, review } = a;
-      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/comments`, { author: AUTHOR, text, ...review !== undefined ? { review } : {} });
+      const res = await http("POST", `${board()}/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/comments`, { author: AUTHOR, text, ...review !== undefined ? { review } : {} });
       return ok2(res);
     }
     case "post_status": {
@@ -16862,7 +17143,7 @@ async function handleDocsTool(name, a, ctx) {
       if (body.length > STATUS_TEXT_MAX) {
         return err2(`text is over ${STATUS_TEXT_MAX} chars — a status is a line to a few sentences; the full report is already on the Activity tab from your end-of-turn message`);
       }
-      const path = taskId !== undefined && taskId !== "" ? `/api/tasks/${encodeURIComponent(taskId)}/notes` : "/api/agent-notes";
+      const path = taskId !== undefined && taskId !== "" ? `${board()}/tasks/${encodeURIComponent(taskId)}/notes` : "/api/agent-notes";
       const res = await http("POST", path, {
         agent: AUTHOR.name,
         kind: "status",
@@ -16879,60 +17160,52 @@ async function handleDocsTool(name, a, ctx) {
       });
     }
     case "create_thread": {
-      const { path, body } = threadCreateRequest(a, AUTHOR);
+      const { path, body } = threadCreateRequest(a, AUTHOR, board());
       const res = await http("POST", path, body);
       return ok2(res);
     }
     case "resolve_thread": {
       const { docId, threadId } = a;
-      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/resolve`);
+      const res = await http("POST", `${board()}/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/resolve`);
       return ok2(res);
     }
     case "summarize_thread": {
       const { docId, threadId, force } = a;
-      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/summary`, force ? { force: true } : undefined);
+      const res = await http("POST", `${board()}/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/summary`, force ? { force: true } : undefined);
       return ok2(res);
     }
     case "reopen_thread": {
       const { docId, threadId } = a;
-      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/reopen`);
+      const res = await http("POST", `${board()}/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/reopen`);
       return ok2(res);
     }
     case "get_doc": {
       const { docId } = a;
-      const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/content?reader=${encodeURIComponent(AUTHOR.id)}`);
+      const res = await http("GET", `${board()}/docs/${encodeURIComponent(docId)}/content?reader=${encodeURIComponent(AUTHOR.id)}`);
       return ok2(res);
     }
     case "doc_status": {
       const { docId } = a;
-      const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/status`);
+      const res = await http("GET", `${board()}/docs/${encodeURIComponent(docId)}/status`);
       return ok2(res);
     }
     case "create_review_doc":
     case "attach_markdown": {
-      const {
-        docId,
-        path,
-        title,
-        setId,
-        hubWorkspaceId: boardWorkspaceId,
-        producedBy
-      } = a;
-      const res = await http("POST", "/api/docs", {
+      const { docId, path, title, setId, producedBy } = a;
+      const res = await http("POST", `${board()}/docs`, {
         docId,
         type: "markdown",
         sourceUrl: path,
         owner: process.cwd(),
         ...title ? { title } : {},
         ...setId ? { setId } : {},
-        ...boardWorkspaceId ? { hubWorkspaceId: boardWorkspaceId } : {},
         ...producedBy ? { producedBy } : {}
       });
       return ok2(res);
     }
     case "set_doc_content": {
       const { docId, markdown, confirmOverwriteHumanEdits } = a;
-      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/content`, {
+      const res = await http("POST", `${board()}/docs/${encodeURIComponent(docId)}/content`, {
         markdown,
         author: AUTHOR,
         ...confirmOverwriteHumanEdits === true ? { confirmOverwriteHumanEdits: true } : {}
@@ -16941,51 +17214,35 @@ async function handleDocsTool(name, a, ctx) {
     }
     case "reparse_from_disk": {
       const { docId } = a;
-      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/reparse_from_disk`);
+      const res = await http("POST", `${board()}/docs/${encodeURIComponent(docId)}/reparse_from_disk`);
       return ok2(res);
     }
     case "delete_doc": {
       const { docId, force } = a;
       const qs = force ? "?force=true" : "";
-      const res = await http("DELETE", `/api/docs/${encodeURIComponent(docId)}${qs}`);
+      const res = await http("DELETE", `${board()}/docs/${encodeURIComponent(docId)}${qs}`);
       return ok2(res);
     }
     case "bind_mock":
     case "attach_mockup": {
-      const {
-        docId,
-        sourceHtmlPath,
-        title,
-        hubWorkspaceId: boardWorkspaceId
-      } = a;
-      const res = await http("POST", "/api/docs", {
+      const { docId, sourceHtmlPath, title } = a;
+      const res = await http("POST", `${board()}/docs`, {
         docId,
         type: "mockup",
         owner: process.cwd(),
         ...sourceHtmlPath ? { sourceUrl: sourceHtmlPath } : {},
-        ...title ? { title } : {},
-        ...boardWorkspaceId ? { hubWorkspaceId: boardWorkspaceId } : {}
+        ...title ? { title } : {}
       });
       return ok2(res);
     }
     case "bind_folder":
     case "attach_folder": {
-      const {
-        folderPath,
-        workspaceId,
-        hubWorkspaceId: boardWorkspaceId,
-        title,
-        include,
-        exclude,
-        maxFiles,
-        subscribe,
-        producedBy
-      } = a;
+      const { folderPath, setId, title, include, exclude, maxFiles, subscribe, producedBy } = a;
       const res = await http("POST", "/workspaces", {
         folderPath,
         owner: process.cwd(),
-        ...workspaceId ? { workspaceId } : {},
-        ...boardWorkspaceId ? { hubWorkspaceId: boardWorkspaceId } : {},
+        ...setId ? { workspaceId: setId } : {},
+        hubWorkspaceId: boardId(),
         ...title ? { title } : {},
         ...include ? { include } : {},
         ...exclude ? { exclude } : {},
@@ -17003,7 +17260,6 @@ async function handleDocsTool(name, a, ctx) {
         base,
         target,
         reviewId,
-        hubWorkspaceId: boardWorkspaceId,
         title,
         exclude,
         groups,
@@ -17011,13 +17267,12 @@ async function handleDocsTool(name, a, ctx) {
         subscribe,
         producedBy
       } = a;
-      const res = await http("POST", "/api/diffs", {
+      const res = await http("POST", `${board()}/reviews`, {
         repo,
         base,
         ...target ? { target } : {},
         owner: process.cwd(),
         ...reviewId ? { reviewId } : {},
-        ...boardWorkspaceId ? { hubWorkspaceId: boardWorkspaceId } : {},
         ...title ? { title } : {},
         ...exclude ? { exclude } : {},
         ...groups ? { groups } : {},
@@ -17034,13 +17289,13 @@ async function handleDocsTool(name, a, ctx) {
       const { setId, force, purge } = a;
       const params = [force ? "force=true" : "", purge ? "purge=true" : ""].filter(Boolean);
       const qs = params.length > 0 ? `?${params.join("&")}` : "";
-      const res = await http("DELETE", `/api/reviews/${encodeURIComponent(setId)}${qs}`);
+      const res = await http("DELETE", `${board()}/reviews/${encodeURIComponent(setId)}${qs}`);
       return ok2(res);
     }
     case "archive_review":
     case "archive_attachment_set": {
       const { setId, reason } = a;
-      const res = await http("POST", `/api/reviews/${encodeURIComponent(setId)}/archive`, {
+      const res = await http("POST", `${board()}/reviews/${encodeURIComponent(setId)}/archive`, {
         author: AUTHOR,
         ...reason !== undefined ? { reason } : {}
       });
@@ -17049,14 +17304,14 @@ async function handleDocsTool(name, a, ctx) {
     case "unarchive_review":
     case "unarchive_attachment_set": {
       const { setId } = a;
-      const res = await http("POST", `/api/reviews/${encodeURIComponent(setId)}/unarchive`, {
+      const res = await http("POST", `${board()}/reviews/${encodeURIComponent(setId)}/unarchive`, {
         author: AUTHOR
       });
       return ok2(res);
     }
     case "archive_doc": {
       const { docId, reason } = a;
-      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/archive`, {
+      const res = await http("POST", `${board()}/docs/${encodeURIComponent(docId)}/archive`, {
         author: AUTHOR,
         ...reason !== undefined ? { reason } : {}
       });
@@ -17064,14 +17319,14 @@ async function handleDocsTool(name, a, ctx) {
     }
     case "unarchive_doc": {
       const { docId } = a;
-      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/unarchive`, {
+      const res = await http("POST", `${board()}/docs/${encodeURIComponent(docId)}/unarchive`, {
         author: AUTHOR
       });
       return ok2(res);
     }
     case "list_archived_reviews":
     case "list_archived_attachments": {
-      const res = await http("GET", "/api/reviews/archived");
+      const res = await http("GET", `${board()}/reviews?archived=true`);
       return ok2(res);
     }
     case "delete_workspace": {
@@ -17086,7 +17341,7 @@ async function handleDocsTool(name, a, ctx) {
     case "refresh_attachment_set": {
       const { setId, workspaceId } = a;
       const id = setId ?? workspaceId ?? "";
-      const res = await http("POST", `/api/reviews/${encodeURIComponent(id)}/refresh`, {});
+      const res = await http("POST", `${board()}/reviews/${encodeURIComponent(id)}/refresh`, {});
       return ok2(res);
     }
     case "set_workspace_groups":
@@ -17094,7 +17349,7 @@ async function handleDocsTool(name, a, ctx) {
     case "set_attachment_groups": {
       const { setId, workspaceId, groups } = a;
       const id = setId ?? workspaceId ?? "";
-      const res = await http("POST", `/api/reviews/${encodeURIComponent(id)}/groups`, {
+      const res = await http("POST", `${board()}/reviews/${encodeURIComponent(id)}/groups`, {
         groups
       });
       return ok2(res);
@@ -17111,7 +17366,7 @@ async function handleDocsTool(name, a, ctx) {
         parseInlineMarks,
         suggest
       } = a;
-      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/find_and_replace`, {
+      const res = await http("POST", `${board()}/docs/${encodeURIComponent(docId)}/find_and_replace`, {
         find,
         replace,
         ...contextBefore !== undefined ? { contextBefore } : {},
@@ -17125,7 +17380,7 @@ async function handleDocsTool(name, a, ctx) {
     }
     case "rewrite_thread_region": {
       const { docId, threadId, replacement, parseInlineMarks, suggest } = a;
-      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/rewrite_region`, {
+      const res = await http("POST", `${board()}/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/rewrite_region`, {
         replacement,
         ...parseInlineMarks === true ? { parseInlineMarks: true } : {},
         ...suggest === true ? { suggest: true, author: suggestionAuthor() } : {}
@@ -17134,37 +17389,37 @@ async function handleDocsTool(name, a, ctx) {
     }
     case "list_suggestions": {
       const { docId } = a;
-      const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/suggestions`);
+      const res = await http("GET", `${board()}/docs/${encodeURIComponent(docId)}/suggestions`);
       return ok2(res);
     }
     case "accept_suggestion": {
       const { docId, sid } = a;
-      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/suggestions/${encodeURIComponent(sid)}/accept`);
+      const res = await http("POST", `${board()}/docs/${encodeURIComponent(docId)}/suggestions/${encodeURIComponent(sid)}/accept`);
       return ok2(res);
     }
     case "reject_suggestion": {
       const { docId, sid } = a;
-      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/suggestions/${encodeURIComponent(sid)}/reject`);
+      const res = await http("POST", `${board()}/docs/${encodeURIComponent(docId)}/suggestions/${encodeURIComponent(sid)}/reject`);
       return ok2(res);
     }
     case "resolve_all_suggestions": {
       const { docId, action, authorId } = a;
-      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/suggestions/resolve_all`, { action, ...authorId !== undefined ? { authorId } : {} });
+      const res = await http("POST", `${board()}/docs/${encodeURIComponent(docId)}/suggestions/resolve_all`, { action, ...authorId !== undefined ? { authorId } : {} });
       return ok2(res);
     }
     case "insert_after_thread": {
       const { docId, threadId, text } = a;
-      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_after`, { text });
+      const res = await http("POST", `${board()}/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_after`, { text });
       return ok2(res);
     }
     case "insert_blocks_after_thread": {
       const { docId, threadId, markdown, placement } = a;
-      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_blocks_after`, { markdown, ...placement !== undefined ? { placement } : {} });
+      const res = await http("POST", `${board()}/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_blocks_after`, { markdown, ...placement !== undefined ? { placement } : {} });
       return ok2(res);
     }
     case "create_anchor": {
       const { docId, find, contextBefore, contextAfter, occurrence, label } = a;
-      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/agent_anchors`, {
+      const res = await http("POST", `${board()}/docs/${encodeURIComponent(docId)}/agent_anchors`, {
         find,
         ...contextBefore !== undefined ? { contextBefore } : {},
         ...contextAfter !== undefined ? { contextAfter } : {},
@@ -17175,22 +17430,22 @@ async function handleDocsTool(name, a, ctx) {
     }
     case "edit_at_anchor": {
       const { docId, anchorId, op } = a;
-      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/edit`, op);
+      const res = await http("POST", `${board()}/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/edit`, op);
       return ok2(res);
     }
     case "insert_blocks_at_anchor": {
       const { docId, anchorId, markdown, placement } = a;
-      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/insert_blocks`, { markdown, ...placement !== undefined ? { placement } : {} });
+      const res = await http("POST", `${board()}/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/insert_blocks`, { markdown, ...placement !== undefined ? { placement } : {} });
       return ok2(res);
     }
     case "delete_anchor": {
       const { docId, anchorId } = a;
-      const res = await http("DELETE", `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}`);
+      const res = await http("DELETE", `${board()}/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}`);
       return ok2(res);
     }
     case "delete_block_at_anchor": {
       const { docId, threadId, anchorId } = a;
-      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/delete_block_at_anchor`, {
+      const res = await http("POST", `${board()}/docs/${encodeURIComponent(docId)}/delete_block_at_anchor`, {
         ...threadId !== undefined ? { threadId } : {},
         ...anchorId !== undefined ? { anchorId } : {}
       });
@@ -17206,7 +17461,7 @@ async function handleDocsTool(name, a, ctx) {
         startOccurrence,
         endOccurrence
       } = a;
-      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/delete_blocks_in_range`, {
+      const res = await http("POST", `${board()}/docs/${encodeURIComponent(docId)}/delete_blocks_in_range`, {
         startFind,
         endFind,
         ...contextBefore !== undefined ? { contextBefore } : {},
@@ -17218,7 +17473,7 @@ async function handleDocsTool(name, a, ctx) {
     }
     case "delete_section": {
       const { docId, heading, level, occurrence } = a;
-      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/delete_section`, {
+      const res = await http("POST", `${board()}/docs/${encodeURIComponent(docId)}/delete_section`, {
         heading,
         ...level !== undefined ? { level } : {},
         ...occurrence !== undefined ? { occurrence } : {}
@@ -17395,25 +17650,25 @@ function taskCreatedSummary(task, ignoredLinks, shapeGaps, placed) {
 }
 async function recordReviewAnswer(ctx, args) {
   const { http, AUTHOR } = ctx;
-  const { taskId, text, reviewItemId, answeredWith } = args;
+  const { board, taskId, text, reviewItemId, answeredWith } = args;
   if (reviewItemId === undefined) {
-    return await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/answer`, {
+    return await http("POST", `${board}/tasks/${encodeURIComponent(taskId)}/answer`, {
       text,
       ...answeredWith !== undefined ? { optionId: answeredWith } : {},
       author: AUTHOR
     });
   }
-  return await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/review-items/${encodeURIComponent(reviewItemId)}/answer`, {
+  return await http("POST", `${board}/tasks/${encodeURIComponent(taskId)}/review-items/${encodeURIComponent(reviewItemId)}/answer`, {
     text,
     ...answeredWith !== undefined ? { answeredWith } : {},
     author: AUTHOR
   });
 }
-async function resolveReviewItemId(ctx, reviewItemId) {
+async function resolveReviewItemId(ctx, board, reviewItemId) {
   const thread = parseThreadReviewItemId(reviewItemId);
   if (thread)
     return { kind: "doc-thread", ...thread };
-  const res = await ctx.http("GET", `/api/review-items/${encodeURIComponent(reviewItemId)}`);
+  const res = await ctx.http("GET", `${board}/review-items/${encodeURIComponent(reviewItemId)}`);
   return {
     kind: "task-item",
     taskId: res.taskId,
@@ -17431,6 +17686,7 @@ function heldResult(res) {
 }
 async function handleTaskTool(name, a, ctx) {
   const { http, ok: ok2, err: err2, AUTHOR, claimNoticeFor: claimNoticeFor2 } = ctx;
+  const board = () => boardPathOf(name, a);
   switch (name) {
     case "create_tasks": {
       const { workspaceId, tasks, sourceDoc } = a;
@@ -17472,7 +17728,7 @@ async function handleTaskTool(name, a, ctx) {
         dueAt,
         links
       } = a;
-      const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/promote`, {
+      const res = await http("POST", `${board()}/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/promote`, {
         workspaceId,
         ...title !== undefined ? { title } : {},
         ...body !== undefined ? { body } : {},
@@ -17532,7 +17788,7 @@ async function handleTaskTool(name, a, ctx) {
     case "task_transition": {
       const { taskId, to, note, usage } = a;
       const claimNotice = to === "in-progress" ? await claimNoticeFor2(taskId) : undefined;
-      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/transition`, {
+      const res = await http("POST", `${board()}/tasks/${encodeURIComponent(taskId)}/transition`, {
         to,
         author: AUTHOR,
         ...note !== undefined ? { note } : {},
@@ -17547,7 +17803,7 @@ async function handleTaskTool(name, a, ctx) {
     }
     case "assign_task": {
       const { taskId, assignee, assigneeKind } = a;
-      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/assignee`, {
+      const res = await http("POST", `${board()}/tasks/${encodeURIComponent(taskId)}/assignee`, {
         assignee,
         ...assigneeKind !== undefined ? { assigneeKind } : {},
         author: AUTHOR
@@ -17565,7 +17821,7 @@ async function handleTaskTool(name, a, ctx) {
       if (ids.length === 0 || ids.some((id) => typeof id !== "string" || id === "")) {
         return err2("blockedBy must be a task id, or an array of them");
       }
-      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/park`, {
+      const res = await http("POST", `${board()}/tasks/${encodeURIComponent(taskId)}/park`, {
         blockedBy: ids,
         author: AUTHOR
       });
@@ -17578,7 +17834,7 @@ async function handleTaskTool(name, a, ctx) {
     }
     case "archive_task": {
       const { taskId, reason } = a;
-      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/archive`, {
+      const res = await http("POST", `${board()}/tasks/${encodeURIComponent(taskId)}/archive`, {
         ...reason !== undefined ? { reason } : {},
         author: AUTHOR
       });
@@ -17591,7 +17847,7 @@ async function handleTaskTool(name, a, ctx) {
     }
     case "unarchive_task": {
       const { taskId } = a;
-      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/restore`, {
+      const res = await http("POST", `${board()}/tasks/${encodeURIComponent(taskId)}/restore`, {
         author: AUTHOR
       });
       return ok2({
@@ -17607,7 +17863,7 @@ async function handleTaskTool(name, a, ctx) {
         return err2("nothing to rewrite — pass title, body, or both");
       }
       if (body !== undefined) {
-        const res2 = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/body`, {
+        const res2 = await http("POST", `${board()}/tasks/${encodeURIComponent(taskId)}/body`, {
           markdown: body,
           ...title !== undefined ? { title } : {},
           ...reason !== undefined ? { reason } : {},
@@ -17620,7 +17876,7 @@ async function handleTaskTool(name, a, ctx) {
           quote: res2.task?.quote
         });
       }
-      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/title`, {
+      const res = await http("POST", `${board()}/tasks/${encodeURIComponent(taskId)}/title`, {
         title,
         ...reason !== undefined ? { reason } : {},
         author: AUTHOR
@@ -17629,7 +17885,7 @@ async function handleTaskTool(name, a, ctx) {
     }
     case "set_task_goal": {
       const { taskId, goal, position, batchId } = a;
-      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/goal`, {
+      const res = await http("POST", `${board()}/tasks/${encodeURIComponent(taskId)}/goal`, {
         goal,
         author: AUTHOR,
         ...position !== undefined ? { position } : {},
@@ -17674,7 +17930,7 @@ async function handleTaskTool(name, a, ctx) {
     }
     case "add_review_item": {
       const { taskId, review } = a;
-      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/review-items`, {
+      const res = await http("POST", `${board()}/tasks/${encodeURIComponent(taskId)}/review-items`, {
         review,
         author: AUTHOR
       });
@@ -17692,9 +17948,9 @@ async function handleTaskTool(name, a, ctx) {
         if (reviewItemId === undefined) {
           return err2("which item? Pass its reviewItemId (from the queue row or the ticket), or taskId — alone for a ticket that is itself a decision, with reviewItemId for one of the items filed on it");
         }
-        const address = await resolveReviewItemId(ctx, reviewItemId);
+        const address = await resolveReviewItemId(ctx, board(), reviewItemId);
         if (address.kind === "doc-thread") {
-          await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/answer`, {
+          await http("POST", `${board()}/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/answer`, {
             text,
             commentId: address.commentId,
             ...answeredWith !== undefined ? { optionId: answeredWith } : {},
@@ -17711,6 +17967,7 @@ async function handleTaskTool(name, a, ctx) {
         effectiveTaskId = address.taskId;
       }
       const res = await recordReviewAnswer(ctx, {
+        board: board(),
         taskId: effectiveTaskId,
         text,
         ...reviewItemId !== undefined ? { reviewItemId } : {},
@@ -17753,7 +18010,7 @@ async function handleTaskTool(name, a, ctx) {
         if (reply !== undefined) {
           return err2("`reply` is ticket-only — a doc-thread item already lives in its thread, so point at the change there with post_reply");
         }
-        const docRes = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/revise`, { ...patch, commentId });
+        const docRes = await http("POST", `${board()}/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/revise`, { ...patch, commentId });
         return ok2({ docId, threadId, commentId, revised: true, ...heldResult(docRes) });
       }
       let effectiveTaskId = taskId;
@@ -17761,12 +18018,12 @@ async function handleTaskTool(name, a, ctx) {
         if (reviewItemId === undefined) {
           return err2("which item? A bare reviewItemId (from the queue row or the ticket), taskId (+ reviewItemId for one of the items filed on the ticket), or docId + threadId + commentId for one raised on a doc thread");
         }
-        const address = await resolveReviewItemId(ctx, reviewItemId);
+        const address = await resolveReviewItemId(ctx, board(), reviewItemId);
         if (address.kind === "doc-thread") {
           if (reply !== undefined) {
             return err2("`reply` is ticket-only — a doc-thread item already lives in its thread, so point at the change there with post_reply");
           }
-          const docRes = await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/revise`, { ...patch, commentId: address.commentId });
+          const docRes = await http("POST", `${board()}/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/revise`, { ...patch, commentId: address.commentId });
           return ok2({
             reviewItemId,
             docId: address.docId,
@@ -17782,7 +18039,7 @@ async function handleTaskTool(name, a, ctx) {
         return err2("`reply` needs an item thread to land on, and a ticket's own decision has none — revise without `reply`, then point at the change with post_reply on the task");
       }
       const targetItemId = reviewItemId ?? "r-legacy";
-      const res = await http("POST", `/api/tasks/${encodeURIComponent(effectiveTaskId)}/review-items/${encodeURIComponent(targetItemId)}/revise`, { ...patch, ...reply !== undefined ? { reply } : {} });
+      const res = await http("POST", `${board()}/tasks/${encodeURIComponent(effectiveTaskId)}/review-items/${encodeURIComponent(targetItemId)}/revise`, { ...patch, ...reply !== undefined ? { reply } : {} });
       return ok2({
         taskId: effectiveTaskId,
         ...reviewItemId !== undefined ? { reviewItemId } : { decision: true },
@@ -17797,7 +18054,7 @@ async function handleTaskTool(name, a, ctx) {
       const { reviewItemId, taskId, docId, threadId, commentId, reason, undo } = a;
       const body = { author: AUTHOR, ...reason !== undefined ? { reason } : {} };
       const docWithdraw = async (address) => {
-        await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/withdraw${undo ? "/undo" : ""}`, { ...body, commentId: address.commentId });
+        await http("POST", `${board()}/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/withdraw${undo ? "/undo" : ""}`, { ...body, commentId: address.commentId });
         return ok2({
           ...reviewItemId !== undefined ? { reviewItemId } : {},
           ...address,
@@ -17808,10 +18065,10 @@ async function handleTaskTool(name, a, ctx) {
         if (docId !== undefined || threadId !== undefined || commentId !== undefined) {
           return err2("two addresses in one call — pass reviewItemId alone (it carries its own address), or the docId + threadId + commentId triple, not both");
         }
-        const address = taskId !== undefined ? { kind: "task-item", taskId } : await resolveReviewItemId(ctx, reviewItemId);
+        const address = taskId !== undefined ? { kind: "task-item", taskId } : await resolveReviewItemId(ctx, board(), reviewItemId);
         if (address.kind === "doc-thread")
           return docWithdraw(address);
-        await http("POST", `/api/tasks/${encodeURIComponent(address.taskId)}/review-items/${encodeURIComponent(reviewItemId)}/withdraw${undo ? "/undo" : ""}`, body);
+        await http("POST", `${board()}/tasks/${encodeURIComponent(address.taskId)}/review-items/${encodeURIComponent(reviewItemId)}/withdraw${undo ? "/undo" : ""}`, body);
         return ok2({ taskId: address.taskId, reviewItemId, withdrawn: undo !== true });
       }
       if (docId === undefined || threadId === undefined || commentId === undefined) {
@@ -17826,9 +18083,9 @@ async function handleTaskTool(name, a, ctx) {
         if (reviewItemId === undefined) {
           return err2("which item? Pass its reviewItemId (from the queue row or the ticket), or taskId — alone for a ticket that is itself a decision, with reviewItemId for one of the items filed on it");
         }
-        const address = await http("GET", `/api/review-items/${encodeURIComponent(reviewItemId)}`);
+        const address = await http("GET", `${board()}/review-items/${encodeURIComponent(reviewItemId)}`);
         if (address.kind === "doc-thread") {
-          await http("POST", `/api/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/comments`, { author: AUTHOR, text: question });
+          await http("POST", `${board()}/docs/${encodeURIComponent(address.docId)}/threads/${encodeURIComponent(address.threadId)}/comments`, { author: AUTHOR, text: question });
           return ok2({
             reviewItemId,
             docId: address.docId,
@@ -17838,7 +18095,7 @@ async function handleTaskTool(name, a, ctx) {
         }
         effectiveTaskId = address.taskId;
       }
-      const path = reviewItemId === undefined ? `/api/tasks/${encodeURIComponent(effectiveTaskId)}/more-info` : `/api/tasks/${encodeURIComponent(effectiveTaskId)}/review-items/${encodeURIComponent(reviewItemId)}/more-info`;
+      const path = reviewItemId === undefined ? `${board()}/tasks/${encodeURIComponent(effectiveTaskId)}/more-info` : `${board()}/tasks/${encodeURIComponent(effectiveTaskId)}/review-items/${encodeURIComponent(reviewItemId)}/more-info`;
       const res = await http("POST", path, { question, author: AUTHOR });
       return ok2({
         taskId: effectiveTaskId,
@@ -17850,6 +18107,7 @@ async function handleTaskTool(name, a, ctx) {
     case "answer_decision": {
       const { taskId, text, optionId, reviewItemId } = a;
       const res = await recordReviewAnswer(ctx, {
+        board: board(),
         taskId,
         text,
         ...reviewItemId !== undefined ? { reviewItemId } : {},
@@ -17859,7 +18117,7 @@ async function handleTaskTool(name, a, ctx) {
     }
     case "set_task_dependencies": {
       const { taskId, after, afterEnforce } = a;
-      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/after`, {
+      const res = await http("POST", `${board()}/tasks/${encodeURIComponent(taskId)}/after`, {
         after,
         ...afterEnforce !== undefined ? { afterEnforce } : {},
         author: AUTHOR
@@ -17878,7 +18136,7 @@ async function handleTaskTool(name, a, ctx) {
     }
     case "link_refs": {
       const { taskId, ref } = a;
-      const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/links`, {
+      const res = await http("POST", `${board()}/tasks/${encodeURIComponent(taskId)}/links`, {
         ref
       });
       return ok2({ taskId, changed: res.changed });
@@ -17890,7 +18148,7 @@ async function handleTaskTool(name, a, ctx) {
     }
     case "unlink_refs": {
       const { taskId, ref } = a;
-      const res = await http("DELETE", `/api/tasks/${encodeURIComponent(taskId)}/links`, {
+      const res = await http("DELETE", `${board()}/tasks/${encodeURIComponent(taskId)}/links`, {
         ref
       });
       return ok2({ taskId, changed: res.changed });
@@ -18021,6 +18279,7 @@ async function handleWorkspaceTool(name, a, ctx) {
     markAttached: markAttached2,
     watchWorkspace
   } = ctx;
+  const board = () => boardPathOf(name, a);
   switch (name) {
     case "create_workspace": {
       const {
@@ -18081,18 +18340,8 @@ async function handleWorkspaceTool(name, a, ctx) {
       return declared.isError === true ? err2(String(declared.message)) : ok2(declared);
     }
     case "set_review_item_criteria": {
-      const { workspaceId, criteria, reviewItemId } = a;
-      let effectiveWorkspaceId = workspaceId;
-      if (effectiveWorkspaceId === undefined) {
-        if (reviewItemId === undefined) {
-          return err2("which board? Pass workspaceId, or a reviewItemId — the criteria then land on the board that judges that item");
-        }
-        const res2 = await http("GET", `/api/review-items/${encodeURIComponent(reviewItemId)}`);
-        if (res2.workspaceId === undefined) {
-          return err2("that item's doc is not attached to any workspace, so it names no board — pass workspaceId");
-        }
-        effectiveWorkspaceId = res2.workspaceId;
-      }
+      const { criteria } = a;
+      const effectiveWorkspaceId = boardIdOf(name, a);
       const res = await http("PUT", `/workspaces/${encodeURIComponent(effectiveWorkspaceId)}/settings`, {
         reviewItemCriteria: criteria !== undefined && criteria.trim() !== "" ? criteria : null,
         author: AUTHOR
@@ -18195,11 +18444,11 @@ async function handleWorkspaceTool(name, a, ctx) {
     case "get_unfiled_ask_count": {
       const { agent } = a;
       const who = agent?.trim() || AUTHOR.name;
-      return ok2(await http("GET", `/api/chat-audit/${encodeURIComponent(who)}`));
+      return ok2(await http("GET", `${board()}/chat-audit/${encodeURIComponent(who)}`));
     }
     case "publish_chat_audit": {
       const { day, entries } = a;
-      return ok2(await http("POST", "/api/chat-audit", {
+      return ok2(await http("POST", `${board()}/chat-audit`, {
         ...day !== undefined ? { day } : {},
         auditor: AUTHOR.name,
         entries
@@ -18207,11 +18456,11 @@ async function handleWorkspaceTool(name, a, ctx) {
     }
     case "register_dispatch": {
       const { taskId, worktreePath } = a;
-      return ok2(await http("POST", "/api/dispatches", { taskId, worktreePath }));
+      return ok2(await http("POST", `${board()}/dispatches`, { taskId, worktreePath }));
     }
     case "close_dispatch": {
       const { taskId } = a;
-      return ok2(await http("DELETE", `/api/dispatches/${encodeURIComponent(taskId)}`));
+      return ok2(await http("DELETE", `${board()}/dispatches/${encodeURIComponent(taskId)}`));
     }
     case "set_parallelism_cap": {
       const { workspaceId, cap: rawCap } = a;
@@ -18588,7 +18837,7 @@ var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.173";
+var PLUGIN_VERSION = "0.1.174";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
