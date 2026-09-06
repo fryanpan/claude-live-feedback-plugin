@@ -19,6 +19,7 @@ import {
   interleave,
   mergeLcov,
   nextChunkSize,
+  planChunks,
   shardOf,
 } from './test-server.ts';
 
@@ -138,6 +139,37 @@ describe('nextChunkSize', () => {
       expect(chunks).toBeLessThan(1000);
     }
     expect(remaining).toBe(0);
+  });
+});
+
+describe('planChunks', () => {
+  const files = Array.from({ length: 100 }, (_, i) => `f${i}.ts`);
+
+  it('decides the grouping before anything runs, not as workers grab', () => {
+    // Which worker picks a chunk up may depend on machine speed. Which files
+    // are in a chunk must not: each chunk is its own bun process, so a
+    // timing-dependent split would run the same commit's tests in different
+    // company on two runs, and a file that only passes beside (or apart from)
+    // another would fail intermittently with nothing to say why.
+    expect(planChunks(files, 4)).toEqual(planChunks(files, 4));
+  });
+
+  it('covers every file, in order, exactly once', () => {
+    expect(planChunks(files, 8).flat()).toEqual(files);
+  });
+
+  it('starts big and ends at single files', () => {
+    const chunks = planChunks(files, 4);
+    expect(chunks[0]?.length).toBe(12);
+    expect(chunks[chunks.length - 1]?.length).toBe(1);
+  });
+
+  it('is one chunk when there is one file', () => {
+    expect(planChunks(['only.ts'], 8)).toEqual([['only.ts']]);
+  });
+
+  it('is empty for an empty suite rather than looping', () => {
+    expect(planChunks([], 4)).toEqual([]);
   });
 });
 
