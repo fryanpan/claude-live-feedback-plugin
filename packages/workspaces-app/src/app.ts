@@ -57,8 +57,16 @@ export interface AppBootEnv {
  * file starts the page. The destructure re-binds each injected thing to the
  * name it had as a global, so the sequence reads as it did and what changed is
  * only where those names come from.
+ *
+ * Returns the router's `stop()` — remove the shell listeners and dispose the
+ * live document mount. The page never calls it (the app owns the tab for its
+ * lifetime), but a caller that is not a page has to, and until now there was
+ * nothing to call. A mount left running keeps its debounced timers armed, and
+ * the margin's relayout debounce reads `document` when it lands; in the suite
+ * that landed after the environment was torn down, as an unhandled
+ * `ReferenceError` charged to whichever file the worker was running.
  */
-export async function bootApp(env: AppBootEnv): Promise<void> {
+export async function bootApp(env: AppBootEnv): Promise<() => void> {
   const { document, location, localStorage, window, connect } = env;
 
   const DEFAULT_WS_PATH = (docId: string, type: string) =>
@@ -128,7 +136,7 @@ export async function bootApp(env: AppBootEnv): Promise<void> {
     writeAccess.canWrite ? {} : { suppressNamePrompt: true },
   );
   registerMarkdownMount(mountMarkdown);
-  startRouter({
+  return startRouter({
     user,
     // The answer is already in hand — every mount gets it as a value rather
     // than asking again. A mount that re-asks is editable while it waits.
