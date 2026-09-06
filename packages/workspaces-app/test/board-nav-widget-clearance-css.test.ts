@@ -22,6 +22,15 @@ import { describe, expect, it } from 'vitest';
  * widget's OWN fab geometry, so growing the bubble or its inset fails here
  * rather than silently re-covering the tab. What a browser still has to
  * confirm is in the commit body: the tap at 430px.
+ *
+ * PERMANENT SOURCE-SHAPE SITES, and counted as such. Two of the audit's
+ * source-shape floor lives here (scripts/test-audit.baseline.json names all
+ * three). A `calc()` of `max()` and `env()`, which happy-dom discards whole, needs a real layout engine, and the only browser this repo
+ * has is `bun run ui:shot`, which is a local dev tool: it wants a Chrome
+ * binary and a running server, and CI runs neither. Moving this there would
+ * not convert the test — it would retire it, swapping a gate that runs on
+ * every PR for one nobody runs. It carries no `audit: not-source` marker
+ * because it IS a source read; what it is not is an unconverted leftover.
  */
 const SRC = resolve(import.meta.dirname, '../src');
 const CSS = readFileSync(resolve(SRC, 'board.css'), 'utf8');

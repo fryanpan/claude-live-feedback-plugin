@@ -23,6 +23,15 @@ import { describe, expect, it } from 'vitest';
  * browser in CI, so track geometry was verified by hand in headless Chrome
  * against the running app and is recorded in the `#shell` comment. The row
  * index is the part that regresses silently; the geometry follows from it.
+ *
+ * PERMANENT SOURCE-SHAPE SITE, and counted as such. One of the audit's
+ * source-shape floor lives here (scripts/test-audit.baseline.json names all
+ * three). Grid auto-placement needs a real layout engine, and the only browser this repo
+ * has is `bun run ui:shot`, which is a local dev tool: it wants a Chrome
+ * binary and a running server, and CI runs neither. Moving this there would
+ * not convert the test — it would retire it, swapping a gate that runs on
+ * every PR for one nobody runs. It carries no `audit: not-source` marker
+ * because it IS a source read; what it is not is an unconverted leftover.
  */
 
 const SRC = resolve(import.meta.dirname, '../src');

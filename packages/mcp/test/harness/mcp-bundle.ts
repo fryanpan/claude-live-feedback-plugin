@@ -117,6 +117,13 @@ export type BundleHarness = {
   /** The declarations a real MCP client receives from the running bundle. */
   tools: ToolDecl[];
   tool(name: string): ToolDecl | undefined;
+  /** The version the running bundle reports in the initialize handshake —
+   *  the string a client, and the board's presence strip, actually sees. */
+  serverVersion: string;
+  /** The `instructions` a session is handed at initialize. This is the text
+   *  every session reads at startup, so a claim about "the server
+   *  instructions" is a claim about this string and not about a source file. */
+  instructions: string;
   /** Calls a tool and returns the parsed result plus the requests it made. */
   call(
     name: string,
@@ -291,6 +298,10 @@ export async function startBundle(
     clientInfo: { name: 'mcp-bundle-harness', version: '0' },
   });
   if (init.error) throw new Error(`initialize failed: ${JSON.stringify(init.error)}`);
+  const initResult = (init.result ?? {}) as {
+    serverInfo?: { version?: string };
+    instructions?: string;
+  };
   child.stdin?.write(
     `${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`,
   );
@@ -308,6 +319,8 @@ export async function startBundle(
     requests,
     tools,
     channel,
+    serverVersion: initResult.serverInfo?.version ?? '',
+    instructions: initResult.instructions ?? '',
     tool: (name) => tools.find((t) => t.name === name),
     async streamOpen(timeoutMs = 10_000) {
       const deadline = Date.now() + timeoutMs;

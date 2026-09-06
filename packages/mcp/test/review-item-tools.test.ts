@@ -29,10 +29,8 @@ import { fileURLToPath } from 'node:url';
 import { threadReviewItemId } from '@feedback/core/review-item-id';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { isBackgroundRequest } from './harness/background-requests.ts';
-import { readMcpSource } from './harness/mcp-source.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SRC = readMcpSource();
 const BUNDLE = join(HERE, '../../plugin/mcp/index.js');
 
 type Recorded = { method: string; path: string; body: Record<string, unknown> };
@@ -536,34 +534,39 @@ describe('a ticket carries review items, and the tools reach them', () => {
   });
 });
 
-describe('what the tool schemas tell an agent', () => {
-  // Read from `tools/list` on the running bundle rather than from the source
-  // text: that is the JSON an agent's client is handed, and it is what a
-  // schema reused by spread actually resolves to. A source-slice assertion
-  // would pass on a `review: SOME_SCHEMA` line whose description said
-  // something else entirely, one file away.
-  type ToolDecl = {
-    name: string;
-    description: string;
-    inputSchema: { properties?: Record<string, Record<string, unknown>> };
-  };
-  let tools: ToolDecl[] = [];
+/**
+ * The declarations a real MCP client receives from the running bundle.
+ *
+ * Read from `tools/list` rather than from the source text: that is the JSON
+ * an agent's client is handed, and it is what a schema reused by spread
+ * actually resolves to. A source-slice assertion would pass on a
+ * `review: SOME_SCHEMA` line whose description said something else entirely,
+ * one file away — and on a source edit that was never rebuilt into the
+ * artifact a peer loads.
+ */
+type ToolDecl = {
+  name: string;
+  description: string;
+  inputSchema: { properties?: Record<string, Record<string, unknown>> };
+};
+let tools: ToolDecl[] = [];
 
-  beforeAll(async () => {
-    const id = nextId++;
-    const reply = await new Promise<unknown>((resolve) => {
-      waiters.set(id, resolve);
-      send({ jsonrpc: '2.0', id, method: 'tools/list', params: {} });
-    });
-    tools = (reply as { result?: { tools?: ToolDecl[] } }).result?.tools ?? [];
+beforeAll(async () => {
+  const id = nextId++;
+  const reply = await new Promise<unknown>((resolve) => {
+    waiters.set(id, resolve);
+    send({ jsonrpc: '2.0', id, method: 'tools/list', params: {} });
   });
+  tools = (reply as { result?: { tools?: ToolDecl[] } }).result?.tools ?? [];
+});
 
-  const byName = (n: string): ToolDecl => {
-    const t = tools.find((x) => x.name === n);
-    expect(t, `${n} is not in tools/list (${tools.length} tools listed)`).toBeTruthy();
-    return t as ToolDecl;
-  };
+const byName = (n: string): ToolDecl => {
+  const t = tools.find((x) => x.name === n);
+  expect(t, `${n} is not in tools/list (${tools.length} tools listed)`).toBeTruthy();
+  return t as ToolDecl;
+};
 
+describe('what the tool schemas tell an agent', () => {
   it('found the advertised tools (the assertions below are otherwise vacuous)', () => {
     expect(tools.length).toBeGreaterThan(20);
     expect(byName('create_tasks').description).toContain('takes a list');
@@ -626,9 +629,46 @@ describe('what the tool schemas tell an agent', () => {
     expect((decl.inputSchema as { required?: string[] }).required).toEqual(['taskId', 'text']);
   });
 
-  it('reuses ONE review-item schema in the source rather than declaring a second', () => {
-    expect(SRC).toContain('...REVIEW_ITEM_SCHEMA');
-    expect(SRC.match(/required: \['headline'\]/g)?.length).toBe(1);
+  /**
+   * ONE review-item schema, checked on the resolved JSON rather than on the
+   * spread that produced it.
+   *
+   * The old form matched `...REVIEW_ITEM_SCHEMA` in the source and counted
+   * `required: ['headline']` occurrences. Both are claims about how the
+   * registry is WRITTEN: a second schema that happened to be identical failed
+   * them, and a `review` block that had drifted apart by an added property
+   * passed them as long as the spread was still spelt that way. What has to
+   * hold is that every tool taking a review item advertises the same payload,
+   * which is exactly what the delivered schemas say.
+   */
+  it('every tool that takes a review item advertises the SAME payload', () => {
+    const reviewSchemas = tools
+      .map((t) => ({ name: t.name, review: t.inputSchema.properties?.review }))
+      .filter(
+        (r): r is { name: string; review: Record<string, unknown> } => r.review !== undefined,
+      );
+    // Positive control: the probe found the tools, so an agreement below is
+    // not agreement across an empty set.
+    expect(reviewSchemas.map((r) => r.name)).toEqual(
+      expect.arrayContaining(['create_thread', 'post_reply', 'add_review_item']),
+    );
+    // Everything but the top-level `description`, which each tool overrides
+    // on purpose — `add_review_item` says "a review item on this ticket"
+    // where `create_thread` says "declares this a Review Item". The PAYLOAD
+    // is what must not fork.
+    const payloadOf = (r: Record<string, unknown>) => {
+      const { description: _drop, ...rest } = r;
+      return rest;
+    };
+    const first = reviewSchemas[0];
+    for (const r of reviewSchemas)
+      expect(payloadOf(r.review), r.name).toEqual(payloadOf(first?.review ?? {}));
+    // …and it really is the review-item payload, not an empty object every
+    // tool agrees about by accident.
+    expect((first?.review as { required?: string[] }).required).toEqual(['headline']);
+    expect(
+      Object.keys((first?.review as { properties?: Record<string, unknown> }).properties ?? {}),
+    ).toEqual(expect.arrayContaining(['headline', 'detail']));
   });
 });
 
@@ -637,23 +677,28 @@ describe('the shipped guidance describes the entity, not the old model', () => {
   // skill is gone: a tool's own description is read at the moment the tool is
   // about to be called, which is when this matters, and it costs nothing on
   // every other turn. The pin follows the content to the surviving home.
-  const bundle = readFileSync(BUNDLE, 'utf8');
+  //
+  // Read off `tools/list`, not out of the source and not out of the bundle's
+  // TEXT. A literal surviving in a file says nothing about whether a client
+  // is handed it — the description could have been moved to a tool nobody
+  // declares, or left on a schema the registry no longer exports, and both
+  // spellings of the old check were green for that.
   const board = readFileSync(
     join(HERE, '../../plugin/skills/working-in-a-workspace/SKILL.md'),
     'utf8',
   );
 
   it('add_review_item teaches the 0..n cardinality in its own description', () => {
-    expect(SRC).toContain('A ticket carries several at once, each answered on its own');
-    // And it reaches a peer, who loads the BUNDLE and never the source.
-    expect(bundle).toContain('A ticket carries several at once, each answered on its own');
+    expect(byName('add_review_item').description).toContain(
+      'A ticket carries several at once, each answered on its own',
+    );
   });
 
   it('answer_review_item says what makes several open questions answerable apart', () => {
-    expect(SRC).toContain(
-      'Naming reviewItemId is what keeps several open questions on one ticket independently answerable',
-    );
-    expect(bundle).toContain(
+    const rid = byName('answer_review_item').inputSchema.properties?.reviewItemId as {
+      description?: string;
+    };
+    expect(`${byName('answer_review_item').description} ${rid?.description ?? ''}`).toContain(
       'Naming reviewItemId is what keeps several open questions on one ticket independently answerable',
     );
   });
@@ -672,12 +717,13 @@ describe('the shipped guidance describes the entity, not the old model', () => {
       join(HERE, '../../plugin/skills/leading-a-workspace/SKILL.md'),
       'utf8',
     );
+    const declared = JSON.stringify(tools);
     for (const gone of [
       'running-a-workspace-board',
       'handling-a-goal-change',
       'reviewing-task-shape',
     ]) {
-      expect(SRC).not.toContain(gone);
+      expect(declared, gone).not.toContain(gone);
       expect(board).not.toContain(gone);
       expect(lead).not.toContain(gone);
     }
