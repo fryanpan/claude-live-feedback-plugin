@@ -196,7 +196,14 @@ button {
    row 4, which someone notices, instead of silently taking #main's track,
    which only a measurement finds. #shell's six other children are
    `position: fixed` / `absolute` and are not grid items at all.
-   Guarded by test/shell-grid-placement.test.ts. */
+
+   THERE IS A SECOND POSTURE AND IT LIVES ELSEWHERE. A browser that may not
+   write mounts `.signin-bar` as a fourth in-flow child and re-declares this
+   template; the rules are `body.signin-gated #shell` and friends, in the
+   SIGN-IN section near the bar itself. That rule shipped a new track list
+   WITHOUT new placements and brought the dead band straight back, so: change
+   the row contract here and you owe the same change there.
+   Guarded by test/shell-grid-placement.test.ts, which reads both postures. */
 #topbar {
   grid-row: 1;
 }
@@ -2706,11 +2713,52 @@ body.composer-open #editor > .ProseMirror ::selection {
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border);
 }
-/* The doc shell declares its rows, so the row this bar occupies has to be
-   declared too — `#shell`'s `48px auto 1fr` has no track for a fourth child,
-   and without this the bar is laid into the topbar's 48px and clipped. */
+/* THE SIGNED-OUT SHELL. A fourth in-flow child needs a fourth track AND a
+   placement for every child, and the first version of this rule declared only
+   the track list. That was half the contract, and the missing half put the
+   dead band back:
+
+   `#topbar`, `#meeting-strip` and `#main` stay pinned to 1 / 2 / 3 by the
+   block beside `#shell`'s own template, so the bar — the only child with no
+   `grid-row` — was the only one left to AUTO-PLACE. It landed in row 2 (the
+   cursor starts at the bar's own document position and the hidden strip
+   vacates that row), `#main` stayed in row 3, and the flexible fourth track
+   held nothing. Measured on a short doc: `37px 48px 732px 3px` at 1180x820 and
+   `45px 48px 783.66px 55.34px` at 430px, `#main` ending 3px / 55px above the
+   bottom of the window with that band hit-testing to `#shell` rather than to
+   the editor — the same failure `#shell`'s own comment describes, back through
+   a selector the placement test could not see.
+
+   So: four tracks and four placements, and the shape follows the signed-in
+   rule rather than inventing its own.
+   - Track 1 is `48px`, NOT `auto`. The topbar is in row 1 in both postures and
+     is the same topbar; `auto` here shrank it to 37px at 1180x820 and 45px at
+     430px, which nobody asked for and no test read.
+   - The bar's track is `auto`, not a second `48px`. It is `flex-wrap: wrap`
+     and its two spans do fit one 48px line at 430px today with 1px to spare —
+     one more word and a fixed track clips it.
+   - The last track is `minmax(0, 1fr)` for the reason spelled out at `#shell`:
+     bare `1fr` is `minmax(auto, 1fr)`, whose floor is content-driven and
+     happens to work only because `#main` sets `overflow: hidden` 2500 lines
+     away.
+   Guarded by test/shell-grid-placement.test.ts (placement, both postures) and
+   test/signin-css.test.ts (the cascade), and measured for real by
+   `shell-main-reaches-bottom-gated-*` in scripts/ui-nightly-lib.ts. */
 body.signin-gated #shell {
-  grid-template-rows: auto 48px auto 1fr;
+  grid-template-rows: 48px auto auto minmax(0, 1fr);
+}
+/* Row order is topbar, bar, strip, doc. `mountSignInBar` inserts the bar as
+   #shell's FIRST child, so the DOM order and the row order disagree by one —
+   the grid is what a reader sees, and stating the row here is what makes that
+   deliberate rather than whatever auto-placement worked out to. */
+body.signin-gated .signin-bar {
+  grid-row: 2;
+}
+body.signin-gated #meeting-strip {
+  grid-row: 3;
+}
+body.signin-gated #main {
+  grid-row: 4;
 }
 /* Fallback for a surface with no header to sit under (see mountSignInBar).
    Bottom-docked, because the top of an unknown page is the band most likely
