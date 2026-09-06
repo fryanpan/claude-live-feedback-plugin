@@ -23,6 +23,10 @@
  *   --scale <n>            deviceScaleFactor (default 1)
  *   --chrome <bin>         Chrome binary; else $CW_CHROME_BIN; else the /Applications path
  *
+ * $CW_CHROME_ARGS adds launch flags (CI containers want
+ * `--no-sandbox --disable-dev-shm-usage`); unset on a laptop, so the sandbox
+ * stays on there.
+ *
  * Why this exists. Resizing a real Chrome window cannot reach a phone
  * viewport (Chrome floors the window near 500px) and every attempt to drive a
  * real window has landed in the owner's own browser. `--headless=new` with a
@@ -62,6 +66,7 @@ import {
   type ShotOptions,
   USAGE,
   UsageError,
+  chromeLaunchArgs,
   parseArgs,
   profilePrefix,
   resolveChromeBin,
@@ -204,23 +209,7 @@ async function launchChrome(
   onSpawn: (b: Browser) => void,
 ): Promise<Browser> {
   const profile = mkdtempSync(join(tmpdir(), profilePrefix(runId)));
-  const proc = spawn(
-    bin,
-    [
-      '--headless=new',
-      '--remote-debugging-port=0',
-      '--remote-allow-origins=*',
-      `--user-data-dir=${profile}`,
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-extensions',
-      '--disable-background-timer-throttling',
-      '--hide-scrollbars',
-      `--window-size=${o.width},${o.height}`,
-      'about:blank',
-    ],
-    { stdio: ['ignore', 'ignore', 'pipe'] },
-  );
+  const proc = spawn(bin, chromeLaunchArgs(o, profile), { stdio: ['ignore', 'ignore', 'pipe'] });
   const browser: Browser = { proc, profile, port: 0 };
   onSpawn(browser);
   let stderr = '';
