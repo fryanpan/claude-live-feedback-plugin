@@ -859,12 +859,16 @@ describe('the review-item quality gate', () => {
           // past the millisecond the judge stamped it in. Ticking inside that
           // same millisecond finds nothing, and the single tick below would
           // then wait out its whole deadline for a frame nobody was ever going
-          // to send. One millisecond of real time makes the precondition true
-          // and keeps it true; this is not a tuned timeout.
+          // to send.
+          //
+          // So the precondition is WAITED FOR rather than slept-for and then
+          // asserted. A fixed 5ms nap followed by an assertion that the clock
+          // had moved past the stamp was a wall-clock check a loaded box could
+          // fail; this loop cannot fail on a slow machine, because slowness
+          // only makes the condition arrive sooner. It exits on the first tick.
           const stampedAt = res.item.judge?.at;
           expect(stampedAt).toBeGreaterThan(0); // never vacuous: an absent stamp fails here
-          await settle(5);
-          expect(Date.now()).toBeGreaterThan(stampedAt as number);
+          while (Date.now() <= (stampedAt as number)) await settle(1);
 
           handle.nudgeStalls();
           const [stall] = await waitForFrames(lead.frames, STALL_EVENT, 1);

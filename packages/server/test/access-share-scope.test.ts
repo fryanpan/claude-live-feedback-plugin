@@ -218,14 +218,23 @@ describe('Access-mode shares over HTTP', () => {
     it('can extend or shorten a live share after the fact', async () => {
       const mk = await mintSolo();
       const { share } = (await mk.json()) as { share: { shareId: string } };
+      const TTL_SECONDS = 14 * 24 * 3600;
+      // Bracketed by two readings taken either side of the call, so the new
+      // expiry is pinned to `<some instant inside the bracket> + ttl` exactly.
+      // The old form divided a live delta down to days and left a tenth of a
+      // day of slack to absorb the assertion's own runtime — a tolerance that
+      // encodes how fast this machine is rather than what the route promises.
+      const before = Date.now();
       const r = await local(`/api/share/${share.shareId}/ttl`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ ttlSeconds: 14 * 24 * 3600 }),
+        body: JSON.stringify({ ttlSeconds: TTL_SECONDS }),
       });
+      const after = Date.now();
       expect(r.status).toBe(200);
       const updated = (await r.json()) as { share: { expiresAt: number } };
-      expect((updated.share.expiresAt - Date.now()) / 86_400_000).toBeGreaterThan(13.9);
+      expect(updated.share.expiresAt).toBeGreaterThanOrEqual(before + TTL_SECONDS * 1000);
+      expect(updated.share.expiresAt).toBeLessThanOrEqual(after + TTL_SECONDS * 1000);
       expect(
         (
           await local('/api/share/nope/ttl', {
