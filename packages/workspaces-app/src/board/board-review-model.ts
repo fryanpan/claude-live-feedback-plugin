@@ -151,7 +151,7 @@ export function humanBlockerRows(tasks: BoardTask[]): BlockerRow[] {
 // ── The review queue: everything waiting on a person, in one list ──────────
 
 /**
- * One thread-shaped item, exactly as `GET /api/workspaces/:id/review-items`
+ * One thread-shaped item, exactly as `GET /workspaces/:id/review-items`
  * ships it. The server owns this half because "is this comment an agent's" is
  * `classifyActor`'s judgement and must not be re-decided in the browser.
  */

@@ -105,7 +105,7 @@ describe('the review_answered wake only sends its reader to links that exist', (
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
     const { workspace } = await jj<{ workspace: { id: string; leadAgentId?: string } }>(
-      await post('/api/workspaces', { name: 'index-rebuild', leadAgentId: LEAD.id }),
+      await post('/workspaces', { name: 'index-rebuild', leadAgentId: LEAD.id }),
     );
     workspaceId = workspace.id;
     expect(workspace.leadAgentId).toBe(LEAD.id);
@@ -134,7 +134,7 @@ describe('the review_answered wake only sends its reader to links that exist', (
   async function answeredFrame(links: unknown[]): Promise<Frame> {
     const before = lead.frames.filter((f) => f.event === REVIEW_ANSWERED_EVENT).length;
     const { task } = await jj<{ task: { id: string } }>(
-      await post(`/api/workspaces/${workspaceId}/tasks`, {
+      await post(`/workspaces/${workspaceId}/tasks`, {
         title: 'Rebuild the index now or after the freeze?',
         assignee: 'human',
         needs: 'decision',

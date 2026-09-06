@@ -80,7 +80,7 @@ describe('a doc knows which board to go back to', () => {
   };
 
   it('names the board a plain doc is attached to, with the board name', async () => {
-    const ws = await post('/api/workspaces', { name: 'search-revamp', goal: 'Ship search.' });
+    const ws = await post('/workspaces', { name: 'search-revamp', goal: 'Ship search.' });
     const wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
     expect(
       (
@@ -110,7 +110,7 @@ describe('a doc knows which board to go back to', () => {
     mkdirSync(join(folder, 'src'));
     writeFileSync(join(folder, 'src', 'util.ts'), 'export const y = 2;\n');
 
-    const ws = await post('/api/workspaces', { name: 'review-home', goal: 'Review it.' });
+    const ws = await post('/workspaces', { name: 'review-home', goal: 'Review it.' });
     const boardId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
 
     const bound = await post('/api/diffs', { repo: folder, hubWorkspaceId: boardId });
@@ -125,7 +125,7 @@ describe('a doc knows which board to go back to', () => {
     expect(res.reviewId).toBeTruthy();
     expect(res.hubWorkspaceId).toBe(boardId);
 
-    const board = await local(`/api/workspaces/${boardId}`);
+    const board = await local(`/workspaces/${boardId}?format=json`);
     const docIds = ((await board.json()) as { workspace: { docIds: string[] } }).workspace.docIds;
     expect(docIds).toContain(res.reviewId); // the grouping IS the row
     expect(docIds).not.toContain(memberDocId); // the member is not
@@ -140,9 +140,9 @@ describe('a doc knows which board to go back to', () => {
   });
 
   it("names a task body's own board", async () => {
-    const ws = await post('/api/workspaces', { name: 'task-home', goal: 'Do the work.' });
+    const ws = await post('/workspaces', { name: 'task-home', goal: 'Do the work.' });
     const wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
-    const t = await post(`/api/workspaces/${wsId}/tasks`, {
+    const t = await post(`/workspaces/${wsId}/tasks`, {
       title: 'Agent can read the body so that the work is unambiguous',
       author: { id: 'person-1', name: 'Reviewer', kind: 'known' },
       body: 'Body prose.',
@@ -212,11 +212,9 @@ describe('the back target is not handed to a share visitor', () => {
     expect(createdShared.status).toBe(200);
     sharedId = ((await createdShared.json()) as { docId: string }).docId;
 
-    const ws = await post('/api/workspaces', { name: 'shared-board', goal: 'Ship it.' });
+    const ws = await post('/workspaces', { name: 'shared-board', goal: 'Ship it.' });
     boardId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
-    expect((await post(`/api/workspaces/${boardId}/docs`, { docId: 'shared-doc' })).status).toBe(
-      200,
-    );
+    expect((await post(`/workspaces/${boardId}/docs`, { docId: 'shared-doc' })).status).toBe(200);
 
     visitorHeaders = (await mintAccessShare(base, access, boardId, { label: 'a share' })).headers;
   });
@@ -260,11 +258,9 @@ describe('the back target is not handed to a share visitor', () => {
     // same doc is a different matter: nobody shared it, its id is an
     // unguessable capability, and it is exactly what a resolver that answers
     // "the first workspace holding this doc" would hand over.
-    const other = await post('/api/workspaces', { name: 'other-board', goal: 'Not shared.' });
+    const other = await post('/workspaces', { name: 'other-board', goal: 'Not shared.' });
     const otherId = ((await other.json()) as { workspace: { id: string } }).workspace.id;
-    expect((await post(`/api/workspaces/${otherId}/docs`, { docId: 'shared-doc' })).status).toBe(
-      200,
-    );
+    expect((await post(`/workspaces/${otherId}/docs`, { docId: 'shared-doc' })).status).toBe(200);
 
     const body = await (await pub(`/api/docs/${sharedId}`)).text();
     expect(body).not.toContain(otherId);

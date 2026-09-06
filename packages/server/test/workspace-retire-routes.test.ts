@@ -1,14 +1,14 @@
 /**
  * HTTP surface for retiring and renaming a board.
  *
- * Every handler under `/api/workspaces` hand-copies body fields into the
+ * Every handler under `/workspaces` hand-copies body fields into the
  * store call, so a field that isn't copied is silently discarded while the
  * request still returns 200 — the standing reason this file exists at all
  * (see the banner over the board routes in server.ts). Each param below
  * is asserted through the wire, not through the store.
  *
  * The other half is READBACK: retiring is only useful if the surfaces an
- * agent actually calls say so. `GET /api/workspaces/:id`, `/next` and the
+ * agent actually calls say so. `GET /workspaces/:id`, `/next` and the
  * workspace list are checked here for exactly that, because a retired board
  * that reads as live is the incident with an extra field on it.
  *
@@ -58,7 +58,7 @@ describe('retire / rename routes', () => {
   const get = (path: string) => fetch(`${base}${path}`);
 
   const newBoard = async (name: string): Promise<string> => {
-    const r = await post('/api/workspaces', { name, author: AGENT });
+    const r = await post('/workspaces', { name, author: AGENT });
     expect(r.status).toBe(200);
     const payload = (await r.json()) as { workspace: { id: string } };
     return payload.workspace.id;
@@ -67,7 +67,7 @@ describe('retire / rename routes', () => {
   it('PUT /retired stands a board down and carries the reason through', async () => {
     start();
     const id = await newBoard('harbor-relay');
-    const r = await put(`/api/workspaces/${id}/retired`, {
+    const r = await put(`/workspaces/${id}/retired`, {
       retired: true,
       reason: 'superseded by the September board',
       author: AGENT,
@@ -87,8 +87,8 @@ describe('retire / rename routes', () => {
   it('PUT /retired with retired:false brings it back', async () => {
     start();
     const id = await newBoard('harbor-relay');
-    await put(`/api/workspaces/${id}/retired`, { retired: true, author: AGENT });
-    const r = await put(`/api/workspaces/${id}/retired`, { retired: false, author: AGENT });
+    await put(`/workspaces/${id}/retired`, { retired: true, author: AGENT });
+    const r = await put(`/workspaces/${id}/retired`, { retired: false, author: AGENT });
     expect(r.status).toBe(200);
     const payload = (await r.json()) as { workspace: { retiredAt?: number } };
     expect(payload.workspace.retiredAt).toBeUndefined();
@@ -97,13 +97,13 @@ describe('retire / rename routes', () => {
   it('PUT /retired validates its body and its board', async () => {
     start();
     const id = await newBoard('harbor-relay');
-    expect((await put(`/api/workspaces/${id}/retired`, { author: AGENT })).status).toBe(400);
+    expect((await put(`/workspaces/${id}/retired`, { author: AGENT })).status).toBe(400);
+    expect((await put(`/workspaces/${id}/retired`, { retired: 'yes', author: AGENT })).status).toBe(
+      400,
+    );
+    expect((await put(`/workspaces/${id}/retired`, { retired: true })).status).toBe(400);
     expect(
-      (await put(`/api/workspaces/${id}/retired`, { retired: 'yes', author: AGENT })).status,
-    ).toBe(400);
-    expect((await put(`/api/workspaces/${id}/retired`, { retired: true })).status).toBe(400);
-    expect(
-      (await put('/api/workspaces/w-no-board/retired', { retired: true, author: AGENT })).status,
+      (await put('/workspaces/w-no-board/retired', { retired: true, author: AGENT })).status,
     ).toBe(404);
   });
 
@@ -112,7 +112,7 @@ describe('retire / rename routes', () => {
     const first = await newBoard('harbor-relay');
     const second = await newBoard('september-board');
 
-    const r = await post(`/api/workspaces/${second}/rename`, {
+    const r = await post(`/workspaces/${second}/rename`, {
       name: '  harbor-relay  ',
       author: AGENT,
     });
@@ -130,25 +130,25 @@ describe('retire / rename routes', () => {
   it('POST /rename refuses an empty name and an unknown board', async () => {
     start();
     const id = await newBoard('harbor-relay');
-    expect((await post(`/api/workspaces/${id}/rename`, { name: '  ', author: AGENT })).status).toBe(
+    expect((await post(`/workspaces/${id}/rename`, { name: '  ', author: AGENT })).status).toBe(
       400,
     );
-    expect((await post(`/api/workspaces/${id}/rename`, { author: AGENT })).status).toBe(400);
-    expect((await post(`/api/workspaces/${id}/rename`, { name: 'ok' })).status).toBe(400);
+    expect((await post(`/workspaces/${id}/rename`, { author: AGENT })).status).toBe(400);
+    expect((await post(`/workspaces/${id}/rename`, { name: 'ok' })).status).toBe(400);
     expect(
-      (await post('/api/workspaces/w-no-board/rename', { name: 'ok', author: AGENT })).status,
+      (await post('/workspaces/w-no-board/rename', { name: 'ok', author: AGENT })).status,
     ).toBe(404);
   });
 
-  it('GET /api/workspaces/:id says the board is retired, with the notice', async () => {
+  it('GET /workspaces/:id says the board is retired, with the notice', async () => {
     start();
     const id = await newBoard('harbor-relay');
-    await put(`/api/workspaces/${id}/retired`, {
+    await put(`/workspaces/${id}/retired`, {
       retired: true,
       reason: 'superseded',
       author: AGENT,
     });
-    const r = await get(`/api/workspaces/${id}`);
+    const r = await get(`/workspaces/${id}?format=json`);
     expect(r.status).toBe(200);
     const payload = (await r.json()) as {
       retired?: { since: number; reason?: string; notice: string };
@@ -159,30 +159,32 @@ describe('retire / rename routes', () => {
 
   /** The positive control for the assertion above: the field is ABSENT on a
    *  live board, so "no retired key" means live rather than "not implemented". */
-  it('GET /api/workspaces/:id carries no retired key on a live board', async () => {
+  it('GET /workspaces/:id carries no retired key on a live board', async () => {
     start();
     const id = await newBoard('harbor-relay');
-    const payload = (await (await get(`/api/workspaces/${id}`)).json()) as { retired?: unknown };
+    const payload = (await (await get(`/workspaces/${id}?format=json`)).json()) as {
+      retired?: unknown;
+    };
     expect(payload.retired).toBeUndefined();
   });
 
-  it('GET /api/workspaces/:id/next warns before an agent picks work off it', async () => {
+  it('GET /workspaces/:id/next warns before an agent picks work off it', async () => {
     start();
     const id = await newBoard('harbor-relay');
-    await put(`/api/workspaces/${id}/retired`, { retired: true, author: AGENT });
-    const payload = (await (await get(`/api/workspaces/${id}/next`)).json()) as {
+    await put(`/workspaces/${id}/retired`, { retired: true, author: AGENT });
+    const payload = (await (await get(`/workspaces/${id}/next`)).json()) as {
       retired?: { notice: string };
     };
     expect(payload.retired?.notice.toLowerCase()).toContain('retired');
   });
 
-  it('GET /api/workspaces marks the retired rows in boardWorkspaces', async () => {
+  it('GET /workspaces marks the retired rows in boardWorkspaces', async () => {
     start();
     const live = await newBoard('harbor-relay');
     const stale = await newBoard('september-board');
-    await put(`/api/workspaces/${stale}/retired`, { retired: true, author: AGENT });
+    await put(`/workspaces/${stale}/retired`, { retired: true, author: AGENT });
 
-    const payload = (await (await get('/api/workspaces')).json()) as {
+    const payload = (await (await get('/workspaces')).json()) as {
       boardWorkspaces: Array<{ id: string; retired?: boolean }>;
     };
     const byId = new Map(payload.boardWorkspaces.map((w) => [w.id, w]));
@@ -200,7 +202,7 @@ describe('retire / rename routes', () => {
     start();
     const live = await newBoard('harbor-relay');
     const stale = await newBoard('september-board');
-    await put(`/api/workspaces/${stale}/retired`, { retired: true, author: AGENT });
+    await put(`/workspaces/${stale}/retired`, { retired: true, author: AGENT });
 
     const html = await (await get('/')).text();
     const foldAt = html.indexOf('Retired workspaces');
@@ -218,13 +220,13 @@ describe('retire / rename routes', () => {
   it('refuses a task create on a retired board, on both create doors', async () => {
     start();
     const id = await newBoard('harbor-relay');
-    await put(`/api/workspaces/${id}/retired`, {
+    await put(`/workspaces/${id}/retired`, {
       retired: true,
       reason: 'superseded',
       author: AGENT,
     });
 
-    const single = await post(`/api/workspaces/${id}/tasks`, {
+    const single = await post(`/workspaces/${id}/tasks`, {
       title: 'Agent can file work so that the board is current',
       author: AGENT,
       assignee: AGENT.id,
@@ -235,7 +237,7 @@ describe('retire / rename routes', () => {
     expect(singleBody.error).toBe('workspace-retired');
     expect(singleBody.message).toContain('superseded');
 
-    const batch = await post(`/api/workspaces/${id}/tasks/batch`, {
+    const batch = await post(`/workspaces/${id}/tasks/batch`, {
       author: AGENT,
       tasks: [{ title: 'Agent can file work so that the board is current' }],
     });
@@ -243,7 +245,7 @@ describe('retire / rename routes', () => {
     expect(((await batch.json()) as { error: string }).error).toBe('workspace-retired');
 
     // Nothing landed — the refusal is a refusal, not a warning.
-    const tasks = (await (await get(`/api/workspaces/${id}/tasks`)).json()) as {
+    const tasks = (await (await get(`/workspaces/${id}/tasks?format=json`)).json()) as {
       tasks: unknown[];
     };
     expect(tasks.tasks).toHaveLength(0);
@@ -252,9 +254,9 @@ describe('retire / rename routes', () => {
   it('takes work again once the board is un-retired', async () => {
     start();
     const id = await newBoard('harbor-relay');
-    await put(`/api/workspaces/${id}/retired`, { retired: true, author: AGENT });
-    await put(`/api/workspaces/${id}/retired`, { retired: false, author: AGENT });
-    const r = await post(`/api/workspaces/${id}/tasks`, {
+    await put(`/workspaces/${id}/retired`, { retired: true, author: AGENT });
+    await put(`/workspaces/${id}/retired`, { retired: false, author: AGENT });
+    const r = await post(`/workspaces/${id}/tasks`, {
       title: 'Agent can file work so that the board is current',
       author: AGENT,
       assignee: AGENT.id,
@@ -281,7 +283,7 @@ describe('retire / rename routes', () => {
     expect(payload.retired).toBeUndefined();
 
     // Retiring the stale one is the fix, and the fix has to clear the warning.
-    await put(`/api/workspaces/${stale}/retired`, { retired: true, author: AGENT });
+    await put(`/workspaces/${stale}/retired`, { retired: true, author: AGENT });
     const after = await post(`/workspaces/${live}/agents`, {
       agentId: AGENT.id,
       runtime: 'claude-code-local',

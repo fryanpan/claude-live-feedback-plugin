@@ -73,7 +73,7 @@ describe('plan-doc linkage (routes)', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'plan-links-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
-    const r = await post('/api/workspaces', { name: 'plan-links-ws', goal: 'Ship the plan flow.' });
+    const r = await post('/workspaces', { name: 'plan-links-ws', goal: 'Ship the plan flow.' });
     wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
     const mdPath = join(dataDir, 'sprint-plan.md');
     writeFileSync(mdPath, '# Sprint plan\n\nThe plan.\n');
@@ -95,7 +95,7 @@ describe('plan-doc linkage (routes)', () => {
     let freeId: string;
 
     it('stamps a doc origin on every row, holds plan drafts in triage, and marks the doc pending', async () => {
-      const r = await post(`/api/workspaces/${wsId}/tasks/batch`, {
+      const r = await post(`/workspaces/${wsId}/tasks/batch`, {
         author: AGENT,
         sourceDoc: { docId: 'sprint-plan' },
         tasks: [
@@ -132,14 +132,14 @@ describe('plan-doc linkage (routes)', () => {
     });
 
     it('held drafts are in no dispatch read — beside a positive control that is', async () => {
-      const free = await post(`/api/workspaces/${wsId}/tasks`, {
+      const free = await post(`/workspaces/${wsId}/tasks`, {
         author: PERSON,
         assignee: 'human',
         title: 'Jordan can see an ordinary row so that this read is proven live',
         goal: 'chores',
       });
       freeId = ((await free.json()) as { task: Task }).task.id;
-      const next = (await (await local(`/api/workspaces/${wsId}/next`)).json()) as {
+      const next = (await (await local(`/workspaces/${wsId}/next`)).json()) as {
         tasks: Array<{ id: string }>;
       };
       const ids = next.tasks.map((t) => t.id);
@@ -186,7 +186,7 @@ describe('plan-doc linkage (routes)', () => {
     });
 
     it('an approved plan gates nothing: later rows ride in unheld, origin still stamped', async () => {
-      const r = await post(`/api/workspaces/${wsId}/tasks/batch`, {
+      const r = await post(`/workspaces/${wsId}/tasks/batch`, {
         author: AGENT,
         sourceDoc: { docId: 'sprint-plan' },
         tasks: [{ title: 'Agent can add a follow-up so that approved plans stay usable' }],
@@ -199,7 +199,7 @@ describe('plan-doc linkage (routes)', () => {
 
     it("discussion mode never holds, and a huddle doc defaults to it — a plain doc defaults to 'plan' (control above)", async () => {
       handle.docStore.getOrCreate('standup-notes', { type: 'markdown', huddle: true });
-      const r = await post(`/api/workspaces/${wsId}/tasks/batch`, {
+      const r = await post(`/workspaces/${wsId}/tasks/batch`, {
         author: AGENT,
         sourceDoc: { docId: 'standup-notes' },
         tasks: [{ title: 'Agent can act on a standup note so that discussion tasks start free' }],
@@ -216,7 +216,7 @@ describe('plan-doc linkage (routes)', () => {
     });
 
     it('a sourceDoc that names no real doc is refused whole — its gate cannot be read', async () => {
-      const r = await post(`/api/workspaces/${wsId}/tasks/batch`, {
+      const r = await post(`/workspaces/${wsId}/tasks/batch`, {
         author: AGENT,
         sourceDoc: { docId: 'no-such-doc' },
         tasks: [{ title: 'Agent can never see this row so that the refusal is whole' }],
@@ -235,7 +235,7 @@ describe('plan-doc linkage (routes)', () => {
     beforeAll(async () => {
       handle.docStore.getOrCreate('drift-plan', { type: 'markdown' });
       docId = 'drift-plan';
-      const r = await post(`/api/workspaces/${wsId}/tasks/batch`, {
+      const r = await post(`/workspaces/${wsId}/tasks/batch`, {
         author: AGENT,
         sourceDoc: { docId, mode: 'discussion' },
         tasks: [
@@ -286,7 +286,7 @@ describe('plan-doc linkage (routes)', () => {
         room.ydoc.getText('content').insert(0, 'y');
       }, 'agent');
       // …and a create from the doc before the debounce fires.
-      const r = await post(`/api/workspaces/${wsId}/tasks/batch`, {
+      const r = await post(`/workspaces/${wsId}/tasks/batch`, {
         author: AGENT,
         sourceDoc: { docId, mode: 'discussion' },
         tasks: [{ title: 'Agent can derive mid-burst so that self-edits never flag' }],
@@ -301,7 +301,7 @@ describe('plan-doc linkage (routes)', () => {
     it('a thread promoted off a pending plan doc is held like a batch draft', async () => {
       handle.docStore.getOrCreate('promote-plan', { type: 'markdown' });
       // Declare it a plan by filing one draft from it.
-      await post(`/api/workspaces/${wsId}/tasks/batch`, {
+      await post(`/workspaces/${wsId}/tasks/batch`, {
         author: AGENT,
         sourceDoc: { docId: 'promote-plan' },
         tasks: [{ title: 'Agent can seed the plan so that the gate is pending' }],
@@ -363,7 +363,7 @@ describe('plan-doc linkage (routes)', () => {
       const trackerDocId = ((await doc.json()) as { docId: string }).docId;
       const pend = await post('/api/docs/tracker-plan/plan', { state: 'pending', author: PERSON });
       expect(pend.status).toBe(200);
-      const r = await post(`/api/workspaces/${wsId}/import-tasks`, {
+      const r = await post(`/workspaces/${wsId}/import-tasks`, {
         author: PERSON,
         path: trackerPath,
         apply: true,

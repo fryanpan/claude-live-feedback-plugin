@@ -82,7 +82,7 @@ describe('link mode is retired', () => {
     handle = createServer({ port: 0, dataDir, ...access.serverOptions });
     base = `http://localhost:${handle.port}`;
 
-    const board = await local('/api/workspaces', {
+    const board = await local('/workspaces', {
       method: 'POST',
       body: JSON.stringify({ name: 'Retirement board' }),
     });
@@ -97,7 +97,7 @@ describe('link mode is retired', () => {
     expect(doc.status).toBe(200);
     expect(
       (
-        await local(`/api/workspaces/${boardId}/docs`, {
+        await local(`/workspaces/${boardId}/docs`, {
           method: 'POST',
           body: JSON.stringify({ docId }),
         })
@@ -189,7 +189,9 @@ describe('link mode is retired', () => {
     it('POSITIVE CONTROL: the same host serves the board to the same visitor', async () => {
       // Without this, every 404 above would also pass on a server that had
       // stopped serving this hostname entirely.
-      const ok = await fetch(`${base}/api/workspaces/${boardId}`, { headers: live.headers });
+      const ok = await fetch(`${base}/workspaces/${boardId}?format=json`, {
+        headers: live.headers,
+      });
       expect(ok.status).toBe(200);
     });
   });

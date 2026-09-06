@@ -52,10 +52,19 @@ document and returns computed styles, so its forty-six importers are
 asserting behaviour, not source shape. Reads under a `fixtures/` path are not
 counted at all — a parser driven over sample input is behaviour.
 
+The read may be wrapped: the window is the read call's own parentheses,
+followed across whatever lines the formatter put them on. It used to be one
+line, which meant a rename could lower the count with nothing converted — PR
+718's `src/hub/` → `src/board/` pushed a read in `walk-handoff.test.ts` past
+biome's width, biome wrapped it, and the site went uncounted while still
+grepping source. A neighbouring statement's literal is still not the read's:
+the parentheses bound the window, and a probe in `scripts/test-audit.test.ts`
+plants a source literal on the line after a read's closing paren to keep that
+true.
+
 Three things the check still cannot see, so a clean table is not proof: a read
-in a test file whose path literal sits on a different line or in a constant
-declared elsewhere, a support module outside a `test/` directory, and
-`require()`.
+whose path is in a constant declared elsewhere, a support module outside a
+`test/` directory, and `require()`.
 
 ## 2. No fixed sleeps in the server suite
 

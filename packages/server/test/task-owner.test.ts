@@ -64,13 +64,13 @@ describe('task creation records a real owner', () => {
 
   async function seedWorkspace(): Promise<string> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
+      await post('/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' }),
     );
     return workspace.id;
   }
   async function getTasks(workspaceId: string): Promise<Task[]> {
     const { tasks } = await jj<{ tasks: Task[] }>(
-      await fetch(`${base}/api/workspaces/${workspaceId}/tasks`),
+      await fetch(`${base}/workspaces/${workspaceId}/tasks?format=json`),
     );
     return tasks;
   }
@@ -86,11 +86,11 @@ describe('task creation records a real owner', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  describe('POST /api/workspaces/<id>/tasks', () => {
+  describe('POST /workspaces/<id>/tasks', () => {
     it('records the calling agent as the owner when the create names nobody', async () => {
       const wsId = await seedWorkspace();
       const { task } = await jj<{ task: Task }>(
-        await post(`/api/workspaces/${wsId}/tasks`, { title: 'Rebuild the index', author: AGENT }),
+        await post(`/workspaces/${wsId}/tasks`, { title: 'Rebuild the index', author: AGENT }),
       );
       // Read the stored effect back, not the response of the call that made it.
       const stored = (await getTasks(wsId)).find((t) => t.id === task.id);
@@ -100,7 +100,7 @@ describe('task creation records a real owner', () => {
     it('lets an explicit assignee win over the caller', async () => {
       const wsId = await seedWorkspace();
       const { task } = await jj<{ task: Task }>(
-        await post(`/api/workspaces/${wsId}/tasks`, {
+        await post(`/workspaces/${wsId}/tasks`, {
           title: 'Write the launch note',
           assignee: 'Jordan',
           author: AGENT,
@@ -111,7 +111,7 @@ describe('task creation records a real owner', () => {
 
     it('refuses a create that names nobody and has no caller identity', async () => {
       const wsId = await seedWorkspace();
-      const r = await post(`/api/workspaces/${wsId}/tasks`, { title: 'Nobody owns me' });
+      const r = await post(`/workspaces/${wsId}/tasks`, { title: 'Nobody owns me' });
       expect(r.status).toBe(400);
       const body = (await r.json()) as { error: string; message?: string };
       expect(body.error).toBe('assignee-required');
@@ -123,14 +123,14 @@ describe('task creation records a real owner', () => {
 
     it('refuses the generic word itself — it is not an identity', async () => {
       const wsId = await seedWorkspace();
-      const r = await post(`/api/workspaces/${wsId}/tasks`, {
+      const r = await post(`/workspaces/${wsId}/tasks`, {
         title: 'Some agent, any agent',
         assignee: GENERIC_ASSIGNEE,
       });
       expect(r.status).toBe(400);
       // Positive control: the same create with a name lands, so the refusal is
       // the generic value and not a broken route.
-      const ok = await post(`/api/workspaces/${wsId}/tasks`, {
+      const ok = await post(`/workspaces/${wsId}/tasks`, {
         title: 'Some agent, any agent',
         assignee: 'Search Revamp',
       });
@@ -146,7 +146,7 @@ describe('task creation records a real owner', () => {
     const LEAD = 'agent-lookup';
     async function seedLedWorkspace(): Promise<string> {
       const { workspace } = await jj<{ workspace: { id: string } }>(
-        await post('/api/workspaces', {
+        await post('/workspaces', {
           name: 'led-board',
           goal: 'Answer what the room asks.',
           leadAgentId: LEAD,
@@ -159,7 +159,7 @@ describe('task creation records a real owner', () => {
     it('goes to the lead, as an agent, when the board has one', async () => {
       const wsId = await seedLedWorkspace();
       const { task } = await jj<{ task: Task }>(
-        await post(`/api/workspaces/${wsId}/tasks`, { ...RESEARCH, assignToLead: true }),
+        await post(`/workspaces/${wsId}/tasks`, { ...RESEARCH, assignToLead: true }),
       );
       const stored = (await getTasks(wsId)).find((t) => t.id === task.id);
       expect(stored?.assignee).toBe(LEAD);
@@ -170,7 +170,7 @@ describe('task creation records a real owner', () => {
     it('lands at triage owned by nobody when there is no lead — never the tapper', async () => {
       const wsId = await seedWorkspace();
       const { task } = await jj<{ task: Task }>(
-        await post(`/api/workspaces/${wsId}/tasks`, { ...RESEARCH, assignToLead: true }),
+        await post(`/workspaces/${wsId}/tasks`, { ...RESEARCH, assignToLead: true }),
       );
       const stored = (await getTasks(wsId)).find((t) => t.id === task.id);
       expect(stored?.assignee).not.toBe(PERSON.name);
@@ -181,7 +181,7 @@ describe('task creation records a real owner', () => {
       // POSITIVE CONTROL: the same create WITHOUT the flag is the tapper's, so
       // it is the flag that moved the row and not a broken author fallback.
       const { task: plain } = await jj<{ task: Task }>(
-        await post(`/api/workspaces/${wsId}/tasks`, RESEARCH),
+        await post(`/workspaces/${wsId}/tasks`, RESEARCH),
       );
       expect((await getTasks(wsId)).find((t) => t.id === plain.id)?.assignee).toBe(PERSON.name);
     });
@@ -189,7 +189,7 @@ describe('task creation records a real owner', () => {
     it('still lets an explicit assignee win over the flag', async () => {
       const wsId = await seedLedWorkspace();
       const { task } = await jj<{ task: Task }>(
-        await post(`/api/workspaces/${wsId}/tasks`, {
+        await post(`/workspaces/${wsId}/tasks`, {
           ...RESEARCH,
           assignToLead: true,
           assignee: 'Search Revamp',
@@ -207,7 +207,7 @@ describe('task creation records a real owner', () => {
     // state the gate exists to prevent.
     async function seedTask(wsId: string, title: string): Promise<Task> {
       const { task } = await jj<{ task: Task }>(
-        await post(`/api/workspaces/${wsId}/tasks`, { title, author: AGENT }),
+        await post(`/workspaces/${wsId}/tasks`, { title, author: AGENT }),
       );
       return task;
     }
@@ -316,7 +316,7 @@ describe('task creation records a real owner', () => {
         ].join('\n'),
       );
       await jj(
-        await post(`/api/workspaces/${wsId}/import-tasks`, { path, apply: true, author: AGENT }),
+        await post(`/workspaces/${wsId}/import-tasks`, { path, apply: true, author: AGENT }),
       );
       const tasks = await getTasks(wsId);
       expect(tasks.find((t) => t.title === 'Rebuild the index')?.assignee).toBe('Search Revamp');
@@ -341,7 +341,7 @@ describe('task creation records a real owner', () => {
         ].join('\n'),
       );
       const anon = { id: 'known-agent', name: GENERIC_ASSIGNEE, kind: 'known' };
-      const r = await post(`/api/workspaces/${wsId}/import-tasks`, {
+      const r = await post(`/workspaces/${wsId}/import-tasks`, {
         path,
         apply: true,
         author: anon,
@@ -352,10 +352,10 @@ describe('task creation records a real owner', () => {
       expect(await getTasks(wsId)).toHaveLength(0);
       // The dry run is still allowed: it creates nothing, so refusing it would
       // only hide the mapping from someone about to fix their launch env.
-      const dry = await post(`/api/workspaces/${wsId}/import-tasks`, { path, author: anon });
+      const dry = await post(`/workspaces/${wsId}/import-tasks`, { path, author: anon });
       expect(dry.status).toBe(200);
       // Positive control: a named importer applies the same file.
-      const named = await post(`/api/workspaces/${wsId}/import-tasks`, {
+      const named = await post(`/workspaces/${wsId}/import-tasks`, {
         path,
         apply: true,
         author: AGENT,
@@ -380,7 +380,7 @@ describe('task creation records a real owner', () => {
           '',
         ].join('\n'),
       );
-      const r = await post(`/api/workspaces/${wsId}/import-tasks`, {
+      const r = await post(`/workspaces/${wsId}/import-tasks`, {
         path,
         apply: true,
         author: { id: 'known-agent', name: GENERIC_ASSIGNEE, kind: 'known' },

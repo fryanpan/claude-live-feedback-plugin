@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "workspaces": ["packages/*", "demos/*"],
   "scripts": {
+    "postinstall": "bash scripts/check-hooks.sh || true",
     "bootstrap": "bun run scripts/bootstrap.ts",
     "dev": "bun run scripts/serve.ts",
     "dev:bare": "bun run packages/server/src/bin.ts",
@@ -23,6 +24,7 @@
     "check:widget-size": "bun run scripts/check-widget-size.ts",
     "check:plugin-version": "bun run scripts/check-plugin-version.ts",
     "check:scrub-gate": "python3 scripts/scrub-selftest.py",
+    "check:hooks": "bash scripts/check-hooks.sh",
     "check:architecture": "bun run scripts/architecture-freshness.ts",
     "check:imports": "bun run scripts/import-direction.ts",
     "test:audit": "bun run scripts/test-audit.ts",

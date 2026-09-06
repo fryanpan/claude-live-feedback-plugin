@@ -1,8 +1,8 @@
 /**
  * The file-binding routes are for agents, not pages.
  *
- * `POST /api/docs` (bind a file as a doc), `POST /api/workspaces` with a
- * `folderPath` (bind a folder), `POST /api/workspaces/<id>/import-tasks`
+ * `POST /api/docs` (bind a file as a doc), `POST /workspaces` with a
+ * `folderPath` (bind a folder), `POST /workspaces/<id>/import-tasks`
  * (read a markdown file off disk) and `POST /api/diffs` (`repo` — a diff, or
  * with no `base` a browse of the whole folder) each turn a host path into
  * server-readable content. Nothing in the browser apps calls them — every caller is an MCP
@@ -106,18 +106,18 @@ describe('file-binding routes refuse browser callers', () => {
     });
   });
 
-  describe('POST /api/workspaces', () => {
+  describe('POST /workspaces', () => {
     it('positive control: an agent binds a folder', async () => {
-      const r = await post('/api/workspaces', { folderPath: scratch });
+      const r = await post('/workspaces', { folderPath: scratch });
       expect(r.status).toBe(200);
     });
 
     it('a page cannot bind a folder', async () => {
-      await expectRefused(await post('/api/workspaces', { folderPath: scratch }, devServerPage()));
+      await expectRefused(await post('/workspaces', { folderPath: scratch }, devServerPage()));
     });
 
     it('but a page may still create a board by name — no file is involved', async () => {
-      const r = await post('/api/workspaces', { name: 'Browser board' }, samePage());
+      const r = await post('/workspaces', { name: 'Browser board' }, samePage());
       expect(r.status).toBe(200);
     });
   });
@@ -144,15 +144,15 @@ describe('file-binding routes refuse browser callers', () => {
     });
   });
 
-  describe('POST /api/workspaces/<id>/import-tasks', () => {
+  describe('POST /workspaces/<id>/import-tasks', () => {
     let workspaceId: string;
     beforeEach(async () => {
-      const r = await post('/api/workspaces', { name: 'Import target' });
+      const r = await post('/workspaces', { name: 'Import target' });
       workspaceId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
     });
 
     it('positive control: an agent reads the file (dry run)', async () => {
-      const r = await post(`/api/workspaces/${workspaceId}/import-tasks`, {
+      const r = await post(`/workspaces/${workspaceId}/import-tasks`, {
         path: join(scratch, 'tasks.md'),
         author: { id: 'agent-x', name: 'Agent X', kind: 'agent' },
       });
@@ -162,7 +162,7 @@ describe('file-binding routes refuse browser callers', () => {
     it('a page cannot point the import at a path', async () => {
       await expectRefused(
         await post(
-          `/api/workspaces/${workspaceId}/import-tasks`,
+          `/workspaces/${workspaceId}/import-tasks`,
           {
             path: join(scratch, 'tasks.md'),
             author: { id: 'agent-x', name: 'Agent X', kind: 'agent' },

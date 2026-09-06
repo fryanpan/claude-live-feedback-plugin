@@ -99,13 +99,13 @@ describe('voice, smoothly (route)', () => {
     context: unknown,
     author: unknown = PERSON,
   ): Promise<{ route: string; ack: string; navigate?: string }> => {
-    const r = await post(`/api/workspaces/${boardId}/voice`, { transcript, context, author });
+    const r = await post(`/workspaces/${boardId}/voice`, { transcript, context, author });
     expect(r.status).toBe(200);
     return (await r.json()) as { route: string; ack: string; navigate?: string };
   };
 
   const newTask = async (body: Record<string, unknown>): Promise<string> => {
-    const r = await post(`/api/workspaces/${boardId}/tasks`, { author: PERSON, ...body });
+    const r = await post(`/workspaces/${boardId}/tasks`, { author: PERSON, ...body });
     expect(r.status).toBe(200);
     return ((await r.json()) as { task: { id: string } }).task.id;
   };
@@ -116,7 +116,7 @@ describe('voice, smoothly (route)', () => {
     const made = await post('/api/docs', { docId: name, type: 'markdown', sourceUrl: file, title });
     expect(made.status).toBe(200);
     const id = ((await made.json()) as { docId: string }).docId;
-    expect((await post(`/api/workspaces/${boardId}/docs`, { docId: id })).status).toBe(200);
+    expect((await post(`/workspaces/${boardId}/docs`, { docId: id })).status).toBe(200);
     return id;
   };
 
@@ -168,7 +168,7 @@ describe('voice, smoothly (route)', () => {
     });
     base = `http://localhost:${handle.port}`;
 
-    const ws = await post('/api/workspaces', { name: 'QB', goal: 'Ship onboarding.' });
+    const ws = await post('/workspaces', { name: 'QB', goal: 'Ship onboarding.' });
     expect(ws.status).toBe(200);
     boardId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
 

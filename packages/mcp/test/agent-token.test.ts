@@ -125,7 +125,7 @@ describe('which paths carry the bearer', () => {
     expect(pathNeedsAgentToken('/api/agents/agent-mira/merge')).toBe(false);
     expect(pathNeedsAgentToken('/api/agents/agent-mira/token')).toBe(false);
     // The bulk of the surface. Every one of these used to trigger a mint.
-    expect(pathNeedsAgentToken('/api/workspaces/w-1/goals')).toBe(false);
+    expect(pathNeedsAgentToken('/workspaces/w-1/goals')).toBe(false);
     expect(pathNeedsAgentToken('/api/docs/d-1/threads')).toBe(false);
     // Not a prefix match: a path that merely starts the same way is not it.
     expect(pathNeedsAgentToken('/api/agents/agent-mira/watches/extra')).toBe(false);
@@ -135,7 +135,7 @@ describe('which paths carry the bearer', () => {
     // The regression this predicate exists for: an unrelated tool call must
     // not wait on, or record, a token request.
     const s = store(() => okToken('at1.agent-mira.macbytes'));
-    expect(await s.headersFor('/api/workspaces/w-1/goals')).toEqual({});
+    expect(await s.headersFor('/workspaces/w-1/goals')).toEqual({});
     expect(s.calls).toHaveLength(0);
   });
 

@@ -56,7 +56,7 @@ describe('resources under the workspace path', () => {
     writeFileSync(join(appDist, 'index.html'), '<!doctype html><title>app shell</title>');
     handle = createServer({ port: 0, dataDir, markdownAppDistDir: appDist });
     base = `http://localhost:${handle.port}`;
-    const ws = await post('/api/workspaces', { name: 'route-home', goal: 'Route it.' });
+    const ws = await post('/workspaces', { name: 'route-home', goal: 'Route it.' });
     wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
   });
 
@@ -116,7 +116,7 @@ describe('resources under the workspace path', () => {
       // The workspace segment is context, not authorization — that is the
       // host guard's job, and it checks both halves. A doc moved between
       // workspaces would otherwise break every link already handed out.
-      const other = await post('/api/workspaces', { name: 'elsewhere', goal: 'Other.' });
+      const other = await post('/workspaces', { name: 'elsewhere', goal: 'Other.' });
       const otherId = ((await other.json()) as { workspace: { id: string } }).workspace.id;
       expect((await local(`/workspaces/${otherId}/docs/plan-doc`)).status).toBe(200);
     });
@@ -246,11 +246,11 @@ describe('resources under the workspace path', () => {
         (await post('/api/docs', { docId: 'orphan-doc', type: 'markdown', sourceUrl: p })).status,
       ).toBe(200);
       // Detach it from whatever default workspace filing put it on.
-      const wsList = (await (await local('/api/workspaces')).json()) as {
+      const wsList = (await (await local('/workspaces')).json()) as {
         boardWorkspaces?: Array<{ id: string }>;
       };
       for (const w of wsList.boardWorkspaces ?? []) {
-        await local(`/api/workspaces/${w.id}/docs?docId=orphan-doc`, { method: 'DELETE' });
+        await local(`/workspaces/${w.id}/docs?docId=orphan-doc`, { method: 'DELETE' });
       }
       const r = await local('/review/orphan-doc');
       expect([200, 302]).toContain(r.status);
@@ -265,11 +265,11 @@ describe('resources under the workspace path', () => {
       expect(
         (await post('/api/docs', { docId: 'orphan-mock', type: 'mockup', sourceUrl: p })).status,
       ).toBe(200);
-      const wsList = (await (await local('/api/workspaces')).json()) as {
+      const wsList = (await (await local('/workspaces')).json()) as {
         boardWorkspaces?: Array<{ id: string }>;
       };
       for (const w of wsList.boardWorkspaces ?? []) {
-        await local(`/api/workspaces/${w.id}/docs?docId=orphan-mock`, { method: 'DELETE' });
+        await local(`/workspaces/${w.id}/docs?docId=orphan-mock`, { method: 'DELETE' });
       }
       const r = await local('/review/orphan-mock');
       // Whether filing held or not, the one answer that must never come back

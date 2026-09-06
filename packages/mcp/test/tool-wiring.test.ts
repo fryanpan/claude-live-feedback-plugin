@@ -8,15 +8,10 @@
  * a version that already shipped. This reads the source rather than the
  * module because mcp.ts is a bundle entry point and exports nothing.
  */
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { type BundleHarness, startBundle } from './harness/mcp-bundle.ts';
 import { readMcpSource } from './harness/mcp-source.ts';
 
-// Not `import.meta.dir` — that is Bun-only, and this file is collected by
-// vitest as well as by `bun test`.
-const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = readMcpSource();
 
 /** Tool names from the `name: 'x',` lines inside the tools array — each is
@@ -119,10 +114,42 @@ describe('find_and_replace forwards replaceAll', () => {
     expect(decl.toLowerCase()).toContain('every occurrence');
   });
 
-  it('the committed bundle carries the forward too (peers load the bundle, not the source)', () => {
-    const bundle = readFileSync(join(HERE, '../../plugin/mcp/index.js'), 'utf8');
-    expect(bundle).toContain('replaceAll');
-  });
+  /**
+   * Peers load the bundle, not the source — but `bundle.toContain('replaceAll')`
+   * was satisfied by the SCHEMA naming the field, which is exactly the state
+   * this describe exists to rule out: a declared parameter the handler drops.
+   * So call it and read the body the bundle actually POSTs.
+   */
+  it('the committed bundle forwards it too, not just declares it', async () => {
+    let h: BundleHarness | undefined;
+    try {
+      h = await startBundle();
+      const on = await h.call('find_and_replace', {
+        docId: 'doc-1',
+        find: 'alpha',
+        replace: 'beta',
+        replaceAll: true,
+      });
+      const post = on.sent.find((r) => r.method === 'POST' && r.path.endsWith('/find_and_replace'));
+      expect(post, `no find_and_replace POST; sent ${JSON.stringify(on.sent)}`).toBeDefined();
+      expect((post?.body as { replaceAll?: unknown }).replaceAll).toBe(true);
+
+      // CONTROL: the field is absent, not defaulted, when the caller omits it.
+      // A handler that hard-coded `replaceAll: true` would pass the assertion
+      // above and change what every existing caller does.
+      const off = await h.call('find_and_replace', {
+        docId: 'doc-1',
+        find: 'alpha',
+        replace: 'beta',
+      });
+      const plain = off.sent.find(
+        (r) => r.method === 'POST' && r.path.endsWith('/find_and_replace'),
+      );
+      expect((plain?.body as { replaceAll?: unknown }).replaceAll).toBeUndefined();
+    } finally {
+      await h?.stop();
+    }
+  }, 60_000);
 });
 
 describe('insert_blocks tools forward placement', () => {
@@ -151,8 +178,33 @@ describe('insert_blocks tools forward placement', () => {
     });
   }
 
-  it('the committed bundle carries the forward too (peers load the bundle, not the source)', () => {
-    const bundle = readFileSync(join(HERE, '../../plugin/mcp/index.js'), 'utf8');
-    expect(bundle).toContain("'after-block'");
-  });
+  /** Same reasoning as above: the old `bundle.toContain("'after-block'")`
+   *  could not tell a forwarded placement from the enum in the schema. */
+  it('the committed bundle forwards placement too, not just declares it', async () => {
+    let h: BundleHarness | undefined;
+    try {
+      h = await startBundle();
+      const on = await h.call('insert_blocks_at_anchor', {
+        docId: 'doc-1',
+        anchorId: 'anc-1',
+        markdown: '- a nested item',
+        placement: 'after-block',
+      });
+      const post = on.sent.find((r) => r.method === 'POST' && r.path.endsWith('/insert_blocks'));
+      expect(post, `no insert_blocks POST; sent ${JSON.stringify(on.sent)}`).toBeDefined();
+      expect((post?.body as { placement?: unknown }).placement).toBe('after-block');
+
+      // CONTROL: omitted stays omitted, so the server's own default still
+      // decides for every caller that never passes one.
+      const off = await h.call('insert_blocks_at_anchor', {
+        docId: 'doc-1',
+        anchorId: 'anc-1',
+        markdown: '- a nested item',
+      });
+      const plain = off.sent.find((r) => r.method === 'POST' && r.path.endsWith('/insert_blocks'));
+      expect((plain?.body as { placement?: unknown }).placement).toBeUndefined();
+    } finally {
+      await h?.stop();
+    }
+  }, 60_000);
 });

@@ -112,14 +112,14 @@ describe('a grouping cannot be shared on its own', () => {
 
     // A real board. This is what `create_workspace` makes, and it is the
     // only id the share routes will accept after this change.
-    const board = await local('/api/workspaces', { name: 'Partner review' });
+    const board = await local('/workspaces', { name: 'Partner review' });
     expect(board.status).toBe(200);
     boardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
     expect(boardId).toBeTruthy();
 
     // A folder bind — a GROUPING. Filed onto the board, so the only thing
     // separating it from `boardId` is which store answers for it.
-    const bind = await local('/api/workspaces', { folderPath: folder, hubWorkspaceId: boardId });
+    const bind = await local('/workspaces', { folderPath: folder, hubWorkspaceId: boardId });
     expect(bind.status).toBe(200);
     bindGroupingId = ((await bind.json()) as { workspaceId: string }).workspaceId;
     expect(bindGroupingId).toBeTruthy();
@@ -161,7 +161,7 @@ describe('a grouping cannot be shared on its own', () => {
     docId: '',
     workspaceId,
     hostname: `share-legacy-board-${n}.${BASE_HOST}`,
-    url: `https://share-legacy-board-${n}.${BASE_HOST}/workspaces/${encodeURIComponent(workspaceId)}`,
+    url: `https://share-legacy-board-${n}.${BASE_HOST}/workspaces/${encodeURIComponent(workspaceId)}?format=json`,
     label: 'board share already on disk',
     createdAt: Date.now(),
     expiresAt: Date.now() + 86_400_000,
@@ -412,7 +412,7 @@ describe('a grouping cannot be shared on its own', () => {
         (await withCookie('legacy02', `/api/docs/${encodeURIComponent(diffMemberDocId)}`)).status,
       ).toBe(401);
       expect(
-        (await withCookie('legacy02', `/api/workspaces/${encodeURIComponent(diffGroupingId)}/tree`))
+        (await withCookie('legacy02', `/api/reviews/${encodeURIComponent(diffGroupingId)}/tree`))
           .status,
       ).toBe(401);
       // …and a cookie for the LIVE board share is no better: the credential
@@ -495,6 +495,11 @@ describe('a grouping cannot be shared on its own', () => {
   });
 
   describe('what replaces it', () => {
+    /** Files in the fresh folder. Enough that a per-file round trip would be
+     *  unmistakable against the ceiling in the cold-start test, small enough
+     *  to stay quick. */
+    const FRESH_FILE_COUNT = 25;
+
     it('reaches the filed diff review through a share of the board', async () => {
       const boardRec = boardShare(boardId, 'd');
       await restartWith([boardRec]);
@@ -504,7 +509,9 @@ describe('a grouping cannot be shared on its own', () => {
       const asVisitor = (path: string) => fetch(`${base}${path}`, { headers: share.headers });
 
       // The board page itself.
-      expect((await asVisitor(`/workspaces/${encodeURIComponent(boardId)}`)).status).toBe(200);
+      expect(
+        (await asVisitor(`/workspaces/${encodeURIComponent(boardId)}?format=json`)).status,
+      ).toBe(200);
       // A changed file of the diff review, reachable because the review is
       // FILED on the shared board — never because anything named the doc.
       expect((await asVisitor(`/api/docs/${encodeURIComponent(diffMemberDocId)}`)).status).toBe(
@@ -512,46 +519,75 @@ describe('a grouping cannot be shared on its own', () => {
       );
       // And the review's own tree, through the grouping→board hop.
       expect(
-        (await asVisitor(`/api/workspaces/${encodeURIComponent(diffGroupingId)}/tree`)).status,
+        (await asVisitor(`/api/reviews/${encodeURIComponent(diffGroupingId)}/tree`)).status,
       ).toBe(200);
     });
 
     it('creates a review on a fresh board and shares it in one create + one share', async () => {
-      // The cost this change lands on the most-used path, measured on the
-      // actual flow rather than asserted. Bryan's ruling on the board ticket:
-      // "creating and sharing docs should both still take seconds … workspace
-      // setup should normally have already happened … and that should also
-      // take seconds to make a blank empty workspace if there isn't one yet."
+      // The cost this change lands on the most-used path. Bryan's ruling on
+      // the board ticket: "creating and sharing docs should both still take
+      // seconds … workspace setup should normally have already happened … and
+      // that should also take seconds to make a blank empty workspace if there
+      // isn't one yet."
+      //
+      // Asserted by COUNTING the round trips rather than by timing them, the
+      // house style of `list-docs-linear.test.ts`. What "still fast" means
+      // here is what this file's header claims — one create call plus one
+      // share call — and what would break it is the flow acquiring a per-file
+      // step (a scan, a round trip per file). A five-second stopwatch measured
+      // neither: it encoded how fast this machine is, and would have gone red
+      // on a loaded CI box while the flow was still exactly three calls. The
+      // folder below is deliberately not one file, so a cost that TRACKED the
+      // folder would be unmistakable against the ceiling.
       const other = mkdtempSync(join(tmpdir(), 'grouping-share-fresh-'));
       mkdirSync(join(other, 'sub'), { recursive: true });
-      writeFileSync(join(other, 'sub', 'notes.md'), '# Notes\n\nFresh.\n');
+      for (let i = 0; i < FRESH_FILE_COUNT; i += 1) {
+        writeFileSync(join(other, 'sub', `notes-${i}.md`), `# Notes ${i}\n\nFresh.\n`);
+      }
 
-      const started = Date.now();
+      let calls = 0;
+      const counted = (path: string, body: unknown): Promise<Response> => {
+        calls += 1;
+        return local(path, body);
+      };
 
       // 1. A blank board, if the agent has not already got one.
-      const board = await local('/api/workspaces', { name: 'Fresh review' });
+      const board = await counted('/workspaces', { name: 'Fresh review' });
       expect(board.status).toBe(200);
       const freshBoard = ((await board.json()) as { workspace: { id: string } }).workspace.id;
 
       // 2. The review, filed on it in the SAME call — no extra step, which is
       //    what keeps the prerequisite cheap.
-      const bound = await local('/api/workspaces', {
+      const bound = await counted('/workspaces', {
         folderPath: other,
         hubWorkspaceId: freshBoard,
       });
       expect(bound.status).toBe(200);
-      expect(((await bound.json()) as { hubWorkspaceId: string }).hubWorkspaceId).toBe(freshBoard);
+      const boundJson = (await bound.json()) as {
+        hubWorkspaceId: string;
+        fileCount: number;
+        files: Array<{ docId: string }>;
+      };
+      expect(boundJson.hubWorkspaceId).toBe(freshBoard);
+      // Positive control: the ONE bind call really did carry the whole folder,
+      // so the counts here are claims about the flow and not about an answer
+      // that skipped the files.
+      expect(boundJson.fileCount).toBeGreaterThanOrEqual(FRESH_FILE_COUNT);
+      // The per-file cost, made countable. A browse bind opens ONE entry doc
+      // and leaves the rest to open lazily; the eager-bind-everything path it
+      // replaced (and its per-file pollers) is exactly the "round trip per
+      // file" the old stopwatch was standing in for, and this number is what
+      // would move if it came back.
+      expect(boundJson.files).toHaveLength(1);
 
       // 3. The share — `share_workspace`, which is what replaces every mint
       //    this file is about.
-      const mint = await local('/api/share/workspace', { workspaceId: freshBoard });
+      const mint = await counted('/api/share/workspace', { workspaceId: freshBoard });
       expect(mint.status, await mint.clone().text()).toBe(200);
 
-      const elapsed = Date.now() - started;
-      // Generous on purpose: this is a regression guard against the flow
-      // acquiring a slow prerequisite (a scan, a round trip per file), not a
-      // benchmark. Locally it runs in well under a second.
-      expect(elapsed).toBeLessThan(5000);
+      // Three round trips for a cold start, and the number does not track the
+      // folder: a round trip per file would put this at 3 + FRESH_FILE_COUNT.
+      expect(calls).toBe(3);
 
       rmSync(other, { recursive: true, force: true });
     });

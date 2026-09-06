@@ -9,7 +9,7 @@ import type { WorkspaceRouteRequest, WorkspaceRoutesContext } from './workspace-
 
 // Moved down from server.ts with the route below, its only caller.
 /**
- * Structural validation for PUT /api/workspaces/:id/goals. Returns the
+ * Structural validation for PUT /workspaces/:id/goals. Returns the
  * sanitized list, or null if any entry is malformed. Unknown keys are
  * dropped rather than persisted — the sidecar shape is a contract, not a
  * A stored or in-flight `subgoals` array is still ACCEPTED and validated one
@@ -77,13 +77,29 @@ export async function handleWorkspaceGoals(
   // write ("Archive this goal and its 14 tasks?"). `GET .../cascade`
   // answers it from the same walk the archive runs, so the sentence and
   // the act cannot disagree.
-  const goalCascadeMatch = pathname.match(/^\/api\/goals\/([^/]+)\/cascade$/);
+  const goalCascadeMatch = pathname.match(/^\/workspaces\/[^/]+\/goals\/([^/]+)\/cascade$/);
   if (goalCascadeMatch && req.method === 'GET') {
     const goalId = decodeURIComponent(goalCascadeMatch[1] ?? '');
+    // The board question is answered above: `middleware/workspace-scope.ts`
+    // has already asked which board holds this row and refused "none" or "a
+    // different one". What it CANNOT ask is the narrower half this route
+    // needs. Its `workspaceOfRow` resolves a goal band and a TASK — they
+    // share the `task:<id>` id space, which is what lets one lookup cover
+    // both collections — so `/workspaces/<A>/goals/<taskIdOnA>` passes it.
+    //
+    // Nothing is disclosed by that (`goalCascade` walks the tasks filed under
+    // a band and a task has none, so the answer is an empty list), but the
+    // reading is wrong: a caller that named a row which is not a band gets
+    // "this band has no tasks" instead of "there is no such band", and the
+    // confirmation the board shows before an archive is built from this walk.
+    // The write verbs already refuse it; this is the read catching up.
+    //
+    // Refused with the middleware's own body, so an id that is a task, an id
+    // on another board and an id nothing knows are indistinguishable.
     if (!taskStore.getGoalRow(goalId)) return j(404, { error: 'not-found' });
     return j(200, taskStore.goalCascade(goalId));
   }
-  const goalArchiveMatch = pathname.match(/^\/api\/goals\/([^/]+)\/archive$/);
+  const goalArchiveMatch = pathname.match(/^\/workspaces\/[^/]+\/goals\/([^/]+)\/archive$/);
   if (goalArchiveMatch && req.method === 'POST') {
     const goalId = decodeURIComponent(goalArchiveMatch[1] ?? '');
     const body = await safeJson(req);
@@ -97,7 +113,7 @@ export async function handleWorkspaceGoals(
     if (!res.changed) taskProjection.ensureWorkspace(res.goal.workspaceId);
     return j(200, res);
   }
-  const goalRestoreMatch = pathname.match(/^\/api\/goals\/([^/]+)\/restore$/);
+  const goalRestoreMatch = pathname.match(/^\/workspaces\/[^/]+\/goals\/([^/]+)\/restore$/);
   if (goalRestoreMatch && req.method === 'POST') {
     const goalId = decodeURIComponent(goalRestoreMatch[1] ?? '');
     const body = await safeJson(req);
@@ -112,7 +128,7 @@ export async function handleWorkspaceGoals(
   // sections. Structural validation happens HERE because the store
   // trusts its callers with shapes — a junk entry that reached the
   // sidecar would render as a broken section forever.
-  const wsGoalsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/goals$/);
+  const wsGoalsMatch = pathname.match(/^\/workspaces\/([^/]+)\/goals$/);
   if (wsGoalsMatch && req.method === 'PUT') {
     const workspaceId = decodeURIComponent(wsGoalsMatch[1] ?? '');
     const body = await safeJson(req);
@@ -178,7 +194,7 @@ export async function handleWorkspaceGoals(
   // Its own route rather than a flag on the PUT above, because the
   // whole value is that it cannot reach the replace path at all — a
   // task's band IS its goal id, and nothing here changes an id.
-  const wsRenameMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/goals\/rename$/);
+  const wsRenameMatch = pathname.match(/^\/workspaces\/([^/]+)\/goals\/rename$/);
   if (wsRenameMatch && req.method === 'POST') {
     const workspaceId = decodeURIComponent(wsRenameMatch[1] ?? '');
     const body = await safeJson(req);
@@ -220,7 +236,7 @@ export async function handleWorkspaceGoals(
   // reason rename is — that one replaces the list, so a board adding a
   // band through it submits the list it last read and removes anything
   // another writer added in between.
-  const wsAddGoalMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/goals\/add$/);
+  const wsAddGoalMatch = pathname.match(/^\/workspaces\/([^/]+)\/goals\/add$/);
   if (wsAddGoalMatch && req.method === 'POST') {
     const workspaceId = decodeURIComponent(wsAddGoalMatch[1] ?? '');
     const body = await safeJson(req);
@@ -259,7 +275,7 @@ export async function handleWorkspaceGoals(
   // contract, and `parent` is exactly the kind of param a hand-copying
   // route drops while still answering 200, so both are asserted
   // end-to-end in goal-reorder.test.ts (the `groups` lesson).
-  const wsReorderMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/goals\/reorder$/);
+  const wsReorderMatch = pathname.match(/^\/workspaces\/([^/]+)\/goals\/reorder$/);
   if (wsReorderMatch && req.method === 'POST') {
     const workspaceId = decodeURIComponent(wsReorderMatch[1] ?? '');
     const body = await safeJson(req);
@@ -292,7 +308,7 @@ export async function handleWorkspaceGoals(
                 `reserved (never ordered — leave these out): [${res.reservedIds.join(', ')}]; ` +
                 `missing: [${res.missingIds.join(', ')}]; ` +
                 `duplicated: [${res.duplicateIds.join(', ')}]. ` +
-                `Re-read the list with GET /api/workspaces/${workspaceId} and send back every ` +
+                `Re-read the list with GET /workspaces/${workspaceId} and send back every ` +
                 'row at this scope whose `reorderable` is true.',
             }
           : {};

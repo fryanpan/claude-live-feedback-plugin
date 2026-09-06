@@ -1,5 +1,5 @@
 /**
- * `GET /api/workspaces/:id/related-work` — the matching step over a real board.
+ * `GET /workspaces/:id/related-work` — the matching step over a real board.
  *
  * The scorer itself is unit-tested in `packages/core/src/related-work.test.ts`;
  * what this suite is for is everything the route decides and the scorer cannot
@@ -49,7 +49,7 @@ interface RelatedBody {
   matches: RelatedMatch[];
 }
 
-describe('GET /api/workspaces/:id/related-work', () => {
+describe('GET /workspaces/:id/related-work', () => {
   let dataDir: string;
   let handle: ServerHandle;
   let base: string;
@@ -65,7 +65,7 @@ describe('GET /api/workspaces/:id/related-work', () => {
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
 
-    const wsRes = await fetch(`${base}/api/workspaces`, {
+    const wsRes = await fetch(`${base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'meeting-notes', goal: 'Notes worth keeping.' }),
@@ -147,7 +147,7 @@ describe('GET /api/workspaces/:id/related-work', () => {
 
   async function relatedOn(board: string, params: Record<string, string>): Promise<RelatedBody> {
     const qs = new URLSearchParams(params).toString();
-    const res = await fetch(`${base}/api/workspaces/${board}/related-work?${qs}`);
+    const res = await fetch(`${base}/workspaces/${board}/related-work?${qs}`);
     expect(res.status, await res.clone().text()).toBe(200);
     return (await res.json()) as RelatedBody;
   }
@@ -222,7 +222,7 @@ describe('GET /api/workspaces/:id/related-work', () => {
   });
 
   it('refuses a request with no query, naming what to pass', async () => {
-    const res = await fetch(`${base}/api/workspaces/${wsId}/related-work?q=%20%20`);
+    const res = await fetch(`${base}/workspaces/${wsId}/related-work?q=%20%20`);
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string; hint: string };
     expect(body.error).toBe('q required');
@@ -230,7 +230,7 @@ describe('GET /api/workspaces/:id/related-work', () => {
   });
 
   it('404s on a board that does not exist', async () => {
-    const res = await fetch(`${base}/api/workspaces/w-nope/related-work?q=meeting%20notes`);
+    const res = await fetch(`${base}/workspaces/w-nope/related-work?q=meeting%20notes`);
     expect(res.status).toBe(404);
   });
 
@@ -244,7 +244,7 @@ describe('GET /api/workspaces/:id/related-work', () => {
     // filter that missed either one would leak a neighbouring board's work
     // into this board's answer, and the caller would file a clarifying
     // question about a goal nobody here can see.
-    const otherRes = await fetch(`${base}/api/workspaces`, {
+    const otherRes = await fetch(`${base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'billing', goal: 'Invoices that reconcile.' }),

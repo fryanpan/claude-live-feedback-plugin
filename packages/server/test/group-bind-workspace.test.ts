@@ -13,7 +13,7 @@
  *   - a BOARD workspace is the board: goals, tasks, and a list of attached ids.
  *
  * A board's `docIds` is a list of ATTACHMENT ids, and an attachment is either
- * a doc room or a grouping — `POST /api/workspaces/:id/docs` has accepted both
+ * a doc room or a grouping — `POST /workspaces/:id/docs` has accepted both
  * since it was written, and the board sidebar already resolves a grouping id
  * through the workspace endpoints. So the unit that goes on the board is the
  * grouping, and its members stay off: a hundred-file review is one row, not a
@@ -79,7 +79,7 @@ describe('a group bind lands on a board, as one unit', () => {
     });
 
   const newBoard = async (name: string): Promise<string> => {
-    const r = await post('/api/workspaces', { name, goal: 'Ship.' });
+    const r = await post('/workspaces', { name, goal: 'Ship.' });
     return ((await r.json()) as { workspace: { id: string } }).workspace.id;
   };
 
@@ -144,7 +144,7 @@ describe('a group bind lands on a board, as one unit', () => {
     // And findable without the URL — the point of the task. A board the
     // server materialized was never named to anyone, so the list is the only
     // way in.
-    const list = await local('/api/workspaces');
+    const list = await local('/workspaces');
     const ids = ((await list.json()) as { boardWorkspaces: { id: string }[] }).boardWorkspaces.map(
       (w) => w.id,
     );
@@ -169,11 +169,11 @@ describe('a group bind lands on a board, as one unit', () => {
   });
 
   it('files a folder bind the same way', async () => {
-    // bind_folder is a second route into the same shape (POST /api/workspaces
+    // bind_folder is a second route into the same shape (POST /workspaces
     // with folderPath), and it is the one a reader forgets exists.
     const folder = newFolder('bound');
     try {
-      const r = await post('/api/workspaces', { folderPath: folder });
+      const r = await post('/workspaces', { folderPath: folder });
       expect(r.status).toBe(200);
       const body = (await r.json()) as FolderResponse;
       expect(body.hubWorkspaceId).toBeTruthy();
@@ -189,7 +189,7 @@ describe('a group bind lands on a board, as one unit', () => {
     const folder = newFolder('named');
     try {
       const boardId = await newBoard('named-folder-board');
-      const r = await post('/api/workspaces', { folderPath: folder, hubWorkspaceId: boardId });
+      const r = await post('/workspaces', { folderPath: folder, hubWorkspaceId: boardId });
       const body = (await r.json()) as FolderResponse;
       expect(body.hubWorkspaceId).toBe(boardId);
       expect(handle.tasks.getWorkspace(boardId)?.docIds).toContain(body.workspaceId);
@@ -224,7 +224,7 @@ describe('a group bind lands on a board, as one unit', () => {
     expect(handle.tasks.getWorkspace(holdingId)?.docIds).toContain('rev-moved');
 
     const realId = await newBoard('real-home-for-review');
-    expect((await post(`/api/workspaces/${realId}/docs`, { docId: 'rev-moved' })).status).toBe(200);
+    expect((await post(`/workspaces/${realId}/docs`, { docId: 'rev-moved' })).status).toBe(200);
 
     expect(handle.tasks.getWorkspace(realId)?.docIds).toContain('rev-moved');
     expect(handle.tasks.getWorkspace(holdingId)?.docIds).not.toContain('rev-moved');
@@ -239,7 +239,7 @@ describe('a group bind lands on a board, as one unit', () => {
     const boardId = ((await r.json()) as DiffResponse).hubWorkspaceId as string;
     expect(handle.tasks.getWorkspace(boardId)?.docIds).toContain('rev-deleted');
 
-    const del = await local('/api/workspaces/rev-deleted?force=true', { method: 'DELETE' });
+    const del = await local('/workspaces/rev-deleted?force=true', { method: 'DELETE' });
     expect(del.status).toBe(200);
     expect(handle.tasks.getWorkspace(boardId)?.docIds).not.toContain('rev-deleted');
   });

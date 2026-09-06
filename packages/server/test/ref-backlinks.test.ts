@@ -56,7 +56,7 @@ describe('POST /api/refs/backlinks', () => {
     });
 
   const mkTask = async (workspaceId: string, title: string, links: Ref[]): Promise<Task> => {
-    const r = await post(`/api/workspaces/${workspaceId}/tasks`, {
+    const r = await post(`/workspaces/${workspaceId}/tasks`, {
       title,
       goal: 'chores',
       author: AGENT,
@@ -79,9 +79,9 @@ describe('POST /api/refs/backlinks', () => {
     handle = createServer({ port: 0, dataDir });
     base = `http://127.0.0.1:${handle.port}`;
 
-    const ws = await post('/api/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' });
+    const ws = await post('/workspaces', { name: 'search-revamp', goal: 'Ship search v2.' });
     wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
-    const other = await post('/api/workspaces', { name: 'billing', goal: 'Ship invoices.' });
+    const other = await post('/workspaces', { name: 'billing', goal: 'Ship invoices.' });
     otherWsId = ((await other.json()) as { workspace: { id: string } }).workspace.id;
 
     citesPr = await mkTask(wsId, 'review the ranking change', [{ kind: 'url', url: PR }]);

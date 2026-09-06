@@ -66,7 +66,7 @@ describe('agent notes routes', () => {
 
   async function boardWithLead(name = 'search-revamp'): Promise<string> {
     const { workspace } = await jj<{ workspace: { id: string } }>(
-      await post('/api/workspaces', { name, leadAgentId: LEAD.id }),
+      await post('/workspaces', { name, leadAgentId: LEAD.id }),
     );
     await jj(
       await post(`/workspaces/${workspace.id}/agents`, {
@@ -79,7 +79,7 @@ describe('agent notes routes', () => {
 
   async function inProgressRow(workspaceId: string, title: string): Promise<string> {
     const { task } = await jj<{ task: { id: string } }>(
-      await post(`/api/workspaces/${workspaceId}/tasks`, {
+      await post(`/workspaces/${workspaceId}/tasks`, {
         title,
         body: `Agent can ${title.toLowerCase()} so that the queue keeps moving.`,
         assignee: LEAD.name,
@@ -279,7 +279,7 @@ describe('agent notes routes', () => {
   it('a person moving the row in-progress leaves it with its assignee (positive control)', async () => {
     const wsId = await boardWithLead();
     const { task } = await jj<{ task: { id: string } }>(
-      await post(`/api/workspaces/${wsId}/tasks`, {
+      await post(`/workspaces/${wsId}/tasks`, {
         title: 'Moved by a person',
         body: 'Agent can pick this up so that the queue keeps moving.',
         assignee: LEAD.name,

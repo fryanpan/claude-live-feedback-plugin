@@ -88,7 +88,7 @@ describe('broadcast event ids', () => {
   });
 
   it('stamps the SAME eid on both channels of one broadcast, and a new one per event', async () => {
-    const w = await post('/api/workspaces', { name: 'Event Id Board', goal: 'Ship it.' });
+    const w = await post('/workspaces', { name: 'Event Id Board', goal: 'Ship it.' });
     const { workspace } = (await w.json()) as { workspace: { id: string } };
     const path = join(srcDir, 'doc-one.md');
     writeFileSync(path, '# doc-one\n\nBody.\n');

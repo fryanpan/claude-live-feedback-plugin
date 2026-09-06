@@ -796,17 +796,17 @@ describe('answer + undo drive the shared queue — retire everywhere, reopen eve
   /** The one Home derivation: the workspace review-items route, which reads
    *  the stamps off the declaration. No second state to sync is the design. */
   async function queueItems(workspaceId: string): Promise<Array<{ threadId?: string }>> {
-    const res = await fetch(`${base}/api/workspaces/${workspaceId}/review-items`);
+    const res = await fetch(`${base}/workspaces/${workspaceId}/review-items`);
     expect(res.status).toBe(200);
     return ((await res.json()) as { items: Array<{ threadId?: string }> }).items;
   }
 
   it('an answer retires the item from the queue and an undo re-offers it', async () => {
-    const ws = await post('/api/workspaces', { name: 'undo-rt', goal: 'Round-trip the record.' });
+    const ws = await post('/workspaces', { name: 'undo-rt', goal: 'Round-trip the record.' });
     expect(ws.status, await ws.clone().text()).toBe(200);
     const { workspace } = (await ws.json()) as { workspace: { id: string } };
     const docId = await mkdoc();
-    expect((await post(`/api/workspaces/${workspace.id}/docs`, { docId })).status).toBe(200);
+    expect((await post(`/workspaces/${workspace.id}/docs`, { docId })).status).toBe(200);
 
     const seeded = await seedThread(docId, DECISION);
     const commentId = seeded.comments[0]?.id ?? '';

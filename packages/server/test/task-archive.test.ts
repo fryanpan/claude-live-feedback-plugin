@@ -236,18 +236,18 @@ describe('archive + restore routes', () => {
   // as an agent would make every "gone from the queue" assertion pass whether
   // archiving worked or not, which is the vacuous-probe failure.
   const makeTask = async (title: string): Promise<Task> => {
-    const r = await post(`/api/workspaces/${wsId}/tasks`, { author: PERSON, title });
+    const r = await post(`/workspaces/${wsId}/tasks`, { author: PERSON, title });
     return ((await r.json()) as { task: Task }).task;
   };
 
   const listIds = async (query = ''): Promise<string[]> => {
-    const r = await local(`/api/workspaces/${wsId}/tasks${query}`);
+    const r = await local(`/workspaces/${wsId}/tasks?format=json${query.replace('?', '&')}`);
     const { tasks } = (await r.json()) as { tasks: Task[] };
     return tasks.map((t) => t.id);
   };
 
   const nextIds = async (query = ''): Promise<string[]> => {
-    const r = await local(`/api/workspaces/${wsId}/next${query}`);
+    const r = await local(`/workspaces/${wsId}/next${query}`);
     const { tasks } = (await r.json()) as { tasks: Array<{ id: string }> };
     return tasks.map((t) => t.id);
   };
@@ -256,7 +256,7 @@ describe('archive + restore routes', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'task-archive-routes-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
-    const r = await post('/api/workspaces', { name: 'search-revamp' });
+    const r = await post('/workspaces', { name: 'search-revamp' });
     wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
   });
 

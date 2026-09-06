@@ -3,7 +3,7 @@
  *
  * task-staleness.test.ts proves the arming rule. It cannot prove the notes
  * survive the trip from the task's body room, through the projection, into
- * `buildQueue`, and out of `GET /api/workspaces/:id/next` — and that trip is
+ * `buildQueue`, and out of `GET /workspaces/:id/next` — and that trip is
  * where this class of bug lives here: every REST handler hand-copies fields,
  * and the route is the layer nothing type-checks. `groups` was accepted,
  * returned ok:true, and discarded exactly this way.
@@ -74,13 +74,13 @@ describe('premise drift over the work-queue route', () => {
   };
 
   const nextRows = async (workspaceId: string): Promise<Row[]> => {
-    const r = await local(`/api/workspaces/${workspaceId}/next?includeBlocked=true`);
+    const r = await local(`/workspaces/${workspaceId}/next?includeBlocked=true`);
     expect(r.status).toBe(200);
     return ((await r.json()) as { tasks: Row[] }).tasks;
   };
 
   const makeTask = async (workspaceId: string, title: string, body: string): Promise<string> => {
-    const r = await post(`/api/workspaces/${workspaceId}/tasks`, {
+    const r = await post(`/workspaces/${workspaceId}/tasks`, {
       title,
       body,
       assignee: 'Reviewer',
@@ -104,7 +104,7 @@ describe('premise drift over the work-queue route', () => {
     // here the subject is the plumbing, and a real 24h gap is unwaitable.
     handle = createServer({ port: 0, dataDir, premiseStaleAfterMs: 0 });
     base = `http://localhost:${handle.port}`;
-    const w = await post('/api/workspaces', { name: 'queue', goal: 'Ship it.' });
+    const w = await post('/workspaces', { name: 'queue', goal: 'Ship it.' });
     workspaceId = ((await w.json()) as { workspace: { id: string } }).workspace.id;
   });
 

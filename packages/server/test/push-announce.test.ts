@@ -103,10 +103,10 @@ describe('filing a review item announces it', () => {
     );
 
     const { workspace } = (await (
-      await post('/api/workspaces', { name: 'index-rebuild', goal: 'Rebuild the index nightly.' })
+      await post('/workspaces', { name: 'index-rebuild', goal: 'Rebuild the index nightly.' })
     ).json()) as { workspace: { id: string } };
     const { task } = (await (
-      await post(`/api/workspaces/${workspace.id}/tasks`, {
+      await post(`/workspaces/${workspace.id}/tasks`, {
         title: 'Rebuild the index nightly',
         assignee: 'Index Keeper',
         author: AGENT,
@@ -152,10 +152,10 @@ describe('filing a review item announces it', () => {
       });
 
     const { workspace } = (await (
-      await post('/api/workspaces', { name: 'index-rebuild', goal: 'Rebuild the index nightly.' })
+      await post('/workspaces', { name: 'index-rebuild', goal: 'Rebuild the index nightly.' })
     ).json()) as { workspace: { id: string } };
     const { task } = (await (
-      await post(`/api/workspaces/${workspace.id}/tasks`, {
+      await post(`/workspaces/${workspace.id}/tasks`, {
         title: 'Rebuild the index nightly',
         assignee: 'Index Keeper',
         author: AGENT,
@@ -203,10 +203,10 @@ describe('filing a review item announces it', () => {
     await post('/api/push/subscriptions', { author: AGENT, subscription: sub });
 
     const { workspace } = (await (
-      await post('/api/workspaces', { name: 'index-rebuild', goal: 'Rebuild the index nightly.' })
+      await post('/workspaces', { name: 'index-rebuild', goal: 'Rebuild the index nightly.' })
     ).json()) as { workspace: { id: string } };
     const { task } = (await (
-      await post(`/api/workspaces/${workspace.id}/tasks`, {
+      await post(`/workspaces/${workspace.id}/tasks`, {
         title: 'Rebuild the index nightly',
         assignee: 'Index Keeper',
         author: AGENT,

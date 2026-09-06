@@ -168,7 +168,7 @@ const writes = {
       }),
     }),
   createWorkspace: (b: Booted, cookie?: string) =>
-    fetch(`${b.base}/api/workspaces`, {
+    fetch(`${b.base}/workspaces`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -354,7 +354,7 @@ describe('with the gate ON', () => {
     // Not only POST. The gate is method-keyed, so every mutating verb runs
     // the same risk of taking agents offline — and has to refuse a browser.
     const b = boot(true);
-    const created = await fetch(`${b.base}/api/workspaces`, {
+    const created = await fetch(`${b.base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'Agent board' }),
@@ -363,14 +363,14 @@ describe('with the gate ON', () => {
     const { workspace } = (await created.json()) as { workspace: { id: string } };
     const workspaceId = workspace.id;
 
-    const agentPut = await fetch(`${b.base}/api/workspaces/${workspaceId}/retired`, {
+    const agentPut = await fetch(`${b.base}/workspaces/${workspaceId}/retired`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ retired: true, author: reviewer }),
     });
     expect(agentPut.status).toBe(200);
 
-    const browserPut = await fetch(`${b.base}/api/workspaces/${workspaceId}/retired`, {
+    const browserPut = await fetch(`${b.base}/workspaces/${workspaceId}/retired`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json', ...browserHeaders(b.base) },
       body: JSON.stringify({ retired: false, author: reviewer }),
@@ -420,7 +420,7 @@ describe('with the gate ON', () => {
     // The control, in the same test: an ordinary POST from the SAME unsigned
     // browser on the SAME server is still refused. Without this the 200 above
     // would be equally consistent with a gate that had stopped working.
-    const gated = await fetch(`${b.base}/api/workspaces`, {
+    const gated = await fetch(`${b.base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...browserHeaders(b.base) },
       body: JSON.stringify({ name: 'A board' }),
@@ -443,7 +443,7 @@ describe('with the gate ON', () => {
     writeFileSync(join(folder, 'note.md'), '# Note\n\nProse a reader can comment on.\n');
     // Created over the AGENT path, which is how a review actually comes into
     // being — the browser is only ever the reader here.
-    const bound = await fetch(`${b.base}/api/workspaces`, {
+    const bound = await fetch(`${b.base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ folderPath: folder, title: 'A folder review' }),

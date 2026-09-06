@@ -14,7 +14,7 @@
  * nothing — but a containment assertion passes on a body that merely holds
  * the transcript somewhere inside a sentence the speaker never said.
  *
- * Driven through the real route table (POST /api/workspaces/:id/voice): the
+ * Driven through the real route table (POST /workspaces/:id/voice): the
  * route layer hand-copies fields and nothing type-checks it, so a unit test on
  * the router alone would not prove the actor ever arrives.
  *
@@ -111,7 +111,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
     });
 
   const voice = (workspaceId: string, body: unknown) =>
-    post(`/api/workspaces/${workspaceId}/voice`, body);
+    post(`/workspaces/${workspaceId}/voice`, body);
 
   const say = async (
     workspaceId: string,
@@ -148,7 +148,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
     audit(workspaceId).filter((r) => r.event === 'task.transitioned' && r.taskId === taskId);
 
   const newTask = async (workspaceId: string, body: Record<string, unknown>): Promise<string> => {
-    const r = await post(`/api/workspaces/${workspaceId}/tasks`, { author: PERSON, ...body });
+    const r = await post(`/workspaces/${workspaceId}/tasks`, { author: PERSON, ...body });
     expect(r.status).toBe(200);
     return ((await r.json()) as { task: { id: string } }).task.id;
   };
@@ -163,7 +163,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
     const made = await post('/api/docs', { docId, type: 'markdown', sourceUrl: file });
     expect(made.status).toBe(200);
     const mintedId = ((await made.json()) as { docId: string }).docId;
-    expect((await post(`/api/workspaces/${boardId}/docs`, { docId: mintedId })).status).toBe(200);
+    expect((await post(`/workspaces/${boardId}/docs`, { docId: mintedId })).status).toBe(200);
     return mintedId;
   };
 
@@ -206,7 +206,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
     });
     base = `http://localhost:${handle.port}`;
 
-    const ws = await post('/api/workspaces', {
+    const ws = await post('/workspaces', {
       name: 'search-revamp',
       goal: 'Ship the new search.',
     });
@@ -246,7 +246,7 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
     // which is what keeps it an honest fixture for the queued fallback.
     agentStream = await openWorkspaceStream(base, boardId);
 
-    const quiet = await post('/api/workspaces', {
+    const quiet = await post('/workspaces', {
       name: 'billing-cleanup',
       goal: 'Retire the old invoicing path.',
     });

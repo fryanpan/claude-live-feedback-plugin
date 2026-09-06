@@ -379,7 +379,7 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
     name: string,
     docName: string,
   ): Promise<{ workspaceId: string; docId: string }> => {
-    const ws = (await (await rest('/api/workspaces', 'POST', { name })).json()) as {
+    const ws = (await (await rest('/workspaces', 'POST', { name })).json()) as {
       workspace: { id: string };
     };
     const workspaceId = ws.workspace.id;
@@ -397,7 +397,7 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
     expect(docId).toBeTruthy();
     // A spoken change is what queues for a board's lead; with no live lead it
     // waits instead of being routed to anybody.
-    const voice = await rest(`/api/workspaces/${workspaceId}/voice`, 'POST', {
+    const voice = await rest(`/workspaces/${workspaceId}/voice`, 'POST', {
       author: { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' },
       transcript: 'make cutting token usage the top goal',
     });
@@ -550,11 +550,11 @@ describe('a declared lead comes back live after a respawn', () => {
   };
 
   it('is re-ATTACHED, not merely re-subscribed, and its lead-addressed asks arrive', async () => {
-    const w = await rest('/api/workspaces', 'POST', { name: 'declared-board' });
+    const w = await rest('/workspaces', 'POST', { name: 'declared-board' });
     const workspaceId = ((await w.json()) as { workspace: { id: string } }).workspace.id;
     /** A spoken change is the lead-addressed ask that goes live or queues. */
     const speak = async (transcript: string): Promise<string> => {
-      const res = await rest(`/api/workspaces/${workspaceId}/voice`, 'POST', {
+      const res = await rest(`/workspaces/${workspaceId}/voice`, 'POST', {
         transcript,
         author: PERSON,
       });
@@ -602,7 +602,7 @@ describe('a declared lead comes back live after a respawn', () => {
   it('POSITIVE CONTROL: does not attach a respawn to a board it only watches', async () => {
     const OTHER = 'Bystander Tester';
     const OTHER_ID = 'agent-bystander-tester';
-    const w = await rest('/api/workspaces', 'POST', { name: 'someone-elses-board' });
+    const w = await rest('/workspaces', 'POST', { name: 'someone-elses-board' });
     const workspaceId = ((await w.json()) as { workspace: { id: string } }).workspace.id;
     const path = join(dataDir, 'bystander-doc.md');
     writeFileSync(path, '# bystander-doc\n\nBody.\n');
@@ -624,7 +624,7 @@ describe('a declared lead comes back live after a respawn', () => {
     };
     expect(res.attachments.map((a) => a.agentId)).not.toContain(OTHER_ID);
     // …and the seat is still empty, rather than quietly taken by a bystander.
-    const board = (await (await rest(`/api/workspaces/${workspaceId}`, 'GET')).json()) as {
+    const board = (await (await rest(`/workspaces/${workspaceId}?format=json`, 'GET')).json()) as {
       workspace: { leadAgentId?: string };
     };
     expect(board.workspace.leadAgentId).toBeUndefined();
@@ -803,13 +803,20 @@ describe('a restore that could not reach the server fails loudly, then recovers'
     // The backoff is doing something: an immediate second call does not spend
     // another attempt on a server that was unreachable milliseconds ago.
     const again = (await second.tool('list_watched_docs')) as {
-      restore: { status: string; attempts: number };
+      restore: { status: string; attempts: number; error?: string };
     };
     expect(again.restore.status).toBe('failed');
+    // The load-bearing line, and it needs no wall-clock window beside it. A
+    // machine slow enough to have left the backoff would have RUN the retry,
+    // failed it against the still-dead port, and left `attempts` at 2 — so a
+    // lapsed window fails here, loudly, on the assertion that carries the
+    // coverage. The `Date.now() - failedAt` delta that used to sit under this
+    // line restated the same fact in the one form that could also go red on a
+    // loaded CI box for no reason at all.
     expect(again.restore.attempts).toBe(1);
-    // Asserted about the WINDOW, so a machine slow enough to have left it
-    // fails loudly instead of passing the line above for the wrong reason.
-    expect(Date.now() - failedAt).toBeLessThan(FIRST_BACKOFF_MS);
+    // Nothing else moved either: the recorded failure is the FIRST one, not a
+    // second attempt's identical-looking result.
+    expect(again.restore.error).toBe(failed.restore.error);
 
     // Bring the same origin back, over the same data dir — so the set the
     // first child persisted is there to be restored.

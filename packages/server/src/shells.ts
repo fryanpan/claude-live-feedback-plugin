@@ -346,7 +346,7 @@ small{color:#777}</style>
 <h1>Workspace not found</h1>
 <p>No board workspace exists for <code>${safe}</code>. Board workspaces are
 created by an agent calling <code>create_workspace</code> (or
-<code>POST /api/workspaces</code> with a name).</p>
+<code>POST /workspaces</code> with a name).</p>
 <p><small><a href="/">all docs</a></small></p>`;
 }
 

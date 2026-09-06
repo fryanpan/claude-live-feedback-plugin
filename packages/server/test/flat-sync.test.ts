@@ -396,7 +396,7 @@ describe('flat write-back through bindDiff', () => {
     await waitForFileToBe(file, downtimeEdit);
   });
 
-  it('POST /api/workspaces/:id/editable-file routes the whole flow (route-layer test per learnings)', async () => {
+  it('POST /api/reviews/:id/editable-file routes the whole flow (route-layer test per learnings)', async () => {
     const handle: ServerHandle = createServer({ port: 0, dataDir });
     try {
       const httpBase = `http://localhost:${handle.port}`;
@@ -408,7 +408,7 @@ describe('flat write-back through bindDiff', () => {
       expect(bind.ok).toBe(true);
       const bound = (await bind.json()) as { reviewId: string };
       const open = await fetch(
-        `${httpBase}/api/workspaces/${encodeURIComponent(bound.reviewId)}/editable-file`,
+        `${httpBase}/api/reviews/${encodeURIComponent(bound.reviewId)}/editable-file`,
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },

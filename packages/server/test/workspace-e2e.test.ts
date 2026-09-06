@@ -54,8 +54,8 @@ describe('workspace folder-review e2e (HTTP)', () => {
   let workspaceId: string;
   let files: Map<string, BindFile>;
 
-  it('(a) POST /api/workspaces binds lazily (entry only); the rest open on demand', async () => {
-    const r = await fetch(`${base}/api/workspaces`, {
+  it('(a) POST /workspaces binds lazily (entry only); the rest open on demand', async () => {
+    const r = await fetch(`${base}/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ folderPath: folder, owner: '/cwd' }),
@@ -74,7 +74,7 @@ describe('workspace folder-review e2e (HTTP)', () => {
     // Open the remaining files like a reviewer clicking the all-files tree.
     for (const relPath of ['src/index.ts', 'src/data.json']) {
       const cr = await fetch(
-        `${base}/api/workspaces/${encodeURIComponent(workspaceId)}/context-file`,
+        `${base}/api/reviews/${encodeURIComponent(workspaceId)}/context-file`,
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -94,8 +94,8 @@ describe('workspace folder-review e2e (HTTP)', () => {
     expect([...files.keys()].sort()).toEqual(['README.md', 'src/data.json', 'src/index.ts']);
   });
 
-  it('(b) GET /api/workspaces/:id/tree returns the nested tree with zero open counts', async () => {
-    const r = await fetch(`${base}/api/workspaces/${encodeURIComponent(workspaceId)}/tree`);
+  it('(b) GET /api/reviews/:id/tree returns the nested tree with zero open counts', async () => {
+    const r = await fetch(`${base}/api/reviews/${encodeURIComponent(workspaceId)}/tree`);
     type FileNode = { type: 'file'; relPath: string; openCount: number; fileType: string };
     type DirNode = { type: 'dir'; name: string; openCount: number; children: Node[] };
     type Node = FileNode | DirNode;
@@ -162,7 +162,7 @@ describe('workspace folder-review e2e (HTTP)', () => {
 
     // Re-fetch the tree: the code file's openCount is 1, and it rolls up
     // through the `src` folder and the workspace total.
-    const r2 = await fetch(`${base}/api/workspaces/${encodeURIComponent(workspaceId)}/tree`);
+    const r2 = await fetch(`${base}/api/reviews/${encodeURIComponent(workspaceId)}/tree`);
     type FileNode = { type: 'file'; relPath: string; openCount: number };
     type DirNode = { type: 'dir'; name: string; openCount: number; children: Node[] };
     type Node = FileNode | DirNode;

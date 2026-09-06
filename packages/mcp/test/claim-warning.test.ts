@@ -22,13 +22,11 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { type PresenceRow, claimWarning } from '../src/claim-warning.ts';
+import { type BundleHarness, startBundle } from './harness/mcp-bundle.ts';
 import { readMcpSource } from './harness/mcp-source.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = readMcpSource();
-/** Peers load the BUNDLE, not the source. A green build step is not evidence
- *  the artifact carries the change. */
-const BUNDLE = readFileSync(join(HERE, '../../plugin/mcp/index.js'), 'utf8');
 
 const NOW = 1_700_000_000_000;
 const ME = 'claim-surfacing';
@@ -236,30 +234,87 @@ describe('claiming a row says who was already on it', () => {
 });
 
 /**
- * Peers load `packages/plugin/mcp/index.js`. Comments are stripped and only
- * runtime strings survive, so these needles are whole literal spans that do
- * not cross a `${...}` boundary.
+ * Peers load `packages/plugin/mcp/index.js`, so a source-only change reaches
+ * nobody — and this is the half that says the shipped artifact does the work.
+ *
+ * It used to be four `BUNDLE.toContain(...)` assertions. Every one of them
+ * would have passed on a bundle whose `claimNoticeFor` call was deleted, on a
+ * warning built and then dropped on the floor, and on a description string no
+ * client is ever handed — the literals survive all three. So it now runs the
+ * bundle over stdio: the guidance is what `tools/list` returns, and the
+ * warning is what a real `task_transition` answers with.
+ *
+ * The board must be one this session has attached to: `claimNoticeFor` reads
+ * presence per attached board and answers silence otherwise (attachments.ts),
+ * so `attach_agent` first is the flow, not ceremony.
  */
 describe('the built bundle carries it', () => {
-  it('can see a literal that is really there (positive control)', () => {
-    expect(BUNDLE.length).toBeGreaterThan(1000);
-    expect(BUNDLE).toContain('claimedBy');
-  });
+  const NOW_ROW = {
+    id: 't-K69wx',
+    title: 'Ship the search revamp',
+    claimedBy: {
+      agentId: 'row-presence',
+      at: Date.now() - 12 * 60_000,
+      lastHeartbeat: Date.now() - 20_000,
+      lastToolCallAt: Date.now() - 40_000,
+      state: 'active',
+      stateLabel: 'active',
+    },
+  };
 
-  it('cannot see a literal that is not (negative control)', () => {
-    expect(BUNDLE).not.toContain('DO NOT START THAT COLUMN');
-  });
+  it('declares the queue guidance and warns at the moment of the claim', async () => {
+    let h: BundleHarness | undefined;
+    try {
+      h = await startBundle((req) => {
+        if (req.method === 'GET' && req.path.endsWith('/next')) return { tasks: [NOW_ROW] };
+        if (req.path.endsWith('/transition'))
+          return { task: { id: 't-K69wx', status: 'in-progress' }, blockers: [] };
+        return {};
+      });
 
-  it('ships the next_tasks guidance', () => {
-    // The queue's own share of it: the field a picker has to read, and the
-    // instruction to skip a row a live session already holds. The rest is in
-    // the skill, asserted above against the file that ships alongside this.
-    expect(BUNDLE).toContain('claimedBy is an active session that is not you');
-  });
+      // The declaration a real MCP client receives, not a string in a file.
+      const decl = h.tool('next_tasks');
+      expect(decl, 'the bundle declares no next_tasks tool').toBeDefined();
+      expect(JSON.stringify(decl)).toContain('claimedBy is an active session that is not you');
+      // Negative control for the probe: a phrase that is not there must not
+      // be found, or the assertion above proves nothing about this bundle.
+      expect(JSON.stringify(decl)).not.toContain('DO NOT START THAT COLUMN');
 
-  it('ships the claim-time warning', () => {
-    expect(BUNDLE).toContain('[claim]');
-    expect(BUNDLE).toContain('message that session over claude-hive');
-    expect(BUNDLE).toContain('Nothing here refuses you');
-  });
+      await h.call('attach_agent', { workspaceId: 'w-stub' });
+      const claim = await h.call('task_transition', { taskId: 't-K69wx', to: 'in-progress' });
+
+      // The status the caller always got is untouched — the warning is
+      // additive, which is the whole compat argument above.
+      expect(claim.isError).toBe(false);
+      expect((claim.json as { status?: string }).status).toBe('in-progress');
+
+      const warning = (claim.json as { warning?: string }).warning ?? '';
+      expect(warning).toContain('[claim]');
+      expect(warning).toContain('row-presence');
+      expect(warning).toContain('message that session over claude-hive');
+      expect(warning).toContain('Nothing here refuses you');
+    } finally {
+      await h?.stop();
+    }
+  }, 60_000);
+
+  it('CONTROL: says nothing on a row nobody is on', async () => {
+    // Without this, the assertions above could be satisfied by a bundle that
+    // warns on every pickup — which is how a warning stops being read.
+    let h: BundleHarness | undefined;
+    try {
+      h = await startBundle((req) => {
+        if (req.method === 'GET' && req.path.endsWith('/next'))
+          return { tasks: [{ id: 't-K69wx', title: 'Ship the search revamp' }] };
+        if (req.path.endsWith('/transition'))
+          return { task: { id: 't-K69wx', status: 'in-progress' }, blockers: [] };
+        return {};
+      });
+      await h.call('attach_agent', { workspaceId: 'w-stub' });
+      const claim = await h.call('task_transition', { taskId: 't-K69wx', to: 'in-progress' });
+      expect((claim.json as { warning?: string }).warning).toBeUndefined();
+    } finally {
+      await h?.stop();
+    }
+  }, 60_000);
 });

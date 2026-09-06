@@ -88,7 +88,7 @@ describe('an idle SSE stream survives past the old death window', () => {
     handle = createServer({ port: 0, dataDir });
     const base = `http://localhost:${handle.port}`;
     const host = `localhost:${handle.port}`;
-    const made = await fetch(`${base}/api/workspaces`, {
+    const made = await fetch(`${base}/workspaces`, {
       method: 'POST',
       headers: { host, 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'Idle Board' }),

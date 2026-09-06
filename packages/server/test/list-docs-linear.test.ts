@@ -76,7 +76,7 @@ describe('GET /api/docs does not re-list the workspaces per row', () => {
     // production shape: the docs that dominate the listing are diff-review
     // members no board holds, and they are the rows that used to pay for
     // BOTH lookups, the docId one and the review-id fallback.
-    const ws = await local('/api/workspaces', {
+    const ws = await local('/workspaces', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'Board holding nothing' }),

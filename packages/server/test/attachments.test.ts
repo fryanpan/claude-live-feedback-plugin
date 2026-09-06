@@ -293,9 +293,17 @@ describe('TaskStore attachment registry', () => {
     if (!back.ok) throw new Error('heartbeat failed');
     expect(back.attachment.lastToolCallAt).toBe(t0 + 2);
     // — and never forward-date it past now (a claim of future work is fake).
-    const future = store.heartbeat(ws.id, 'lead', { toolCallAt: Date.now() + 60_000 });
+    // Bracketed by two readings taken either side of the call, so the clamp is
+    // pinned to the instant of THIS call rather than to whenever the assertion
+    // after it happened to run. `<= Date.now()` read at assertion time also
+    // admitted "the store ignored the claim entirely and left the old value",
+    // which the lower bound now rules out.
+    const before = Date.now();
+    const future = store.heartbeat(ws.id, 'lead', { toolCallAt: before + 60_000 });
+    const after = Date.now();
     if (!future.ok) throw new Error('heartbeat failed');
-    expect(future.attachment.lastToolCallAt).toBeLessThanOrEqual(Date.now());
+    expect(future.attachment.lastToolCallAt).toBeGreaterThanOrEqual(before);
+    expect(future.attachment.lastToolCallAt).toBeLessThanOrEqual(after);
 
     expect(events.filter((e) => e.type === 'agent.heartbeat')).toHaveLength(4);
     expect(store.heartbeat(ws.id, 'ghost').ok).toBe(false);
@@ -435,7 +443,7 @@ describe('attachment routes + lead-addressed delivery', () => {
     local(path, { method: 'PUT', body: JSON.stringify(body) });
 
   const makeWorkspace = async (name: string, leadAgentId?: string): Promise<string> => {
-    const r = await post('/api/workspaces', {
+    const r = await post('/workspaces', {
       name,
       goal: 'Ship it.',
       ...(leadAgentId !== undefined ? { leadAgentId } : {}),
@@ -484,6 +492,41 @@ describe('attachment routes + lead-addressed delivery', () => {
     });
     expect(old.status).toBe(200);
     expect(handle.identities.get('agent-legacy-bundle')?.displayName).toBe('agent-legacy-bundle');
+  });
+
+  it('answers a malformed escape in an id rather than closing the connection', async () => {
+    // `matchWorkspaceRoute` safe-decodes the WORKSPACE segment and nothing
+    // else, so the ids these four routes pull out of the remainder were the
+    // unguarded half. A `%` with no valid escape behind it throws a URIError
+    // out of `decodeURIComponent`; thrown inside a route match it takes the
+    // whole request down — the socket closes with no status line at all,
+    // which is neither an allow nor a deny and is chosen by the caller.
+    //
+    // REACHING an `expect` on `status` IS the assertion here: none of these
+    // lines can run if the handler threw.
+    const wsId = await makeWorkspace('bad-escape-board');
+    const BAD = '%E0%A4%A';
+    expect((await post(`/workspaces/${wsId}/agents/${BAD}/heartbeat`, {})).status).toBe(404);
+    expect((await local(`/workspaces/${wsId}/agents/${BAD}`, { method: 'DELETE' })).status).toBe(
+      404,
+    );
+    expect((await post(`/workspaces/${wsId}/comment-queue/${BAD}/ack`, {})).status).toBe(200);
+    expect((await post(`/workspaces/${wsId}/voice-queue/${BAD}/ack`, {})).status).toBe(200);
+
+    // POSITIVE CONTROL. Without it the four verdicts above are also what a
+    // deleted route gives: the same two paths must answer a well-formed id,
+    // so the 404s read as "no such agent" rather than "no such route".
+    const attached = await post(`/workspaces/${wsId}/agents`, {
+      agentId: 'agent-well-formed',
+      runtime: 'claude-code-local',
+    });
+    expect(attached.status).toBe(200);
+    expect((await post(`/workspaces/${wsId}/agents/agent-well-formed/heartbeat`, {})).status).toBe(
+      200,
+    );
+    expect(
+      (await local(`/workspaces/${wsId}/agents/agent-well-formed`, { method: 'DELETE' })).status,
+    ).toBe(200);
   });
 
   it('POST attach → GET list round-trips every param, including endpoint + capabilities', async () => {
@@ -598,7 +641,7 @@ describe('attachment routes + lead-addressed delivery', () => {
     // cold-only assertion would pass against the code this replaces.
     const coldWs = await makeWorkspace('cold-board');
     const coldSse = listen(await local(`/workspaces/${coldWs}/events:stream`));
-    const cold = await post(`/api/workspaces/${coldWs}/tasks`, {
+    const cold = await post(`/workspaces/${coldWs}/tasks`, {
       author: PERSON,
       title: 'Nobody home',
     });
@@ -618,7 +661,7 @@ describe('attachment routes + lead-addressed delivery', () => {
       runtime: 'claude-code-local',
     });
     const hotSse = listen(await local(`/workspaces/${hotWs}/events:stream`));
-    const hot = await post(`/api/workspaces/${hotWs}/tasks`, {
+    const hot = await post(`/workspaces/${hotWs}/tasks`, {
       author: PERSON,
       title: 'Somebody home',
     });
@@ -641,7 +684,7 @@ describe('attachment routes + lead-addressed delivery', () => {
     // board state (who is responsible), never evidence that an ATTACHMENT
     // reached the ydoc, and this test still refuses the latter.
     const wsId = await makeWorkspace('clean-room-board', 'agent-board-lead');
-    await post(`/api/workspaces/${wsId}/tasks`, { author: PERSON, title: 'A visible task' });
+    await post(`/workspaces/${wsId}/tasks`, { author: PERSON, title: 'A visible task' });
     await post(`/workspaces/${wsId}/agents`, {
       agentId: 'relay-agent',
       runtime: 'webhook',
@@ -698,7 +741,7 @@ describe('attachment routes + lead-addressed delivery', () => {
       runtime: 'claude-code-local',
     });
     declaredStreams.push(await openWorkspaceStream(base, wsId));
-    return put(`/api/workspaces/${wsId}/lead`, { leadAgentId: agentId, author: PERSON });
+    return put(`/workspaces/${wsId}/lead`, { leadAgentId: agentId, author: PERSON });
   };
 
   it('a self-declaration leaves the board holding a LIVE lead attachment', async () => {
@@ -760,7 +803,7 @@ describe('attachment routes + lead-addressed delivery', () => {
     const wsId = await makeWorkspace('voice-declare-board', 'agent-away');
     await declareSelf(wsId, 'agent-self');
 
-    const r = await post(`/api/workspaces/${wsId}/voice`, {
+    const r = await post(`/workspaces/${wsId}/voice`, {
       transcript: 'make cutting token usage the top goal',
       author: PERSON,
     });
@@ -787,7 +830,7 @@ describe('attachment routes + lead-addressed delivery', () => {
       agentId: 'agent-elsewhere',
       runtime: 'claude-code-local',
     });
-    const seat = await put(`/api/workspaces/${wsId}/lead`, {
+    const seat = await put(`/workspaces/${wsId}/lead`, {
       leadAgentId: 'agent-elsewhere',
       author: PERSON,
     });
@@ -801,7 +844,7 @@ describe('attachment routes + lead-addressed delivery', () => {
     expect(list.attachments.map((a) => a.agentId)).toEqual(['agent-elsewhere']);
 
     const voice = (await (
-      await post(`/api/workspaces/${wsId}/voice`, {
+      await post(`/workspaces/${wsId}/voice`, {
         transcript: 'make cutting token usage the top goal',
         author: PERSON,
       })

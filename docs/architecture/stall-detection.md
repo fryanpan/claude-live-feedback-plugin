@@ -164,7 +164,7 @@ to disagree with the first.
 **A held review item is a finding of its own.** Every filing path that can
 put a row on the reader's queue passes a quality gate: a Haiku judge reads the board's
 `reviewItemCriteria` (a natural-language prompt; `set_review_item_criteria`,
-or `PUT /api/workspaces/:id/settings`) and the item, and answers
+or `PUT /workspaces/:id/settings`) and the item, and answers
 `{ok, reason}`. Not ok → the item is HELD: it stays on the ticket with the
 reason, leaves the Home queue and the answerable count, and the filer is
 told in the tool result and on the channel (`workspace.review_item_held`).

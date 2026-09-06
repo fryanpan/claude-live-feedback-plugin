@@ -1,5 +1,5 @@
 /**
- * DELETE /api/workspaces/:id, for a BOARD workspace.
+ * DELETE /workspaces/:id, for a BOARD workspace.
  *
  * The route existed and did not cover board workspaces at all:
  * `docStore.deleteWorkspace` starts from `docStore.list().filter(m =>
@@ -56,7 +56,7 @@ const AGENT: User = {
   color: '#888888',
 };
 
-describe('DELETE /api/workspaces/:id — board workspace', () => {
+describe('DELETE /workspaces/:id — board workspace', () => {
   let handle: ServerHandle | undefined;
   let dataDir: string | undefined;
   let base = '';
@@ -121,7 +121,7 @@ describe('DELETE /api/workspaces/:id — board workspace', () => {
    * board as absent before anything has been deleted.
    */
   const listWorkspaceIds = async (): Promise<string[]> => {
-    const r = await fetch(`${base}/api/workspaces`);
+    const r = await fetch(`${base}/workspaces`);
     const payload = (await r.json()) as { boardWorkspaces?: Array<{ id: string }> };
     return (payload.boardWorkspaces ?? []).map((w) => w.id);
   };
@@ -152,11 +152,11 @@ describe('DELETE /api/workspaces/:id — board workspace', () => {
   async function seed(): Promise<{ wsId: string; open: Task; done: Task }> {
     dataDir = mkdtempSync(join(tmpdir(), 'board-ws-delete-'));
     handle = await start(dataDir);
-    const ws = await post('/api/workspaces', { name: 'scratch', goal: 'Try one thing.' });
+    const ws = await post('/workspaces', { name: 'scratch', goal: 'Try one thing.' });
     const wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
 
     const mk = async (title: string): Promise<Task> => {
-      const r = await post(`/api/workspaces/${wsId}/tasks`, {
+      const r = await post(`/workspaces/${wsId}/tasks`, {
         title,
         goal: 'chores',
         author: AGENT,
@@ -192,7 +192,7 @@ describe('DELETE /api/workspaces/:id — board workspace', () => {
 
   it('refuses while tasks are still open, and names how many', async () => {
     const { wsId } = await seed();
-    const res = await del(`/api/workspaces/${wsId}`);
+    const res = await del(`/workspaces/${wsId}`);
     expect(res.status).toBe(409);
     const payload = (await res.json()) as { error: string; openTasks?: number };
     expect(payload.error).toBe('has-open-tasks');
@@ -241,7 +241,7 @@ describe('DELETE /api/workspaces/:id — board workspace', () => {
     expect(existsSync(voiceQueuePath(dataDir as string, wsId))).toBe(true);
     expect(legacyPaths.every((p) => existsSync(p))).toBe(true);
 
-    const res = await del(`/api/workspaces/${wsId}?force=true`);
+    const res = await del(`/workspaces/${wsId}?force=true`);
     expect(res.status).toBe(200);
 
     // Nothing anywhere under the data dir still carries this id — which is
@@ -267,7 +267,7 @@ describe('DELETE /api/workspaces/:id — board workspace', () => {
     // Wait for the board to actually reach disk first — deleting before the
     // debounced write would make this pass with the file removal deleted.
     expect(await awaitFile(tasksSidecarPath(dataDir as string, wsId))).toBe(true);
-    expect((await del(`/api/workspaces/${wsId}?force=true`)).status).toBe(200);
+    expect((await del(`/workspaces/${wsId}?force=true`)).status).toBe(200);
 
     await handle?.stop();
     handle = await start(dataDir as string);
@@ -289,7 +289,7 @@ describe('DELETE /api/workspaces/:id — board workspace', () => {
     rmSync(sidecar);
     mkdirSync(sidecar);
 
-    const res = await del(`/api/workspaces/${wsId}?force=true`);
+    const res = await del(`/workspaces/${wsId}?force=true`);
     expect(res.status).toBe(500);
     expect(((await res.json()) as { error: string }).error).toBe('persist-failed');
     // And the board is intact rather than half-deleted, so a retry once the
@@ -301,7 +301,7 @@ describe('DELETE /api/workspaces/:id — board workspace', () => {
     // rooms were never torn down. The board works and the comment is there.
     expect(handle?.docStore.get(workspaceDocId(wsId))).toBeDefined();
     expect(await openThreadCount(open.id)).toBe(1);
-    const again = await post(`/api/workspaces/${wsId}/tasks`, {
+    const again = await post(`/workspaces/${wsId}/tasks`, {
       title: 'after the failure',
       goal: 'chores',
       author: AGENT,
@@ -326,14 +326,14 @@ describe('DELETE /api/workspaces/:id — board workspace', () => {
     mkdirSync(`${boardYdoc}.deleting`);
     writeFileSync(join(`${boardYdoc}.deleting`, 'occupied'), 'in the way\n');
 
-    const res = await del(`/api/workspaces/${wsId}?force=true`);
+    const res = await del(`/workspaces/${wsId}?force=true`);
     expect(res.status).toBe(500);
     expect(((await res.json()) as { error: string }).error).toBe('rooms-cleanup-failed');
     // And it must keep refusing while the file is still there. The first
     // attempt took the room out of memory, so a check that asks the ROOM
     // ("not-found, nothing to do") would call the retry a success and delete
     // the board over the top of the orphan.
-    const retry = await del(`/api/workspaces/${wsId}?force=true`);
+    const retry = await del(`/workspaces/${wsId}?force=true`);
     expect(retry.status).toBe(500);
     expect(((await retry.json()) as { error: string }).error).toBe('rooms-cleanup-failed');
     // The board and its tasks are still there, so the same call retries once
@@ -438,10 +438,10 @@ describe('DELETE /api/workspaces/:id — board workspace', () => {
       sourceUrl: docPath,
     });
     expect(created.status).toBe(200);
-    const attached = await post(`/api/workspaces/${wsId}/docs`, { docId });
+    const attached = await post(`/workspaces/${wsId}/docs`, { docId });
     expect(attached.status).toBe(200);
 
-    expect((await del(`/api/workspaces/${wsId}?force=true`)).status).toBe(200);
+    expect((await del(`/workspaces/${wsId}?force=true`)).status).toBe(200);
 
     // The doc keeps working at its own URL. Deleting a board that merely
     // CITED it must not take it down.
@@ -453,12 +453,12 @@ describe('DELETE /api/workspaces/:id — board workspace', () => {
   it('404s on an id that is neither a board nor a doc grouping', async () => {
     // Non-vacuous because the same route returns 200 above on a real id.
     await seed();
-    expect((await del('/api/workspaces/w-nope?force=true')).status).toBe(404);
+    expect((await del('/workspaces/w-nope?force=true')).status).toBe(404);
   });
 
   it('still deletes a doc-grouping workspace — the pre-existing path', async () => {
     // Two different stores answer to the word "workspace", and ONE route
-    // creates both: `POST /api/workspaces` mints a board from `name` and
+    // creates both: `POST /workspaces` mints a board from `name` and
     // a doc grouping from `folderPath`. So the delete has to consult both,
     // and the regression to fear is the new board branch shadowing this one.
     dataDir = mkdtempSync(join(tmpdir(), 'board-ws-delete-grouping-'));
@@ -466,7 +466,7 @@ describe('DELETE /api/workspaces/:id — board workspace', () => {
     writeFileSync(join(folder, 'README.md'), '# Member\n\nOne file is enough.\n');
     handle = await start(dataDir);
 
-    const bound = await post('/api/workspaces', { folderPath: folder, owner: '/proj/scratch' });
+    const bound = await post('/workspaces', { folderPath: folder, owner: '/proj/scratch' });
     expect(bound.status).toBe(200);
     const { workspaceId, files } = (await bound.json()) as {
       workspaceId: string;
@@ -476,7 +476,7 @@ describe('DELETE /api/workspaces/:id — board workspace', () => {
     expect(memberDoc).toBeTruthy();
     expect(handle?.docStore.get(memberDoc)).toBeDefined();
 
-    const res = await del(`/api/workspaces/${encodeURIComponent(workspaceId)}?force=true`);
+    const res = await del(`/workspaces/${encodeURIComponent(workspaceId)}?force=true`);
     expect(res.status).toBe(200);
     expect(handle?.docStore.get(memberDoc)).toBeUndefined();
     rmSync(folder, { recursive: true, force: true });
