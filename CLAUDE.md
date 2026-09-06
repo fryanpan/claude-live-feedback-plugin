@@ -73,20 +73,29 @@ that way and add new subsystem docs to the list here.
 ## The gates — `bun run verify` before you push
 
 ```bash
-bun run verify                        # every gate CI runs. ~8 min, cheapest first.
+bun run verify                        # every gate CI runs. ~2 min, cheapest first.
 bun run verify --list                 # the members, and the one hole
 bun run verify --only lint,typecheck  # re-run what failed
 bun run verify --bail                 # stop at the first failure
 ```
 
 **One command, not a list you pick from.** This section used to name four
-gates. CI's `verify` job runs fifteen you can run locally, and a builder who
-ran the four and pushed went red on `loc:audit` — a doc comment had taken a
-file from 496 to 504 lines. A list drifts the moment somebody adds a CI step;
-`bun run verify` is the set, `scripts/verify.ts` is where it is written down,
-and `bun run verify:parity` — a member of the run AND a step of the CI job —
-fails if ci.yml gains a gate that is not a member. That is what keeps this
-paragraph true.
+gates. CI runs fifteen you can run locally, and a builder who ran the four and
+pushed went red on `loc:audit` — a doc comment had taken a file from 496 to
+504 lines. A list drifts the moment somebody adds a CI step; `bun run verify`
+is the set, `scripts/verify.ts` is where it is written down, and
+`bun run verify:parity` — a member of the run AND a step of CI's `gates` job —
+fails if ci.yml gains a gate that is not a member, in ANY of its jobs. That is
+what keeps this paragraph true.
+
+CI is four jobs (`gates`, `client`, `server`, `coverage`) so that a verdict
+takes about ninety seconds rather than eleven minutes; `bun run verify` is
+still one sequential run, because this machine hosts several agents at once.
+Its last three members are a chain — both suites run under coverage
+instrumentation and `coverage` ratchets what they left in `.coverage/`, so
+neither suite runs twice. `bun run test:server` splits the server suite across
+four processes for the same reason CI splits it across eight: it is two-thirds
+idle. Pass `--jobs 1` for the old one-process behaviour.
 
 Every member's output goes straight to your terminal in full; the summary at
 the end indexes that scrollback rather than replacing it. Nothing is piped, so
