@@ -322,6 +322,7 @@ The remaining 93 are exceptions. Each row names the one harness its cases share.
 | `packages/core/test/suggest-ops.test.ts` | 571 | Every describe builds a Y.Doc with `docFrom()` and reads it back with `serialize()`. |
 | `packages/server/test/recall-meeting.test.ts` | 559 | One describe over the `FakeRecall` / `ManualScheduler` / `transcriptFrame()` vendor harness. |
 | `packages/mcp/test/nudge-line.test.ts` | 559 | All describes call the pure `*Line()` renderers with inline row literals; no setup exists to be disjoint. |
+| `packages/server/test/board-workspace-delete.test.ts` | 551 | One top-level describe over one `seed()` board and the shared `del()` / `post()` helpers; every case is the same DELETE answering a different footprint. |
 | `packages/widget/test/widget-auth.test.ts` | 550 | Every describe runs against the module-scope `stubGlobals()` / `importWidget()` widget harness. |
 | `packages/workspaces-app/test/thread-modal.test.ts` | 549 | All describes mount through the shared `mount()` harness and its `comment()` / `thread()` builders. |
 | `packages/server/test/proxied-trusted-host.test.ts` | 547 | All describes depend on the module-scope `jwks` / `signJwt` `beforeAll` and the shared `get()` helper. |
