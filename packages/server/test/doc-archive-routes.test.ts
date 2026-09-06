@@ -141,7 +141,7 @@ describe('POST /api/docs/:id/archive', () => {
     expect(refused.status).toBe(409);
     const body = (await refused.json()) as { error: string; setId?: string };
     expect(body.error).toBe('review-member');
-    // Name the review, so the caller knows to reach for archive_review.
+    // Name the review, so the caller knows to reach for archive_attachment_set.
     expect(body.setId).toBe(res.reviewId);
     expect((await local(`/api/docs/${encodeURIComponent(memberDocId)}`)).status).toBe(200);
   });

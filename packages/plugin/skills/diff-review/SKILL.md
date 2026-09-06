@@ -31,7 +31,7 @@ outdated-comments section where the reviewer (or you, via the reanchor route)
 can re-attach it.
 
 - One review doc per changed file, grouped as a workspace (`reviewId`).
-- Once the review exists, **`refresh_review(setId)` is the way to bring it up to
+- Once the review exists, **`refresh_attachment_set(setId)` is the way to bring it up to
   date** — it re-reads from the stored base, so you don't have to remember the
   ref, and it re-mints no docId, so every comment thread survives. Files you
   changed since join the review; a file that was reverted, deleted or renamed
@@ -39,7 +39,7 @@ can re-attach it.
   those threads are stranded on a file nobody will open again. Stale is always
   reversible. Pinned reviews are refused: their content is a commit.
 - Re-running `create_diff_review` is idempotent too (same docIds, threads
-  survive), but prefer `refresh_review` — it needs no arguments you have to
+  survive), but prefer `refresh_attachment_set` — it needs no arguments you have to
   reconstruct.
 - Per-file **Diff ↔ File** toggle shows the whole file as it is on disk, also
   commentable.
@@ -63,7 +63,7 @@ enumerate them. Unlisted changed files land in an automatic "Other" group.
 If you omit `groups`, a heuristic groups by module/tests/docs/config —
 acceptable, but your semantic grouping is better. Re-binding without
 `groups` preserves whatever grouping the review already has, and
-`set_review_groups(setId, groups)` re-organises an existing review in place —
+`set_attachment_groups(setId, groups)` re-organises an existing review in place —
 reach for it rather than tearing the review down and losing its comments.
 Each group takes an optional `details`, a one- or two-sentence intro under its
 title, capped at 500 characters; a longer one is **rejected, not truncated**,
@@ -116,16 +116,16 @@ navigates to every other changed file.
 
 A diff review is content in the workspace it was filed on. When the pass is
 over — the change merged — retire it yourself rather than leaving it to
-present its unresolved threads forever: `archive_review(setId, reason)`, with
+present its unresolved threads forever: `archive_attachment_set(setId, reason)`, with
 the id `create_diff_review` returned and a reason like `"merged in #301"`.
 
 Archiving takes the review off the home page and off its board row and stops
 its docs syncing, and it **destroys nothing**: the docs stay on disk, every
-comment still feeds the activity analyses, and `unarchive_review(setId)` puts
+comment still feeds the activity analyses, and `unarchive_attachment_set(setId)` puts
 the whole thing back — threads, board links and all. Open threads do not block
-it; that is the point. `list_archived_reviews` shows what can come back.
+it; that is the point. `list_archived_attachments` shows what can come back.
 
-`delete_review(setId)` archives too (that is now what it means) but applies the
+`delete_attachment_set(setId)` archives too (that is now what it means) but applies the
 old open-threads guardrail, so it refuses unless `force:true`. Only
 `purge:true` destroys anything, and reach for it essentially never — a purged
 doc cannot be restored and silently shortens the history the weekly analyses
@@ -135,6 +135,6 @@ read.
 
 - The change is already on GitHub and a normal PR review is happening there —
   don't duplicate the surface unless the human asks.
-- Reviewing a single standalone document — use `create_review_doc`.
+- Reviewing a single standalone document — use `attach_markdown`.
   (Folder browsing is no longer separate: omit `base` here instead of
   reaching for `attach_folder`.)

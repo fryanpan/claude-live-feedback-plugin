@@ -2,7 +2,7 @@
 
 ## Context
 
-Today live‑feedback can bind **one markdown file** at a time (`create_review_doc`) and serve it as a WYSIWYG review surface; it can also bind HTML mockups and dev servers. Bryan wants to make a **whole folder/worktree** available for remote review from a Claude Code session, where the human sees:
+Today live‑feedback can bind **one markdown file** at a time (`attach_markdown`) and serve it as a WYSIWYG review surface; it can also bind HTML mockups and dev servers. Bryan wants to make a **whole folder/worktree** available for remote review from a Claude Code session, where the human sees:
 
 - a **file tree on the left** showing the number of **unresolved comments per file** (rolled up per folder),
 - **markdown** rendered WYSIWYG exactly as today,
@@ -33,7 +33,7 @@ The unifying vision: from one Claude Code session, a reviewer can use live‑fee
 - Persist exactly like `setId`/`owner` today (`initDocMeta`/`readDocMeta`). No separate workspace registry in M1 — derive workspaces from member docs (mirrors how the landing page derives its list from `rooms.list()`).
 
 ### 2. Folder binding — `attach_folder` (MCP) + `POST /api/workspaces`
-- **MCP tool** `attach_folder(folderPath, workspaceId?, title?, include?, maxFiles?, subscribe?)` in `packages/mcp/src/mcp.ts` (mirror the `create_review_doc` case). After binding, it loops the returned files and `watch_doc`s markdown+code docs (cap by `maxFiles`).
+- **MCP tool** `attach_folder(folderPath, workspaceId?, title?, include?, maxFiles?, subscribe?)` in `packages/mcp/src/mcp.ts` (mirror the `attach_markdown` case). After binding, it loops the returned files and `watch_doc`s markdown+code docs (cap by `maxFiles`).
 - **Server route** `POST /api/workspaces` → new `rooms.bindFolder(...)` in `packages/server/src/rooms.ts`.
 - **Scan strategy** (established `spawnSync` pattern already used in keychain.ts/public-host.ts):
   1. If folder is in a git repo: `git -C <folder> ls-files --cached --others --exclude-standard` → respects `.gitignore` for free (skips `node_modules`/`dist`/etc).
@@ -112,7 +112,7 @@ CI green + full verification (below) before requesting review; deploy via server
 ## Verification (end‑to‑end, against this repo)
 
 Use `claude-live-feedback-plugin` itself as the test worktree.
-1. **Per‑surface, via MCP + browser** (after PR 3): `create_review_doc` on a `.ts` file → open `/review/<docId>` → confirm syntax highlighting, read‑only, line numbers; select lines → leave a comment → confirm the gutter marker + that clicking the panel scrolls to the line and clicking the marker reveals the comment (mirrors #52). Repeat for `.json`. Open a `.md` file → confirm WYSIWYG still works.
+1. **Per‑surface, via MCP + browser** (after PR 3): `attach_markdown` on a `.ts` file → open `/review/<docId>` → confirm syntax highlighting, read‑only, line numbers; select lines → leave a comment → confirm the gutter marker + that clicking the panel scrolls to the line and clicking the marker reveals the comment (mirrors #52). Repeat for `.json`. Open a `.md` file → confirm WYSIWYG still works.
 2. **Agent‑edit re‑anchor**: edit the `.ts` file via the Edit tool → confirm the view re‑renders and the comment re‑anchors (or orphans cleanly) like markdown.
 3. **Folder + tree** (after PR 5): `attach_folder` on `packages/core` (or `docs/`) → confirm the tree lists files grouped by directory with per‑file unresolved‑count badges and folder rollups; leave comments in two files → confirm counts update on refocus; click files to navigate between the markdown and code surfaces.
 4. **Guardrails**: `attach_folder` on the repo root → expect the `too-many-files` guard (or a sane filtered count); confirm `node_modules`/`dist` are skipped.

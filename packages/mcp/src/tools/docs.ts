@@ -245,7 +245,8 @@ export async function handleDocsTool(
       const res = await http('GET', `/api/docs/${encodeURIComponent(docId)}/status`);
       return ok(res);
     }
-    case 'create_review_doc': {
+    case 'create_review_doc':
+    case 'attach_markdown': {
       const {
         docId,
         path,
@@ -321,7 +322,7 @@ export async function handleDocsTool(
         title?: string;
         hubWorkspaceId?: string;
       };
-      // Same POST /api/docs route as create_review_doc, with type='mockup'.
+      // Same POST /api/docs route as attach_markdown, with type='mockup'.
       // The server's getOrCreate accepts both shapes; `sourceUrl` is optional
       // for mockups (mockups are served via /demos/ rather than file-watched).
       const res = await http('POST', '/api/docs', {
@@ -426,14 +427,16 @@ export async function handleDocsTool(
       }
       return ok(res);
     }
-    case 'delete_review': {
+    case 'delete_review':
+    case 'delete_attachment_set': {
       const { setId, force, purge } = a as { setId: string; force?: boolean; purge?: boolean };
       const params = [force ? 'force=true' : '', purge ? 'purge=true' : ''].filter(Boolean);
       const qs = params.length > 0 ? `?${params.join('&')}` : '';
       const res = await http('DELETE', `/api/reviews/${encodeURIComponent(setId)}${qs}`);
       return ok(res);
     }
-    case 'archive_review': {
+    case 'archive_review':
+    case 'archive_attachment_set': {
       const { setId, reason } = a as { setId: string; reason?: string };
       const res = await http('POST', `/api/reviews/${encodeURIComponent(setId)}/archive`, {
         author: AUTHOR,
@@ -441,7 +444,8 @@ export async function handleDocsTool(
       });
       return ok(res);
     }
-    case 'unarchive_review': {
+    case 'unarchive_review':
+    case 'unarchive_attachment_set': {
       const { setId } = a as { setId: string };
       const res = await http('POST', `/api/reviews/${encodeURIComponent(setId)}/unarchive`, {
         author: AUTHOR,
@@ -463,7 +467,8 @@ export async function handleDocsTool(
       });
       return ok(res);
     }
-    case 'list_archived_reviews': {
+    case 'list_archived_reviews':
+    case 'list_archived_attachments': {
       const res = await http('GET', '/api/reviews/archived');
       return ok(res);
     }
@@ -482,20 +487,24 @@ export async function handleDocsTool(
       const res = await http('DELETE', `/workspaces/${encodeURIComponent(workspaceId)}${qs}`);
       return ok(res);
     }
-    // COMPAT: `refresh_workspace` and `set_workspace_groups` are the names
-    // these two had before a review stopped being called a workspace. An
-    // agent working from a stale skill or from memory reaches for the old
-    // name, and either key for the id; both are accepted here so it lands
-    // instead of erroring. The tool LIST advertises the new names only.
+    // COMPAT, two generations deep: these two were `refresh_workspace` and
+    // `set_workspace_groups` before a review stopped being called a
+    // workspace, and `refresh_review` / `set_review_groups` before an
+    // attachment set stopped being called a review. An agent working from a
+    // stale skill or from memory reaches for whichever name it learned, and
+    // either key for the id; all of them are accepted here so the call lands
+    // instead of erroring. The tool LIST advertises the newest name only.
     case 'refresh_workspace':
-    case 'refresh_review': {
+    case 'refresh_review':
+    case 'refresh_attachment_set': {
       const { setId, workspaceId } = a as { setId?: string; workspaceId?: string };
       const id = setId ?? workspaceId ?? '';
       const res = await http('POST', `/api/reviews/${encodeURIComponent(id)}/refresh`, {});
       return ok(res);
     }
     case 'set_workspace_groups':
-    case 'set_review_groups': {
+    case 'set_review_groups':
+    case 'set_attachment_groups': {
       const { setId, workspaceId, groups } = a as {
         setId?: string;
         workspaceId?: string;

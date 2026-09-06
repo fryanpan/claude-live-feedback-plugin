@@ -9,7 +9,7 @@ then have their access expire automatically.
 
 **A board is the unit of sharing** (Bryan, 2026-08-17: "Workspace only — a
 review must be filed on a board before it can be shared"). You bind docs the
-way you always did — `create_review_doc`, `attach_folder`, `create_diff_review`
+way you always did — `attach_markdown`, `attach_folder`, `create_diff_review`
 — and then you share the BOARD they are filed on.
 
 Two smaller grants used to exist, and both are gone:

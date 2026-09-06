@@ -138,7 +138,7 @@ export function createArchiveRoutes(ctx: ArchiveRoutesContext): {
           return j(409, { ok: false, error: 'has-open-threads', files: blocked });
         }
       }
-      return archiveReview(setId, 'delete_review', undefined);
+      return archiveReview(setId, 'delete_attachment_set', undefined);
     }
     const res = docStore.deleteWorkspace(setId, { force });
     if (res.ok) {
@@ -221,7 +221,7 @@ export function createArchiveRoutes(ctx: ArchiveRoutesContext): {
       if (visitor) return j(403, { error: 'not available to share visitors' });
       // Deliberately NOT canonicalized: an archived doc has no doc, so
       // there is nothing for an alias to resolve against. The canonical
-      // id is what `list_archived_reviews` hands back, which is where a
+      // id is what `list_archived_attachments` hands back, which is where a
       // caller gets one. Asserted in doc-id-routes.test.ts so the
       // asymmetry is a decision on the record rather than a surprise.
       const docId = decodeURIComponent(docUnarchiveMatch[1] ?? '');
