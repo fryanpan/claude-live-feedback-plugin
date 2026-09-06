@@ -25,6 +25,9 @@ export interface BootLocation {
   /** Read for "copy this page's link", and ASSIGNED to hop a walk chain. */
   href: string;
   assign(url: string): void;
+  /** Repaint the whole page from the server — what the me-menu does after a
+   *  sign-out or a rename, because every surface is rendering the old one. */
+  reload(): void;
 }
 
 /** The session history, as much of it as the board's one URL writer uses. */

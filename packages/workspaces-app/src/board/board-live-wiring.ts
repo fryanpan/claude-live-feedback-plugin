@@ -16,6 +16,7 @@
  * two sources.
  */
 import { connect } from '@feedback/core';
+import type { BootLocation } from '../boot-env.ts';
 import { renderLiveStaleNotice, watchConnection, watchLiveSync } from '../connection-state.ts';
 import { staleTaskLinkStatuses } from '../link-titles.ts';
 import type { BoardState } from './board-actions.ts';
@@ -70,6 +71,9 @@ export interface BoardLiveDeps {
   loadHome: () => Promise<void>;
   loadReviewItems: () => Promise<void>;
   loadDiscussion: (row: LiveDiscussionRow, quiet?: boolean) => Promise<void>;
+  /** The address bar the boot was handed. Following a person off this board
+   *  leaves through it, so a test can read where the follow sent us. */
+  location: Pick<BootLocation, 'assign'>;
 }
 
 export function wireBoardLive(deps: BoardLiveDeps): void {
@@ -95,6 +99,7 @@ export function wireBoardLive(deps: BoardLiveDeps): void {
     loadHome,
     loadReviewItems,
     loadDiscussion,
+    location,
   } = deps;
 
   // ── Wiring ──────────────────────────────────────────────────────────────
