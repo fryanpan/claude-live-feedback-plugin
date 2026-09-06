@@ -75,7 +75,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.170';
+const PLUGIN_VERSION = '0.1.172';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -106,7 +106,7 @@ const server = new Server(
       'source of truth at rest; the live editor is the source of truth at runtime;',
       'the plugin keeps them in sync bidirectionally (~1s debounced).',
       '',
-      'CREATE: call create_review_doc(docId, path) to bring a .md under review.',
+      'CREATE: call attach_markdown(docId, path) to bring a .md under review.',
       'The server reads the file, parses it into the live editor, sets up the',
       'fs.watch + write-back, and returns a reviewUrl you can hand to a human.',
       '',
@@ -153,7 +153,9 @@ const server = new Server(
       'unless you pass new ones). Share the returned entryUrl with the human',
       '(bare URL on its own line); the file tree navigates the rest. Thread',
       'events arrive per file via the auto-watch; resolve threads as you address',
-      'them; refresh_review(setId) to re-sync membership and reviews as files move (threads survive); delete_review(setId) when the review is done.',
+      'them; refresh_attachment_set(setId) to re-sync membership and diffs as',
+      'files move (threads survive); archive_attachment_set(setId, reason) when',
+      'the review is done.',
       '',
       'SUGGEST: pass suggest: true on find_and_replace or rewrite_thread_region to',
       'PROPOSE a change instead of applying it — the match is marked pending and',

@@ -35,7 +35,7 @@ identity can't distinguish owners; cwd can.)
   also bumps it.
 - `list()` / `GET /api/docs`: include both fields.
 - `POST /api/docs` accepts `owner`.
-- MCP `create_review_doc` + `attach_mockup`: pass `owner: process.cwd()`.
+- MCP `attach_markdown` + `attach_mockup`: pass `owner: process.cwd()`.
 - Tests: owner round-trips; lastActivityAt advances on edit.
 
 ## Increment 2 — Daily triage agent (SHIPPED)

@@ -714,7 +714,7 @@ describe('server REST', () => {
     expect(existsSync(ydocPath)).toBe(true);
 
     // Simulate a supervisor restart: spin up a second server on the same
-    // dataDir without re-calling create_review_doc.
+    // dataDir without re-calling attach_markdown.
     const second = createServer({ port: 0, dataDir });
     try {
       // Trigger a Yjs mutation via find_and_replace. With the bug, the

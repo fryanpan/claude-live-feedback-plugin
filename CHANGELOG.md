@@ -161,7 +161,7 @@ docs, mockups, and dev servers.
 
 ## 0.0.1 — 2026-04 (initial MVP, never formally tagged)
 
-- Markdown review surface: Tiptap + Yjs WYSIWYG editor, file-backed (`create_review_doc(docId, path)` is the canonical creation path), bidirectional disk sync via `fs.watch` + debounced 800ms write-back.
+- Markdown review surface: Tiptap + Yjs WYSIWYG editor, file-backed (`attach_markdown(docId, path)` is the canonical creation path), bidirectional disk sync via `fs.watch` + debounced 800ms write-back.
 - Comment threads with text-range + element anchors that survive concurrent edits.
 - MCP server with the editing primitives: `find_and_replace`, `rewrite_thread_region`, `insert_after_thread`, `insert_blocks_after_thread`, `create_anchor` / `edit_at_anchor` / `delete_anchor` / `insert_blocks_at_anchor`, `reparse_from_disk`.
 - Claude Code channel integration: thread events arrive as `<channel source="live-feedback" ...>` messages.

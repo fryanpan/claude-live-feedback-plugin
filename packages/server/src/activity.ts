@@ -242,7 +242,7 @@ export function docKindFor(type: DocMeta['type']): DocKind {
  * captures {agentId, sessionId, cwd}: cwd = the doc's `owner` (the creating
  * MCP child's cwd); agentId = owner basename; sessionId = the persisted
  * producedBy.sessionId, else null (see DocMeta.producedBy — only populated
- * when create_review_doc / bind_folder were called with producedBy).
+ * when attach_markdown / bind_folder were called with producedBy).
  */
 export function buildEventDoc(meta: DocMeta): EventDoc {
   const repo = deriveRepo(meta);

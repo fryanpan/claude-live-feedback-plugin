@@ -7,7 +7,7 @@
 ## Pre-record setup (5 min, one-time)
 
 - Two windows side-by-side or quick alt-tab between:
-  - **Browser** at `http://mac-mini.<private-network>:8788/review/<docId>?as=bryan` — pick a real doc with a paragraph that's worth commenting on. Suggest the README draft itself, or a doc with a small visible imperfection (typo, missing comma, awkward phrasing).
+  - **Browser** at `http://mac-mini.<tailnet>.ts.net:8788/review/<docId>?as=bryan` — pick a real doc with a paragraph that's worth commenting on. Suggest the README draft itself, or a doc with a small visible imperfection (typo, missing comma, awkward phrasing).
   - **Terminal** with a Claude Code session active, `--channels plugin:live-feedback@claude-live-feedback` on, sized so the channel-event line is readable.
 - Loom set to record both windows (camera off; this is screen-only).
 

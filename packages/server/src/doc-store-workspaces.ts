@@ -818,7 +818,7 @@ export class DocStoreWorkspaces {
    *
    * `archiveReview` is the same act over a member list, and it is the verb for
    * anything that HAS a member list. This one exists for what that cannot
-   * express — a markdown doc from `create_review_doc`, a mockup from
+   * express — a markdown doc from `attach_markdown`, a mockup from
    * `bind_mock`: a few hundred docs on the production box whose only removal
    * path was `delete_doc`, which purges the `.ydoc` the activity analyses are
    * rebuilt from. Everything mechanical is shared with the review path
