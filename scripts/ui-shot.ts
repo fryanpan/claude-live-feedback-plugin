@@ -66,8 +66,7 @@ import {
   type ShotOptions,
   USAGE,
   UsageError,
-  emulatedMediaFeatures,
-  extraChromeArgs,
+  chromeLaunchArgs,
   parseArgs,
   profilePrefix,
   resolveChromeBin,
@@ -210,25 +209,7 @@ async function launchChrome(
   onSpawn: (b: Browser) => void,
 ): Promise<Browser> {
   const profile = mkdtempSync(join(tmpdir(), profilePrefix(runId)));
-  const proc = spawn(
-    bin,
-    [
-      '--headless=new',
-      '--remote-debugging-port=0',
-      '--remote-allow-origins=*',
-      `--user-data-dir=${profile}`,
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-extensions',
-      '--disable-background-timer-throttling',
-      '--hide-scrollbars',
-      `--window-size=${o.width},${o.height}`,
-      // CI only, and empty everywhere else — see extraChromeArgs.
-      ...extraChromeArgs(),
-      'about:blank',
-    ],
-    { stdio: ['ignore', 'ignore', 'pipe'] },
-  );
+  const proc = spawn(bin, chromeLaunchArgs(o, profile), { stdio: ['ignore', 'ignore', 'pipe'] });
   const browser: Browser = { proc, profile, port: 0 };
   onSpawn(browser);
   let stderr = '';
@@ -292,9 +273,6 @@ async function shoot(o: ShotOptions, cdp: Cdp): Promise<Record<string, unknown>>
     mobile: o.mobile,
   });
   if (o.mobile) await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true });
-  // Pin `(hover:)` and `(pointer:)` to the DEVICE being modelled. Left alone
-  // they come from whatever machine ran the shot — see emulatedMediaFeatures.
-  await cdp.send('Emulation.setEmulatedMedia', { features: emulatedMediaFeatures(o.mobile) });
 
   const started = Date.now();
   const loaded = cdp.once('Page.loadEventFired');
