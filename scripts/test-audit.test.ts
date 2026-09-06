@@ -635,9 +635,12 @@ describe('the audit sees a source read one module away', () => {
     // is named now because it is one of the THREE permanent floor reads the
     // baseline names — a calc() of max() and env() that happy-dom discards
     // whole — so it is the one real wrapped read that will still be here after
-    // the next conversion pass.
+    // the next conversion pass. The LINE number is part of the assertion (the
+    // detector reports a site, not a file), so an edit to that file's header
+    // moves it — as the nightly-UI change did, 37 → 45. Re-read it from
+    // `bun run test:audit --list` rather than guessing.
     expect(listed).toContain(
-      `${join('packages', 'workspaces-app', 'test', 'board-nav-widget-clearance-css.test.ts')}:37`,
+      `${join('packages', 'workspaces-app', 'test', 'board-nav-widget-clearance-css.test.ts')}:45`,
     );
   });
 });
