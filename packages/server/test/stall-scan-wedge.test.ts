@@ -16,10 +16,17 @@
  *
  * NOTE ON FAILURE MODE: a regression here does not fail this test, it HANGS
  * it — `nudgeStalls` is synchronous, so a blocking read inside it parks the
- * runner and the assertion below is never reached. The runner's own timeout
+ * runner and the assertions below are never reached. The runner's own timeout
  * is what turns that into a red test. That is inherent to asserting on a
  * synchronous call; there is no way to race a timer against code that owns
- * the only thread.
+ * the only thread. Verified by mutation: restoring the synchronous fallback
+ * in `DocStore.prereadFor` hangs this file rather than failing it.
+ *
+ * The criterion behind this file asks for a scan "under 100ms". It is
+ * asserted here as a COUNT — a pool read outstanding when the scan returns —
+ * because testing-standards §3 bans elapsed-time assertions, and because the
+ * count is the stronger claim: a scan that skipped the doc would also be
+ * fast.
  *
  * The board, the doc and the paths here are invented.
  */
@@ -62,7 +69,9 @@ describe('the stall scan over a board holding an unreadable doc', () => {
     expect(created.status).toBe(200);
     workspaceId = ((await created.json()) as { workspace: { id: string } }).workspace.id;
 
-    expect((await post('/api/docs', { docId: DOC_ID, type: 'markdown', sourceUrl: boundPath })).status).toBe(200);
+    expect(
+      (await post('/api/docs', { docId: DOC_ID, type: 'markdown', sourceUrl: boundPath })).status,
+    ).toBe(200);
     // Onto the board itself: `heldThreadReviewItems` walks `workspace.docIds`,
     // which is the loop this test is about. A doc merely LINKED to a row is
     // reached by a different walk.
@@ -93,10 +102,16 @@ describe('the stall scan over a board holding an unreadable doc', () => {
     // the first thing to ask for it.
     expect(handle.docStore.boundPathOf(DOC_ID)).toBeUndefined();
 
-    const started = Date.now();
     handle.nudgeStalls();
-    const elapsed = Date.now() - started;
-    expect(elapsed).toBeLessThan(100);
+
+    // The scan RETURNED, and it returned with a read still outstanding on the
+    // thread pool. That pair is the whole property: it went through the async
+    // door rather than opening the file itself. Asserting it as a count
+    // rather than as an elapsed time is required by testing-standards §3 (a
+    // wall-clock assertion fails on a loaded runner and passes on a broken
+    // fast path), and it is also the stronger claim — "fast" would still be
+    // true of a scan that skipped the doc entirely.
+    expect(boundFiles.stats().inflight).toBeGreaterThan(0);
 
     // Not a vacuous pass. Without this the test would also go green on a scan
     // that never looked at the doc at all — which is the other way to be fast.
