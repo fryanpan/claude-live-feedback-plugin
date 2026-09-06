@@ -23,10 +23,8 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { type PresenceRow, claimWarning } from '../src/claim-warning.ts';
 import { type BundleHarness, startBundle } from './harness/mcp-bundle.ts';
-import { readMcpSource } from './harness/mcp-source.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SRC = readMcpSource();
 
 const NOW = 1_700_000_000_000;
 const ME = 'claim-surfacing';
@@ -147,43 +145,20 @@ describe('claimWarning', () => {
   });
 });
 
-/** The `case 'x': {` block for one tool, up to the next case. */
-function handlerFor(tool: string): string {
-  const start = SRC.indexOf(`case '${tool}': {`);
-  expect(start, `no handler for ${tool}`).toBeGreaterThan(-1);
-  const rest = SRC.slice(start + 1);
-  return rest.slice(0, rest.indexOf('case '));
-}
-
-/** The declaration block for one tool, up to the next tool entry. */
-function declarationFor(tool: string): string {
-  const start = SRC.indexOf(`name: '${tool}',\n      description:`);
-  expect(start, `no declaration for ${tool}`).toBeGreaterThan(-1);
-  const rest = SRC.slice(start);
-  return rest.slice(0, rest.indexOf('},\n    {'));
-}
-
-/**
- * Source-read rather than behavioral, like tool-wiring.test.ts: mcp.ts is a
- * bundle entry point and exports nothing.
- */
 /**
  * The presence guidance now lives in the `working-in-a-workspace` SKILL rather
  * than in the `next_tasks` description. It is the same knowledge, moved to the
  * surface that loads on demand instead of the one every session pays for on
  * every turn — so this suite reads the skill, and `next_tasks` only has to
- * point at the field.
+ * point at the field. The `next_tasks` half is read off the running bundle's
+ * `tools/list` in the describe below, which is the text an agent is actually
+ * handed.
  */
 describe('the queue tells an agent who is already on a row', () => {
-  const decl = declarationFor('next_tasks');
   const SKILL = readFileSync(
     join(HERE, '../../plugin/skills/working-in-a-workspace/SKILL.md'),
     'utf8',
   );
-
-  it('the queue itself still names the field a picker has to check', () => {
-    expect(decl).toContain('claimedBy');
-  });
 
   it('names both presence fields', () => {
     expect(SKILL).toContain('ownerSession');
@@ -209,33 +184,19 @@ describe('the queue tells an agent who is already on a row', () => {
   });
 });
 
-describe('claiming a row says who was already on it', () => {
-  const handler = handlerFor('task_transition');
-
-  it('reads presence before the move, and only on a pickup', () => {
-    expect(handler).toContain("to === 'in-progress' ? await claimNoticeFor(taskId)");
-    // BEFORE: after the transition the latest claim is this session's own.
-    expect(handler.indexOf('claimNoticeFor')).toBeLessThan(handler.indexOf('/transition'));
-  });
-
-  it('adds the warning to the result without changing anything already there', () => {
-    expect(handler).toContain('warning: claimNotice');
-    for (const kept of ['status: res.task.status', 'blockers: res.blockers'])
-      expect(handler).toContain(kept);
-  });
-
-  // The whole compat argument: an old bundle calling this route from a
-  // session that cannot restart must read what it always did. A refusal here
-  // would be that narrowing.
-  it('never refuses on presence', () => {
-    expect(handler).not.toContain('claimNotice) return err');
-    expect(handler).not.toContain('if (claimNotice) return');
-  });
-});
-
 /**
  * Peers load `packages/plugin/mcp/index.js`, so a source-only change reaches
  * nobody — and this is the half that says the shipped artifact does the work.
+ *
+ * It is also, since the source-shape sweep, the ONLY half. The wiring claims
+ * that used to be made by slicing `case 'task_transition': {` out of the
+ * concatenated source — that presence is read before the move and only on a
+ * pickup, that the warning is additive, that nothing refuses on presence —
+ * are all observable from outside: the order of the requests the bundle
+ * makes, and the payload it answers with. A `toContain` over the handler text
+ * could not tell a computed warning from a discarded one, could not see a
+ * source edit that was never rebuilt, and went red on a rename that changed
+ * nothing.
  *
  * It used to be four `BUNDLE.toContain(...)` assertions. Every one of them
  * would have passed on a bundle whose `claimNoticeFor` call was deleted, on a
@@ -293,6 +254,18 @@ describe('the built bundle carries it', () => {
       expect(warning).toContain('row-presence');
       expect(warning).toContain('message that session over claude-hive');
       expect(warning).toContain('Nothing here refuses you');
+
+      // Nothing the caller already got is disturbed: the warning is ADDITIVE,
+      // which is the whole compat argument for an old session that cannot
+      // restart. `blockers` is the field beside it that a caller reads.
+      expect((claim.json as { blockers?: unknown }).blockers).toEqual([]);
+
+      // Presence is read BEFORE the move — after it, the latest claim is this
+      // session's own.
+      const queueRead = claim.sent.findIndex((r) => r.method === 'GET' && r.path.endsWith('/next'));
+      const transition = claim.sent.findIndex((r) => r.path.endsWith('/transition'));
+      expect(queueRead, `no presence read; sent ${JSON.stringify(claim.sent)}`).toBeGreaterThan(-1);
+      expect(queueRead).toBeLessThan(transition);
     } finally {
       await h?.stop();
     }
@@ -313,6 +286,27 @@ describe('the built bundle carries it', () => {
       await h.call('attach_agent', { workspaceId: 'w-stub' });
       const claim = await h.call('task_transition', { taskId: 't-K69wx', to: 'in-progress' });
       expect((claim.json as { warning?: string }).warning).toBeUndefined();
+    } finally {
+      await h?.stop();
+    }
+  }, 60_000);
+
+  it('CONTROL: reads presence only on a pickup, not on every transition', async () => {
+    // A presence read on `done` is a round trip nobody needs, and it would
+    // also mean the "before the move" ordering above proved nothing about
+    // pickups in particular.
+    let h: BundleHarness | undefined;
+    try {
+      h = await startBundle((req) => {
+        if (req.method === 'GET' && req.path.endsWith('/next')) return { tasks: [NOW_ROW] };
+        if (req.path.endsWith('/transition'))
+          return { task: { id: 't-K69wx', status: 'done' }, blockers: [] };
+        return {};
+      });
+      await h.call('attach_agent', { workspaceId: 'w-stub' });
+      const done = await h.call('task_transition', { taskId: 't-K69wx', to: 'done' });
+      expect(done.sent.filter((r) => r.method === 'GET' && r.path.endsWith('/next'))).toEqual([]);
+      expect((done.json as { warning?: string }).warning).toBeUndefined();
     } finally {
       await h?.stop();
     }
