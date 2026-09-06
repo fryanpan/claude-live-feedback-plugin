@@ -440,6 +440,65 @@ describe('mountMarkupMargin — teardown', () => {
       vi.unstubAllGlobals();
     }
   });
+
+  /**
+   * The relayout debounce is the one timer here that reads a global: it lands
+   * in `positionBalloons` → `toggleClearanceY`, whose first act is
+   * `document.getElementById('view-toggle')`. A debounce still armed when its
+   * mount is gone is harmless in a browser (the reader navigated away) and
+   * fatal in the suite, where "gone" can mean the environment itself: the
+   * read throws `ReferenceError: document is not defined` from a timer no
+   * test is inside, so vitest reports every test passing and exits 1, blaming
+   * whichever file the worker was running.
+   *
+   * `document.getElementById` is the assertion rather than a thrown error
+   * because it is the exact line that throws — the first half arms the timer
+   * and lets it land, so the test can fail for the reason it names rather
+   * than because nothing was ever scheduled.
+   *
+   * It asserts the PROPERTY, not one mechanism, and the mount holds two that
+   * are each sufficient: the cleanup's `clearTimeout`, and `relayout`'s own
+   * `scope.disposed` guard. Removing either alone leaves this green — removing
+   * both turns it red, which is what was measured. So it is a guard against
+   * the property being lost, not a pin on either line; and neither line is
+   * what this branch fixes, because both were already here. What was missing
+   * was anything to CALL dispose after a whole-app boot — see
+   * `app-boot.test.ts`, 'hands back a teardown …', which is the test that
+   * fails without the fix.
+   */
+  it('a disposed scope cancels the relayout debounce before it reads `document`', async () => {
+    const { parent, surface } = mountSurface(
+      'Alpha.\n\nRemoved.\n\nBravo.\n',
+      'Alpha.\n\nBravo.\n',
+    );
+    await tick();
+    const scope = new MountScope();
+    const margin = mountMarkupMargin({
+      editorEl: parent,
+      view: surface.handle.editor.view,
+      getDeletions: () => surface.getDeletions(),
+      scope,
+    });
+    const spy = vi.spyOn(document, 'getElementById');
+    try {
+      vi.useFakeTimers();
+      // Positive control: armed and landing while the mount is alive, the
+      // debounce DOES make that read.
+      margin.scheduleRelayout();
+      vi.advanceTimersByTime(500);
+      expect(spy.mock.calls.flat()).toContain('view-toggle');
+
+      // Arm it again, then end the mount before it can land.
+      spy.mockClear();
+      margin.scheduleRelayout();
+      scope.dispose();
+      vi.advanceTimersByTime(500);
+      expect(spy.mock.calls.flat()).not.toContain('view-toggle');
+    } finally {
+      vi.useRealTimers();
+      spy.mockRestore();
+    }
+  });
 });
 
 describe('mountMarkupMargin — comment balloons', () => {
