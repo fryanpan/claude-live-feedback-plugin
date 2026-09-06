@@ -58,6 +58,22 @@ interface Booted {
   location: ReturnType<typeof fakeLocation>;
 }
 
+/**
+ * Every boot this file starts, so `afterEach` can stop it. Emptying
+ * `document.body` is not an end: the router's mount is still live, and a live
+ * markdown mount holds a 100ms relayout debounce that the boot's own opening
+ * transaction armed. Land that after vitest has torn the environment down and
+ * `markup-margin`'s `toggleClearanceY` reads a `document` that no longer
+ * exists — an unhandled `ReferenceError` that fails a run in which every test
+ * passed, charged to whichever file the worker happened to be on.
+ */
+const booted: Array<() => void> = [];
+
+/** Run the boot, and register its teardown for `afterEach`. */
+async function start(env: AppBootEnv): Promise<void> {
+  booted.push(await bootApp(env));
+}
+
 async function boot(url: string, seed: Record<string, string> = {}): Promise<Booted> {
   const parsed = new URL(url);
   document.body.innerHTML = SHELL;
@@ -74,7 +90,7 @@ async function boot(url: string, seed: Record<string, string> = {}): Promise<Boo
     window: new EventTarget(),
     connect: sockets.connect,
   };
-  await bootApp(env);
+  await start(env);
   await settle();
   return { sockets, storage, location };
 }
@@ -86,6 +102,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Before the markup goes: stopping the router disposes the live mount, and
+  // that is what clears its debounced timers (see `booted` above).
+  for (const stop of booted.splice(0)) stop();
   document.body.innerHTML = '';
   // The boot writes its mode onto the body itself (`code-mode`, `has-set`, …),
   // and one document serves every test in the file. Emptying the markup leaves
@@ -249,7 +268,7 @@ describe('identity and the write gate are settled before anything connects', () 
     document.body.innerHTML = SHELL;
     history.replaceState(null, '', '/review/d-notes');
     const sockets = fakeSockets();
-    await bootApp({
+    await start({
       document,
       location: fakeLocation('https://docs.test/review/d-notes'),
       localStorage: fakeStorage(),
@@ -273,7 +292,7 @@ describe('identity and the write gate are settled before anything connects', () 
     // so a boot that opened its socket without ever awaiting the write
     // answer still shows a session request sitting before the socket.
     let barUpWhenSocketOpened = false;
-    await bootApp({
+    await start({
       document,
       location: fakeLocation('https://docs.test/review/d-notes'),
       localStorage: fakeStorage({ [NAME_KEY]: 'Ada' }),
@@ -305,16 +324,18 @@ describe('identity and the write gate are settled before anything connects', () 
     let wrappedWhenSocketOpened = false;
     document.body.innerHTML = SHELL;
     history.replaceState(null, '', '/review/d-notes');
-    await freshBoot({
-      document,
-      location: fakeLocation('https://docs.test/review/d-notes'),
-      localStorage: fakeStorage({ [NAME_KEY]: 'Ada' }),
-      window: new EventTarget(),
-      connect: (url) => {
-        wrappedWhenSocketOpened = globalThis.fetch !== beforeBoot;
-        return sockets.connect(url);
-      },
-    });
+    booted.push(
+      await freshBoot({
+        document,
+        location: fakeLocation('https://docs.test/review/d-notes'),
+        localStorage: fakeStorage({ [NAME_KEY]: 'Ada' }),
+        window: new EventTarget(),
+        connect: (url) => {
+          wrappedWhenSocketOpened = globalThis.fetch !== beforeBoot;
+          return sockets.connect(url);
+        },
+      }),
+    );
     await settle();
     expect(sockets.opened).toHaveLength(1);
     expect(wrappedWhenSocketOpened).toBe(true);
@@ -339,5 +360,45 @@ describe('identity and the write gate are settled before anything connects', () 
   it('shows no bar when writes are allowed', async () => {
     await boot('https://docs.test/review/d-notes');
     expect(document.querySelector('.signin-bar')).toBeNull();
+  });
+});
+
+describe('the boot hands back an end for what it started', () => {
+  /**
+   * A mount left running keeps its debounced timers armed, and the margin's
+   * relayout debounce reads `document` when it lands (`markup-margin`'s
+   * `toggleClearanceY`, the `#view-toggle` lookup). In a browser that is
+   * harmless — the reader navigated away. In the suite, "gone" can mean the
+   * environment itself: the read throws `ReferenceError: document is not
+   * defined` inside a timer no test is awaiting, so vitest reports every test
+   * passing and exits 1, blaming whichever file the worker happened to be on.
+   *
+   * The mount has always cancelled that timer on `scope.dispose()`. What was
+   * missing was anything to CALL dispose: `bootApp` returned `void`, so a
+   * caller that is not a page had no end to invoke, and every boot in this
+   * file left one running. The control is the first half — the same read,
+   * from a boot that was not stopped.
+   */
+  const READ = 'view-toggle';
+  const past = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  it('hands back a teardown, and a stopped mount stops reading `document` on a timer', async () => {
+    const spy = vi.spyOn(document, 'getElementById');
+    try {
+      // Control: left running, the debounce lands and makes the read.
+      await boot('https://docs.test/review/d-notes');
+      spy.mockClear();
+      await past(250);
+      expect(spy.mock.calls.flat()).toContain(READ);
+
+      // The same boot, ended: the debounce never lands.
+      await boot('https://docs.test/review/d-notes');
+      for (const stop of booted.splice(0)) stop();
+      spy.mockClear();
+      await past(250);
+      expect(spy.mock.calls.flat()).not.toContain(READ);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
