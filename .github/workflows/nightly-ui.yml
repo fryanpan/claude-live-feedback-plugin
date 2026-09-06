@@ -14,6 +14,12 @@ on:
   schedule:
     - cron: '0 10 * * *'
   workflow_dispatch:
+  # TEMPORARY — REMOVED BEFORE MERGE. `gh workflow run` refuses a workflow that
+  # is not on the default branch (HTTP 404), so this is the only way to show
+  # the job going red on a deliberate break and green again on the fix, which
+  # is what this PR is asked to demonstrate.
+  push:
+    branches: [ci/nightly-ui-shot]
 
 # A run already going is worth more than a new one: it is the same commit.
 concurrency:
