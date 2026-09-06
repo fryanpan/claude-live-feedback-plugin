@@ -55,37 +55,87 @@ export interface ProbeReading {
   scrollWidth: number;
   clientWidth: number;
   hoverSupported: boolean;
+  /** `<body>` carries `signin-gated` — the app decided it may not write. */
+  signedOut: boolean;
   navItems: NavItemReading[];
   hoverRules: HoverRuleReading[];
   shell: ShellReading | null;
 }
 
-/* ===== Shots: which page, at which viewport ===== */
+/* ===== Shots: which page, in which posture, at which viewport ===== */
 
 export type PageKind = 'board' | 'doc';
 export type Preset = 'ipad' | 'phone';
+
+/**
+ * Which server the shot renders against.
+ *
+ * `signed-in` is `CW_REQUIRE_SIGNIN_TO_WRITE=0`. `signed-out` is `=1` with a
+ * browser that has proven nobody — what a reader following a shared link gets.
+ * They are different LAYOUTS, not one layout with a banner added: the second
+ * mounts `.signin-bar` as a fourth in-flow child of `#shell` and re-declares
+ * the shell's track list (`body.signin-gated #shell` in styles.css).
+ */
+export type Posture = 'signed-in' | 'signed-out';
 
 export interface Shot {
   id: string;
   page: PageKind;
   preset: Preset;
+  posture: Posture;
   /** Selector `ui:shot --wait-for` polls before measuring. */
   waitFor: string;
 }
 
 /**
- * Four renders: the board and a markdown doc, each at the two viewports
- * docs/product/design-mobile.md names. The phone shots are where the layout
- * bugs this suite exists for actually appeared; the iPad shots are Bryan's own
- * device and the positive control for the hover checks — the same assertion
- * has to come out the other way on a pointer device, or it is not reading the
- * device at all.
+ * Six renders: the board and a markdown doc at the two viewports
+ * docs/product/design-mobile.md names, plus the doc again signed out. The
+ * phone shots are where the layout bugs this suite exists for actually
+ * appeared; the iPad shots are Bryan's own device and the positive control for
+ * the hover checks — the same assertion has to come out the other way on a
+ * pointer device, or it is not reading the device at all.
+ *
+ * WHY THE GATED PAIR EXISTS. This job ran only `CW_REQUIRE_SIGNIN_TO_WRITE=0`,
+ * and its own header called the other posture "a different layout that
+ * deserves its own checks" — a correct sentence standing in for a check nobody
+ * had written. So it went green every night on a page it never rendered, while
+ * the signed-out doc shipped the exact dead band `shell-main-reaches-bottom`
+ * exists to catch: `#main` ending 3px above the bottom of `#shell` at 1180x820
+ * and 55px at 430px, that band hit-testing to the shell. Two more renders is
+ * what it costs for this job to be about the app rather than about one of its
+ * two postures.
+ *
+ * The BOARD is deliberately not duplicated. Its bar is an ordinary flow child
+ * inserted under `.board-topbar`, with no grid to be placed in, so a second
+ * posture would ask it nothing the first already does.
  */
 export const SHOTS: readonly Shot[] = [
-  { id: 'board-phone', page: 'board', preset: 'phone', waitFor: '.board-nav' },
-  { id: 'board-ipad', page: 'board', preset: 'ipad', waitFor: '.board-nav' },
-  { id: 'doc-phone', page: 'doc', preset: 'phone', waitFor: '#main' },
-  { id: 'doc-ipad', page: 'doc', preset: 'ipad', waitFor: '#main' },
+  {
+    id: 'board-phone',
+    page: 'board',
+    preset: 'phone',
+    posture: 'signed-in',
+    waitFor: '.board-nav',
+  },
+  { id: 'board-ipad', page: 'board', preset: 'ipad', posture: 'signed-in', waitFor: '.board-nav' },
+  { id: 'doc-phone', page: 'doc', preset: 'phone', posture: 'signed-in', waitFor: '#main' },
+  { id: 'doc-ipad', page: 'doc', preset: 'ipad', posture: 'signed-in', waitFor: '#main' },
+  {
+    id: 'doc-phone-gated',
+    page: 'doc',
+    preset: 'phone',
+    posture: 'signed-out',
+    // The bar, not `#main`: `#main` is in the markup either way, so waiting on
+    // it would let a shot that never gated proceed and be judged as if it had.
+    waitFor: '.signin-bar',
+  },
+  {
+    id: 'doc-ipad-gated',
+    page: 'doc',
+    preset: 'ipad',
+    posture: 'signed-out',
+    waitFor: '.signin-bar',
+  },
 ];
 
 /* ===== Checks ===== */
@@ -147,6 +197,54 @@ function noHorizontalOverflow(r: ProbeReading): string | null {
 }
 
 /**
+ * The page the shot MEANT to render is the page it rendered.
+ *
+ * The control for every gated check, and the reason the gated shots are worth
+ * anything. `CW_REQUIRE_SIGNIN_TO_WRITE=1` is a server setting; whether the
+ * browser then decides it cannot write depends on a session lookup that
+ * `fetchWriteAccess` deliberately fails OPEN on a timeout, a 404 or junk. So a
+ * gated shot can come back as an ordinary signed-in page — and every geometry
+ * check below would pass on it, reporting the posture as healthy on evidence
+ * from the other one. That is the exact shape of the bug these shots were
+ * added for, one level up.
+ *
+ * Asserted BOTH ways: the signed-in shots must NOT be gated. A build where the
+ * bar mounted for everybody would otherwise satisfy the gated side while
+ * silently changing the page every reader sees.
+ */
+function postureRendered(expectSignedOut: boolean) {
+  return (r: ProbeReading): string | null => {
+    if (r.signedOut !== expectSignedOut) {
+      return (
+        `<body> ${r.signedOut ? 'carries' : 'does not carry'} \`signin-gated\`, expected ` +
+        `${expectSignedOut ? 'it to' : 'it not to'} — this shot measured the other posture, ` +
+        'so every other check on it judged the wrong page'
+      );
+    }
+    if (!expectSignedOut) return null;
+    if (!r.shell) return '#shell is not on this page — the probe lost its subject';
+    const bar = r.shell.inFlow.find((c) => c.id === '.signin-bar');
+    if (!bar) {
+      return (
+        "no `.signin-bar` among #shell's in-flow children — the class is on <body> but the " +
+        `bar is not a grid item, so the fourth track has nothing in it. In flow: ${
+          r.shell.inFlow.map((c) => `${c.id}@row ${c.gridRow}`).join(', ') || '(none)'
+        }`
+      );
+    }
+    if (bar.gridRow === 'auto') {
+      return (
+        'the sign-in bar is AUTO-PLACED. Every other in-flow child of #shell is pinned by ' +
+        '`grid-row`, so the one that is not takes whichever row is free and pushes the ' +
+        'flexible track off the end — which is how the dead band came back. It needs ' +
+        '`body.signin-gated .signin-bar { grid-row: 2 }` in styles.css'
+      );
+    }
+    return null;
+  };
+}
+
+/**
  * `#main` reaches the bottom of `#shell`.
  *
  * `#shell` is a three-row grid and the meeting strip is `display: none` on
@@ -157,6 +255,10 @@ function noHorizontalOverflow(r: ProbeReading): string | null {
  * 1180x820 and 105px at 430px wide. Explicit `grid-row` on the three in-flow
  * children is the fix; this is the only check in the repo that can see the
  * GEOMETRY rather than the declarations.
+ *
+ * It runs on the SIGNED-OUT doc too, and had to: that posture adds a fourth
+ * in-flow child and a fourth track and shipped the same band again — 3px at
+ * 1180x820, 55px at 430px — with nothing rendering the page to notice.
  */
 function shellMainReachesBottom(r: ProbeReading): string | null {
   if (!r.shell) return '#shell is not on this page — the probe lost its subject';
@@ -239,6 +341,30 @@ export const CHECKS: readonly Check[] = [
     says: '#main reaches the bottom of #shell at 1180x820',
     run: shellMainReachesBottom,
   },
+  {
+    id: 'shell-main-reaches-bottom-gated-phone',
+    shot: 'doc-phone-gated',
+    says: '#main reaches the bottom of #shell at 430px with the sign-in bar mounted',
+    run: shellMainReachesBottom,
+  },
+  {
+    id: 'shell-main-reaches-bottom-gated-ipad',
+    shot: 'doc-ipad-gated',
+    says: '#main reaches the bottom of #shell at 1180x820 with the sign-in bar mounted',
+    run: shellMainReachesBottom,
+  },
+  // The control pair for the two above, and its own negative on the signed-in
+  // side. Without these, a gated shot that quietly rendered the signed-in page
+  // would report the gated posture healthy on the wrong page's evidence.
+  ...SHOTS.filter((s) => s.page === 'doc').map((s) => ({
+    id: `posture-rendered-${s.id}`,
+    shot: s.id,
+    says:
+      s.posture === 'signed-out'
+        ? `${s.id} really is the signed-out shell, bar mounted and placed`
+        : `${s.id} really is the signed-in shell, with no sign-in bar`,
+    run: postureRendered(s.posture === 'signed-out'),
+  })),
   {
     id: 'hover-guards-inert-on-touch',
     shot: 'board-phone',
