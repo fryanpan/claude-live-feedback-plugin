@@ -61,6 +61,14 @@ export interface TaskAuthoringPersistence {
   /** Record the new row in the store's `taskId → workspaceId` index. */
   registerTask(taskId: string, workspaceId: string): void;
   scheduleSave(workspaceId: string): void;
+  /**
+   * The store's clock, so a row's stamps and the `task.created` it emits come
+   * from the same place every other liveness read does. It is `Date.now` in
+   * production; a test that injects one gets an event whose `ts` its own
+   * clock can be compared against, which is what `noteObservedWork` does when
+   * it moves the author's work clock.
+   */
+  now(): number;
   emit(event: TaskAuthoringEvent): void;
 }
 
@@ -143,7 +151,7 @@ export class TaskAuthoringStore {
       shapeGaps = check.gaps;
     }
 
-    const now = Date.now();
+    const now = this.p.now();
     // Where the row came from, as a revision it can later be measured
     // against. Asked of the injected reader HERE — the one place every
     // create path converges — and settled on the reader's side, so words

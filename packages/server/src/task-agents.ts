@@ -427,6 +427,19 @@ export interface AgentStorePersistence {
   states(): Iterable<WorkspaceState>;
   hasWorkspace(workspaceId: string): boolean;
   readonly thresholds: AttachmentThresholds;
+  /**
+   * The clock every attachment timestamp is read from.
+   *
+   * A seam rather than a bare `Date.now()` because the freshness windows here
+   * are the one thing in this file that cannot be asserted without one. A
+   * test that waits out a real window has to pick a window short enough to
+   * wait for (40ms) and then finish its own assertion inside it — so any
+   * scheduling pause between the observed work and the read flips the answer,
+   * and `voice-gate-liveness.test.ts` went red on CI for exactly that, on a
+   * docs-only branch. Advancing an injected clock makes the same assertions
+   * exact. Production passes nothing and gets `Date.now`.
+   */
+  now(): number;
   readonly voiceAckGraceMs: number;
   readonly commentAckGraceMs: number;
   roster(): AgentRoster | undefined;
@@ -597,7 +610,7 @@ export class AgentStore {
           'recreate the duplicate the merge removed.',
       };
     }
-    const now = Date.now();
+    const now = this.p.now();
     // Is this attach a NEW process, or the same live one re-attaching (a
     // lead declaration, a retry after `subscribed: false`, a defensive
     // re-call)? The distinction decides whether the drains below may bypass
@@ -864,7 +877,7 @@ export class AgentStore {
   heartbeat(workspaceId: string, agentId: string, opts?: { toolCallAt?: number }): HeartbeatResult {
     const attachment = this.p.state(workspaceId)?.attachments.get(agentId);
     if (!attachment) return { ok: false, error: 'not-found' };
-    const now = Date.now();
+    const now = this.p.now();
     attachment.lastHeartbeat = now;
     if (opts?.toolCallAt !== undefined) {
       const claimed = Math.min(opts.toolCallAt, now);
@@ -942,7 +955,8 @@ export class AgentStore {
   noteAgentToolCall(workspaceId: string, agentId: string, at?: number): boolean {
     const attachment = this.p.state(workspaceId)?.attachments.get(agentId);
     if (!attachment) return false;
-    const observed = Math.min(at ?? Date.now(), Date.now());
+    const clock = this.p.now();
+    const observed = Math.min(at ?? clock, clock);
     if (observed <= attachment.lastToolCallAt) return true;
     attachment.lastToolCallAt = observed;
     this.p.saveAttachments(workspaceId);
@@ -955,7 +969,7 @@ export class AgentStore {
     const state = this.p.state(workspaceId);
     const attachment = state?.attachments.get(agentId);
     if (!state || !attachment) return false;
-    const now = Date.now();
+    const now = this.p.now();
     state.attachments.delete(agentId);
     this.p.saveAttachments(workspaceId);
     this.p.emit({
@@ -973,7 +987,7 @@ export class AgentStore {
   listAttachments(workspaceId: string): DescribedAttachment[] {
     const state = this.p.state(workspaceId);
     if (!state) return [];
-    const now = Date.now();
+    const now = this.p.now();
     return Array.from(state.attachments.values())
       .sort((a, b) => a.agentId.localeCompare(b.agentId))
       .map((att) => {
@@ -986,7 +1000,7 @@ export class AgentStore {
   listPublicAttachments(workspaceId: string): PublicAttachment[] {
     const state = this.p.state(workspaceId);
     if (!state) return [];
-    const now = Date.now();
+    const now = this.p.now();
     return Array.from(state.attachments.values())
       .sort((a, b) => a.agentId.localeCompare(b.agentId))
       .map((att) => publicAttachment(att, now, this.p.thresholds));
@@ -1015,7 +1029,7 @@ export class AgentStore {
     // when it says yes there is nothing the clock could add.
     if (att.agentId && this.p.agentStreamProbe(workspaceId, att.agentId)) return true;
     const freshMs = this.p.thresholds.observedWorkFreshMs ?? OBSERVED_LIVE_MS;
-    if (Date.now() - this.lastObserved(att) >= freshMs) return false;
+    if (this.p.now() - this.lastObserved(att) >= freshMs) return false;
     // Asked last and separately: the clock says the agent was here recently,
     // this says somebody is on the wire to receive what we are about to send.
     return this.p.deliveryProbe(workspaceId);
@@ -1081,7 +1095,7 @@ export class AgentStore {
    * observed, so there is no moment to report and no reason to believe
    * anybody is listening.
    */
-  leadSeatHealth(workspaceId: string, now = Date.now()): LeadSeatHealth {
+  leadSeatHealth(workspaceId: string, now = this.p.now()): LeadSeatHealth {
     const state = this.p.state(workspaceId);
     const leadAgentId = state?.workspace.leadAgentId;
     // An empty seat is not stale — it is empty, which every surface already

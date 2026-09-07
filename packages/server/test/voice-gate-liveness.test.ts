@@ -42,6 +42,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { OBSERVED_LIVE_MS, TaskStore } from '../src/tasks.ts';
+import type { TaskStoreEvent } from '../src/tasks.ts';
 
 describe('liveness for delivery is observed, not self-reported', () => {
   const dirs: string[] = [];
@@ -52,30 +53,60 @@ describe('liveness for delivery is observed, not self-reported', () => {
     for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
   });
 
-  /** A store whose windows are milliseconds, so the clock can be waited out. */
-  function tightStore(observedWorkFreshMs = 40): TaskStore {
+  /**
+   * A store whose clock this test drives, so no window is ever waited out.
+   *
+   * It used to shrink the windows to 40ms and `await sleep(60)` to go stale.
+   * That made the assertion depend on the machine twice over: the sleep had
+   * to overrun the window, and then the observed work and the read that
+   * followed it had to BOTH land inside the next 40ms. Any scheduling pause
+   * between them — a GC, a loaded runner — flipped a passing test red, which
+   * is what happened on CI at `the roster is matched on every spelling`, on a
+   * docs-only branch whose diff was one markdown URL, passing on a rerun of
+   * the same commit.
+   *
+   * `advance` moves the injected clock instead. The windows stay small and
+   * the assertions stay exactly what they were; what goes away is the race,
+   * because staleness is now something the test states rather than something
+   * it waits for and hopes for.
+   *
+   * `clock` is only passed by the one test that needs a clock which TICKS on
+   * every read — see it below for why that is the assertion rather than the
+   * setup.
+   */
+  function tightStore(
+    observedWorkFreshMs = 40,
+    clock?: () => number,
+  ): { store: TaskStore; advance: (ms: number) => void } {
     const dataDir = mkdtempSync(join(tmpdir(), 'voice-gate-'));
     dirs.push(dataDir);
+    let t = Date.now();
     const store = new TaskStore({
       dataDir,
       debounceMs: 5,
       heartbeatFreshMs: 40,
       observedWorkFreshMs,
+      now: clock ?? (() => t),
     });
     stores.push(store);
-    return store;
+    return {
+      store,
+      advance: (ms) => {
+        t += ms;
+      },
+    };
   }
 
   it('an agent that is WORKING but never heartbeats still counts as live', async () => {
     // THE bug. The agent attaches, gets on with the job, and never calls the
     // one tool whose only purpose is to say it exists. Today that reads away
     // within five minutes and its user is told the board is not listening.
-    const store = tightStore();
+    const { store, advance } = tightStore();
     const ws = store.createWorkspace('delivery-board');
     store.attachAgent(ws.id, { agentId: 'worker', runtime: 'claude-code-local' });
 
     // Let every heartbeat-shaped signal go stale.
-    await new Promise((r) => setTimeout(r, 60));
+    advance(60);
     expect(store.hasLiveAttachment(ws.id)).toBe(false);
 
     // …and now the agent does a piece of observable work. That is the whole
@@ -88,11 +119,11 @@ describe('liveness for delivery is observed, not self-reported', () => {
     // Without this, the assertion above passes just as happily against a gate
     // that returns true unconditionally — which would be a worse bug than the
     // one being fixed, because a delivery to nobody is lost rather than late.
-    const store = tightStore();
+    const { store, advance } = tightStore();
     const ws = store.createWorkspace('silent-board');
     store.attachAgent(ws.id, { agentId: 'ghost', runtime: 'claude-code-local' });
     expect(store.hasLiveAttachment(ws.id)).toBe(true); // fresh at attach
-    await new Promise((r) => setTimeout(r, 60));
+    advance(60);
     // The record is still there. Existence was never the question.
     expect(store.listAttachments(ws.id)).toHaveLength(1);
     expect(store.hasLiveAttachment(ws.id)).toBe(false);
@@ -102,10 +133,10 @@ describe('liveness for delivery is observed, not self-reported', () => {
     // Goal re-triage is lead-addressed, so it has its own predicate — and it
     // had the same starvation. Fixing one and not the other would leave the
     // board-wide request queueing while ordinary ones flowed.
-    const store = tightStore();
+    const { store, advance } = tightStore();
     const ws = store.createWorkspace('lead-board');
     store.attachAgent(ws.id, { agentId: 'lead', runtime: 'claude-code-local' });
-    await new Promise((r) => setTimeout(r, 60));
+    advance(60);
     expect(store.hasLiveLeadAttachment(ws.id)).toBe(false);
     store.noteAgentToolCall(ws.id, 'lead');
     expect(store.hasLiveLeadAttachment(ws.id)).toBe(true);
@@ -114,10 +145,10 @@ describe('liveness for delivery is observed, not self-reported', () => {
   it('a fresh heartbeat is still a sign of life — the new clock ADDS to the old one', async () => {
     // The change must not trade one starved signal for another: an agent that
     // does heartbeat honestly is live on that alone, with no writes at all.
-    const store = tightStore();
+    const { store, advance } = tightStore();
     const ws = store.createWorkspace('polite-board');
     store.attachAgent(ws.id, { agentId: 'polite', runtime: 'claude-code-local' });
-    await new Promise((r) => setTimeout(r, 60));
+    advance(60);
     expect(store.hasLiveAttachment(ws.id)).toBe(false);
     store.heartbeat(ws.id, 'polite');
     expect(store.hasLiveAttachment(ws.id)).toBe(true);
@@ -127,7 +158,7 @@ describe('liveness for delivery is observed, not self-reported', () => {
     // The half a time window cannot cover: a session that died since its last
     // write is inside the window and gone. The request is about to be
     // broadcast on `ws~<id>` — so ask whether anyone is on that channel.
-    const store = tightStore();
+    const { store } = tightStore();
     const ws = store.createWorkspace('probe-board');
     store.attachAgent(ws.id, { agentId: 'worker', runtime: 'claude-code-local' });
     // Freshly attached and freshly working: the clock says live.
@@ -150,10 +181,10 @@ describe('liveness for delivery is observed, not self-reported', () => {
     // moves never moved. Every assertion above would pass just as well
     // against that dead method. This one fails unless the observation is
     // wired to something an agent actually does.
-    const store = tightStore();
+    const { store, advance } = tightStore();
     const ws = store.createWorkspace('wiring-board');
     store.attachAgent(ws.id, { agentId: 'worker', runtime: 'claude-code-local' });
-    await new Promise((r) => setTimeout(r, 60));
+    advance(60);
     expect(store.hasLiveAttachment(ws.id)).toBe(false);
 
     // No liveness call anywhere in this line — just an agent doing its job.
@@ -170,10 +201,10 @@ describe('liveness for delivery is observed, not self-reported', () => {
     // in the event actor and `agent-live-feedback` in the attachment roster.
     // Matching a single spelling would leave this fix a no-op in production
     // while every test above still passed.
-    const store = tightStore();
+    const { store, advance } = tightStore();
     const ws = store.createWorkspace('spelling-board');
     store.attachAgent(ws.id, { agentId: 'agent-field-worker', runtime: 'claude-code-local' });
-    await new Promise((r) => setTimeout(r, 60));
+    advance(60);
     expect(store.hasLiveAttachment(ws.id)).toBe(false);
 
     store.createTask(ws.id, {
@@ -187,10 +218,10 @@ describe('liveness for delivery is observed, not self-reported', () => {
     // POSITIVE CONTROL for the matching above. If the actor were ignored and
     // any event bumped every attachment, the two tests above would pass and
     // the gate would promise delivery to sessions that had gone home.
-    const store = tightStore();
+    const { store, advance } = tightStore();
     const ws = store.createWorkspace('person-board');
     store.attachAgent(ws.id, { agentId: 'worker', runtime: 'claude-code-local' });
-    await new Promise((r) => setTimeout(r, 60));
+    advance(60);
 
     store.createTask(ws.id, {
       title: 'Filed by a human',
@@ -204,12 +235,32 @@ describe('liveness for delivery is observed, not self-reported', () => {
     // expressible. Observing `agent.heartbeat` as work would collapse them
     // back into one and delete that state, which is the same mistake the MCP
     // side made by defaulting `toolCallAt` to now.
-    const store = tightStore(10_000); // work window wide open
+    const { store, advance } = tightStore(10_000); // work window wide open
     const ws = store.createWorkspace('clocks-board');
     store.attachAgent(ws.id, { agentId: 'worker', runtime: 'claude-code-local' });
     const before = store.listAttachments(ws.id)[0]?.lastToolCallAt;
-    await new Promise((r) => setTimeout(r, 20));
+    let seen: TaskStoreEvent | undefined;
+    const off = store.onEvent((e) => {
+      if (e.type === 'agent.heartbeat') seen = e;
+    });
+    advance(20);
     store.heartbeat(ws.id, 'worker');
+    off();
+    expect(store.listAttachments(ws.id)[0]?.lastToolCallAt).toBe(before);
+    // WHY it held, stated so the day it stops being true is a red test rather
+    // than a silent loss: the observer needs an actor to resolve against the
+    // roster, and no `agent.*` event carries one. That makes the `agent.*`
+    // guard belt to this braces — the assertion below is the braces, and the
+    // one after it is the belt.
+    expect(seen).toBeDefined();
+    expect((seen as { actor?: unknown } | undefined)?.actor).toBeUndefined();
+    // The guard itself, driven by the only thing that can reach it: the same
+    // heartbeat with an actor bolted on. It must still be ignored, because
+    // "the agent says it is alive" is not "the agent did work".
+    store.emit({
+      ...(seen as TaskStoreEvent),
+      actor: { id: 'worker', name: 'worker', kind: 'agent' },
+    } as TaskStoreEvent);
     expect(store.listAttachments(ws.id)[0]?.lastToolCallAt).toBe(before);
   });
 
@@ -220,7 +271,7 @@ describe('liveness for delivery is observed, not self-reported', () => {
     // there lands a millisecond after the attach, breaking the contract that
     // a new attachment's two clocks are equal ("active from birth, never
     // unresponsive-from-birth").
-    const store = tightStore(10_000);
+    const { store } = tightStore(10_000);
     const ws = store.createWorkspace('stamp-board');
     store.attachAgent(ws.id, { agentId: 'lead', runtime: 'claude-code-local' });
     const att = store.listAttachments(ws.id)[0];
@@ -239,16 +290,14 @@ describe('liveness for delivery is observed, not self-reported', () => {
     // Ticking the clock on EVERY read makes that tick certain rather than
     // lucky: under this stub the old code fails every single run, so the red
     // is a statement about the code and not about the machine's timing.
-    const store = tightStore(10_000);
+    // The tick has to be in the STORE's clock. Stubbing the global `Date.now`
+    // stopped reaching it the moment the store took an injected clock, and a
+    // stub nothing reads is a control that cannot fail — this test would have
+    // gone on passing over the two-read bug it exists to catch.
+    let ticks = Date.now();
+    const { store } = tightStore(10_000, () => ++ticks);
     const ws = store.createWorkspace('one-read-board');
-    const realNow = Date.now;
-    let ticks = realNow.call(Date);
-    Date.now = () => ++ticks;
-    try {
-      store.attachAgent(ws.id, { agentId: 'lead', runtime: 'claude-code-local' });
-    } finally {
-      Date.now = realNow;
-    }
+    store.attachAgent(ws.id, { agentId: 'lead', runtime: 'claude-code-local' });
     const att = store.listAttachments(ws.id)[0];
     expect(att?.lastToolCallAt).toBe(att?.lastHeartbeat);
   });
@@ -257,7 +306,7 @@ describe('liveness for delivery is observed, not self-reported', () => {
     // The clock only moves forward, the same guard `heartbeat` applies to a
     // claimed toolCallAt — otherwise a replayed or out-of-order event could
     // walk a live agent's liveness backwards toward away.
-    const store = tightStore(10_000);
+    const { store } = tightStore(10_000);
     const ws = store.createWorkspace('monotonic-board');
     store.attachAgent(ws.id, { agentId: 'worker', runtime: 'claude-code-local' });
     const before = store.listAttachments(ws.id)[0]?.lastToolCallAt ?? 0;

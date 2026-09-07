@@ -87,6 +87,7 @@ function fakeHost(dataDir: string): TaskPersistenceHost & {
     scheduledAttachmentSaves: string[];
   } = {
     dataDir,
+    now: () => Date.now(),
     workspaces: new Map<string, WorkspaceState>(),
     taskIndex: new Map(),
     goalIndex: new Map(),

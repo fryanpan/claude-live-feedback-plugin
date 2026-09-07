@@ -21,6 +21,7 @@ export function fakePersistence(opts: {
     states: () => [],
     hasWorkspace: (workspaceId) => known.has(workspaceId),
     thresholds: {},
+    now: () => Date.now(),
     voiceAckGraceMs: opts.voiceAckGraceMs ?? 90_000,
     commentAckGraceMs: opts.commentAckGraceMs ?? 90_000,
     roster: () => undefined,
