@@ -96,6 +96,9 @@ export interface TaskPersistenceHost {
   saveTimers: Map<string, ReturnType<typeof setTimeout>>;
   attachmentSaveTimers: Map<string, ReturnType<typeof setTimeout>>;
   attachmentThresholds: AttachmentThresholds;
+  /** The store's clock — `Date.now` unless a test injected one. See
+   *  `AgentStorePersistence.now`. */
+  now(): number;
   voiceAckGraceMs: number;
   commentAckGraceMs: number;
   roster: AgentRoster | undefined;
@@ -166,6 +169,7 @@ export function agentPersistenceFor(store: TaskPersistenceHost): AgentStorePersi
     get thresholds() {
       return store.attachmentThresholds;
     },
+    now: () => store.now(),
     get voiceAckGraceMs() {
       return store.voiceAckGraceMs;
     },

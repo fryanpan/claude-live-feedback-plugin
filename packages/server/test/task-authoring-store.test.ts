@@ -22,6 +22,7 @@ function store(fake = new FakeStore()): { authoring: TaskAuthoringStore; fake: F
     docRevisionFor: (docId) => fake.docRevisionFor(docId),
     registerTask: (taskId, wsId) => fake.registerTask(taskId, wsId),
     scheduleSave: (id) => fake.scheduleSave(id),
+    now: () => Date.now(),
     emit: (e) => fake.emit(e),
   });
   return { authoring, fake };

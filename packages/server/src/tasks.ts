@@ -1691,6 +1691,15 @@ export class TaskStore {
   // Not `private`, for the same reason as the maps above.
   dataDir: string;
   private debounceMs: number;
+  /** This store's clock. Injected only by tests; see the constructor's
+   *  `now` option for why the liveness windows need one. */
+  private readonly clock: () => number;
+
+  /** The clock every attachment timestamp and freshness window is read
+   *  from, exposed because the agent seam reads it (`agentPersistenceFor`). */
+  now(): number {
+    return this.clock();
+  }
   attachmentThresholds: AttachmentThresholds;
   deliveryProbe: DeliveryProbe | undefined;
   roster: AgentRoster | undefined;
@@ -1750,6 +1759,7 @@ export class TaskStore {
       this.taskIndex.set(taskId, workspaceId);
     },
     scheduleSave: (workspaceId) => this.scheduleSave(workspaceId),
+    now: () => this.clock(),
     emit: (event) => this.emit(event),
   });
 
@@ -1822,9 +1832,21 @@ export class TaskStore {
      *  semantics must be free to diverge without a shared constant coupling
      *  them. */
     commentAckGraceMs?: number;
+    /**
+     * The clock the attachment liveness windows are read from.
+     *
+     * The knobs above shrink a window so a test can wait it out; this
+     * removes the waiting. A window short enough to sleep through (40ms) is
+     * also short enough that a scheduling pause between the observed work
+     * and the assertion flips the answer, which is how
+     * `voice-gate-liveness.test.ts` went red on CI on a docs-only branch.
+     * Production passes nothing and gets `Date.now`.
+     */
+    now?: () => number;
   }) {
     this.dataDir = opts.dataDir;
     this.debounceMs = opts.debounceMs ?? 200;
+    this.clock = opts.now ?? Date.now;
     this.voiceAckGraceMs = opts.voiceAckGraceMs ?? VOICE_ACK_GRACE_MS;
     this.commentAckGraceMs = opts.commentAckGraceMs ?? COMMENT_ACK_GRACE_MS;
     this.attachmentThresholds = {
